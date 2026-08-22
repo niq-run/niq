@@ -136,6 +136,42 @@ func (b *AccumulateTranscript) CommitEdit(digest string, keepTail int) {
 		b.messages = append(b.messages, b.pendingInput...)
 		b.pendingInput = nil
 	}
+	sanitizeDanglingToolCalls(b.messages)
+}
+
+// sanitizeDanglingToolCalls strips tool_calls from assistant messages that
+// have no following tool_result. Compaction can orphan a tool call two ways:
+// a cut landing between an assistant tool_calls and its results, or a meta
+// tool call (compress/rotate) that never produces a result. A dangling
+// tool_calls message is rejected by providers ("assistant with tool_calls
+// must be followed by tool messages"), so the call is dropped while the
+// message's text/thinking is kept.
+func sanitizeDanglingToolCalls(msgs []llm.Message) {
+	for i := range msgs {
+		if msgs[i].Role != llm.RoleAssistant {
+			continue
+		}
+		hasToolCalls := false
+		for _, b := range msgs[i].Content {
+			if b.Type == llm.ContentToolCall {
+				hasToolCalls = true
+				break
+			}
+		}
+		if !hasToolCalls {
+			continue
+		}
+		if i+1 < len(msgs) && msgs[i+1].Role == llm.RoleToolResult {
+			continue // paired with a following tool result
+		}
+		kept := msgs[i].Content[:0]
+		for _, b := range msgs[i].Content {
+			if b.Type != llm.ContentToolCall {
+				kept = append(kept, b)
+			}
+		}
+		msgs[i].Content = kept
+	}
 }
 
 // AbortEdit cancels an edit without applying it: clears the editing state

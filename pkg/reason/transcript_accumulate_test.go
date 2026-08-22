@@ -250,3 +250,63 @@ func TestAbortEditPreserves(t *testing.T) {
 		t.Fatalf("abort should leave transcript unchanged, got %+v", got)
 	}
 }
+
+// TestSanitizeDanglingToolCalls verifies tool_calls are stripped from assistant
+// messages lacking a following tool_result, while paired calls are kept.
+func TestSanitizeDanglingToolCalls(t *testing.T) {
+	// Dangling meta tool call (no following tool result): the tool_calls block
+	// is dropped, thinking/text kept.
+	msgs := []llm.Message{{
+		Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{
+			{Type: llm.ContentThinking, Text: "think"},
+			toolCall("c1", "context.compress"),
+			{Type: llm.ContentText, Text: "text"},
+		},
+	}}
+	sanitizeDanglingToolCalls(msgs)
+	if len(msgs[0].Content) != 2 {
+		t.Fatalf("want 2 blocks (thinking+text), got %d", len(msgs[0].Content))
+	}
+	for _, b := range msgs[0].Content {
+		if b.Type == llm.ContentToolCall {
+			t.Fatal("dangling tool_call not stripped")
+		}
+	}
+
+	// Paired tool call (followed by a tool result): kept.
+	msgs = []llm.Message{
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{toolCall("c2", "bash")}},
+		{Role: llm.RoleToolResult, ToolCallID: "c2", Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}},
+	}
+	sanitizeDanglingToolCalls(msgs)
+	if len(msgs[0].Content) != 1 || msgs[0].Content[0].Type != llm.ContentToolCall {
+		t.Fatal("paired tool_call must be kept")
+	}
+}
+
+// TestCommitEditStripsDanglingMetaToolCall verifies a compaction that keeps a
+// meta tool call (which never produces a result) in its tail yields a valid
+// transcript: the tool_calls block is stripped after the edit.
+func TestCommitEditStripsDanglingMetaToolCall(t *testing.T) {
+	b := NewAccumulateTranscript()
+	b.Apply(InputPatch{Messages: []llm.Message{userMsg("hi")}})
+	b.Apply(AssistantOutputPatch{Message: llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: []llm.ContentBlock{toolCall("m1", "context.compress")},
+	}})
+
+	b.BeginEdit()
+	b.CommitEdit("digest", 1)
+	msgs := b.Render()
+	if len(msgs) != 2 {
+		t.Fatalf("got %d messages, want 2 (digest + assistant)", len(msgs))
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != llm.RoleAssistant {
+		t.Fatalf("last message role = %q, want assistant", last.Role)
+	}
+	if len(last.Content) != 0 {
+		t.Fatalf("dangling meta tool_call survived CommitEdit: %+v", last.Content)
+	}
+}

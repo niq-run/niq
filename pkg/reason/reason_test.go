@@ -158,3 +158,38 @@ func TestFinalMessageReturns(t *testing.T) {
 		t.Fatalf("stop_reason = %q, want stop", msg.StopReason)
 	}
 }
+
+// TestHasMetaToolCallAndStripToolCalls verifies meta tool detection and that a
+// meta tool call (which never produces a tool result) is excluded from the
+// transcript: hasMetaToolCall flags the response, and stripToolCalls removes
+// all tool_calls while keeping thinking/text.
+func TestHasMetaToolCallAndStripToolCalls(t *testing.T) {
+	w := newTestWorker(nil, nil)
+	w.mu.Lock()
+	w.tools["context.compress"] = worker.Tool{Name: "context.compress", IsMetaTool: true}
+	w.tools["ws-tmp-niq-test__ls"] = worker.Tool{Name: "ws-tmp-niq-test__ls", Provider: "ws-tmp-niq-test"}
+	w.mu.Unlock()
+
+	metaMsg := llm.Message{
+		Role:       llm.RoleAssistant,
+		StopReason: "tool_calls",
+		Content: []llm.ContentBlock{
+			{Type: llm.ContentThinking, Text: "need to compress"},
+			{Type: llm.ContentToolCall, ToolCallID: "m1", ToolName: "context.compress"},
+			{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "ws-tmp-niq-test__ls"},
+		},
+	}
+	if !w.hasMetaToolCall(metaMsg) {
+		t.Fatal("hasMetaToolCall should detect context.compress")
+	}
+
+	stripped := stripToolCalls(metaMsg)
+	if len(stripped.Content) != 1 || stripped.Content[0].Type != llm.ContentThinking {
+		t.Fatalf("stripToolCalls should keep only thinking, got %+v", stripped.Content)
+	}
+
+	plain := llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}}
+	if w.hasMetaToolCall(plain) {
+		t.Fatal("hasMetaToolCall must be false without a meta tool call")
+	}
+}

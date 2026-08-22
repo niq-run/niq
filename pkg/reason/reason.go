@@ -326,7 +326,15 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	log.Printf("[reason %s] LLM response: stop_reason=%s, content_blocks=%d",
 		w.ID(), finalMsg.StopReason, len(finalMsg.Content))
 
-	w.transcript.Apply(AssistantOutputPatch{Message: finalMsg})
+	// If the response contains a meta tool call, ALL tool calls are discarded:
+	// a meta operation edits the transcript itself, so its call never enters it.
+	// The applied assistant message carries only thinking/text; handleToolCalls
+	// still sees the calls and emits worker.update.
+	appliedMsg := finalMsg
+	if w.hasMetaToolCall(finalMsg) {
+		appliedMsg = stripToolCalls(finalMsg)
+	}
+	w.transcript.Apply(AssistantOutputPatch{Message: appliedMsg})
 
 	// Budget check: record the round's usage and act on thresholds
 	// (soft: remind, hard: schedule compaction). Expects w.mu held.
@@ -366,6 +374,35 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	w.tryReason(ctx)
 }
 
+// hasMetaToolCall reports whether any tool call in msg targets a meta tool
+// (IsMetaTool). When present, the round's tool calls are excluded from the
+// transcript and the meta operation runs via worker.update.
+func (w *BaseReasonWorker) hasMetaToolCall(msg llm.Message) bool {
+	for _, b := range msg.Content {
+		if b.Type == llm.ContentToolCall {
+			if t, ok := w.tools[b.ToolName]; ok && t.IsMetaTool {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stripToolCalls returns a copy of msg with all ContentToolCall blocks removed,
+// keeping thinking/text. Used when a meta tool call is present, since meta
+// operations never produce a tool result (their call must not enter the
+// transcript, or it would dangle without a paired tool_result).
+func stripToolCalls(msg llm.Message) llm.Message {
+	cleaned := make([]llm.ContentBlock, 0, len(msg.Content))
+	for _, b := range msg.Content {
+		if b.Type != llm.ContentToolCall {
+			cleaned = append(cleaned, b)
+		}
+	}
+	msg.Content = cleaned
+	return msg
+}
+
 func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.ContentBlock, traceID string) {
 	busCalls := toolCalls
 
@@ -385,16 +422,12 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 		}
 	}
 	if metaCall != nil {
-		// If a newer input already requested reasoning (needReason set), the
-		// meta operation yields: it has not started, so it is simply dropped -
-		// the next round decides whether to issue it again. This mirrors a
-		// tool call being parked on preemption, minus the dispatch.
+		// All tool calls were already excluded from the transcript in
+		// finishReasoning once a meta tool was present, so nothing here needs
+		// pairing. If a newer input already requested reasoning, the meta
+		// operation yields (dropped — nothing is dispatched or applied); the
+		// next round re-decides.
 		if w.needReason {
-			// A newer input already requested reasoning. Meta operations
-			// (compress/rotate) edit the transcript and depend on its tail being
-			// current; the scheduled input would make that tail stale (especially
-			// rotate, which keeps only the latest user turn). So they are dropped
-			// — nothing is dispatched or applied — and the next round re-decides.
 			log.Printf("[reason %s] meta tool %s yielded to pending input", w.ID(), metaCall.ToolName)
 			w.isReasoning = false
 			w.mu.Unlock()
@@ -402,29 +435,8 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 			return
 		}
 
-		// Insert placeholders only for the non-meta calls, then reject them:
-		// while the meta operation runs, they cannot proceed, and after it the
-		// next reasoning round will issue fresh calls anyway.
-		var others []llm.ContentBlock
-		for i := range busCalls {
-			if &busCalls[i] != metaCall {
-				others = append(others, busCalls[i])
-			}
-		}
-		if len(others) > 0 {
-			w.transcript.Apply(ToolPlaceholdersPatch{Calls: others})
-			for i := range others {
-				w.transcript.Apply(ToolResultPatch{
-					CallID: others[i].ToolCallID,
-					Name:   others[i].ToolName,
-					Text:   "Rejected: a context meta operation is running; issue this call again after it completes.",
-					IsErr:  true,
-				})
-			}
-		}
-
-		// The meta call itself leaves no placeholder (its execution rewrites the
-		// transcript); emit worker.update to self, routed via the bus for audit.
+		// Emit worker.update to self, routed via the bus for audit; the meta
+		// operation completes asynchronously and schedules the next round.
 		var argsMap map[string]any
 		if metaCall.ToolArguments != "" {
 			json.Unmarshal([]byte(metaCall.ToolArguments), &argsMap)
