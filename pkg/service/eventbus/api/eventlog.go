@@ -18,25 +18,16 @@ import (
 
 // Filter controls which events a subscriber receives.
 type Filter struct {
-	WorkerID string          // filter by source or target worker ID
-	TraceID  string          // filter by trace ID
-	Type     event.EventType // filter by event type (exact match)
+	WorkerIDs []string        // filter by source, target, or recipient worker
+	TraceID   string          // filter by trace ID
+	Type      event.EventType // filter by event type (exact match)
 }
 
 // matchesFilter checks whether an event satisfies the filter.
 // An empty filter field matches everything.
 func matchesFilter(evt event.Event, f Filter) bool {
-	if f.WorkerID != "" && evt.WorkerId != f.WorkerID && evt.TargetWorkerID != f.WorkerID {
-		matched := false
-		for _, r := range evt.Recipients {
-			if r == f.WorkerID {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
+	if len(f.WorkerIDs) > 0 && !workerMatchesAny(evt, f.WorkerIDs) {
+		return false
 	}
 	if f.TraceID != "" && evt.TraceID != f.TraceID {
 		return false
@@ -45,6 +36,22 @@ func matchesFilter(evt event.Event, f Filter) bool {
 		return false
 	}
 	return true
+}
+
+// workerMatchesAny reports whether the event involves any of the given worker
+// IDs, as source, target, or recipient.
+func workerMatchesAny(evt event.Event, ids []string) bool {
+	for _, id := range ids {
+		if evt.WorkerId == id || evt.TargetWorkerID == id {
+			return true
+		}
+		for _, r := range evt.Recipients {
+			if r == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // subscriber represents a single SSE subscriber watching the event stream.
@@ -136,10 +143,10 @@ func (l *EventLog) Follow(ctx context.Context, filter Filter, limit int) (<-chan
 
 	// Load history from store.
 	history, err := l.store.List(ctx, "*", store.QueryOpts{
-		Limit:    limit,
-		Desc:     true,
-		WorkerID: filter.WorkerID,
-		TraceID:  filter.TraceID,
+		Limit:     limit,
+		Desc:      true,
+		WorkerIDs: filter.WorkerIDs,
+		TraceID:   filter.TraceID,
 	})
 	if err != nil {
 		return nil, err
@@ -185,10 +192,10 @@ func (l *EventLog) LoadBefore(ctx context.Context, filter Filter, anchor string,
 		limit = 50
 	}
 	return l.store.List(ctx, "*", store.QueryOpts{
-		BeforeID: anchor,
-		Limit:    limit,
-		Desc:     true,
-		WorkerID: filter.WorkerID,
-		TraceID:  filter.TraceID,
+		BeforeID:  anchor,
+		Limit:     limit,
+		Desc:      true,
+		WorkerIDs: filter.WorkerIDs,
+		TraceID:   filter.TraceID,
 	})
 }

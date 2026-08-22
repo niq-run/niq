@@ -58,8 +58,8 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 	allWorkers := workerID == "*"
 	for _, e := range s.events {
 		idOK := allWorkers || e.WorkerId == workerID || e.TargetWorkerID == workerID || workerInRecipients(e, workerID)
-		if opts.WorkerID != "" {
-			idOK = e.WorkerId == opts.WorkerID || e.TargetWorkerID == opts.WorkerID || workerInRecipients(e, opts.WorkerID)
+		if len(opts.WorkerIDs) > 0 {
+			idOK = workerMatchesAny(e, opts.WorkerIDs)
 		}
 		if !idOK {
 			continue
@@ -97,6 +97,17 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 func workerInRecipients(e event.Event, id string) bool {
 	for _, r := range e.Recipients {
 		if r == id {
+			return true
+		}
+	}
+	return false
+}
+
+// workerMatchesAny reports whether the event involves any of the given worker
+// IDs, as source, target, or recipient.
+func workerMatchesAny(e event.Event, ids []string) bool {
+	for _, id := range ids {
+		if e.WorkerId == id || e.TargetWorkerID == id || workerInRecipients(e, id) {
 			return true
 		}
 	}

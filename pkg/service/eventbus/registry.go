@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	corebus "github.com/54c1/niq/core/bus"
@@ -119,7 +120,9 @@ func (r *FileIdentityRegistry) Lookup(workerID string) (corebus.Identity, bool) 
 	return id, ok
 }
 
-// List implements corebus.IdentityRegistry.
+// List implements corebus.IdentityRegistry. The backing store is a map, whose
+// iteration order is randomized by the Go runtime; sort by WorkerID so callers
+// (e.g. the WebUI worker list) get a stable, deterministic order.
 func (r *FileIdentityRegistry) List() []corebus.Identity {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -127,6 +130,7 @@ func (r *FileIdentityRegistry) List() []corebus.Identity {
 	for _, id := range r.identities {
 		ids = append(ids, id)
 	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].WorkerID < ids[j].WorkerID })
 	return ids
 }
 

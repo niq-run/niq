@@ -79,9 +79,9 @@ func (s *Server) handleStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	}
 
 	filter := Filter{
-		WorkerID: r.URL.Query().Get("worker"),
-		TraceID:  r.URL.Query().Get("trace"),
-		Type:     event.EventType(r.URL.Query().Get("type")),
+		WorkerIDs: r.URL.Query()["worker"],
+		TraceID:   r.URL.Query().Get("trace"),
+		Type:      event.EventType(r.URL.Query().Get("type")),
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
@@ -110,9 +110,9 @@ func (s *Server) handleLoadBefore(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
 	filter := Filter{
-		WorkerID: r.URL.Query().Get("worker"),
-		TraceID:  r.URL.Query().Get("trace"),
-		Type:     event.EventType(r.URL.Query().Get("type")),
+		WorkerIDs: r.URL.Query()["worker"],
+		TraceID:   r.URL.Query().Get("trace"),
+		Type:      event.EventType(r.URL.Query().Get("type")),
 	}
 
 	events, err := s.log.LoadBefore(r.Context(), filter, anchor, limit)

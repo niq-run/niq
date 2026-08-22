@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/54c1/niq/core/event"
@@ -101,9 +102,13 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 			FROM events WHERE 1=1`
 	var args []any
 
-	if opts.WorkerID != "" {
-		query += " AND (worker_id = ? OR target_worker_id = ? OR recipients LIKE ?)"
-		args = append(args, opts.WorkerID, opts.WorkerID, "%"+opts.WorkerID+"%")
+	if len(opts.WorkerIDs) > 0 {
+		var conds []string
+		for _, wid := range opts.WorkerIDs {
+			conds = append(conds, "(worker_id = ? OR target_worker_id = ? OR recipients LIKE ?)")
+			args = append(args, wid, wid, "%"+wid+"%")
+		}
+		query += " AND (" + strings.Join(conds, " OR ") + ")"
 	} else if workerID != "*" && workerID != "" {
 		query += " AND (worker_id = ? OR target_worker_id = ? OR recipients LIKE ?)"
 		args = append(args, workerID, workerID, "%"+workerID+"%")

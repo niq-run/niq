@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -108,9 +109,9 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter := eventbusapi.Filter{
-		WorkerID: r.URL.Query().Get("worker"),
-		TraceID:  r.URL.Query().Get("trace"),
-		Type:     event.EventType(r.URL.Query().Get("type")),
+		WorkerIDs: r.URL.Query()["worker"],
+		TraceID:   r.URL.Query().Get("trace"),
+		Type:      event.EventType(r.URL.Query().Get("type")),
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
@@ -198,6 +199,11 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The registry's List is already ID-sorted; sort the merged view too, so
+	// transient managed workers land at a deterministic position instead of
+	// trailing in an ever-changing insertion order.
+	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
+
 	json.NewEncoder(w).Encode(views)
 }
 
@@ -248,9 +254,9 @@ func (s *Server) handleLoadBefore(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
 	filter := eventbusapi.Filter{
-		WorkerID: r.URL.Query().Get("worker"),
-		TraceID:  r.URL.Query().Get("trace"),
-		Type:     event.EventType(r.URL.Query().Get("type")),
+		WorkerIDs: r.URL.Query()["worker"],
+		TraceID:   r.URL.Query().Get("trace"),
+		Type:      event.EventType(r.URL.Query().Get("type")),
 	}
 
 	events, err := s.eventLog.LoadBefore(r.Context(), filter, anchor, limit)

@@ -30,11 +30,11 @@ type AppendStore interface {
 
 // QueryOpts controls the results returned by [EventStore.List].
 type QueryOpts struct {
-	Limit    int    // max events to return; 0 means unlimited
-	Since    int64  // Unix timestamp; only events at or after this time
-	AfterID  string // only events after this event ID (for replay / rebuild)
-	BeforeID string // only events before this event ID (for pagination)
-	WorkerID string // filter by worker ID (overrides List's workerID arg)
-	TraceID  string // filter by trace ID
-	Desc     bool   // true = newest first (display), false = oldest first (replay)
+	Limit     int      // max events to return; 0 means unlimited
+	Since     int64    // Unix timestamp; only events at or after this time
+	AfterID   string   // only events after this event ID (for replay / rebuild)
+	BeforeID  string   // only events before this event ID (for pagination)
+	WorkerIDs []string // filter by worker ID set (overrides List's workerID arg)
+	TraceID   string   // filter by trace ID
+	Desc      bool     // true = newest first (display), false = oldest first (replay)
 }
