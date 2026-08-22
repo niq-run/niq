@@ -2,12 +2,168 @@ package reason
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/54c1/niq/core/event"
 	"github.com/54c1/niq/core/llm"
 	"github.com/54c1/niq/core/worker"
 	reasonBase "github.com/54c1/niq/pkg/reason"
 )
+
+// ── mock bus channel ────────────────────────────────────────────────────────
+
+// mockChannel is a minimal WorkerSideChannel for tests: it delivers events the
+// test feeds in, and records everything the worker publishes/sends.
+type mockChannel struct {
+	in  chan event.Event
+	mu  sync.Mutex
+	out []event.Event
+}
+
+func newMockChannel() *mockChannel { return &mockChannel{in: make(chan event.Event, 16)} }
+
+func (m *mockChannel) ID() string { return "mock" }
+func (m *mockChannel) Send(_ context.Context, evt event.Event, _ ...string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.out = append(m.out, evt)
+	return nil
+}
+func (m *mockChannel) Broadcast(_ context.Context, evt event.Event) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.out = append(m.out, evt)
+	return nil
+}
+func (m *mockChannel) Receive(_ context.Context) (<-chan event.Event, error) { return m.in, nil }
+func (m *mockChannel) Close() error                                          { return nil }
+
+// eventsOf returns all recorded events of the given type.
+func (m *mockChannel) eventsOf(typ event.EventType) []event.Event {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []event.Event
+	for _, e := range m.out {
+		if e.Type == typ {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (m *mockChannel) hasInterrupted() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.out {
+		if e.Type == "reason.end" {
+			if sr, _ := e.Payload["stop_reason"].(string); sr == "interrupted" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m *mockChannel) hasErrorResponse() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.out {
+		if e.Type == "reason.response" {
+			return true
+		}
+	}
+	return false
+}
+
+// ── LLM providers ───────────────────────────────────────────────────────────
+
+// staticProvider returns a fixed completion immediately. Used for tests that
+// just need a deterministic reasoning round to complete.
+type staticProvider struct {
+	msg llm.Message
+}
+
+func (p *staticProvider) Complete(context.Context, *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	return &llm.CompletionResponse{Message: p.msg}, nil
+}
+func (p *staticProvider) CompleteStream(_ context.Context, _ *llm.CompletionRequest) (*llm.EventStream, error) {
+	es := llm.NewEventStream()
+	es.Push(llm.EventTextStart{})
+	es.Push(llm.EventTextEnd{})
+	es.End(p.msg)
+	return es, nil
+}
+func (p *staticProvider) ListModels(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
+
+// blockingProvider blocks CompleteStream until its ctx is cancelled or release
+// is closed, letting a test hold a reasoning round in flight.
+type blockingProvider struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingProvider) Complete(ctx context.Context, _ *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.release:
+	}
+	return &llm.CompletionResponse{Message: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}, nil
+}
+func (p *blockingProvider) CompleteStream(ctx context.Context, _ *llm.CompletionRequest) (*llm.EventStream, error) {
+	p.once.Do(func() { close(p.started) })
+	es := llm.NewEventStream()
+	go func() {
+		select {
+		case <-ctx.Done():
+			es.Abort(ctx.Err())
+		case <-p.release:
+			es.Push(llm.EventTextStart{})
+			es.Push(llm.EventTextDelta{Delta: "hi"})
+			es.Push(llm.EventTextEnd{})
+			es.End(llm.Message{Role: llm.RoleAssistant, StopReason: "stop",
+				Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "hi"}}})
+		}
+	}()
+	return es, nil
+}
+func (p *blockingProvider) ListModels(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+func waitCond(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for %s", msg)
+}
+
+func startWorker(t *testing.T, prov llm.LLMProvider) (*Worker, *mockChannel, context.CancelFunc) {
+	t.Helper()
+	ch := newMockChannel()
+	w := NewWorker(Config{ID: "r1", Provider: prov, Bus: ch})
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() {
+		w.Stop()
+		cancel()
+	})
+	return w, ch, cancel
+}
+
+// ── NewWorker assembly & lifecycle ──────────────────────────────────────────
 
 // TestNewWorkerDefaults verifies a worker built with a minimal Config gets a
 // sensible ID and the built-in subscriptions.
@@ -58,6 +214,8 @@ func TestStartStop(t *testing.T) {
 func TestWorkerImplementsManagedWorker(t *testing.T) {
 	var _ worker.ManagedWorker = NewWorker(Config{ID: "r1", Bus: newMockChannel()})
 }
+
+// ── Snapshot / Restore (durable state) ──────────────────────────────────────
 
 // TestSnapshotRestoreRoundTrip verifies Snapshot captures the reasoning
 // transcript and Restore rehydrates it into a fresh worker — the durable state
@@ -142,5 +300,84 @@ func TestSnapshotEmptyMessages(t *testing.T) {
 	}
 	if len(fresh.Messages()) != 0 {
 		t.Fatalf("restored %d messages, want 0", len(fresh.Messages()))
+	}
+}
+
+// ── Async reasoning (reason() runs on its own goroutine) ────────────────────
+
+// TestAsyncAbortInterruptsReasoning verifies reason() runs on its own
+// goroutine: while an LLM call is in flight, the watch loop still processes
+// events (an abort), and the abort's cancelReason interrupts the blocked call
+// WITHOUT the test having to release the provider.
+func TestAsyncAbortInterruptsReasoning(t *testing.T) {
+	prov := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	_, ch, _ := startWorker(t, prov)
+
+	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "hello", "input_mode": "default"})
+	waitCond(t, 2*time.Second, func() bool {
+		select {
+		case <-prov.started:
+			return true
+		default:
+			return false
+		}
+	}, "reasoning to start (LLM call in flight)")
+
+	// Feed an abort while reasoning is blocked. Because reason() is async, the
+	// watch loop processes it immediately and cancelReason interrupts the call.
+	ch.in <- event.New(event.TypeWorkerAbort, "swarm", map[string]any{})
+	waitCond(t, 2*time.Second, ch.hasInterrupted, "reason.end(interrupted)")
+}
+
+// TestAsyncNoFakeErrorOnInterrupt ensures cancellation does not publish a
+// spurious "Error: context canceled" response.
+func TestAsyncNoFakeErrorOnInterrupt(t *testing.T) {
+	prov := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	_, ch, _ := startWorker(t, prov)
+
+	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "hello", "input_mode": "default"})
+	waitCond(t, 2*time.Second, func() bool {
+		select {
+		case <-prov.started:
+			return true
+		default:
+			return false
+		}
+	}, "reasoning to start")
+	ch.in <- event.New(event.TypeWorkerAbort, "swarm", map[string]any{})
+	waitCond(t, 2*time.Second, ch.hasInterrupted, "reason.end(interrupted)")
+
+	if ch.hasErrorResponse() {
+		t.Fatal("published spurious reason.response after interrupt")
+	}
+}
+
+// ── Seed messages ───────────────────────────────────────────────────────────
+
+// TestSeedMessagesAppliedAtConstruction verifies the spawner's handover brief
+// becomes the transcript's first message (goal goes to Programs instead -
+// tested on the swarm side).
+func TestSeedMessagesAppliedAtConstruction(t *testing.T) {
+	seed := []llm.Message{{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{{Type: llm.ContentText,
+			Text: "[handover brief from spawner]\nroot cause found (trace=t_abc)"}},
+	}}
+	w := NewWorker(Config{ID: "r1", Bus: newMockChannel(), SeedMessages: seed})
+
+	msgs := w.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("seed not applied, got %d messages", len(msgs))
+	}
+	if !strings.Contains(msgs[0].Content[0].Text, "trace=t_abc") {
+		t.Fatalf("brief content lost: %q", msgs[0].Content[0].Text)
+	}
+}
+
+// TestSeedAbsentForFreshWorker verifies no seed leaves the transcript empty.
+func TestSeedAbsentForFreshWorker(t *testing.T) {
+	w := NewWorker(Config{ID: "r1", Bus: newMockChannel()})
+	if got := len(w.Messages()); got != 0 {
+		t.Fatalf("fresh worker should be empty, got %d", got)
 	}
 }
