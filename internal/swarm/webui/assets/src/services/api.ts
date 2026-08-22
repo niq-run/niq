@@ -30,10 +30,10 @@ export async function resumeWorker(id: string): Promise<void> {
   await fetch(`/api/workers/${encodeURIComponent(id)}/resume`, { method: 'POST' })
 }
 
-export async function loadEventsBefore(anchorId: string, limit = 50, worker = '', trace = ''): Promise<any[]> {
+export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = ''): Promise<any[]> {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
-  if (worker) params.set('worker', worker)
+  for (const w of workers) params.append('worker', w)
   if (trace) params.set('trace', trace)
   const res = await fetch(`/api/events/before/${anchorId}?${params}`)
   return res.json()

@@ -30,10 +30,8 @@ export function isReasonBoundary(type: string): boolean {
 
 export function toolSummary(evt: EventPayload): string {
   const name = evt.payload?.name as string || ''
-  const target = evt.type === 'tool.requested' ? ` → ${evt.target_worker_id || ''}` : ''
-  const source = evt.type !== 'tool.requested' ? ` ← ${evt.worker_id}` : ''
   const err = evt.type === 'tool.failed' ? (evt.payload?.error as string || '') : ''
-  return `[${name}]${target}${source}${err ? ' — ' + truncate(err, 60) : ''}`
+  return `[${name}]${err ? ' — ' + truncate(err, 60) : ''}`
 }
 
 export function toolCallId(evt: EventPayload): string {
@@ -121,6 +119,27 @@ export function summaryText(evt: EventPayload): string {
   return parts.join(', ')
 }
 
+// ── Worker type → color (for the worker-type tag) ──
+
+export function getWorkerTypeColor(type: string, colors: import('../theme').Palette): string {
+  switch (type) {
+    case "reason":
+      return colors.eventType.reason
+    case "timer":
+      return colors.eventType.timer
+    case "hiw":
+      return colors.eventType.hiw
+    case "workspace":
+      return colors.eventType.tool
+    case "host":
+      return colors.eventType.worker
+    case "program":
+      return colors.eventType.worker
+    default:
+      return colors.eventType.default
+  }
+}
+
 // ── Target summary (truncate to 14 chars) ──
 
 export function targetSummary(s: string): string {
@@ -161,7 +180,12 @@ export function findReferencedInput(events: EventPayload[], responseEvt: EventPa
 // ── Time formatting ──
 
 export function formatTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleTimeString()
+  return new Date(ts * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  })
 }
 
 // ── Event payload formatting ──

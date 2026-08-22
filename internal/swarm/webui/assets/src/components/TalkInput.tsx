@@ -12,9 +12,11 @@ interface TalkInputProps {
   onModeChange: (m: string) => void
   workers: WorkerInfo[]
   mentionKey: number
+  mentionTarget: string
+  onClearMentionTarget: () => void
 }
 
-export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, mentionKey }: TalkInputProps) {
+export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, mentionKey, mentionTarget, onClearMentionTarget }: TalkInputProps) {
   const { colors } = useTheme()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [showMentions, setShowMentions] = useState(false)
@@ -62,14 +64,25 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (showMentions) {
+    // IME composition: keys (esp. Enter to confirm pinyin) must not trigger
+    // send or mention navigation while composing.
+    const composing = e.nativeEvent.isComposing || e.keyCode === 229
+
+    // Backspace/Delete on an empty input clears the persisted @ target.
+    if (!composing && input === '' && (e.key === 'Backspace' || e.key === 'Delete') && mentionTarget) {
+      e.preventDefault()
+      onClearMentionTarget()
+      return
+    }
+
+    if (showMentions && !composing) {
       const filtered = reasonWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery))
-      if (e.key === 'ArrowDown') {
+      if ((e.ctrlKey && e.key.toLowerCase() === 'n') || e.key === 'ArrowDown') {
         e.preventDefault()
         setMentionIndex(i => Math.min(i + 1, filtered.length - 1))
         return
       }
-      if (e.key === 'ArrowUp') {
+      if ((e.ctrlKey && e.key.toLowerCase() === 'p') || e.key === 'ArrowUp') {
         e.preventDefault()
         setMentionIndex(i => Math.max(i - 1, 0))
         return
@@ -86,7 +99,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         return
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !composing) {
       e.preventDefault()
       onSend()
     }
@@ -119,13 +132,27 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const filtered = showMentions ? reasonWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery)) : []
 
   return (
-    <div style={{ padding: '12px 48px', borderTop: '1px solid ' + colors.border, position: 'relative' }}>
-      {/* Target indicator */}
-      {currentTarget && (
+    <div style={{ padding: '12px 24px', borderTop: '1px solid ' + colors.border, position: 'relative' }}>
+      {/* Target indicator: immediate @ in the input, or the persisted target */}
+      {currentTarget ? (
         <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4 }}>
           → <span style={{ color: colors.accent, fontWeight: 'bold' }}>{currentTarget}</span>
         </div>
-      )}
+      ) : mentionTarget ? (
+        <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>
+            → <span style={{ color: colors.accent, fontWeight: 'bold' }}>{mentionTarget}</span>
+            <span style={{ color: colors.textDimmed, fontStyle: 'italic', marginLeft: 4 }}>(persistent)</span>
+          </span>
+          <span
+            onClick={onClearMentionTarget}
+            title="clear persistent target"
+            style={{ cursor: 'pointer', color: colors.textDimmed, border: '1px solid ' + colors.border, borderRadius: 3, padding: '0 5px', fontSize: fontSizes.xs, lineHeight: '14px', userSelect: 'none' }}
+          >
+            {'\u2715'}
+          </span>
+        </div>
+      ) : null}
 
       {/* Mention dropdown */}
       {showMentions && filtered.length > 0 && (
@@ -199,8 +226,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             cursor: 'pointer',
           }}
         >
-          <option value="default">default</option>
-          <option value="append">append</option>
+          <option value="default" title="interrupt in-flight reasoning and handle now">interrupt</option>
+          <option value="schedule" title="wake gently; don't interrupt in-flight reasoning">schedule</option>
+          <option value="append" title="only when idle (no reasoning, no pending tools)">append</option>
         </select>
         <button
           onClick={onAbort}

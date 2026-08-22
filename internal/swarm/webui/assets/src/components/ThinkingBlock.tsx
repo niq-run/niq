@@ -18,9 +18,8 @@ export default function ThinkingBlock({ evt, defaultExpanded = true, compact = f
   const text = getContentText(evt)
 
   const tPad = compact ? '4px 8px' : '6px 12px'
-  const tRadius = compact ? 6 : 8
   const tFontSize = compact ? fontSizes.xs : fontSizes.base
-  const tBorder = '1px solid ' + (dark ? '#9d7fa38c' : 'rgba(156, 39, 176, 0.35)')
+  const tBorder = '1px solid ' + colors.border
 
   return (
     <div
@@ -30,7 +29,6 @@ export default function ThinkingBlock({ evt, defaultExpanded = true, compact = f
         borderRight: tBorder,
         borderBottom: tBorder,
         borderLeft: tBorder,
-        borderRadius: '0 ' + tRadius + 'px ' + tRadius + 'px ' + tRadius + 'px',
         padding: tPad,
         fontSize: tFontSize,
         lineHeight: 1.5,
@@ -41,12 +39,16 @@ export default function ThinkingBlock({ evt, defaultExpanded = true, compact = f
         onClick={() => setCollapsed(!collapsed)}
         style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8 }}
       >
-        <span style={{ color: colors.eventType.reason, fontSize: tFontSize }}>Thinking</span>
-        <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{collapsed ? '▸' : '▾'} {text.length} chars</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 4, background: colors.eventType.reason, flexShrink: 0, opacity: 0.5 }} />
+          <span style={{ color: colors.textDim, fontSize: tFontSize }}>Thinking</span>
+        </span>
+        <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
+        <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{text.length} chars</span>
         <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
       </div>
       {!collapsed && text && (
-        <div className="md-content" style={{ marginTop: 8, padding: '8px 0', borderTop: '1px solid ' + (dark ? 'rgba(156, 39, 176, 0.25)' : 'rgba(156, 39, 176, 0.2)') }}>
+        <div className="md-content" style={{ marginTop: 8, padding: '8px 0', borderTop: '1px solid ' + colors.borderLight }}>
           <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>{text}</Markdown>
         </div>
       )}

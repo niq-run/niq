@@ -24,3 +24,5 @@ export interface WorkerInfo {
   managed?: boolean
   state?: string // "running" | "suspended" (managed only)
 }
+
+export type ViewMode = 'talk' | 'events' | 'workers'
