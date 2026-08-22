@@ -59,7 +59,7 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 		w.handleToolResult(evt)
 	case evt.Type == event.TypeToolRequested:
 		w.handleToolRequest(evt)
-	default:
+	case evt.Type == event.TypeWorkerInput:
 		w.handleInput(evt)
 	}
 }

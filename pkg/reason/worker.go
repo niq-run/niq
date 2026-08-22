@@ -267,6 +267,9 @@ type BaseReasonWorker struct {
 	immediateReasoningCause PreemptCause // why the next reasoning round was triggered
 	currentTraceID          string
 
+	// Rate-limit backoff state (429 handling); guarded by w.mu
+	rateLimitAttempts int // consecutive 429s consumed in the current backoff chain
+
 	cancelReason context.CancelFunc
 	cancelRun    context.CancelFunc
 

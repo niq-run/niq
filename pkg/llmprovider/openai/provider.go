@@ -185,22 +185,25 @@ func (p *Provider) setHeaders(req *http.Request) {
 // ---------------------------------------------------------------------------
 
 type chatRequest struct {
- 	Model            string         `json:"model"`
- 	Messages         []chatMessage  `json:"messages"`
- 	Temperature      *float32       `json:"temperature,omitempty"`
- 	MaxTokens        *int           `json:"max_tokens,omitempty"`
- 	TopP             *float32       `json:"top_p,omitempty"`
- 	Stop             []string       `json:"stop,omitempty"`
- 	Stream           bool           `json:"stream"`
- 	Tools            []chatTool     `json:"tools,omitempty"`
- 	ToolChoice       any            `json:"tool_choice,omitempty"`
- 	StreamOpts       *streamOptions `json:"stream_options,omitempty"`
- 	ReasoningEffort  *string        `json:"reasoning_effort,omitempty"`
+	Model           string         `json:"model"`
+	Messages        []chatMessage  `json:"messages"`
+	Temperature     *float32       `json:"temperature,omitempty"`
+	MaxTokens       *int           `json:"max_tokens,omitempty"`
+	TopP            *float32       `json:"top_p,omitempty"`
+	Stop            []string       `json:"stop,omitempty"`
+	Stream          bool           `json:"stream"`
+	Tools           []chatTool     `json:"tools,omitempty"`
+	ToolChoice      any            `json:"tool_choice,omitempty"`
+	StreamOpts      *streamOptions `json:"stream_options,omitempty"`
+	ReasoningEffort *string        `json:"reasoning_effort,omitempty"`
 }
 
 type chatMessage struct {
-	Role    string      `json:"role"`
-	Content any `json:"content"`
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+	// assistant messages with thinking (DeepSeek reasoning_content); only set
+	// when the message actually carries reasoning.
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 	// assistant messages with tool calls
 	ToolCalls []chatToolCall `json:"tool_calls,omitempty"`
 	// tool messages
@@ -213,15 +216,15 @@ type chatTool struct {
 }
 
 type chatFunction struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"`
 }
 
 type chatToolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
-	Function chatFnCall   `json:"function"`
+	ID       string     `json:"id"`
+	Type     string     `json:"type"`
+	Function chatFnCall `json:"function"`
 }
 
 type streamOptions struct {
@@ -260,10 +263,10 @@ func (p *Provider) buildRequestBody(req *llm.CompletionRequest, stream bool) ([]
 	if stream {
 		cr.StreamOpts = &streamOptions{IncludeUsage: true}
 	}
- 
- 	if ctx.ReasoningEffort != nil {
- 		cr.ReasoningEffort = ctx.ReasoningEffort
- 	}
+
+	if ctx.ReasoningEffort != nil {
+		cr.ReasoningEffort = ctx.ReasoningEffort
+	}
 
 	if len(ctx.Tools) > 0 {
 		cr.Tools = make([]chatTool, len(ctx.Tools))
@@ -312,6 +315,13 @@ func messageToChat(m llm.Message) chatMessage {
 	// Assistant messages may carry tool_calls.
 	if m.Role == llm.RoleAssistant {
 		cm.ToolCalls = contentToToolCalls(m.Content)
+		// Thinking (ContentThinking) must be echoed back in reasoning_content,
+		// not folded into content — providers like DeepSeek require the field
+		// to be present on any assistant message that originally carried
+		// reasoning, and reject it when the text is merged into content.
+		if rc := reasoningToPayload(m.Content); rc != "" {
+			cm.ReasoningContent = rc
+		}
 	}
 
 	cm.Content = contentToPayload(m.Content)
@@ -336,9 +346,10 @@ func contentToToolCalls(blocks []llm.ContentBlock) []chatToolCall {
 	return calls
 }
 
-// contentToPayload builds the OpenAI content field.
-// Returns a plain string when all blocks are text; returns a content array
-// when image blocks are present.
+// contentToPayload builds the OpenAI content field from the non-reasoning
+// blocks. Returns a plain string when all blocks are text; returns a content
+// array when image blocks are present. Thinking blocks (ContentThinking) are
+// intentionally excluded — they belong in reasoning_content, not content.
 func contentToPayload(blocks []llm.ContentBlock) any {
 	hasImage := false
 	for _, b := range blocks {
@@ -349,10 +360,10 @@ func contentToPayload(blocks []llm.ContentBlock) any {
 	}
 
 	if !hasImage {
-		// Simple case: all text/thinking — concatenate.
+		// Simple case: plain text only.
 		var sb strings.Builder
 		for _, b := range blocks {
-			if b.Type == llm.ContentText || b.Type == llm.ContentThinking {
+			if b.Type == llm.ContentText {
 				sb.WriteString(b.Text)
 			}
 		}
@@ -382,6 +393,18 @@ func contentToPayload(blocks []llm.ContentBlock) any {
 		}
 	}
 	return parts
+}
+
+// reasoningToPayload concatenates thinking blocks into the reasoning_content
+// string. Returns "" when the message carries no thinking.
+func reasoningToPayload(blocks []llm.ContentBlock) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if b.Type == llm.ContentThinking {
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
 }
 
 func convertToolChoice(tc llm.ToolChoice) any {
@@ -423,10 +446,10 @@ type choice struct {
 }
 
 type chatRespMsg struct {
- 	Role             string          `json:"role"`
- 	Content          json.RawMessage `json:"content"`
- 	ReasoningContent string          `json:"reasoning_content"`
- 	ToolCalls        []chatToolCall  `json:"tool_calls"`
+	Role             string          `json:"role"`
+	Content          json.RawMessage `json:"content"`
+	ReasoningContent string          `json:"reasoning_content"`
+	ToolCalls        []chatToolCall  `json:"tool_calls"`
 }
 
 type usage struct {
@@ -451,14 +474,14 @@ func (p *Provider) toCompletionResponse(cr *chatCompletionResponse) *llm.Complet
 	if len(cr.Choices) > 0 {
 		c := cr.Choices[0]
 
- 		// Extract reasoning_content (DeepSeek-style thinking, separate top-level field).
- 		if c.Message.ReasoningContent != "" {
- 			msg.Content = append(msg.Content, llm.ContentBlock{
- 				Type: llm.ContentThinking,
- 				Text: c.Message.ReasoningContent,
- 			})
- 		}
- 
+		// Extract reasoning_content (DeepSeek-style thinking, separate top-level field).
+		if c.Message.ReasoningContent != "" {
+			msg.Content = append(msg.Content, llm.ContentBlock{
+				Type: llm.ContentThinking,
+				Text: c.Message.ReasoningContent,
+			})
+		}
+
 		// Parse content blocks (may be string, text+thinking array, or null).
 		blocks := parseContentBlocks(c.Message.Content)
 		msg.Content = append(msg.Content, blocks...)
@@ -491,55 +514,55 @@ func (p *Provider) toCompletionResponse(cr *chatCompletionResponse) *llm.Complet
 	return resp
 }
 
- // contentPart mirrors a single element in the OpenAI content array.
- type contentPart struct {
- 	Type      string `json:"type"`
- 	Text      string `json:"text"`
- 	Thinking  string `json:"thinking"`
- 	Signature string `json:"signature"`
- }
- 
- // parseContentBlocks parses an OpenAI response content field (string or array)
- // into ContentBlocks, preserving text, thinking, and other typed content.
- func parseContentBlocks(raw json.RawMessage) []llm.ContentBlock {
- 	if len(raw) == 0 {
- 		return nil
- 	}
- 
- 	// String case.
- 	var s string
- 	if json.Unmarshal(raw, &s) == nil {
- 		if s == "" {
- 			return nil
- 		}
- 		return []llm.ContentBlock{{Type: llm.ContentText, Text: s}}
- 	}
- 
- 	// Array case.
- 	var parts []contentPart
- 	if json.Unmarshal(raw, &parts) != nil {
- 		return nil
- 	}
- 
- 	var blocks []llm.ContentBlock
- 	for _, p := range parts {
- 		switch p.Type {
- 		case "text":
- 			if p.Text != "" {
- 				blocks = append(blocks, llm.ContentBlock{Type: llm.ContentText, Text: p.Text})
- 			}
- 		case "thinking":
- 			if p.Thinking != "" {
- 				blocks = append(blocks, llm.ContentBlock{
- 					Type:      llm.ContentThinking,
- 					Text:      p.Thinking,
- 					Signature: p.Signature,
- 				})
- 			}
- 		}
- 	}
- 	return blocks
- }
+// contentPart mirrors a single element in the OpenAI content array.
+type contentPart struct {
+	Type      string `json:"type"`
+	Text      string `json:"text"`
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
+}
+
+// parseContentBlocks parses an OpenAI response content field (string or array)
+// into ContentBlocks, preserving text, thinking, and other typed content.
+func parseContentBlocks(raw json.RawMessage) []llm.ContentBlock {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	// String case.
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if s == "" {
+			return nil
+		}
+		return []llm.ContentBlock{{Type: llm.ContentText, Text: s}}
+	}
+
+	// Array case.
+	var parts []contentPart
+	if json.Unmarshal(raw, &parts) != nil {
+		return nil
+	}
+
+	var blocks []llm.ContentBlock
+	for _, p := range parts {
+		switch p.Type {
+		case "text":
+			if p.Text != "" {
+				blocks = append(blocks, llm.ContentBlock{Type: llm.ContentText, Text: p.Text})
+			}
+		case "thinking":
+			if p.Thinking != "" {
+				blocks = append(blocks, llm.ContentBlock{
+					Type:      llm.ContentThinking,
+					Text:      p.Thinking,
+					Signature: p.Signature,
+				})
+			}
+		}
+	}
+	return blocks
+}
 
 // ---------------------------------------------------------------------------
 // SSE streaming
@@ -551,16 +574,16 @@ type chatChunk struct {
 }
 
 type chunkChoice struct {
-	Index        int         `json:"index"`
-	Delta        chunkDelta  `json:"delta"`
-	FinishReason *string     `json:"finish_reason"`
+	Index        int        `json:"index"`
+	Delta        chunkDelta `json:"delta"`
+	FinishReason *string    `json:"finish_reason"`
 }
 
 type chunkDelta struct {
- 	Role             string          `json:"role"`
- 	Content          string          `json:"content"`
- 	ReasoningContent string          `json:"reasoning_content"`
- 	ToolCalls        []chunkToolCall `json:"tool_calls"`
+	Role             string          `json:"role"`
+	Content          string          `json:"content"`
+	ReasoningContent string          `json:"reasoning_content"`
+	ToolCalls        []chunkToolCall `json:"tool_calls"`
 }
 
 type chunkToolCall struct {
@@ -577,11 +600,11 @@ type chunkFnCall struct {
 
 // inProgressCall accumulates a streaming tool call across chunks.
 type inProgressCall struct {
-	id        string
-	name      string
-	nameDone  bool
-	argsBuf   strings.Builder
-	argsDone  bool
+	id       string
+	name     string
+	nameDone bool
+	argsBuf  strings.Builder
+	argsDone bool
 }
 
 func (p *Provider) readStream(body io.ReadCloser, es *llm.EventStream) {
@@ -592,12 +615,12 @@ func (p *Provider) readStream(body io.ReadCloser, es *llm.EventStream) {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var (
-		textStarted bool
-		textBuf     strings.Builder
- 		thinkingStarted bool
- 		thinkingBuf     strings.Builder
-		calls       = make(map[int]*inProgressCall)
-		usage       *llm.Usage
+		textStarted     bool
+		textBuf         strings.Builder
+		thinkingStarted bool
+		thinkingBuf     strings.Builder
+		calls           = make(map[int]*inProgressCall)
+		usage           *llm.Usage
 	)
 
 	for scanner.Scan() {
@@ -620,22 +643,22 @@ func (p *Provider) readStream(body io.ReadCloser, es *llm.EventStream) {
 		for _, c := range chunk.Choices {
 			d := c.Delta
 
- 			// --- thinking ---
- 			if d.ReasoningContent != "" {
- 				if !thinkingStarted {
- 					es.Push(llm.EventThinkingStart{})
- 					thinkingStarted = true
- 				}
- 				thinkingBuf.WriteString(d.ReasoningContent)
- 				es.Push(llm.EventThinkingDelta{Delta: d.ReasoningContent})
- 			}
- 
+			// --- thinking ---
+			if d.ReasoningContent != "" {
+				if !thinkingStarted {
+					es.Push(llm.EventThinkingStart{})
+					thinkingStarted = true
+				}
+				thinkingBuf.WriteString(d.ReasoningContent)
+				es.Push(llm.EventThinkingDelta{Delta: d.ReasoningContent})
+			}
+
 			// --- text ---
 			if d.Content != "" {
- 				if thinkingStarted {
- 					es.Push(llm.EventThinkingEnd{})
- 					thinkingStarted = false
- 				}
+				if thinkingStarted {
+					es.Push(llm.EventThinkingEnd{})
+					thinkingStarted = false
+				}
 				if !textStarted {
 					es.Push(llm.EventTextStart{})
 					textStarted = true
@@ -668,10 +691,10 @@ func (p *Provider) readStream(body io.ReadCloser, es *llm.EventStream) {
 
 			// --- finish ---
 			if c.FinishReason != nil && *c.FinishReason != "" {
- 				if thinkingStarted {
- 					es.Push(llm.EventThinkingEnd{})
- 					thinkingStarted = false
- 				}
+				if thinkingStarted {
+					es.Push(llm.EventThinkingEnd{})
+					thinkingStarted = false
+				}
 				if textStarted {
 					es.Push(llm.EventTextEnd{})
 				}
@@ -703,13 +726,13 @@ func (p *Provider) readStream(body io.ReadCloser, es *llm.EventStream) {
 		Usage:      usage,
 		StopReason: "stop",
 	}
- 
- 	if thinkingBuf.Len() > 0 {
- 		msg.Content = append(msg.Content, llm.ContentBlock{
- 			Type: llm.ContentThinking,
- 			Text: thinkingBuf.String(),
- 		})
- 	}
+
+	if thinkingBuf.Len() > 0 {
+		msg.Content = append(msg.Content, llm.ContentBlock{
+			Type: llm.ContentThinking,
+			Text: thinkingBuf.String(),
+		})
+	}
 
 	if textBuf.Len() > 0 {
 		msg.Content = append(msg.Content, llm.ContentBlock{
@@ -757,22 +780,73 @@ func (p *Provider) decodeError(resp *http.Response) error {
 		}
 	}
 	return &llm.LLMError{
-		Type:    errorTypeFromStatus(resp.StatusCode),
+		Type:    classifyError(resp.StatusCode, wrapper.Error),
 		Message: wrapper.Error.Message,
 	}
 }
 
-func errorTypeFromStatus(code int) llm.ErrorType {
+// classifyError maps an HTTP status and the provider's error body to a
+// structured LLM error type. Only a genuine context-window overflow is
+// reported as ErrorContextLength — the one 4xx the reason worker answers with
+// compression-and-retry. Every other client error (e.g. DeepSeek's
+// "reasoning_content must be passed back", which is a malformed-request
+// contract violation, not an overflow) is reported as ErrorBadRequest so the
+// round fails cleanly instead of compressing-and-looping forever.
+func classifyError(code int, ae apiError) llm.ErrorType {
 	switch {
 	case code == 401 || code == 403:
 		return llm.ErrorAuthFailed
 	case code == 429:
 		return llm.ErrorRateLimit
+	case code >= 500:
+		return llm.ErrorProvider
 	case code >= 400:
-		return llm.ErrorContextLength
+		if isContextLengthError(ae) {
+			return llm.ErrorContextLength
+		}
+		return llm.ErrorBadRequest
+	default:
+		return llm.ErrorProvider // 2xx/3xx with a decodable error body
+	}
+}
+
+// isContextLengthError reports whether a provider error denotes a context
+// window overflow — the only 4xx the reason worker should answer with
+// compression. Detection keys off both the structured error type and common
+// message phrasing, because providers vary in how they flag the overflow.
+func isContextLengthError(ae apiError) bool {
+	if ae.Type == "context_length_exceeded" || ae.Type == "context_length" {
+		return true
+	}
+	msg := strings.ToLower(ae.Message)
+	for _, needle := range []string{
+		"context length",
+		"maximum context",
+		"context limit",
+		"token limit",
+		"exceeds the context",
+		"too many tokens",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func errorTypeFromStatus(code int) llm.ErrorType {
+	// Used only as a fallback when the error body cannot be decoded, so we
+	// cannot distinguish a context overflow from any other 4xx. Default to a
+	// non-retriable client error rather than ErrorContextLength, which would
+	// otherwise trigger an unbounded compress-and-retry loop.
+	switch {
+	case code == 401 || code == 403:
+		return llm.ErrorAuthFailed
+	case code == 429:
+		return llm.ErrorRateLimit
 	case code >= 500:
 		return llm.ErrorProvider
 	default:
-		return llm.ErrorProvider // unknown; treat as provider error
+		return llm.ErrorBadRequest
 	}
 }

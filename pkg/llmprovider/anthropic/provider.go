@@ -752,12 +752,18 @@ func (p *Provider) decodeError(resp *http.Response) error {
 		}
 	}
 	return &llm.LLMError{
-		Type:    errorTypeFromStatus(resp.StatusCode),
+		Type:    classifyError(resp.StatusCode, wrapper.Error),
 		Message: wrapper.Error.Message,
 	}
 }
 
-func errorTypeFromStatus(code int) llm.ErrorType {
+// classifyError maps an HTTP status and the provider's error body to a
+// structured LLM error type. Only a genuine context-window overflow is
+// reported as ErrorContextLength — the one 4xx the reason worker answers with
+// compression-and-retry. Every other client error (e.g. a malformed-request
+// contract violation) is reported as ErrorBadRequest so the round fails
+// cleanly instead of compressing-and-looping forever.
+func classifyError(code int, ae anthropicAPIError) llm.ErrorType {
 	switch {
 	case code == 401 || code == 403:
 		return llm.ErrorAuthFailed
@@ -768,8 +774,54 @@ func errorTypeFromStatus(code int) llm.ErrorType {
 	case code >= 500:
 		return llm.ErrorProvider
 	case code >= 400:
-		return llm.ErrorContextLength
+		if isContextLengthError(ae) {
+			return llm.ErrorContextLength
+		}
+		return llm.ErrorBadRequest
 	default:
 		return llm.ErrorProvider
+	}
+}
+
+// isContextLengthError reports whether a provider error denotes a context
+// window overflow — the only 4xx the reason worker should answer with
+// compression. Detection keys off both the structured error type and common
+// message phrasing, because providers vary in how they flag the overflow.
+func isContextLengthError(ae anthropicAPIError) bool {
+	if ae.Type == "context_length_exceeded" || ae.Type == "context_length" {
+		return true
+	}
+	msg := strings.ToLower(ae.Message)
+	for _, needle := range []string{
+		"context length",
+		"maximum context",
+		"context limit",
+		"token limit",
+		"exceeds the context",
+		"too many tokens",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func errorTypeFromStatus(code int) llm.ErrorType {
+	// Used only as a fallback when the error body cannot be decoded, so we
+	// cannot distinguish a context overflow from any other 4xx. Default to a
+	// non-retriable client error rather than ErrorContextLength, which would
+	// otherwise trigger an unbounded compress-and-retry loop.
+	switch {
+	case code == 401 || code == 403:
+		return llm.ErrorAuthFailed
+	case code == 429 || code == 529:
+		return llm.ErrorRateLimit
+	case code == 408 || code == 504:
+		return llm.ErrorTimeout
+	case code >= 500:
+		return llm.ErrorProvider
+	default:
+		return llm.ErrorBadRequest
 	}
 }

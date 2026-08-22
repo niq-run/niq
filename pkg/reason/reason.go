@@ -29,7 +29,7 @@ func (w *BaseReasonWorker) reason(ctx context.Context) {
 	w.cancelReason = cancel
 	w.mu.Unlock()
 
-	stream, err := w.openStream(reasonCtx, req)
+	stream, err := w.openStream(reasonCtx, req, traceID)
 	if err != nil {
 		w.handleStreamStartError(ctx, reasonCtx, traceID, err)
 		return
@@ -95,33 +95,19 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	return traceID, req
 }
 
-// openStream starts the LLM stream, retrying on transient errors.
-func (w *BaseReasonWorker) openStream(reasonCtx context.Context, req *llm.CompletionRequest) (*llm.EventStream, error) {
+// openStream starts the LLM stream, retrying on transient errors. Error
+// policy (what to retry, and what recovery to schedule for a terminal error)
+// lives in llmerror.go.
+func (w *BaseReasonWorker) openStream(reasonCtx context.Context, req *llm.CompletionRequest, traceID string) (*llm.EventStream, error) {
 	var stream *llm.EventStream
 	err := retry(reasonCtx, 5, func() (bool, error) {
 		s, callErr := w.llmProvider.CompleteStream(reasonCtx, req)
 		if callErr == nil {
 			stream = s
+			w.resetRateLimitBackoff()
 			return false, nil
 		}
-		var llmErr *llm.LLMError
-		if !errors.As(callErr, &llmErr) {
-			// A non-LLMError is not classified; treat it as transient and retry.
-			return true, callErr
-		}
-		if llmErr.Type == llm.ErrorContextLength {
-			// The context is over the hard limit: retrying cannot help. Ask to
-			// compress via a meta update request (single auditable path), and
-			// return a non-retriable error so this round ends; the compaction
-			// completes asynchronously and schedules the next round on the
-			// shrunk context.
-			w.emitMetaUpdateRequest(reasonCtx, "compress", nil)
-			return false, callErr
-		}
-		// Retry everything except authentication: rate limits, timeouts,
-		// provider-side blips and other transient LLM errors all deserve a few
-		// backoff attempts; only an auth failure is permanent.
-		return llmErr.Type != llm.ErrorAuthFailed, callErr
+		return w.decideLLMError(reasonCtx, traceID, callErr)
 	})
 	return stream, err
 }
@@ -283,8 +269,18 @@ func (w *BaseReasonWorker) handleStreamStartError(ctx context.Context, reasonCtx
 	w.mu.Lock()
 	w.cancelReason = nil
 
+	if errors.Is(err, errRateLimitBackoff) {
+		// A retry reminder is already scheduled; end the round quietly. The
+		// timer.reminder triggers the next attempt — no tryReason here.
+		w.broadcastReasonEnd(traceID, StopReasonRateLimited)
+		w.isReasoning = false
+		w.mu.Unlock()
+		return
+	}
+
 	if reasonCtx.Err() != nil {
 		log.Printf("[reason %s] reasoning interrupted", w.ID())
+		w.interruptReason = "" // consumed; don't let it leak into a later round
 		w.broadcastReasonEnd(traceID, StopReasonInterrupted)
 		w.isReasoning = false
 		w.mu.Unlock()
@@ -303,6 +299,7 @@ func (w *BaseReasonWorker) handleStreamStartError(ctx context.Context, reasonCtx
 // returning.
 func (w *BaseReasonWorker) finishInterrupted(ctx context.Context, traceID string, out streamOutcome) {
 	cause := w.interruptReason
+	w.interruptReason = "" // consumed; don't let it leak into a later round
 	if cause == "" {
 		cause = "unknown"
 	}
@@ -521,9 +518,10 @@ func (w *BaseReasonWorker) broadcastReasonStart(traceID string) {
 type StopReason string
 
 const (
-	StopReasonInterrupted StopReason = "interrupted" // reasoning interrupted mid-stream
-	StopReasonError       StopReason = "error"       // LLM call failed
-	StopReasonAborted     StopReason = "aborted"     // abort received, no reasoning was in flight
+	StopReasonInterrupted StopReason = "interrupted"  // reasoning interrupted mid-stream
+	StopReasonError       StopReason = "error"        // LLM call failed
+	StopReasonAborted     StopReason = "aborted"      // abort received, no reasoning was in flight
+	StopReasonRateLimited StopReason = "rate_limited" // 429: round paused for reminder-based backoff
 )
 
 func (w *BaseReasonWorker) broadcastReasonEnd(traceID string, stopReason StopReason) {

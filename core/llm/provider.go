@@ -41,6 +41,7 @@ const (
 	ErrorAuthFailed    ErrorType = "authentication"
 	ErrorRateLimit     ErrorType = "rate_limit"
 	ErrorContextLength ErrorType = "context_length"
+	ErrorBadRequest    ErrorType = "bad_request"
 	ErrorProvider      ErrorType = "provider"
 	ErrorTimeout       ErrorType = "timeout"
 	ErrorAborted       ErrorType = "aborted"
