@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/54c1/niq/core/worker"
@@ -127,6 +128,7 @@ func RunSwarm(opts RunOptions) error {
 			}
 		}
 		if hiwWorker != nil {
+			log.Printf("[swarm] WebUI: %s", webuiURL(opts.WebUIAddr))
 			s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, opts.WebUIAddr, false)
 			go func() {
 				if err := s.Start(ctx); err != nil {
@@ -151,6 +153,24 @@ func RunSwarm(opts RunOptions) error {
 
 // workerConfigParams converts a YAML WorkerConfig into the Params map consumed
 // by the builders.
+// webuiURL turns a listen address (":19763", "127.0.0.1:8080") into a
+// clickable URL for the startup banner. 0.0.0.0 maps to localhost.
+func webuiURL(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "http://localhost" + addr
+	}
+	if strings.HasPrefix(addr, "0.0.0.0:") {
+		return "http://localhost:" + strings.TrimPrefix(addr, "0.0.0.0:")
+	}
+	if !strings.Contains(addr, "://") {
+		return "http://" + addr
+	}
+	return addr
+}
+
 func workerConfigParams(wc WorkerConfig) map[string]any {
 	p := map[string]any{}
 	if wc.Instruction != "" {

@@ -463,10 +463,12 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	}
 	log.Printf("[reason %s] requesting %d tool call(s) via bus: %v", w.ID(), len(busCalls), toolNames)
 	callsByTarget := make(map[string][]llm.ContentBlock)
+	var unavailable []string
 	for _, tc := range busCalls {
 		t, ok := w.tools[tc.ToolName]
 		if !ok {
 			log.Printf("[reason %s] unavailable tool: %s - not dispatched", w.ID(), tc.ToolName)
+			unavailable = append(unavailable, tc.ToolName)
 			w.transcript.Apply(ToolResultPatch{
 				CallID: tc.ToolCallID,
 				Name:   tc.ToolName,
@@ -483,6 +485,17 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	for target, calls := range callsByTarget {
 		w.toolCallTracker.Add(target, calls)
 		w.sendToolRequests(target, w.ID(), calls, traceID)
+	}
+	if len(unavailable) > 0 {
+		// Surface the fact that some tool calls could not be dispatched, so
+		// the user sees it in the stream instead of a silent stall.
+		log.Printf("[reason %s] unavailable tool call(s): %s", w.ID(), strings.Join(unavailable, ", "))
+		evt := event.New("reason.response", w.ID(), map[string]any{
+			"content":     []any{fmt.Sprintf("tool call unavailable: %s", strings.Join(unavailable, ", "))},
+			"stop_reason": "tool_unavailable",
+		})
+		evt.TraceID = traceID
+		_ = w.Channel.Broadcast(context.Background(), evt)
 	}
 	w.isReasoning = false
 	w.mu.Unlock()

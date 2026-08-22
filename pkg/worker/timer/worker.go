@@ -36,6 +36,7 @@ func New(cfg Config) *Worker {
 	return &Worker{
 		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
 			event.NewPattern(event.TypeToolRequested),
+			event.NewPattern(event.TypeToolCancel),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),
 		timers: make(map[string]*Entry),
@@ -97,7 +98,26 @@ func (w *Worker) process(evt event.Event) {
 			return
 		}
 		w.handleToolCall(evt)
+	case event.TypeToolCancel:
+		w.handleCancelEvent(evt)
 	}
+}
+
+// handleCancelEvent stops a pending timer in response to a tool.cancel event
+// (e.g. from a reason worker cancelling its set_tool_timeout once the watched
+// tool completes). Payload carries the timer_id being cancelled.
+func (w *Worker) handleCancelEvent(evt event.Event) {
+	timerID, _ := evt.Payload["timer_id"].(string)
+	if timerID == "" {
+		return
+	}
+	w.mu.Lock()
+	e, ok := w.timers[timerID]
+	if ok {
+		e.Stop()
+		delete(w.timers, timerID)
+	}
+	w.mu.Unlock()
 }
 
 func (w *Worker) handleToolCall(evt event.Event) {

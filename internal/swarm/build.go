@@ -258,7 +258,7 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 	id := cfg.ID
 	if id == "" {
-		id = "hiw"
+		id = "default hiw"
 	}
 	connect := specConnect(ctx, id, "hiw", []string{"*"}, []event.EventPattern{event.NewPattern("*")})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {

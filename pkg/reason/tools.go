@@ -357,13 +357,15 @@ func (w *BaseReasonWorker) sendFail(callID, toolName, callerID, errMsg string) {
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
-// toolDefs builds the LLM tool definitions from the known tools, rebuilding the
-// sanitized-name mapping so the LLM-facing name is the w.tools key.
+// toolDefs builds the LLM tool definitions from the known tools. Tools are
+// stored in w.tools with their LLM-facing name already encoded (encodeToolName
+// in handleWorkerReady), so the definition reuses t.Name as-is — re-encoding
+// here would double the provider prefix.
 func toolDefs(w *BaseReasonWorker, tools []worker.Tool) []llm.ToolDef {
 	out := make([]llm.ToolDef, len(tools))
 	for i, t := range tools {
 		out[i] = llm.ToolDef{
-			Name:        encodeToolName(w, t),
+			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  t.Parameters,
 		}

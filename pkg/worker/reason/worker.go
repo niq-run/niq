@@ -37,8 +37,7 @@ type Config struct {
 
 	// ToolProvider supplies the tools this worker exposes on the bus. nil uses
 	// the default set (send_message, list_workers, context.compress,
-	// context.rotate). To customize, supply a provider listing every tool you
-	// want, defaults included.
+	// context.rotate). To customize, supply a provider listing every tool you want
 	ToolProvider reasonBase.ToolProvider
 
 	// SeedMessages are applied to the transcript at construction: the
