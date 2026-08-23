@@ -11,6 +11,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -91,6 +93,30 @@ func SeedTemplates(dir string) error {
 		}
 	}
 	return nil
+}
+
+// ListTemplates returns the available project template names (without the
+// .yaml suffix), preferring the on-disk common/templates dir (seeded + user
+// editable) and falling back to the embedded built-ins.
+func ListTemplates() ([]string, error) {
+	if files, err := filepath.Glob(filepath.Join(TemplatesDir(), "*.yaml")); err == nil && len(files) > 0 {
+		names := make([]string, 0, len(files))
+		for _, f := range files {
+			names = append(names, strings.TrimSuffix(filepath.Base(f), ".yaml"))
+		}
+		sort.Strings(names)
+		return names, nil
+	}
+	entries, err := presetFS.ReadDir("preset")
+	if err != nil {
+		return nil, fmt.Errorf("swarm: read embedded templates: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, strings.TrimSuffix(e.Name(), ".yaml"))
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // LoadTemplate loads a project template from the on-disk templates dir,

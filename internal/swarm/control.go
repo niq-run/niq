@@ -31,6 +31,11 @@ type ControlOptions struct {
 func RunControl(opts ControlOptions) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	// Make sure the built-in project templates are on disk so the new-project
+	// dropdown has something to offer on first run.
+	if err := SeedTemplates(TemplatesDir()); err != nil {
+		log.Printf("[control] seed templates: %v", err)
+	}
 	return NewControl(opts.Addr).Start(ctx)
 }
 
@@ -79,7 +84,9 @@ func (c *Control) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/context", func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		json.NewEncoder(w).Encode(webui.ContextInfo{Mode: "control", ControlURL: c.controlURL})
 	})
+	mux.HandleFunc("GET /api/templates", c.handleListTemplates)
 	mux.HandleFunc("GET /api/projects", c.handleListProjects)
+	mux.HandleFunc("POST /api/projects", c.handleCreateProject)
 	mux.HandleFunc("POST /api/projects/{id}/start", c.handleStartProject)
 
 	assets, err := webui.AssetsFS()
@@ -88,7 +95,7 @@ func (c *Control) Start(ctx context.Context) error {
 	}
 	mux.Handle("GET /", stdhttp.FileServer(stdhttp.FS(assets)))
 
-	c.server = &stdhttp.Server{Handler: mux}
+	c.server = &stdhttp.Server{Handler: corsControl(mux)}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -103,6 +110,17 @@ func (c *Control) Start(ctx context.Context) error {
 	return nil
 }
 
+// handleListTemplates returns the available project template names for the
+// new-project dropdown.
+func (c *Control) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	names, err := ListTemplates()
+	if err != nil {
+		stdhttp.Error(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(names)
+}
+
 // handleListProjects returns the project definitions.
 func (c *Control) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	projects, err := ListProjects()
@@ -113,6 +131,32 @@ func (c *Control) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Reques
 	json.NewEncoder(w).Encode(projects)
 }
 
+// handleCreateProject creates a project from a named template and immediately
+// starts it, returning the resolved WebUI URL.
+func (c *Control) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	var body struct {
+		ID       string `json:"id"`
+		Template string `json:"template"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" {
+		stdhttp.Error(w, "id is required", 400)
+		return
+	}
+	if body.Template == "" {
+		body.Template = "dev"
+	}
+	tmpl, err := LoadTemplate(TemplatesDir(), body.Template)
+	if err != nil {
+		stdhttp.Error(w, "unknown template: "+body.Template, 400)
+		return
+	}
+	if _, err := CreateProject(body.ID, tmpl); err != nil {
+		stdhttp.Error(w, err.Error(), 409)
+		return
+	}
+	c.launchProject(w, body.ID)
+}
+
 // handleStartProject launches a project as its own process on dynamic ports and
 // returns the resolved WebUI URL for the user to be redirected to.
 func (c *Control) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
@@ -121,7 +165,12 @@ func (c *Control) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Reques
 		stdhttp.Error(w, "project not found", 404)
 		return
 	}
+	c.launchProject(w, id)
+}
 
+// launchProject spawns `niq project run <id>` on dynamic ports and answers with
+// the project's resolved WebUI URL.
+func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 	exe, err := os.Executable()
 	if err != nil {
 		stdhttp.Error(w, "control: resolve executable: "+err.Error(), 500)
@@ -144,6 +193,21 @@ func (c *Control) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Reques
 		"webui_url":  localhostURL(webUI),
 		"webui_port": portOf(webUI),
 		"bus_port":   resolvedBus(id),
+	})
+}
+
+// corsControl allows a project WebUI (cross-origin, on its own port) to call the
+// control plane's projects/start APIs.
+func corsControl(next stdhttp.Handler) stdhttp.Handler {
+	return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(stdhttp.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

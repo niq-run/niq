@@ -65,6 +65,71 @@ func TestControlContextAndList(t *testing.T) {
 	}
 }
 
+// newControl starts a Control on an ephemeral port and returns the base URL.
+func newControl(t *testing.T) string {
+	t.Helper()
+	c := NewControl("127.0.0.1:0")
+	addr, err := c.Bind()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = c.Start(ctx) }()
+	return "http://" + addr
+}
+
+// TestControlTemplates verifies the template list is served (dev is always
+// available, embedded if not yet seeded).
+func TestControlTemplates(t *testing.T) {
+	base := newControl(t)
+	code, body := doGet(t, base+"/api/templates")
+	if code != 200 {
+		t.Fatalf("templates status=%d: %s", code, body)
+	}
+	if !strings.Contains(body, "dev") {
+		t.Fatalf("templates missing dev: %s", body)
+	}
+}
+
+// TestControlCreateRejectsDuplicate asserts re-creating an existing project
+// returns 409 before any subprocess is launched.
+func TestControlCreateRejectsDuplicate(t *testing.T) {
+	setupProjectsRoot(t)
+	if _, err := CreateProject("taken", fakeTemplate()); err != nil {
+		t.Fatal(err)
+	}
+	base := newControl(t)
+
+	resp, err := http.Post(base+"/api/projects", "application/json", strings.NewReader(`{"id":"taken","template":"dev"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 409 {
+		t.Fatalf("duplicate create status=%d, want 409", resp.StatusCode)
+	}
+}
+
+// TestControlCreateRejectsUnknownTemplate asserts a bad template name returns 400
+// without creating anything.
+func TestControlCreateRejectsUnknownTemplate(t *testing.T) {
+	setupProjectsRoot(t)
+	base := newControl(t)
+
+	resp, err := http.Post(base+"/api/projects", "application/json", strings.NewReader(`{"id":"x","template":"no-such-template"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("unknown template status=%d, want 400", resp.StatusCode)
+	}
+	if _, err := LoadProject("x"); err == nil {
+		t.Fatal("project should not have been created")
+	}
+}
+
 // TestControlStartProjectNotFound asserts an unknown project id is rejected
 // before any subprocess is attempted.
 func TestControlStartProjectNotFound(t *testing.T) {
