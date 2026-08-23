@@ -133,8 +133,8 @@ func runProject(args []string) error {
 
 	case len(args) >= 2 && args[0] == "run":
 		id := args[1]
-		busAddr := fs.String("bus", ":0", "httptrans bus listen address")
-		webUIAddr := fs.String("webui", ":0", "WebUI listen address")
+		busAddr := fs.String("bus", "", "httptrans bus listen address (empty reuses the project's persisted port)")
+		webUIAddr := fs.String("webui", "", "WebUI listen address (empty reuses the project's persisted port)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}

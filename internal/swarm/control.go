@@ -176,7 +176,9 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 		stdhttp.Error(w, "control: resolve executable: "+err.Error(), 500)
 		return
 	}
-	cmd := exec.Command(exe, "project", "run", id, "--bus", ":0", "--webui", ":0")
+	// No --bus/--webui: Reuse the persisted (already-assigned) ports so a
+	// re-started project lands on the same addresses instead of jumping.
+	cmd := exec.Command(exe, "project", "run", id)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

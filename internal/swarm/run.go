@@ -91,19 +91,25 @@ func RunProject(opts ProjectRunOptions) error {
 	}
 	projDir := ProjectDir(opts.ProjectID)
 
+	// Ports are stable: reuse the project's persisted bus/WebUI ports across runs
+	// so a restarted project lands on the same addresses. Only fall back to an
+	// ephemeral (:0) port when none is persisted yet (first run) or the caller
+	// explicitly overrides with --bus/--webui.
 	busAddr := opts.BusAddr
-	if busAddr == "" && p.Ports.Bus != 0 {
-		busAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.Bus)
-	}
 	if busAddr == "" {
-		busAddr = ":0"
+		if p.Ports.Bus != 0 {
+			busAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.Bus)
+		} else {
+			busAddr = ":0"
+		}
 	}
 	webUIAddr := opts.WebUIAddr
-	if webUIAddr == "" && p.Ports.WebUI != 0 {
-		webUIAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
-	}
 	if webUIAddr == "" {
-		webUIAddr = ":0"
+		if p.Ports.WebUI != 0 {
+			webUIAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
+		} else {
+			webUIAddr = ":0"
+		}
 	}
 
 	onResolved := func(bus, webui string) {
@@ -194,15 +200,22 @@ func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
 	// Optional HTTP transport bus (for external/three-party workers).
 	var busAddr string
 	if opts.BusAddr != "" {
-		busSrv := httptrans.NewServer(engine, registry, opts.BusAddr)
-		if busAddr, err = busSrv.Bind(); err != nil {
+		startBus := func(addr string) (string, error) {
+			srv := httptrans.NewServer(engine, registry, addr)
+			b, err := srv.Bind()
+			if err != nil {
+				return "", err
+			}
+			go func() {
+				if err := srv.Start(ctx); err != nil {
+					log.Printf("[swarm] httptrans error: %v", err)
+				}
+			}()
+			return b, nil
+		}
+		if busAddr, err = bindServer(opts.BusAddr, startBus); err != nil {
 			return fmt.Errorf("swarm: bind bus: %w", err)
 		}
-		go func() {
-			if err := busSrv.Start(ctx); err != nil {
-				log.Printf("[swarm] httptrans error: %v", err)
-			}
-		}()
 	}
 
 	// Build context and register builders.
@@ -264,22 +277,29 @@ func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
 	if opts.WebUIAddr != "" && hiwID != "" {
 		if h, ok := workerSvc.Worker(hiwID); ok {
 			if hiwWorker, ok := h.(*hiw.Worker); ok {
-				s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, opts.WebUIAddr, false)
-				s.SetContext(opts.ContextInfo)
-				if webUIAddr, err = s.Bind(); err != nil {
-					return fmt.Errorf("swarm: bind webui: %w", err)
-				}
-				url := localhostURL(webUIAddr)
-				log.Printf("[%s] WebUI: %s", opts.Banner, url)
-				fmt.Printf("%s WebUI listening at %s\n", opts.Banner, url)
-				go func() {
-					if err := s.Start(ctx); err != nil {
-						log.Printf("[%s] webui error: %v", opts.Banner, err)
+				startWebUI := func(addr string) (string, error) {
+					s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, addr, false)
+					s.SetContext(opts.ContextInfo)
+					b, err := s.Bind()
+					if err != nil {
+						return "", err
 					}
-				}()
-				if !opts.NoBrowser {
-					time.Sleep(400 * time.Millisecond)
-					_ = openBrowser(url)
+					url := localhostURL(b)
+					log.Printf("[%s] WebUI: %s", opts.Banner, url)
+					fmt.Printf("%s WebUI listening at %s\n", opts.Banner, url)
+					go func() {
+						if err := s.Start(ctx); err != nil {
+							log.Printf("[%s] webui error: %v", opts.Banner, err)
+						}
+					}()
+					if !opts.NoBrowser {
+						time.Sleep(400 * time.Millisecond)
+						_ = openBrowser(url)
+					}
+					return b, nil
+				}
+				if webUIAddr, err = bindServer(opts.WebUIAddr, startWebUI); err != nil {
+					return fmt.Errorf("swarm: bind webui: %w", err)
 				}
 			}
 		}
@@ -334,6 +354,22 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 		p["root_dir"] = wc.RootDir
 	}
 	return p
+}
+
+// bindServer binds a listener at reqAddr via start; if a specific (non-":0")
+// address fails to bind (e.g. a stale process still owns the port), it falls back
+// to an ephemeral ":0" port so a restarted project still comes up. The resolved
+// (possibly fallback) host:port is returned to the caller to be persisted.
+func bindServer(reqAddr string, start func(addr string) (string, error)) (string, error) {
+	resolved, err := start(reqAddr)
+	if err == nil || reqAddr == ":0" {
+		return resolved, err
+	}
+	log.Printf("[swarm] addr %s unavailable (%v); falling back to an ephemeral port", reqAddr, err)
+	if resolved2, err2 := start(":0"); err2 == nil {
+		return resolved2, nil
+	}
+	return "", err
 }
 
 // localhostURL turns a resolved listen address (e.g. "[::]:19763") into a
