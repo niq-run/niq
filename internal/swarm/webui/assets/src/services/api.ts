@@ -52,6 +52,12 @@ export async function startProject(id: string): Promise<ProjectStartResult> {
   return res.json()
 }
 
+// stopProject asks the control plane to gracefully stop a running project.
+export async function stopProject(id: string): Promise<void> {
+  const res = await fetch(CONTROL + `/api/projects/${encodeURIComponent(id)}/stop`, { method: 'POST' })
+  if (!res.ok) throw new Error('stop failed: ' + res.status)
+}
+
 export async function sendInput(text: string, target: string, inputMode: string): Promise<void> {
   await fetch(p('/api/input'), {
     method: 'POST',

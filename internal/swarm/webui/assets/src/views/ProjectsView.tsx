@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { usePolling } from '../hooks/usePolling'
-import { CONTROL, fetchProjects, fetchTemplates, createProject, startProject } from '../services/api'
+import { CONTROL, fetchProjects, fetchTemplates, createProject, startProject, stopProject } from '../services/api'
 import type { ProjectInfo } from '../types'
 
 // ProjectsView is the management surface shown in the control plane (and as a
@@ -63,6 +63,15 @@ export default function ProjectsView() {
       setError('failed to start project ' + id)
     }
     setStarting(null)
+  }
+
+  const stop = async (id: string) => {
+    setError('')
+    try {
+      await stopProject(id)
+    } catch (e) {
+      setError('failed to stop project ' + id)
+    }
   }
 
   return (
@@ -147,23 +156,41 @@ export default function ProjectsView() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ color: colors.text, fontSize: fontSizes.md }}>{p.id}</div>
               <div style={{ fontSize: fontSizes.xs, color: colors.textDim }}>
-                <span style={{ color: p.ports?.webui ? colors.toolCompleted : colors.textDimmed }}>
-                  {p.ports?.webui ? 'running' : 'stopped'}
+                <span style={{ color: p.running ? colors.toolCompleted : colors.textDimmed }}>
+                  {p.running ? 'running' : 'stopped'}
                 </span>
                 {' · '}{p.workers?.length ?? 0} workers
                 {p.ports?.webui ? ` · webui :${p.ports.webui}` : ''}
                 {p.ports?.bus ? ` · bus :${p.ports.bus}` : ''}
               </div>
             </div>
-            {p.ports?.webui ? (
-              <a
-                href={`?project=${encodeURIComponent(p.id)}&port=${p.ports.webui}`}
-                target={'_blank'}
-                rel="noopener noreferrer"
-                style={{ color: colors.accent, fontSize: fontSizes.sm, textDecoration: 'none' }}
-              >
-                Jump ↗
-              </a>
+            {p.running ? (
+              <>
+                {p.ports?.webui && (
+                  <a
+                    href={`?project=${encodeURIComponent(p.id)}&port=${p.ports.webui}`}
+                    target={'_blank'}
+                    rel="noopener noreferrer"
+                    style={{ color: colors.accent, fontSize: fontSizes.sm, textDecoration: 'none' }}
+                  >
+                    Jump ↗
+                  </a>
+                )}
+                <button
+                  onClick={() => stop(p.id)}
+                  style={{
+                    cursor: 'pointer',
+                    background: 'transparent',
+                    color: colors.toolFailed,
+                    border: '1px solid ' + colors.border,
+                    borderRadius: 4,
+                    padding: '6px 10px',
+                    fontSize: fontSizes.sm,
+                  }}
+                >
+                  Stop
+                </button>
+              </>
             ) : (
               <button
                 onClick={() => start(p.id)}

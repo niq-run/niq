@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -46,6 +47,9 @@ type Control struct {
 	listener   net.Listener
 	bound      string
 	controlURL string
+
+	mu    sync.Mutex
+	procs map[string]*os.Process // project id -> the running 'niq project run' process
 }
 
 // NewControl creates a control-plane service bound to addr (":9527" when empty).
@@ -53,7 +57,7 @@ func NewControl(addr string) *Control {
 	if addr == "" {
 		addr = ":9527"
 	}
-	return &Control{addr: addr, controlURL: "http://localhost" + addr}
+	return &Control{addr: addr, controlURL: "http://localhost" + addr, procs: map[string]*os.Process{}}
 }
 
 // Bind binds the listen socket and returns the resolved host:port.
@@ -88,6 +92,7 @@ func (c *Control) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/projects", c.handleListProjects)
 	mux.HandleFunc("POST /api/projects", c.handleCreateProject)
 	mux.HandleFunc("POST /api/projects/{id}/start", c.handleStartProject)
+	mux.HandleFunc("POST /api/projects/{id}/stop", c.handleStopProject)
 
 	assets, err := webui.AssetsFS()
 	if err != nil {
@@ -121,14 +126,58 @@ func (c *Control) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Reque
 	json.NewEncoder(w).Encode(names)
 }
 
-// handleListProjects returns the project definitions.
+// projectView augments a project definition with its live run state.
+type projectView struct {
+	Project
+	Running bool `json:"running"`
+}
+
+// handleListProjects returns the project definitions plus live run state.
 func (c *Control) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	projects, err := ListProjects()
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 500)
 		return
 	}
-	json.NewEncoder(w).Encode(projects)
+	views := make([]projectView, 0, len(projects))
+	for _, p := range projects {
+		views = append(views, projectView{Project: p, Running: c.isRunning(p.ID)})
+	}
+	json.NewEncoder(w).Encode(views)
+}
+
+// isRunning reports whether the project's launch process is currently alive.
+func (c *Control) isRunning(id string) bool {
+	c.mu.Lock()
+	proc, ok := c.procs[id]
+	if !ok || proc == nil {
+		c.mu.Unlock()
+		return false
+	}
+	// Confirm liveness (signal 0 does not deliver a signal, just checks).
+	err := proc.Signal(syscall.Signal(0))
+	if err != nil {
+		delete(c.procs, id)
+	}
+	c.mu.Unlock()
+	return err == nil
+}
+
+// handleStopProject terminates a running project's process and forgets it.
+func (c *Control) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	id := r.PathValue("id")
+	c.mu.Lock()
+	proc, ok := c.procs[id]
+	if ok && proc != nil {
+		_ = proc.Signal(os.Interrupt) // graceful: the project snapshots on shutdown
+		delete(c.procs, id)
+	}
+	c.mu.Unlock()
+	if !ok {
+		stdhttp.Error(w, "project not running", 404)
+		return
+	}
+	w.WriteHeader(stdhttp.StatusAccepted)
 }
 
 // handleCreateProject creates a project from a named template and immediately
@@ -185,8 +234,18 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 		stdhttp.Error(w, "control: start project: "+err.Error(), 500)
 		return
 	}
-	// Best-effort watchdog: reap the subprocess so it doesn't zombie on exit.
-	go cmd.Wait()
+	// Track the process and drop it when it exits.
+	c.mu.Lock()
+	c.procs[id] = cmd.Process
+	c.mu.Unlock()
+	go func() {
+		_ = cmd.Wait()
+		c.mu.Lock()
+		if cur, ok := c.procs[id]; ok && cur == cmd.Process {
+			delete(c.procs, id)
+		}
+		c.mu.Unlock()
+	}()
 
 	// Poll project.json for the dynamically-assigned ports.
 	webUI := resolvedWebUI(id)

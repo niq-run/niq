@@ -130,6 +130,22 @@ func TestControlCreateRejectsUnknownTemplate(t *testing.T) {
 	}
 }
 
+// TestControlStopNotRunning asserts stopping a project with no live process
+// returns 404.
+func TestControlStopNotRunning(t *testing.T) {
+	setupProjectsRoot(t)
+	base := newControl(t)
+
+	resp, err := http.Post(base+"/api/projects/x/stop", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("stop not-running status=%d, want 404", resp.StatusCode)
+	}
+}
+
 // TestControlStartProjectNotFound asserts an unknown project id is rejected
 // before any subprocess is attempted.
 func TestControlStartProjectNotFound(t *testing.T) {
