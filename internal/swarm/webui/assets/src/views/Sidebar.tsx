@@ -52,7 +52,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     >
       {/* Logo */}
       <div style={{ marginBottom: 16 }}>
-        <h2 style={{ margin: 0, color: colors.accent, fontSize: fontSizes.h2, fontFamily: 'Monaco, monospace' }}>
+        <h2 style={{ margin: 0, color: colors.accent, fontSize: 40, fontFamily: "'Fira Mono', 'PT Mono', monospace", fontWeight: 'normal' }}>
           <span
             onClick={() => setRotation(r => r + 360)}
             style={{ cursor: 'pointer', display: 'inline-block', transform: `perspective(200px) rotateY(${rotation}deg)`, transition: 'transform 1s ease-in-out' }}
@@ -65,6 +65,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       </div>
 
       {/* View selector */}
+      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '8px 0 16px 0' }} />
       <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>View</strong>
       {(Object.keys(VIEW_LABELS) as ViewMode[]).map((v) => (
         <div
