@@ -74,6 +74,12 @@ func SeedTemplates(dir string) error {
 	if dir == "" {
 		return nil
 	}
+	// Drop the superseded built-in YAML templates (the JSON built-ins replace
+	// them; dev -> default). Runs regardless of seeding so leftover .yaml files
+	// from before the JSON migration are cleaned up on next startup.
+	for _, legacy := range []string{"dev", "test-headless"} {
+		_ = os.Remove(filepath.Join(dir, legacy+".yaml"))
+	}
 	existing, _ := filepath.Glob(filepath.Join(dir, "*.json"))
 	if len(existing) > 0 {
 		return nil // already seeded: never clobber user-edited templates
