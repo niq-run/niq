@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/54c1/niq/internal/swarm"
 )
@@ -138,6 +139,7 @@ func runProject(args []string) error {
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
+		setupProjectLogging(id)
 		return swarm.RunProject(swarm.ProjectRunOptions{
 			ProjectID: id,
 			BusAddr:   *busAddr,
@@ -147,6 +149,22 @@ func runProject(args []string) error {
 	default:
 		return fmt.Errorf("usage: niq project list | niq project create <id> [--template <name>] | niq project run <id> [--bus :0] [--webui :0]")
 	}
+}
+
+// setupProjectLogging sends this project process's logs to
+// ~/.niq/projects/<id>/logs/niq-YYYY-MM-DD.log. The date in the filename gives
+// free daily rotation: a new day starts a new file, same-day restarts append.
+func setupProjectLogging(id string) {
+	logDir := filepath.Join(swarm.ProjectDir(id), "logs")
+	_ = os.MkdirAll(logDir, 0755)
+	daily := "niq-" + time.Now().Format("2006-01-02") + ".log"
+	f, err := os.OpenFile(filepath.Join(logDir, daily), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.SetOutput(io.Discard)
+		return
+	}
+	log.SetOutput(f)
+	log.SetPrefix("[niq] ")
 }
 
 func printUsage() {

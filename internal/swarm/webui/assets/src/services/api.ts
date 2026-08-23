@@ -32,6 +32,13 @@ export async function fetchTemplates(): Promise<string[]> {
   return res.json()
 }
 
+// fetchTemplate returns a template's parsed JSON content.
+export async function fetchTemplate(name: string): Promise<any> {
+  const res = await fetch(CONTROL + `/api/templates/${encodeURIComponent(name)}`)
+  if (!res.ok) throw new Error('fetch template failed: ' + res.status)
+  return res.json()
+}
+
 // createTemplate clones an existing template into a new on-disk one.
 export async function createTemplate(id: string, copyFrom: string): Promise<void> {
   const res = await fetch(CONTROL + '/api/templates', {

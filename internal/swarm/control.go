@@ -89,6 +89,7 @@ func (c *Control) Start(ctx context.Context) error {
 		json.NewEncoder(w).Encode(webui.ContextInfo{Mode: "control", ControlURL: c.controlURL})
 	})
 	mux.HandleFunc("GET /api/templates", c.handleListTemplates)
+	mux.HandleFunc("GET /api/templates/{name}", c.handleTemplateDetail)
 	mux.HandleFunc("POST /api/templates", c.handleCreateTemplate)
 	mux.HandleFunc("DELETE /api/templates/{name}", c.handleDeleteTemplate)
 	mux.HandleFunc("GET /api/projects", c.handleListProjects)
@@ -132,6 +133,18 @@ func (c *Control) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Reque
 type projectView struct {
 	Project
 	Running bool `json:"running"`
+}
+
+// handleTemplateDetail returns a template's JSON content (its workers etc.).
+func (c *Control) handleTemplateDetail(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	name := r.PathValue("name")
+	raw, err := ReadTemplateRaw(TemplatesDir(), name)
+	if err != nil {
+		stdhttp.Error(w, "template not found", 404)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(raw)
 }
 
 // handleCreateTemplate clones an existing template into a new on-disk one.
