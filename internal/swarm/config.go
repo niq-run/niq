@@ -8,7 +8,9 @@ package swarm
 import (
 	"embed"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -51,6 +53,60 @@ func LoadPreset(name string) (*SwarmConfig, error) {
 		return nil, fmt.Errorf("swarm: preset %q not found", name)
 	}
 	return parseYAML(raw)
+}
+
+// TemplatesDir returns the on-disk template directory under the shared
+// "common" layer: ~/.niq/common/templates. Templates are seeded here from the
+// built-ins on first run and become user-editable files from then on.
+func TemplatesDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".niq", "common", "templates")
+}
+
+// SeedTemplates copies the built-in preset templates to dir, but only when dir
+// has no .yaml yet (first-run seeding). Idempotent, best-effort on empty dirs.
+func SeedTemplates(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	existing, _ := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	if len(existing) > 0 {
+		return nil // already seeded: never clobber user-edited templates
+	}
+	entries, err := presetFS.ReadDir("preset")
+	if err != nil {
+		return fmt.Errorf("swarm: read builtin templates: %w", err)
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("swarm: mkdir templates %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		raw, err := presetFS.ReadFile("preset/" + name)
+		if err != nil {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0644); err != nil {
+			log.Printf("[swarm] seed template %s: %v", name, err)
+		}
+	}
+	return nil
+}
+
+// LoadTemplate loads a project template from the on-disk templates dir,
+// preferring the disk copy over the embedded builtin. The disk copy is what a
+// user edits; the embedded one is the fallback before seeding.
+func LoadTemplate(dir, name string) (*SwarmConfig, error) {
+	if dir != "" {
+		raw, err := os.ReadFile(filepath.Join(dir, name+".yaml"))
+		if err == nil {
+			return parseYAML(raw)
+		}
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("swarm: read template %s: %w", name, err)
+		}
+	}
+	return LoadPreset(name)
 }
 
 func parseYAML(raw []byte) (*SwarmConfig, error) {

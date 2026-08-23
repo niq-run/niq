@@ -34,23 +34,29 @@ type RunOptions struct {
 // RunSwarm is the core entry point for the `niq swarm` command.
 // It parses the config, creates the event bus, builds workers, and manages their lifecycle.
 func RunSwarm(opts RunOptions) error {
-	// 1. Parse config.
+	// 1. Parse config from the shared templates dir (seeded from the built-ins
+	// on first run) or an explicit --config file.
+	homeDir, _ := os.UserHomeDir()
+	templatesDir := filepath.Join(homeDir, ".niq", "common", "templates")
+	if err := SeedTemplates(templatesDir); err != nil {
+		log.Printf("[swarm] seed templates: %v", err)
+	}
+
 	var cfg *SwarmConfig
 	var err error
 	switch {
 	case opts.ConfigPath != "":
 		cfg, err = ParseConfig(opts.ConfigPath)
 	case opts.Preset != "":
-		cfg, err = LoadPreset(opts.Preset)
+		cfg, err = LoadTemplate(templatesDir, opts.Preset)
 	default:
-		cfg, err = LoadPreset("dev")
+		cfg, err = LoadTemplate(templatesDir, "dev")
 	}
 	if err != nil {
 		return err
 	}
 
 	// 2. Create identity registry (file-backed).
-	homeDir, _ := os.UserHomeDir()
 	idDir := filepath.Join(homeDir, ".niq", "id")
 	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(idDir, "identities.json"))
 	if err != nil {

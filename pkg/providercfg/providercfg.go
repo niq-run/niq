@@ -69,19 +69,50 @@ type Config struct {
 	Providers []Provider `json:"providers"`
 }
 
+// legacyProviderPath is the pre-common-layout location the provider config
+// lived at before providers moved under ~/.niq/common/providers.
+const legacyProviderPath = ".niq/provider.json"
+
 // Path returns the provider config path. NIQ_PROVIDER_CONFIG overrides the
-// default ~/.niq/provider.json.
+// default ~/.niq/common/providers/provider.json.
 func Path() string {
 	if p := os.Getenv("NIQ_PROVIDER_CONFIG"); p != "" {
 		return p
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".niq", "provider.json")
+	return filepath.Join(home, ".niq", "common", "providers", "provider.json")
+}
+
+// migrateLegacy migrates a pre-common-layout provider.json (at ~/.niq/provider.json)
+// into the common layout, but only when the common-layout file does not exist
+// yet, so an existing config (with real keys) is not lost on upgrade. Idempotent.
+func migrateLegacy() {
+	if os.Getenv("NIQ_PROVIDER_CONFIG") != "" {
+		return // explicit override: never migrate
+	}
+	dest := Path()
+	home, _ := os.UserHomeDir()
+	src := filepath.Join(home, legacyProviderPath)
+	if _, err := os.Stat(dest); err == nil {
+		return // new file already present
+	}
+	raw, err := os.ReadFile(src)
+	if os.IsNotExist(err) {
+		return // nothing to migrate
+	}
+	if err != nil {
+		return // best-effort: don't fail config load on a read hiccup
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return
+	}
+	os.WriteFile(dest, raw, 0644)
 }
 
 // Load reads the provider config. A missing file is not an error and returns
 // an empty config.
 func Load() (*Config, error) {
+	migrateLegacy()
 	path := Path()
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

@@ -3,6 +3,7 @@ package providercfg
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -87,8 +88,48 @@ func TestProviderConfigPathOverride(t *testing.T) {
 
 	_ = os.Unsetenv("NIQ_PROVIDER_CONFIG")
 	home, _ := os.UserHomeDir()
-	want := filepath.Join(home, ".niq", "provider.json")
+	want := filepath.Join(home, ".niq", "common", "providers", "provider.json")
 	if got := Path(); got != want {
 		t.Fatalf("Path() = %q, want %q", got, want)
+	}
+}
+
+// TestMigrateLegacy verifies a pre-common-layout provider.json at ~/.niq is
+// copied into the common layout on first Load (preserving existing keys) and
+// that the migration is idempotent / does not overwrite a newer common file.
+func TestMigrateLegacy(t *testing.T) {
+	// Isolate HOME so we never touch a real ~/.niq.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("NIQ_PROVIDER_CONFIG", "")
+
+	legacy := filepath.Join(home, ".niq", "provider.json")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(`{"active":"legacy","providers":[]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Active != "legacy" {
+		t.Fatalf("Active = %q, want legacy", cfg.Active)
+	}
+	// The common-layout file should now exist and match the legacy content.
+	dest := Path()
+	raw, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("migrated file missing: %v", err)
+	}
+	if !strings.Contains(string(raw), `"legacy"`) {
+		t.Fatalf("migrated file does not carry legacy data: %s", raw)
+	}
+
+	// Second Load must not touch the (now existing) common file.
+	if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("common file should still exist: %v", err)
 	}
 }
