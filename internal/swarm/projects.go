@@ -8,6 +8,7 @@ package swarm
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -22,10 +23,10 @@ type ProjectPorts struct {
 
 // Project is the on-disk startup definition for one project.
 type Project struct {
-	ID        string          `json:"id"`
-	CreatedAt string          `json:"created_at,omitempty"`
-	Ports     ProjectPorts    `json:"ports,omitempty"`
-	Workers   []WorkerConfig  `json:"workers,omitempty"` // managed workers to launch
+	ID        string         `json:"id"`
+	CreatedAt string         `json:"created_at,omitempty"`
+	Ports     ProjectPorts   `json:"ports,omitempty"`
+	Workers   []WorkerConfig `json:"workers,omitempty"` // managed workers to launch
 }
 
 // ProjectsRoot returns ~/.niq/projects (created lazily on write).
@@ -39,6 +40,74 @@ func ProjectDir(id string) string { return filepath.Join(ProjectsRoot(), sanitiz
 
 // ProjectPath returns the project.json path for a project id.
 func ProjectPath(id string) string { return filepath.Join(ProjectDir(id), "project.json") }
+
+// MigrateProjectLayout restructures an existing project from the old nested
+// layout (state/workers, state/events.db) to the flat one (workers/, events.db
+// directly under the project dir). Idempotent: no-op when there is no legacy
+// state/ dir. Best-effort per file so a partial move doesn't lose data.
+func MigrateProjectLayout(id string) error {
+	projDir := ProjectDir(id)
+	stateDir := filepath.Join(projDir, "state")
+	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
+		return nil
+	}
+
+	// state/workers -> workers
+	oldWorkers := filepath.Join(stateDir, "workers")
+	newWorkers := filepath.Join(projDir, "workers")
+	if _, err := os.Stat(oldWorkers); err == nil {
+		if _, err := os.Stat(newWorkers); os.IsNotExist(err) {
+			if err := os.Rename(oldWorkers, newWorkers); err != nil {
+				return fmt.Errorf("migrate: move workers: %w", err)
+			}
+		} else if err := copyDir(oldWorkers, newWorkers); err != nil {
+			return fmt.Errorf("migrate: copy workers: %w", err)
+		}
+	}
+
+	// Move the sqlite event db (and its WAL/SHM sidecars) up to the project root.
+	for _, suffix := range []string{"events.db", "events.db-wal", "events.db-shm"} {
+		src := filepath.Join(stateDir, suffix)
+		dst := filepath.Join(projDir, suffix)
+		if _, err := os.Stat(src); os.IsNotExist(err) {
+			continue
+		}
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+		if err := os.Rename(src, dst); err != nil {
+			log.Printf("[migrate] move %s: %v", suffix, err)
+		}
+	}
+
+	// Remove the now-empty state dir.
+	if ents, err := os.ReadDir(stateDir); err == nil && len(ents) == 0 {
+		_ = os.Remove(stateDir)
+	}
+	return nil
+}
+
+// copyDir copies a directory tree; used when the target dir already exists.
+func copyDir(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0644)
+	})
+}
 
 // CreateProject creates a project directory + project.json from a template's
 // worker definitions. It fails if a project with the same id already exists.
@@ -132,7 +201,46 @@ func ListProjects() ([]Project, error) {
 	return out, nil
 }
 
-// sanitizeProjectID keeps project ids filesystem-safe for the per-project dir.
+// projectArchiver implements the webui.ArchivedStore backed by a project's
+// project.json worker definitions, so archived-worker state persists and the
+// project WebUI can read/toggle it.
+type projectArchiver struct {
+	id string
+}
+
+func (a projectArchiver) Archived() []string {
+	p, err := LoadProject(a.id)
+	if err != nil {
+		return nil
+	}
+	out := []string{}
+	for _, w := range p.Workers {
+		if w.Archived {
+			out = append(out, w.ID)
+		}
+	}
+	return out
+}
+
+func (a projectArchiver) SetArchived(id string, v bool) error {
+	p, err := LoadProject(a.id)
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range p.Workers {
+		if p.Workers[i].ID == id {
+			p.Workers[i].Archived = v
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("worker %q not found in project %q", id, a.id)
+	}
+	return SaveProject(p)
+}
+
 func sanitizeProjectID(id string) string {
 	out := make([]rune, 0, len(id))
 	for _, r := range id {

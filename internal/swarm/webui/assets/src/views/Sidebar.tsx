@@ -22,13 +22,14 @@ interface SidebarProps {
   onToggleViewSetting: (k: ViewSettingKey) => void
   mode: 'control' | 'project'
   project?: string
+  archived: Set<string>
   panel: 'projects' | 'templates' | null
   onSelectPanel: (p: 'projects' | 'templates') => void
 }
 
 const VIEW_LABELS: Record<ViewMode, string> = { talk: 'Talk', events: 'Events', workers: 'Workers' }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, panel, onSelectPanel }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, panel, onSelectPanel, archived }: SidebarProps) {
   const [rotation, setRotation] = useState(0)
   const { dark, toggle, colors } = useTheme()
 
@@ -100,14 +101,14 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         </div>
       ))}
 
-      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0' }} />
-
       {/* Worker selector list — hidden in the workers view (the main area IS
-          the worker list there) */}
+          the worker list there). Its separator is hidden too, so switching to
+          the workers view doesn't leave a stray line. */}
       {view !== 'workers' && (
         <>
+          <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0' }} />
           <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>Worker Selector</strong>
-          {workers.filter(w => view !== 'talk' || w.type === 'reason').map((w) => {
+          {workers.filter(w => (view !== 'talk' || w.type === 'reason') && !archived.has(w.id)).map((w) => {
             const isActive = view === 'talk'
               ? talkWorkers.has(w.id)
               : filterWorkers.has(w.id)

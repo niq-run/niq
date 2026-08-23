@@ -8,6 +8,8 @@ interface WorkersViewProps {
   selectedId: string | null
   onSelect: (id: string) => void
   onOpenEvents: (id: string) => void
+  archived: Set<string>
+  onToggleArchived: (id: string) => void
 }
 
 function fmtPatterns(subs?: EventPattern[]): string {
@@ -15,7 +17,7 @@ function fmtPatterns(subs?: EventPattern[]): string {
   return subs.map(p => (p.source_id ? `${p.type}@${p.source_id}` : p.type)).join(', ')
 }
 
-export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents }: WorkersViewProps) {
+export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived, onToggleArchived }: WorkersViewProps) {
   const { colors } = useTheme()
 
   const handleAction = async (id: string, state?: string) => {
@@ -71,13 +73,14 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
             const suspended = w.managed && w.state === 'suspended'
             const connection = w.online === false ? 'offline' : 'online'
             const isSelected = selectedId === w.id
+            const isArchived = archived.has(w.id)
             const typeColor = w.type ? getWorkerTypeColor(w.type, colors) : colors.textDimmed
             return (
               <tr
                 key={w.id}
                 className={'event-row' + (isSelected ? ' selected' : '')}
                 onClick={() => onSelect(w.id)}
-                style={{ cursor: 'pointer', userSelect: 'none' }}
+                style={{ cursor: 'pointer', userSelect: 'none', opacity: isArchived ? 0.55 : 1 }}
               >
                 <td style={cell}>
                   <span
@@ -111,14 +114,24 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                 </td>
                 <td style={{ ...cell, color: colors.textMuted }} title={fmtPatterns(w.subscribe_allow)}>
                   {fmtPatterns(w.subscribe_allow)}
+                  {isArchived && <span style={{ color: colors.textDimmed }}> · archived</span>}
                 </td>
                 <td style={cell}>
                   {w.managed ? (
-                    <span
-                      onClick={(e) => { e.stopPropagation(); handleAction(w.id, w.state) }}
-                      style={{ cursor: 'pointer', color: colors.textDim, textDecoration: 'underline', whiteSpace: 'nowrap' }}
-                    >
-                      {suspended ? 'resume' : 'suspend'}
+                    <span style={{ whiteSpace: 'nowrap' }}>
+                      <span
+                        onClick={(e) => { e.stopPropagation(); handleAction(w.id, w.state) }}
+                        style={{ cursor: 'pointer', color: colors.textDim, textDecoration: 'underline' }}
+                      >
+                        {suspended ? 'resume' : 'suspend'}
+                      </span>
+                      {' / '}
+                      <span
+                        onClick={(e) => { e.stopPropagation(); onToggleArchived(w.id) }}
+                        style={{ cursor: 'pointer', color: colors.textDim, textDecoration: 'underline' }}
+                      >
+                        {archived.has(w.id) ? 'restore' : 'archive'}
+                      </span>
                     </span>
                   ) : (
                     <span style={{ color: colors.textDimmed }}>{'\u2014'}</span>

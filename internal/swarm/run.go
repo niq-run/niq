@@ -127,13 +127,19 @@ func RunProject(opts ProjectRunOptions) error {
 		}
 	}
 
+	// New flat layout: state/ is gone, workers/ and events.db live directly under
+	// the project dir. Migrate any legacy state/ directory in place first.
+	if err := MigrateProjectLayout(opts.ProjectID); err != nil {
+		log.Printf("[project %s] migrate layout: %v", opts.ProjectID, err)
+	}
+
 	return runAssembly(&SwarmConfig{Workers: p.Workers}, assemblyOptions{
 		IDDir:        filepath.Join(projDir, "id"),
-		StateDir:     filepath.Join(projDir, "state", "workers"),
+		StateDir:     filepath.Join(projDir, "workers"),
 		ProgramsRoot: filepath.Join(projDir, "programs"),
 		BusAddr:      busAddr,
 		WebUIAddr:    webUIAddr,
-		EventsDB:     filepath.Join(projDir, "state", "events.db"),
+		EventsDB:     filepath.Join(projDir, "events.db"),
 		Banner:       "project " + opts.ProjectID,
 		NoBrowser:    true, // the control WebUI drives the redirect, not this process
 		OnResolved:   onResolved,
@@ -298,6 +304,9 @@ func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
 				startWebUI := func(addr string) (string, error) {
 					s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, addr, false)
 					s.SetContext(opts.ContextInfo)
+					if opts.ContextInfo.Project != "" {
+						s.SetArchivedStore(projectArchiver{id: opts.ContextInfo.Project})
+					}
 					b, err := s.Bind()
 					if err != nil {
 						return "", err

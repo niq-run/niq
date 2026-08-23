@@ -68,6 +68,24 @@ export async function startProject(id: string): Promise<ProjectStartResult> {
   return res.json()
 }
 
+// fetchArchived returns the archived-worker ids for the attached project.
+export async function fetchArchived(): Promise<string[]> {
+  const res = await fetch(p('/api/archived'))
+  return res.json()
+}
+
+// setArchived marks/unmarks a worker as archived (persisted in the project's
+// worker definitions). Returns the updated archived set.
+export async function setArchived(id: string, archived: boolean): Promise<string[]> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/archived`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archived }),
+  })
+  if (!res.ok) throw new Error('archive failed: ' + res.status)
+  return res.json()
+}
+
 // stopProject asks the control plane to gracefully stop a running project.
 export async function stopProject(id: string): Promise<void> {
   const res = await fetch(CONTROL + `/api/projects/${encodeURIComponent(id)}/stop`, { method: 'POST' })

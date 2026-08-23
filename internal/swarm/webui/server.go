@@ -39,6 +39,14 @@ type ContextInfo struct {
 	ControlURL string `json:"control_url,omitempty"` // control-plane base URL (for project→control jumps)
 }
 
+// ArchivedStore reads/writes a project's archived-worker set (persisted in the
+// project.json worker definitions). nil disables the feature (endpoints reply
+// with an empty archived set).
+type ArchivedStore interface {
+	Archived() []string
+	SetArchived(id string, v bool) error
+}
+
 // AssetsFS exposes the embedded SPA static assets for reuse by the control server.
 func AssetsFS() (fs.FS, error) {
 	return fs.Sub(embeddedAssets, "assets/dist")
@@ -56,8 +64,9 @@ type Server struct {
 	registry  corebus.IdentityRegistry
 	workerSvc *workerhost.WorkerService
 
-	ctxMu   sync.RWMutex
-	context ContextInfo
+	ctxMu    sync.RWMutex
+	context  ContextInfo
+	archived ArchivedStore
 }
 
 // New creates a WebUI Server.
@@ -102,6 +111,11 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// Mode context: tells the single SPA whether this WebUI is a control plane
 	// or a project instance, and where the control plane lives.
 	mux.HandleFunc("GET /api/context", s.handleContext)
+
+	// Archived workers: which workers are hidden from the selector (by default),
+	// and toggling that flag (persisted in the project.json worker definitions).
+	mux.HandleFunc("GET /api/archived", s.handleGetArchived)
+	mux.HandleFunc("POST /api/workers/{id}/archived", s.handleSetArchived)
 
 	s.server = &http.Server{Addr: addr, Handler: cors(mux)}
 	return s
@@ -151,12 +165,47 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// SetArchivedStore attaches the project's archived-worker store (nil to disable).
+func (s *Server) SetArchivedStore(as ArchivedStore) {
+	s.archived = as
+}
+
 // SetContext records the mode context the single SPA should render in. Safe to
 // call from the swarm assembly after construction and before Start.
 func (s *Server) SetContext(ctx ContextInfo) {
 	s.ctxMu.Lock()
 	defer s.ctxMu.Unlock()
 	s.context = ctx
+}
+
+// handleGetArchived returns the archived-worker ids (empty store → empty list).
+func (s *Server) handleGetArchived(w http.ResponseWriter, r *http.Request) {
+	if s.archived == nil {
+		json.NewEncoder(w).Encode([]string{})
+		return
+	}
+	json.NewEncoder(w).Encode(s.archived.Archived())
+}
+
+// handleSetArchived toggles whether a worker is archived, persisting the change.
+func (s *Server) handleSetArchived(w http.ResponseWriter, r *http.Request) {
+	if s.archived == nil {
+		http.Error(w, "archive store unavailable", 404)
+		return
+	}
+	id := r.PathValue("id")
+	var body struct {
+		Archived bool `json:"archived"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body", 400)
+		return
+	}
+	if err := s.archived.SetArchived(id, body.Archived); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"archived": s.archived.Archived()})
 }
 
 // handleContext reports the SPA mode context.

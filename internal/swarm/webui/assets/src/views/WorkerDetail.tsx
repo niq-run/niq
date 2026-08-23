@@ -6,6 +6,8 @@ import { suspendWorker, resumeWorker } from '../services/api'
 interface WorkerDetailProps {
   worker: WorkerInfo
   onClose: () => void
+  archived: Set<string>
+  onToggleArchived: (id: string) => void
 }
 
 function fmtPatterns(subs?: EventPattern[]): string {
@@ -13,9 +15,10 @@ function fmtPatterns(subs?: EventPattern[]): string {
   return subs.map(p => (p.source_id ? `${p.type}@${p.source_id}` : p.type)).join(', ')
 }
 
-export default function WorkerDetail({ worker, onClose }: WorkerDetailProps) {
+export default function WorkerDetail({ worker, onClose, archived, onToggleArchived }: WorkerDetailProps) {
   const { colors } = useTheme()
   const suspended = worker.managed && worker.state === 'suspended'
+  const isArchived = archived.has(worker.id)
   const connection = worker.online === false ? 'offline' : 'online'
   const lifecycle = worker.managed ? (suspended ? 'suspended' : 'running') : '\u2014'
   const typeColor = worker.type ? getWorkerTypeColor(worker.type, colors) : colors.textDimmed
@@ -108,13 +111,36 @@ export default function WorkerDetail({ worker, onClose }: WorkerDetailProps) {
               Actions
             </div>
             {worker.managed ? (
-              <span
-                onClick={handleAction}
-                className="btn-hover"
-                style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 4, padding: '2px 10px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
-              >
-                {suspended ? 'resume' : 'suspend'}
-              </span>
+              <>
+                <div style={{ marginBottom: 12 }}>
+                  <span
+                    onClick={handleAction}
+                    className="btn-hover"
+                    style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 4, padding: '2px 10px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                  >
+                    {suspended ? 'resume' : 'suspend'}
+                  </span>
+                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 4, lineHeight: 1.4 }}>
+                    {suspended
+                      ? 'Resume the worker: reconnect it to the bus and restart it from its last snapshot.'
+                      : 'Suspend the worker: stop it and release its bus connection (state is kept on disk).'}
+                  </div>
+                </div>
+                <div>
+                  <span
+                    onClick={() => onToggleArchived(worker.id)}
+                    className="btn-hover"
+                    style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 4, padding: '2px 10px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                  >
+                    {isArchived ? 'restore' : 'archive'}
+                  </span>
+                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 4, lineHeight: 1.4 }}>
+                    {isArchived
+                      ? 'Restore the worker: show it again in the worker selector.'
+                      : 'Archive the worker: hide it from the worker selector until you restore it here.'}
+                  </div>
+                </div>
+              </>
             ) : (
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>not host-managed</span>
             )}

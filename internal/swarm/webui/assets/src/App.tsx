@@ -11,7 +11,7 @@ import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
 import { useTheme, fontSizes } from './theme'
 import { usePolling } from './hooks/usePolling'
-import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase } from './services/api'
+import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived } from './services/api'
 import type { ContextInfo, EventPayload, ViewMode, WorkerInfo } from './types'
 
 // Right-hand event detail panel: default 40% of the viewport, resizable by
@@ -37,6 +37,7 @@ export default function App() {
   const [view, setView] = useState<ViewMode>('talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
   const [panel, setPanel] = useState<'projects' | 'templates' | null>(null)
+  const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
   const [inputMode, setInputMode] = useState('default')
   const [sending, setSending] = useState(false)
@@ -92,6 +93,23 @@ export default function App() {
       fetchContext().then(setContext).catch(() => {})
     }
   }, [projectBase, devProjectBase])
+
+  // Archived workers: hidden from the worker selector by default; toggled from
+  // the workers view. State lives in the project's stream definitions.
+  useEffect(() => {
+    if (mode !== 'project') { setArchived(new Set()); return }
+    fetchArchived()
+      .then((list) => setArchived(new Set(list)))
+      .catch(() => setArchived(new Set()))
+  }, [projectBase, mode])
+
+  const toggleArchived = useCallback(async (id: string) => {
+    const next = !archived.has(id)
+    try {
+      const list = await apiSetArchived(id, next)
+      setArchived(new Set(list))
+    } catch {}
+  }, [archived])
 
   // Picking a View (talk/events/workers) leaves the management panels.
   const selectView = (v: ViewMode) => {
@@ -343,6 +361,7 @@ export default function App() {
         project={projectName}
         panel={panel}
         onSelectPanel={setPanel}
+        archived={archived}
       />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
@@ -387,13 +406,20 @@ export default function App() {
           <div style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
             <WorkersView
               workers={workers}
+              archived={archived}
+              onToggleArchived={toggleArchived}
               selectedId={selectedWorkerId}
               onSelect={selectWorker}
               onOpenEvents={handleSelectWorker}
             />
             {selectedWorker && (
               <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
-                <WorkerDetail worker={selectedWorker} onClose={() => setSelectedWorkerId(null)} />
+                <WorkerDetail
+                  worker={selectedWorker}
+                  onClose={() => setSelectedWorkerId(null)}
+                  archived={archived}
+                  onToggleArchived={toggleArchived}
+                />
               </ResizablePanel>
             )}
           </div>

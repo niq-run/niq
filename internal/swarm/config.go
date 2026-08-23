@@ -37,6 +37,7 @@ type WorkerConfig struct {
 	Subscriptions []string `yaml:"subscriptions,omitempty" json:"subscriptions,omitempty"`
 	Publish       []string `yaml:"publish,omitempty" json:"publish,omitempty"`
 	RootDir       string   `yaml:"root_dir,omitempty" json:"root_dir,omitempty"`
+	Archived      bool     `yaml:"archived,omitempty" json:"archived,omitempty"`
 }
 
 // ParseConfig reads and parses a swarm YAML config file.
