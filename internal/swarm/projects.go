@@ -44,14 +44,24 @@ func ProjectPath(id string) string { return filepath.Join(ProjectDir(id), "proje
 // MigrateProjectLayout moves a project into the current layout and consolidates
 // the sqlite event files under an event/ dir. Targets:
 //
-//	projects/<id>/ { project.json, id/, programs/, workers/, event/events.db[+-wal,-shm] }
+//	projects/<id>/ { project.json, id/, programs/, workers/, events/events.db[+-wal,-shm] }
 //
 // It handles both prior layouts: the nested state/ dir (state/workers, state/events.db)
 // and the intermediate flat one (workers/, events.db at the project root).
 // Idempotent and best-effort per file so a partial move never loses data.
 func MigrateProjectLayout(id string) error {
 	projDir := ProjectDir(id)
-	eventDir := filepath.Join(projDir, "event")
+	eventsDir := filepath.Join(projDir, "events")
+
+	// A previously-created singular event/ dir → events/.
+	singularEvent := filepath.Join(projDir, "event")
+	if _, err := os.Stat(singularEvent); err == nil {
+		if _, err := os.Stat(eventsDir); os.IsNotExist(err) {
+			if err := os.Rename(singularEvent, eventsDir); err != nil {
+				log.Printf("[migrate] event -> events: %v", err)
+			}
+		}
+	}
 
 	// 1) state/ -> workers/ (nested layout)
 	stateDir := filepath.Join(projDir, "state")
@@ -71,7 +81,7 @@ func MigrateProjectLayout(id string) error {
 			}
 		}
 		// state/events.db* -> event/
-		moveSQLiteFiles(stateDir, eventDir)
+		moveSQLiteFiles(stateDir, eventsDir)
 		// Drop the now-empty state dir.
 		if ents, err := os.ReadDir(stateDir); err == nil && len(ents) == 0 {
 			_ = os.Remove(stateDir)
@@ -79,7 +89,7 @@ func MigrateProjectLayout(id string) error {
 	}
 
 	// 2) events.db* at the project root -> event/ (intermediate flat layout)
-	moveSQLiteFiles(projDir, eventDir)
+	moveSQLiteFiles(projDir, eventsDir)
 
 	return nil
 }
