@@ -36,6 +36,15 @@ func main() {
 		}
 	}
 
+	// Detect subcommand: "niq control ..." (control-plane, default port 9527)
+	if len(os.Args) > 1 && os.Args[1] == "control" {
+		if err := runControl(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Detect subcommand: "niq project ..."
 	if len(os.Args) > 1 && os.Args[1] == "project" {
 		if err := runProject(os.Args[2:]); err != nil {
@@ -60,6 +69,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runControl(args []string) error {
+	fs := flag.NewFlagSet("niq control", flag.ContinueOnError)
+	addr := fs.String("addr", ":9527", "Control-plane listen address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return swarm.RunControl(swarm.ControlOptions{Addr: *addr})
 }
 
 func runProject(args []string) error {

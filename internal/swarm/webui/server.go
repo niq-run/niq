@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	corebus "github.com/54c1/niq/core/bus"
@@ -29,6 +30,20 @@ import (
 //go:embed assets/dist/*
 var embeddedAssets embed.FS
 
+// ContextInfo tells the single SPA which mode it is in: control (no project
+// attached — only project management is available) or project (a specific
+// project is attached — talk/events run against it).
+type ContextInfo struct {
+	Mode       string `json:"mode"`                // "control" | "project"
+	Project    string `json:"project,omitempty"`  // project id in project mode
+	ControlURL string `json:"control_url,omitempty"` // control-plane base URL (for project→control jumps)
+}
+
+// AssetsFS exposes the embedded SPA static assets for reuse by the control server.
+func AssetsFS() (fs.FS, error) {
+	return fs.Sub(embeddedAssets, "assets/dist")
+}
+
 // Server is the WebUI HTTP server.
 type Server struct {
 	hiw       *hiw.Worker
@@ -40,6 +55,9 @@ type Server struct {
 	engine    *eventbus.Engine
 	registry  corebus.IdentityRegistry
 	workerSvc *workerhost.WorkerService
+
+	ctxMu   sync.RWMutex
+	context ContextInfo
 }
 
 // New creates a WebUI Server.
@@ -74,12 +92,16 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	if devMode {
 		log.Println("[webui] dev mode: static assets served by Vite on :5173")
 	} else {
-		sub, err := fs.Sub(embeddedAssets, "assets/dist")
+		sub, err := AssetsFS()
 		if err != nil {
 			log.Fatalf("[webui] embed fs: %v", err)
 		}
 		mux.Handle("GET /", http.FileServer(http.FS(sub)))
 	}
+
+	// Mode context: tells the single SPA whether this WebUI is a control plane
+	// or a project instance, and where the control plane lives.
+	mux.HandleFunc("GET /api/context", s.handleContext)
 
 	s.server = &http.Server{Addr: addr, Handler: cors(mux)}
 	return s
@@ -127,6 +149,21 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("webui: %w", err)
 	}
 	return nil
+}
+
+// SetContext records the mode context the single SPA should render in. Safe to
+// call from the swarm assembly after construction and before Start.
+func (s *Server) SetContext(ctx ContextInfo) {
+	s.ctxMu.Lock()
+	defer s.ctxMu.Unlock()
+	s.context = ctx
+}
+
+// handleContext reports the SPA mode context.
+func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
+	s.ctxMu.RLock()
+	defer s.ctxMu.RUnlock()
+	json.NewEncoder(w).Encode(s.context)
 }
 
 // ── SSE ──

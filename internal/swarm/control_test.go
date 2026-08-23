@@ -1,0 +1,94 @@
+package swarm
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/54c1/niq/internal/swarm/webui"
+)
+
+func doGet(t *testing.T, url string) (int, string) {
+	t.Helper()
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// TestControlContextAndList verifies the control-plane exposes the SPA mode
+// context and lists projects, isolated under a temp HOME.
+func TestControlContextAndList(t *testing.T) {
+	setupProjectsRoot(t)
+	if _, err := CreateProject("alpha", fakeTemplate()); err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewControl("127.0.0.1:0")
+	addr, err := c.Bind()
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Start(ctx) }()
+	base := "http://" + addr
+
+	// Context reports control mode.
+	code, body := doGet(t, base+"/api/context")
+	if code != 200 {
+		t.Fatalf("context status=%d", code)
+	}
+	var ci webui.ContextInfo
+	if err := json.Unmarshal([]byte(body), &ci); err != nil {
+		t.Fatalf("context parse: %v (%s)", err, body)
+	}
+	if ci.Mode != "control" {
+		t.Fatalf("mode=%q, want control", ci.Mode)
+	}
+
+	// Projects list includes alpha.
+	code, body = doGet(t, base+"/api/projects")
+	if code != 200 {
+		t.Fatalf("projects status=%d: %s", code, body)
+	}
+	if !strings.Contains(body, `"id":"alpha"`) {
+		t.Fatalf("projects list missing alpha: %s", body)
+	}
+}
+
+// TestControlStartProjectNotFound asserts an unknown project id is rejected
+// before any subprocess is attempted.
+func TestControlStartProjectNotFound(t *testing.T) {
+	setupProjectsRoot(t)
+	c := NewControl("127.0.0.1:0")
+	addr, err := c.Bind()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Start(ctx) }()
+
+	code, _ := doGet(t, "http://"+addr+"/api/projects/nope/start")
+	_ = code
+	// Start uses POST; a GET on the route returns 405 from the mux. We instead
+	// assert via the project-not-found path with the real method.
+	req, _ := http.NewRequest("POST", "http://"+addr+"/api/projects/nope/start", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("status=%d, want 404", resp.StatusCode)
+	}
+}

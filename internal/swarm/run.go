@@ -127,6 +127,12 @@ func RunProject(opts ProjectRunOptions) error {
 		Banner:       "project " + opts.ProjectID,
 		NoBrowser:    true, // the control WebUI drives the redirect, not this process
 		OnResolved:   onResolved,
+		ContextInfo: webui.ContextInfo{
+			Mode:    "project",
+			Project: opts.ProjectID,
+			// Project WebUI reaches the control plane for cross-project jumps.
+			ControlURL: "http://127.0.0.1:9527",
+		},
 	})
 }
 
@@ -141,6 +147,7 @@ type assemblyOptions struct {
 	Banner       string
 	NoBrowser    bool
 	OnResolved   func(bus, webui string)
+	ContextInfo  webui.ContextInfo
 }
 
 // runAssembly is the shared core: build the bus, host the workers from cfg, and
@@ -258,6 +265,7 @@ func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
 		if h, ok := workerSvc.Worker(hiwID); ok {
 			if hiwWorker, ok := h.(*hiw.Worker); ok {
 				s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, opts.WebUIAddr, false)
+				s.SetContext(opts.ContextInfo)
 				if webUIAddr, err = s.Bind(); err != nil {
 					return fmt.Errorf("swarm: bind webui: %w", err)
 				}
