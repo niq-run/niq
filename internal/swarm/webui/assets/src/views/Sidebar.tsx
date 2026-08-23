@@ -74,7 +74,6 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               marginTop: 16,
               color: colors.textDim,
               fontSize: fontSizes.sm,
-              fontStyle: 'italic',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
