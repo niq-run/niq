@@ -118,6 +118,19 @@ func runProject(args []string) error {
 		fmt.Printf("created project %q (%d workers) -> %s\n", p.ID, len(p.Workers), path)
 		return nil
 
+	case len(args) >= 1 && args[0] == "migrate":
+		id := "default"
+		if len(args) >= 2 {
+			id = args[1]
+		}
+		home, _ := os.UserHomeDir()
+		projDir, err := swarm.MigrateLegacyProject(id, filepath.Join(home, ".niq"))
+		if err != nil {
+			return err
+		}
+		fmt.Printf("migrated legacy swarm into project %q -> %s\n", id, projDir)
+		return nil
+
 	case len(args) >= 2 && args[0] == "run":
 		id := args[1]
 		busAddr := fs.String("bus", ":0", "httptrans bus listen address")
