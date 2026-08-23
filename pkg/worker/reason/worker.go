@@ -13,6 +13,7 @@ type Config struct {
 	ID              string
 	EventConverters []reasonBase.EventConverter
 	Provider        llm.LLMProvider
+	ProviderSources reasonBase.ProviderSources
 	Programs        []program.Program
 	Bus             corebus.WorkerSideChannel
 	ReasoningEffort *string
@@ -36,8 +37,9 @@ type Config struct {
 	Compactor reasonBase.Compactor
 
 	// ToolProvider supplies the tools this worker exposes on the bus. nil uses
-	// the default set (send_message, list_workers, context.compress,
-	// context.rotate). To customize, supply a provider listing every tool you want
+	// the default set (send_message, list_workers, list_llm_providers,
+	// context_compress, context_rotate). To customize, supply a provider listing
+	// every tool you want
 	ToolProvider reasonBase.ToolProvider
 
 	// SeedMessages are applied to the transcript at construction: the
@@ -91,6 +93,7 @@ func NewWorker(cfg Config) *Worker {
 		Bus:              cfg.Bus,
 		Subscriptions:    subs,
 		Provider:         cfg.Provider,
+		ProviderSources:  cfg.ProviderSources,
 		Programs:         cfg.Programs,
 		EventConverters:  cfg.EventConverters,
 		Transcript:       cfg.Transcript,

@@ -62,6 +62,7 @@ type Config struct {
 	Transcript      Transcript
 
 	Provider        llm.LLMProvider
+	ProviderSources ProviderSources
 	ReasoningEffort *string
 
 	// ToolProvider supplies the tools this worker exposes on the bus (a tool
@@ -105,9 +106,19 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		cfg.ReasoningEffort = &d
 	}
 
+	// The initial provider is the explicit single Provider, falling back to
+	// ProviderSources.Default() when a runtime-switchable source is configured.
+	initialProvider := cfg.Provider
+	if cfg.ProviderSources != nil {
+		if d := cfg.ProviderSources.Default(); d != nil {
+			initialProvider = d
+		}
+	}
+
 	w := &BaseReasonWorker{
 		BaseWorker:               worker.NewBaseWorker(cfg.ID, cfg.Subscriptions, cfg.Bus),
-		llmProvider:              cfg.Provider,
+		llmProvider:              initialProvider,
+		providerSources:          cfg.ProviderSources,
 		transcript:               cfg.Transcript,
 		tools:                    make(map[string]worker.Tool),
 		publishMap:               make(map[string][]EventPublish),
@@ -136,7 +147,7 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	// Compactor: default LLM-summary compactor unless supplied. It needs the
 	// provider for summarization and the tail policy.
 	if cfg.Compactor == nil {
-		w.compactor = NewDefaultCompactor(cfg.Provider, cfg.KeepTail)
+		w.compactor = NewDefaultCompactor(initialProvider, cfg.KeepTail)
 	} else {
 		w.compactor = cfg.Compactor
 	}
@@ -246,6 +257,7 @@ type BaseReasonWorker struct {
 	mu sync.Mutex
 
 	llmProvider     llm.LLMProvider
+	providerSources ProviderSources
 	transcript      Transcript
 	tools           map[string]worker.Tool // tools from the bus + built-ins; read by dispatch
 	programs        []program.Program

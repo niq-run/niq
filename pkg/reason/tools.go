@@ -34,13 +34,13 @@ func (w *BaseReasonWorker) allTools() []worker.Tool {
 // backed by other workers are discovered separately.
 type ToolProvider interface {
 	// ToolDefinitions returns the tools this provider can handle, as the table
-	// the LLM sees (send_message, list_workers, context.compress, ...).
+	// the LLM sees (send_message, list_workers, context_compress, ...).
 	ToolDefinitions() []worker.Tool
 	// HandleToolCall serves one tool.requested targeting this worker.
 	HandleToolCall(tc worker.ToolCall)
 }
 
-// DefaultTools is the default ToolProvider: the four domain-agnostic
+// DefaultTools is the default ToolProvider: the five domain-agnostic
 // capabilities any reason worker exposes on the bus. They are declared with
 // this worker as provider, so only this worker can call them, but they are
 // ordinary bus-declared abilities, not a special built-in set.
@@ -49,7 +49,7 @@ type DefaultTools struct {
 }
 
 // metaOpOf maps a meta tool's bare name to its worker.update op: the tool is
-// the LLM-facing surface (context.compress), the op is the event payload's
+// the LLM-facing surface (context_compress), the op is the event payload's
 // operation name (compress).
 func metaOpOf(toolName string) string {
 	switch toolName {
@@ -78,14 +78,22 @@ var defaultToolDefinitions = []worker.Tool{
 	},
 	{
 		Name:        "list_workers",
-		Description: "List all available workers and their capabilities. Returns tools and events published by each worker. Call this first, then set a 2-second timer, then call again to get the latest worker information after re-discovery.",
+		Description: "List all available workers and their capabilities. Returns tools and events published by each worker.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
 	},
 	{
-		Name:        "context.compress",
+		Name:        "list_llm_providers",
+		Description: "List the available LLM providers and their models (including each provider's default model). Useful before switching provider/model.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+	},
+	{
+		Name:        "context_compress",
 		Description: "Compact your own context history: older messages are replaced by a summary, the most recent messages are kept. Call this when the system reminds you about context budget, or when earlier history is no longer needed in full. This operation edits your own context; issue it alone (other tool calls in the same turn will be rejected while it runs).",
 		Parameters: map[string]any{
 			"type": "object",
@@ -97,7 +105,7 @@ var defaultToolDefinitions = []worker.Tool{
 		IsMetaTool: true,
 	},
 	{
-		Name:        "context.rotate",
+		Name:        "context_rotate",
 		Description: "Rotate your context: summarize the current transcript as a carried digest and start a fresh context containing only that digest. Use for periodic/discrete tasks when previous rounds are no longer relevant, or when starting a new topic. This operation edits your own context; issue it alone (other tool calls in the same turn will be rejected while it runs).",
 		Parameters: map[string]any{
 			"type": "object",
@@ -155,7 +163,9 @@ func (t *DefaultTools) HandleToolCall(tc worker.ToolCall) {
 		t.w.handleSendMessage(tc.CallID, tc.Name, tc.CallerID, tc.Args)
 	case "list_workers":
 		t.w.handleListWorkers(tc.CallID, tc.Name, tc.CallerID, tc.Args)
-	case "context.compress", "context.rotate":
+	case "list_llm_providers":
+		t.w.handleListLLMProvidersTool(tc.CallID, tc.Name, tc.CallerID, tc.Args)
+	case "context_compress", "context_rotate":
 		t.w.ReplyRejected(tc.CallerID, tc.CallID, tc.Name,
 			"meta operation: send a worker.update event to this worker instead of calling this as a tool", tc.TraceID)
 	default:
@@ -337,6 +347,28 @@ func (w *BaseReasonWorker) handleListWorkers(callID, toolName, callerID string, 
 
 	w.sendSuccess(callID, toolName, callerID, string(b))
 	log.Printf("[reason %s] list_workers → %d workers", w.ID(), len(result))
+}
+
+// handleListLLMProvidersTool serves the list_llm_providers tool: it returns
+// the configured LLM providers and their models (as JSON) so the LLM can pick
+// one before issuing a set-llm-provider switch. When no ProviderSources are
+// configured (a single fixed provider), it reports an empty list.
+func (w *BaseReasonWorker) handleListLLMProvidersTool(callID, toolName, callerID string, args map[string]any) {
+	infos := w.availableProviders()
+	b, err := json.Marshal(infos)
+	if err != nil {
+		w.sendFail(callID, toolName, callerID, "list_llm_providers could not serialize the provider list: "+err.Error())
+		return
+	}
+	w.sendSuccess(callID, toolName, callerID, string(b))
+	log.Printf("[reason %s] list_llm_providers → %d providers", w.ID(), len(infos))
+}
+
+func (w *BaseReasonWorker) availableProviders() []ProviderInfo {
+	if w.providerSources != nil {
+		return w.providerSources.List()
+	}
+	return nil
 }
 
 func (w *BaseReasonWorker) sendSuccess(callID, toolName, callerID, result string) {

@@ -107,14 +107,14 @@ func TestSelfDeclaredToolsLoadable(t *testing.T) {
 	}
 }
 
-// TestDefaultProviderExposesFourTools verifies the default provider exposes
-// exactly the four domain-agnostic tools, (self-)discovered by this worker.
-func TestDefaultProviderExposesFourTools(t *testing.T) {
+// TestDefaultProviderExposesDefaultTools verifies the default provider exposes
+// exactly the domain-agnostic tool set, (self-)discovered by this worker.
+func TestDefaultProviderExposesDefaultTools(t *testing.T) {
 	w := newTestWorker(nil, newTestChannel())
 	loadSelfTools(t, w)
 
 	want := map[string]bool{"send_message": true, "list_workers": true,
-		"context_compress": true, "context_rotate": true}
+		"list_llm_providers": true, "context_compress": true, "context_rotate": true}
 	for name := range want {
 		if _, ok := w.tools[name]; !ok {
 			t.Fatalf("expected exposed tool %q, got %+v", name, keys(w.tools))

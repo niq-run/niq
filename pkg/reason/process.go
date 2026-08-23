@@ -15,6 +15,8 @@
 // own choice, not a property of the level.
 package reason
 
+import "errors"
+
 import (
 	"context"
 	"encoding/json"
@@ -118,7 +120,7 @@ func (w *BaseReasonWorker) handleWorkerUpdate(evt event.Event) {
 			w.mu.Unlock()
 
 			log.Printf("[reason %s] meta op %s done: %v", w.ID(), op, err)
-			done := event.New(event.TypeWorkerUpdate, w.ID(), map[string]any{
+			done := event.New(event.TypeWorkerUpdated, w.ID(), map[string]any{
 				"op": op, "done": true, "error": fmt.Sprintf("%v", err),
 			})
 			done.TraceID = traceID
@@ -126,9 +128,53 @@ func (w *BaseReasonWorker) handleWorkerUpdate(evt event.Event) {
 
 			w.tryReason(context.Background())
 		}()
+	case "set-llm-provider":
+		w.handleSetLLMProvider(evt)
 	default:
 		log.Printf("[reason %s] unknown worker.update op: %q", w.ID(), op)
 	}
+}
+
+// handleSetLLMProvider applies a worker.update set-llm-provider op: it builds
+// the named provider with an explicit model from the configured sources and
+// atomically rebinds this worker's active provider under the lock. Both
+// provider and model are required — an empty model is rejected rather than
+// silently defaulting. The switch takes effect from the next reasoning round.
+// Emits a worker.updated completion so the requester can observe success/failure.
+func (w *BaseReasonWorker) handleSetLLMProvider(evt event.Event) {
+	name, _ := evt.Payload["provider"].(string)
+	model, _ := evt.Payload["model"].(string)
+
+	payload := map[string]any{"op": "set-llm-provider", "provider": name, "model": model}
+
+	var err error
+	switch {
+	case name == "":
+		err = errors.New("provider is required")
+	case model == "":
+		err = errors.New("model is required (explicit model, no default fallback)")
+	default:
+		err = w.setActiveProvider(name, model)
+	}
+
+	if err != nil {
+		payload["done"] = false
+		payload["error"] = err.Error()
+	} else {
+		payload["done"] = true
+		w.needReason = true
+	}
+	log.Printf("[reason %s] set-llm-provider provider=%s model=%s done=%t err=%v", w.ID(), name, model, payload["done"], err)
+	w.emitWorkerUpdated(evt, payload)
+}
+
+// emitWorkerUpdated broadcasts a worker.updated completion for a meta op,
+// carrying the caller's trace id.
+func (w *BaseReasonWorker) emitWorkerUpdated(evt event.Event, payload map[string]any) {
+	payload["op"] = payload["op"].(string)
+	done := event.New(event.TypeWorkerUpdated, w.ID(), payload)
+	done.TraceID = evt.TraceID
+	_ = w.Channel.Broadcast(context.Background(), done)
 }
 
 // handleAbort cancels the current LLM call, parks all pending tools (so late

@@ -142,10 +142,12 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	compactDirective, _ := p["compact_directive"].(string)
 
 	connect := specConnect(ctx, id, "reason", pubAllow, subAllow)
+	providerSources := newSwarmProviderSources(provider, apiKey, baseURL, model)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		w := reason.NewWorker(reason.Config{
 			ID:               id,
-			Provider:         providerFromArgs(provider, apiKey, baseURL, model),
+			Provider:         providerSources.Default(),
+			ProviderSources:  providerSources,
 			Programs:         programs,
 			EventConverters:  events,
 			Bus:              ch,

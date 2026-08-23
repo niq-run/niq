@@ -23,6 +23,7 @@ const (
 	TypeWorkerInput    EventType = "worker.input"
 	TypeWorkerAbort    EventType = "worker.abort"
 	TypeWorkerUpdate   EventType = "worker.update"
+	TypeWorkerUpdated  EventType = "worker.updated"
 
 	// Tool invocation lifecycle.
 	TypeToolRequested EventType = "tool.requested"

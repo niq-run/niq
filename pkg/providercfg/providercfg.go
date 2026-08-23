@@ -26,12 +26,41 @@ import (
 )
 
 // Provider describes one named LLM provider.
+//
+// Model is the default model used when none is selected explicitly; Models is
+// the full list of models the provider offers. When Model is empty and Models is
+// non-empty, Model falls back to Models[0] (see ResolveDefaultModel).
 type Provider struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	APIKey  string `json:"api_key,omitempty"`
-	BaseURL string `json:"base_url,omitempty"`
-	Model   string `json:"model,omitempty"`
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`
+	APIKey  string   `json:"api_key,omitempty"`
+	BaseURL string   `json:"base_url,omitempty"`
+	Model   string   `json:"model,omitempty"`
+	Models  []string `json:"models,omitempty"`
+}
+
+// ListModels returns the provider's full model list. When Models is empty it
+// transparently falls back to a single-element list [Model].
+func (p Provider) ListModels() []string {
+	if len(p.Models) > 0 {
+		return p.Models
+	}
+	if p.Model != "" {
+		return []string{p.Model}
+	}
+	return nil
+}
+
+// ResolveDefaultModel returns the effective default model for the provider,
+// falling back to the first entry of Models when Model is unset.
+func (p Provider) ResolveDefaultModel() string {
+	if p.Model != "" {
+		return p.Model
+	}
+	if len(p.Models) > 0 {
+		return p.Models[0]
+	}
+	return ""
 }
 
 // Config is the top-level provider.json shape.
@@ -138,8 +167,13 @@ func Write(cfg *Config) error {
 	return nil
 }
 
-// Build constructs an llm.LLMProvider from a Provider config.
+// Build constructs an llm.LLMProvider from a Provider config. The model used is
+// the provider's default model (see ResolveDefaultModel); a caller that wants
+// another model from Models should pass it via BuildWithOverrides.
 func Build(p Provider) llm.LLMProvider {
+	if resolved := p.ResolveDefaultModel(); resolved != "" {
+		p.Model = resolved
+	}
 	switch p.Type {
 	case "claude", "anthropic":
 		if p.APIKey == "" {
@@ -206,6 +240,37 @@ func Build(p Provider) llm.LLMProvider {
 			Model:   p.Model,
 		})
 	}
+}
+
+// SetModel updates a provider's default model. The model must appear in the
+// provider's Models list (or match its current single Model when no list is
+// configured). Persists the updated config.
+func SetModel(name, model string) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	for i := range cfg.Providers {
+		p := &cfg.Providers[i]
+		if p.Name != name {
+			continue
+		}
+		if !contains(p.ListModels(), model) {
+			return fmt.Errorf("providercfg: model %q not available for provider %q", model, name)
+		}
+		p.Model = model
+		return Write(cfg)
+	}
+	return fmt.Errorf("providercfg: provider %q not found", name)
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // BuildWithOverrides constructs a provider but lets caller-supplied values win
