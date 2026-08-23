@@ -703,30 +703,37 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     }
   }
 
+  // Header: always visible, not in scroll area — shown even when empty.
+  const header = (
+    <div style={{ fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 24, marginBottom: 12 }}>
+      <strong>Talk</strong>
+      <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
+        watching <strong style={{ color: colors.textDim }}>{
+          talkWorkers.size > 0
+            ? `[${[...talkWorkers].join(', ')}]`
+            : '[all workers]'
+        }</strong>
+      </span>
+    </div>
+  )
+
   if (nodes.length === 0 && streamingTraces.length === 0) {
     const label = talkWorkers.size > 0
       ? [...talkWorkers].join(', ')
       : 'all workers'
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: colors.textDimmed }}>
-        <p style={{ fontSize: fontSizes.md }}>No messages yet. Watching <strong style={{ color: colors.textDim }}>{label}</strong>.</p>
-      </div>
+      <>
+        {header}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: colors.textDimmed }}>
+          <p style={{ fontSize: fontSizes.md }}>No messages yet. Watching <strong style={{ color: colors.textDim }}>{label}</strong>.</p>
+        </div>
+      </>
     )
   }
 
   return (
     <>
-      {/* Header: always visible, not in scroll area */}
-      <div style={{ fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 24, marginBottom: 12 }}>
-        <strong>Talk</strong>
-        <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
-          watching <strong style={{ color: colors.textDim }}>{
-            talkWorkers.size > 0
-              ? `[${[...talkWorkers].join(', ')}]`
-              : '[all workers]'
-          }</strong>
-        </span>
-      </div>
+      {header}
       <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px' }}>
         {nodes}
         {!responseOnly && streamingTraces.map(({ traceId, thinking, text, workerId, lastTs }) => {
