@@ -37,7 +37,11 @@ export default function ProjectsView() {
     setError('')
     try {
       const res = await createProject(name, newTemplate)
-      if (res.webui_url) { window.location.href = res.webui_url; return }
+      if (res.webui_port) {
+        // Stay in this (dev/control) WebUI, just attach to the new project.
+        window.location.href = `?project=${encodeURIComponent(name)}&port=${res.webui_port}`
+        return
+      }
       fetchProjects().then(setProjects).catch(() => {})
     } catch (e) {
       setError('failed to create project ' + name)
@@ -50,8 +54,9 @@ export default function ProjectsView() {
     setError('')
     try {
       const res = await startProject(id)
-      if (res.webui_url) {
-        window.location.href = res.webui_url
+      if (res.webui_port) {
+        // Stay in this WebUI, just attach to the (re)started project.
+        window.location.href = `?project=${encodeURIComponent(id)}&port=${res.webui_port}`
         return
       }
     } catch (e) {
@@ -152,7 +157,7 @@ export default function ProjectsView() {
             </div>
             {p.ports?.webui ? (
               <a
-                href={'http://localhost:' + p.ports.webui}
+                href={`?project=${encodeURIComponent(p.id)}&port=${p.ports.webui}`}
                 style={{ color: colors.accent, fontSize: fontSizes.sm, textDecoration: 'none' }}
               >
                 Jump
