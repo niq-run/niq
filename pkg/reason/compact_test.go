@@ -274,3 +274,31 @@ func TestSnapshotOldBlobCompatibility(t *testing.T) {
 		t.Fatalf("old blob content lost: %+v", msgs)
 	}
 }
+
+// TestCompactionAppendsNote verifies a successful compaction appends a
+// completion note to the transcript, so the model knows the operation ran and
+// does not re-decide to compress every round.
+func TestCompactionAppendsNote(t *testing.T) {
+	prov := &summarizeProvider{summarized: "s1",
+		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
+	w := NewBaseReasonWorker(Config{ID: "r1", Provider: prov, Bus: newTestChannel(),
+		ContextWindow: 1000, KeepTail: 1})
+
+	w.transcript.Apply(InputPatch{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "step1"}}},
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "step2"}}},
+	}})
+
+	w.mu.Lock()
+	err := w.compactor.Compact(context.Background(), w.transcript, w.compactDirective())
+	w.mu.Unlock()
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+
+	msgs := w.transcript.Render()
+	last := msgs[len(msgs)-1]
+	if last.Role != llm.RoleUser || !strings.Contains(last.Content[0].Text, "context compressed") {
+		t.Fatalf("compaction note missing at tail, got: %+v", last)
+	}
+}

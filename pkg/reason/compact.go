@@ -7,7 +7,7 @@
 // exits:
 //
 //	>= budget_soft -> guided: inject a reminder, the LLM calls the
-//	   context.compress tool
+//	   context_compress tool
 //	>= budget_hard -> direct: the system compacts without waiting for the LLM
 //
 // How the transcript is compressed is the worker's Compactor (see below). The
@@ -51,7 +51,7 @@ func (w *BaseReasonWorker) handleBudget(ctx context.Context, msg llm.Message) {
 			Role: llm.RoleUser,
 			Content: []llm.ContentBlock{{Type: llm.ContentText,
 				Text: fmt.Sprintf("[system] Context usage is at %d%% of the model window (%d/%d tokens). "+
-					"Consider calling the context.compress tool to summarize older history before continuing.",
+					"Consider calling the context_compress tool to summarize older history before continuing.",
 					int(ratio*100), w.lastUsageTokens, w.contextWindow)}},
 		}}})
 	case ratio < w.budgetSoft:
@@ -106,25 +106,28 @@ verbose tool output. Output only the summary, in a compact structured form.`
 
 // Compact implements Compactor: snapshot, summarize (LLM, unlocked), apply.
 func (c *DefaultCompactor) Compact(ctx context.Context, t Transcript, directive string) error {
-	return c.compact(ctx, t, directive, c.keepTail)
+	return c.compact(ctx, t, directive, c.keepTail, "compress")
 }
 
 // Rotate turns the page: summarize the current transcript as a carried digest
 // and start a fresh context keeping only this turn's own closing call (the
 // rotate tool's assistant tool_call + its [pending] placeholder), so the
 // result stays visible to the model. Not part of the Compactor interface —
-// called via type assertion by whoever declares the context.rotate tool. The
+// called via type assertion by whoever declares the context_rotate tool. The
 // directive (requested carry included) is prepared by the worker.
 func (c *DefaultCompactor) Rotate(ctx context.Context, t Transcript, directive string) error {
 	// keepTail=2: the rotating call's own message + placeholder.
-	return c.compact(ctx, t, directive, 2)
+	return c.compact(ctx, t, directive, 2, "rotate")
 }
 
 // compact is the shared core: snapshot via BeginEdit, optional previous-digest
 // incremental mode, LLM summarize (no lock held), then apply via CommitEdit.
 // If the summary fails, the edit is aborted and Apply inputs buffered during
-// the window are preserved (merged by a later commit).
-func (c *DefaultCompactor) compact(ctx context.Context, t Transcript, directive string, keepTail int) error {
+// the window are preserved (merged by a later commit). On success a note is
+// appended to the transcript so the model knows the operation completed — a
+// meta tool never produces a tool_result, so without it the model would
+// re-decide to compress every round.
+func (c *DefaultCompactor) compact(ctx context.Context, t Transcript, directive string, keepTail int, label string) error {
 	msgs := t.BeginEdit()
 	projection := projectTranscript(msgs)
 	previousDigest := currentDigest(msgs)
@@ -140,7 +143,21 @@ func (c *DefaultCompactor) compact(ctx context.Context, t Transcript, directive 
 	t.CommitEdit(digest, keepTail)
 	log.Printf("[reason] transcript compacted (keepTail=%d, digest=%d chars, update=%v)",
 		keepTail, len(digest), previousDigest != "")
+
+	t.Apply(InputPatch{Messages: []llm.Message{{
+		Role:    llm.RoleUser,
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: compactionNote(label)}},
+	}}})
 	return nil
+}
+
+// compactionNote is the transcript message appended after a successful
+// compaction so the model can proceed instead of re-deciding to compress.
+func compactionNote(label string) string {
+	if label == "rotate" {
+		return "[system] episode rotated: history was compacted into a carried digest and a fresh context started. Continue the task."
+	}
+	return "[system] context compressed: older messages were summarized into a digest. Continue the task with the recent context."
 }
 
 // summarize calls the LLM once, non-streaming. With a previous digest present
