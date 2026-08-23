@@ -4,7 +4,7 @@ import { useEffect } from 'react'
  * Periodically fetches a URL and calls onData with the parsed JSON.
  * Cleans up the interval on unmount.
  */
-export function usePolling<T>(url: string, intervalMs: number, onData: (data: T) => void, enabled = true): void {
+export function usePolling<T>(url: string, intervalMs: number, onData: (data: T) => void, enabled = true, immediate = true): void {
   useEffect(() => {
     if (!enabled) return
     let active = true
@@ -17,7 +17,7 @@ export function usePolling<T>(url: string, intervalMs: number, onData: (data: T)
         // ignore fetch errors for polling endpoints
       }
     }
-    load()
+    if (immediate) load()
     const id = setInterval(load, intervalMs)
     return () => {
       active = false
