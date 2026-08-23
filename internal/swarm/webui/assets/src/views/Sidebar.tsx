@@ -67,20 +67,17 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           </span>
         </h2>
 
-        {/* Current project name — shown only when attached to a project. */}
+        {/* Current project name — plain text below the logo. */}
         {mode === 'project' && project && (
           <div
             style={{
-              marginTop: 2,
+              marginTop: 16,
               color: colors.textDim,
               fontSize: fontSizes.sm,
+              fontStyle: 'italic',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
-              border: '1px solid ' + colors.border,
-              borderRadius: 4,
-              padding: '4px 8px',
-              background: colors.bgLight,
             }}
             title={project}
           >
