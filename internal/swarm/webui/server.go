@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -32,7 +33,9 @@ var embeddedAssets embed.FS
 type Server struct {
 	hiw       *hiw.Worker
 	server    *http.Server
-	devMode   bool // when true, static assets are proxied to Vite dev server
+	listener  net.Listener
+	addr      string // resolved listen address (host:port), empty until Bind
+	devMode   bool   // when true, static assets are proxied to Vite dev server
 	eventLog  *eventbusapi.EventLog
 	engine    *eventbus.Engine
 	registry  corebus.IdentityRegistry
@@ -82,9 +85,36 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	return s
 }
 
-// Start begins serving HTTP. Blocks until ctx is cancelled.
+// Bind binds the listen socket (eagerly, so a caller can learn the port before
+// serving) and records the resolved host:port. With addr ":0" the OS assigns
+// an ephemeral port read back via ResolvedAddr. Calling Bind twice returns the
+// already-bound address. Safe to call before Start; Start binds if not yet.
+func (s *Server) Bind() (string, error) {
+	if s.listener != nil {
+		return s.addr, nil
+	}
+	ln, err := net.Listen("tcp", s.server.Addr)
+	if err != nil {
+		return "", fmt.Errorf("webui: bind %s: %w", s.server.Addr, err)
+	}
+	s.listener = ln
+	s.addr = ln.Addr().String()
+	s.server.Addr = s.addr
+	return s.addr, nil
+}
+
+// ResolvedAddr returns the address actually bound (host:port). Empty until
+// Bind has run; for a dynamic (":0") address this carries the assigned port.
+func (s *Server) ResolvedAddr() string { return s.addr }
+
+// Start binds (if needed) and serves HTTP. Blocks until ctx is cancelled.
 func (s *Server) Start(ctx context.Context) error {
-	log.Printf("[webui] listening on %s", s.server.Addr)
+	if s.listener == nil {
+		if _, err := s.Bind(); err != nil {
+			return err
+		}
+	}
+	log.Printf("[webui] listening on %s", s.addr)
 
 	go func() {
 		<-ctx.Done()
@@ -93,7 +123,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.server.Shutdown(shutdownCtx)
 	}()
 
-	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := s.server.Serve(s.listener); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("webui: %w", err)
 	}
 	return nil

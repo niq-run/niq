@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	stdhttp "net/http"
 	"sync"
 
@@ -30,6 +31,8 @@ type Server struct {
 	engine   *eventbus.Engine
 	registry corebus.IdentityRegistry
 	addr     string
+	listener net.Listener
+	bound    string   // resolved host:port, empty until Bind
 	sessions sync.Map // map[workerID]*busSide
 }
 
@@ -42,14 +45,39 @@ func NewServer(engine *eventbus.Engine, registry corebus.IdentityRegistry, addr 
 	}
 }
 
-// Start starts the HTTP server and blocks until ctx is cancelled.
+// Bind binds the listen socket (eagerly, so a caller can learn the port before
+// serving) and records the resolved host:port. With addr ":0" the OS assigns an
+// ephemeral port read back via ResolvedAddr. Calling Bind twice returns the
+// already-bound address. Safe to call before Start; Start binds if not yet.
+func (s *Server) Bind() (string, error) {
+	if s.listener != nil {
+		return s.bound, nil
+	}
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return "", fmt.Errorf("httptrans: bind %s: %w", s.addr, err)
+	}
+	s.listener = ln
+	s.bound = ln.Addr().String()
+	return s.bound, nil
+}
+
+// ResolvedAddr returns the address actually bound (host:port). Empty until
+// Bind has run; for a dynamic (":0") address this carries the assigned port.
+func (s *Server) ResolvedAddr() string { return s.bound }
+
+// Start binds (if needed) and serves HTTP. Blocks until ctx is cancelled.
 func (s *Server) Start(ctx context.Context) error {
+	if s.listener == nil {
+		if _, err := s.Bind(); err != nil {
+			return err
+		}
+	}
 	mux := stdhttp.NewServeMux()
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/publish", s.handlePublish)
 
 	server := &stdhttp.Server{
-		Addr:    s.addr,
 		Handler: mux,
 	}
 
@@ -58,8 +86,8 @@ func (s *Server) Start(ctx context.Context) error {
 		server.Close()
 	}()
 
-	log.Printf("[httptrans] listening on %s", s.addr)
-	if err := server.ListenAndServe(); err != stdhttp.ErrServerClosed {
+	log.Printf("[httptrans] listening on %s", s.bound)
+	if err := server.Serve(s.listener); err != stdhttp.ErrServerClosed {
 		return err
 	}
 	return nil
@@ -153,7 +181,7 @@ func (s *Server) handleEvents(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 type publishRequest struct {
 	WorkerID   string        `json:"worker_id"`
 	Credential string        `json:"credential"`
-	Type       string        `json:"type"`     // "send" or "broadcast"
+	Type       string        `json:"type"` // "send" or "broadcast"
 	Events     []event.Event `json:"events"`
 	Targets    []string      `json:"targets,omitempty"`
 	TraceID    string        `json:"trace_id,omitempty"`
