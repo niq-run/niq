@@ -171,6 +171,7 @@ func (w *WorkspaceWorker) handleToolCall(ctx context.Context, evt event.Event) {
 			"name":      name,
 			"partial":   partial,
 		})
+		evt.Transient = true // live-streaming only, not durable history
 		_ = w.Channel.Send(context.Background(), evt, callerID)
 	})
 

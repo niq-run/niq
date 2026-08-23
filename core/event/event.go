@@ -112,6 +112,11 @@ type Event struct {
 	DataSchema     string         `json:"dataschema,omitempty"`
 	Timestamp      int64          `json:"timestamp"`
 	Recipients     []string       `json:"recipients,omitempty"` // populated by engine during routing
+
+	// Transient marks events that are live-streaming UI transients (streaming
+	// deltas, partial tool output) rather than durable history. The source sets
+	// it; the bus delivers them live to observers but skips them on persistence.
+	Transient bool `json:"transient,omitempty"`
 }
 
 // New creates a new Event with defaults.

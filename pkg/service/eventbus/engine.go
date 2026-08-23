@@ -161,22 +161,12 @@ func (e *Engine) OnEvent(fn func(event.Event)) {
 	e.onEvent = append(e.onEvent, fn)
 }
 
-// transientStreamEvent reports live-streaming UI transients that are not durable
-// history: streaming deltas and partial tool output. They are still delivered
-// live to observers (the SSE hook), but are skipped on persistence so they don't
-// crowd real messages (inputs/responses/tool results) out of the replay window.
-func transientStreamEvent(evt event.Event) bool {
-	switch evt.Type {
-	case "reason.thinking_delta", "reason.text_delta", "tool.partial":
-		return true
-	}
-	return false
-}
-
 // persistEvent writes the event to the store if configured, and
-// calls the onEvent hook for streaming.
+// calls the onEvent hook for streaming. Events marked Transient by their source
+// (streaming deltas, partial tool output) are delivered live to observers but
+// not persisted, so they don't crowd real messages out of the replay window.
 func (e *Engine) persistEvent(ctx context.Context, evt event.Event) {
-	if e.store != nil && !transientStreamEvent(evt) {
+	if e.store != nil && !evt.Transient {
 		if err := e.store.Append(ctx, evt); err != nil {
 			log.Printf("[eventbus] persist event %s: %v", evt.ID, err)
 		}

@@ -589,6 +589,7 @@ func (w *BaseReasonWorker) broadcastThinkingDelta(text, traceID string) {
 		"delta": text,
 	})
 	evt.TraceID = traceID
+	evt.Transient = true // live-streaming only, not durable history
 	_ = w.Channel.Broadcast(context.Background(), evt)
 }
 
@@ -597,6 +598,7 @@ func (w *BaseReasonWorker) broadcastTextDelta(text, traceID string) {
 		"delta": text,
 	})
 	evt.TraceID = traceID
+	evt.Transient = true // live-streaming only, not durable history
 	_ = w.Channel.Broadcast(context.Background(), evt)
 }
 
