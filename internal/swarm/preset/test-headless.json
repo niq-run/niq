@@ -1,0 +1,23 @@
+{
+  "workers": [
+    {
+      "type": "reason",
+      "id": "test-reasoner",
+      "subscriptions": [
+        "worker.discover",
+        "tool.completed",
+        "tool.failed",
+        "tool.rejected",
+        "worker.ready",
+        "worker.gone",
+        "worker.abort",
+        "timer.timeout",
+        "timer.reminder",
+        "worker.input",
+        "tool.requested",
+        "decision.made"
+      ]
+    },
+    { "type": "timer", "id": "test-timer" }
+  ]
+}

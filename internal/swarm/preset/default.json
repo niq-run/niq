@@ -1,0 +1,27 @@
+{
+  "workers": [
+    { "type": "hiw", "id": "default-hiw", "subscriptions": ["*"] },
+    {
+      "type": "reason",
+      "id": "niq",
+      "subscriptions": [
+        "worker.input",
+        "tool.completed",
+        "tool.failed",
+        "tool.rejected",
+        "worker.ready",
+        "worker.gone",
+        "worker.discover",
+        "worker.abort",
+        "timer.timeout",
+        "timer.reminder",
+        "tool.requested",
+        "decision.made"
+      ]
+    },
+    { "type": "timer", "id": "timer" },
+    { "type": "host", "id": "host" },
+    { "type": "workspace", "id": "workspace", "root_dir": "/tmp/niq-test", "subscriptions": ["tool.requested"] },
+    { "type": "program", "id": "program", "subscriptions": ["tool.requested", "worker.discover"] }
+  ]
+}

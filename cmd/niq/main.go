@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	niq                       — start with the default "dev" preset
+//	niq                       — start with the default "default" preset
 //	niq swarm --config <file> — start from a YAML config file
 //	niq swarm --preset <name> — start from a built-in preset
 package main
@@ -99,7 +99,7 @@ func runProject(args []string) error {
 
 	case len(args) >= 2 && args[0] == "create":
 		id := args[1]
-		templateName := fs.String("template", "dev", "Template to create the project from")
+		templateName := fs.String("template", "default", "Template to create the project from")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
@@ -153,7 +153,7 @@ func printUsage() {
 	fmt.Print(`niq - neural interface quantum
 
 Usage:
-  niq                       start with the default "dev" preset
+  niq                       start with the default "default" preset
   niq swarm --config <file> start from a YAML config file
   niq swarm --preset <name> start from a built-in preset
   niq --version             print version

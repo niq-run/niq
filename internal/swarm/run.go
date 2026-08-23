@@ -55,7 +55,7 @@ func RunSwarm(opts RunOptions) error {
 	case opts.Preset != "":
 		cfg, err = LoadTemplate(templatesDir, opts.Preset)
 	default:
-		cfg, err = LoadTemplate(templatesDir, "dev")
+		cfg, err = LoadTemplate(templatesDir, "default")
 	}
 	if err != nil {
 		return err

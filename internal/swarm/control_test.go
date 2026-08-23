@@ -79,7 +79,7 @@ func newControl(t *testing.T) string {
 	return "http://" + addr
 }
 
-// TestControlTemplates verifies the template list is served (dev is always
+// TestControlTemplates verifies the template list is served (default is always
 // available, embedded if not yet seeded).
 func TestControlTemplates(t *testing.T) {
 	base := newControl(t)
@@ -87,8 +87,8 @@ func TestControlTemplates(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("templates status=%d: %s", code, body)
 	}
-	if !strings.Contains(body, "dev") {
-		t.Fatalf("templates missing dev: %s", body)
+	if !strings.Contains(body, "default") {
+		t.Fatalf("templates missing default: %s", body)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestControlCreateRejectsDuplicate(t *testing.T) {
 	}
 	base := newControl(t)
 
-	resp, err := http.Post(base+"/api/projects", "application/json", strings.NewReader(`{"id":"taken","template":"dev"}`))
+	resp, err := http.Post(base+"/api/projects", "application/json", strings.NewReader(`{"id":"taken","template":"default"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,13 +131,13 @@ func TestControlCreateRejectsUnknownTemplate(t *testing.T) {
 }
 
 // TestControlTemplateCloneDelete verifies the template clone + delete endpoints
-// (isolated under a temp HOME; dev is seeded from the embedded built-in).
+// (isolated under a temp HOME; default is seeded from the embedded built-in).
 func TestControlTemplateCloneDelete(t *testing.T) {
 	setupProjectsRoot(t)
 	base := newControl(t)
 
-	// Clone dev -> t1.
-	resp, err := http.Post(base+"/api/templates", "application/json", strings.NewReader(`{"id":"t1","copy_from":"dev"}`))
+	// Clone default -> t1.
+	resp, err := http.Post(base+"/api/templates", "application/json", strings.NewReader(`{"id":"t1","copy_from":"default"}`))
 	if err != nil {
 		t.Fatal(err)
 	}

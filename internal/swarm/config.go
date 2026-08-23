@@ -1,12 +1,13 @@
 // Package swarm provides the config-driven assembly for niq swarm.
 //
-// It reads a YAML config, instantiates workers, registers them with
+// It reads a JSON config, instantiates workers, registers them with
 // WorkerService, and manages the lifecycle. This is the only place where
 // config files are parsed into worker instances — no new abstractions.
 package swarm
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -17,45 +18,46 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed preset/*.yaml
+//go:embed preset/*.json
 var presetFS embed.FS
 
-// SwarmConfig is the top-level structure of a swarm YAML config file.
+// SwarmConfig is the top-level structure of a swarm config file.
 type SwarmConfig struct {
-	Workers []WorkerConfig `yaml:"workers"`
+	Workers []WorkerConfig `json:"workers" yaml:"workers"`
 }
 
-// WorkerConfig describes a single worker instance declaration.
+// WorkerConfig describes a single worker instance declaration. JSON is the
+// template/config format; yaml tags keep legacy --config files working.
 type WorkerConfig struct {
-	Type          string   `yaml:"type" json:"type"` // reason / workspace / host / timer / hiw
-	ID            string   `yaml:"id" json:"id"`
-	Instruction   string   `yaml:"instruction,omitempty" json:"instruction,omitempty"`
-	Provider      string   `yaml:"provider,omitempty" json:"provider,omitempty"`
-	APIKey        string   `yaml:"api_key,omitempty" json:"api_key,omitempty"`
-	BaseURL       string   `yaml:"base_url,omitempty" json:"base_url,omitempty"`
-	Model         string   `yaml:"model,omitempty" json:"model,omitempty"`
-	Subscriptions []string `yaml:"subscriptions,omitempty" json:"subscriptions,omitempty"`
-	Publish       []string `yaml:"publish,omitempty" json:"publish,omitempty"`
-	RootDir       string   `yaml:"root_dir,omitempty" json:"root_dir,omitempty"`
-	Archived      bool     `yaml:"archived,omitempty" json:"archived,omitempty"`
+	Type          string   `json:"type" yaml:"type"` // reason / workspace / host / timer / hiw
+	ID            string   `json:"id" yaml:"id"`
+	Instruction   string   `json:"instruction,omitempty" yaml:"instruction,omitempty"`
+	Provider      string   `json:"provider,omitempty" yaml:"provider,omitempty"`
+	APIKey        string   `json:"api_key,omitempty" yaml:"api_key,omitempty"`
+	BaseURL       string   `json:"base_url,omitempty" yaml:"base_url,omitempty"`
+	Model         string   `json:"model,omitempty" yaml:"model,omitempty"`
+	Subscriptions []string `json:"subscriptions,omitempty" yaml:"subscriptions,omitempty"`
+	Publish       []string `json:"publish,omitempty" yaml:"publish,omitempty"`
+	RootDir       string   `json:"root_dir,omitempty" yaml:"root_dir,omitempty"`
+	Archived      bool     `json:"archived,omitempty" yaml:"archived,omitempty"`
 }
 
-// ParseConfig reads and parses a swarm YAML config file.
+// ParseConfig reads and parses a swarm config file (JSON preferred, YAML accepted).
 func ParseConfig(path string) (*SwarmConfig, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("swarm: read config: %w", err)
 	}
-	return parseYAML(raw)
+	return parseConfig(raw)
 }
 
-// LoadPreset loads a built-in preset by name (without the .yaml suffix).
+// LoadPreset loads a built-in preset by name (without the .json suffix).
 func LoadPreset(name string) (*SwarmConfig, error) {
-	raw, err := presetFS.ReadFile("preset/" + name + ".yaml")
+	raw, err := presetFS.ReadFile("preset/" + name + ".json")
 	if err != nil {
 		return nil, fmt.Errorf("swarm: preset %q not found", name)
 	}
-	return parseYAML(raw)
+	return parseConfig(raw)
 }
 
 // TemplatesDir returns the on-disk template directory under the shared
@@ -67,12 +69,12 @@ func TemplatesDir() string {
 }
 
 // SeedTemplates copies the built-in preset templates to dir, but only when dir
-// has no .yaml yet (first-run seeding). Idempotent, best-effort on empty dirs.
+// has no .json yet (first-run seeding). Idempotent, best-effort on empty dirs.
 func SeedTemplates(dir string) error {
 	if dir == "" {
 		return nil
 	}
-	existing, _ := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	existing, _ := filepath.Glob(filepath.Join(dir, "*.json"))
 	if len(existing) > 0 {
 		return nil // already seeded: never clobber user-edited templates
 	}
@@ -98,10 +100,10 @@ func SeedTemplates(dir string) error {
 
 // TemplatePath returns the on-disk path of a template file under the templates dir.
 func TemplatePath(dir, name string) string {
-	return filepath.Join(dir, name+".yaml")
+	return filepath.Join(dir, name+".json")
 }
 
-// ReadTemplateRaw returns the raw YAML for a template, preferring the on-disk
+// ReadTemplateRaw returns the raw JSON for a template, preferring the on-disk
 // copy over the embedded built-in (used to clone templates).
 func ReadTemplateRaw(dir, name string) ([]byte, error) {
 	if dir != "" {
@@ -109,17 +111,17 @@ func ReadTemplateRaw(dir, name string) ([]byte, error) {
 			return b, nil
 		}
 	}
-	return presetFS.ReadFile("preset/" + name + ".yaml")
+	return presetFS.ReadFile("preset/" + name + ".json")
 }
 
 // ListTemplates returns the available project template names (without the
-// .yaml suffix), preferring the on-disk common/templates dir (seeded + user
+// .json suffix), preferring the on-disk common/templates dir (seeded + user
 // editable) and falling back to the embedded built-ins.
 func ListTemplates() ([]string, error) {
-	if files, err := filepath.Glob(filepath.Join(TemplatesDir(), "*.yaml")); err == nil && len(files) > 0 {
+	if files, err := filepath.Glob(filepath.Join(TemplatesDir(), "*.json")); err == nil && len(files) > 0 {
 		names := make([]string, 0, len(files))
 		for _, f := range files {
-			names = append(names, strings.TrimSuffix(filepath.Base(f), ".yaml"))
+			names = append(names, strings.TrimSuffix(filepath.Base(f), ".json"))
 		}
 		sort.Strings(names)
 		return names, nil
@@ -130,20 +132,20 @@ func ListTemplates() ([]string, error) {
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		names = append(names, strings.TrimSuffix(e.Name(), ".yaml"))
+		names = append(names, strings.TrimSuffix(e.Name(), ".json"))
 	}
 	sort.Strings(names)
 	return names, nil
 }
 
 // LoadTemplate loads a project template from the on-disk templates dir,
-// preferring the disk copy over the embedded builtin. The disk copy is what a
+// preferring the disk copy over the embedded built-in. The disk copy is what a
 // user edits; the embedded one is the fallback before seeding.
 func LoadTemplate(dir, name string) (*SwarmConfig, error) {
 	if dir != "" {
-		raw, err := os.ReadFile(filepath.Join(dir, name+".yaml"))
+		raw, err := os.ReadFile(TemplatePath(dir, name))
 		if err == nil {
-			return parseYAML(raw)
+			return parseConfig(raw)
 		}
 		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("swarm: read template %s: %w", name, err)
@@ -152,11 +154,20 @@ func LoadTemplate(dir, name string) (*SwarmConfig, error) {
 	return LoadPreset(name)
 }
 
-func parseYAML(raw []byte) (*SwarmConfig, error) {
+// parseConfig parses a config/template. JSON is the canonical format; YAML is
+// still accepted for backwards compatibility (e.g. an old --config file).
+func parseConfig(raw []byte) (*SwarmConfig, error) {
 	var cfg SwarmConfig
+	if err := json.Unmarshal(raw, &cfg); err == nil {
+		return validateWorkers(&cfg)
+	}
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("swarm: parse config: %w", err)
 	}
+	return validateWorkers(&cfg)
+}
+
+func validateWorkers(cfg *SwarmConfig) (*SwarmConfig, error) {
 	for i, w := range cfg.Workers {
 		if w.Type == "" {
 			return nil, fmt.Errorf("swarm: worker %d: type is required", i)
@@ -165,5 +176,5 @@ func parseYAML(raw []byte) (*SwarmConfig, error) {
 			return nil, fmt.Errorf("swarm: worker %d: id is required", i)
 		}
 	}
-	return &cfg, nil
+	return cfg, nil
 }

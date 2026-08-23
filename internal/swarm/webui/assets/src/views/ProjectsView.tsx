@@ -135,7 +135,7 @@ export default function ProjectsView() {
 
       {projects.length === 0 ? (
         <div style={{ color: colors.textDim, fontSize: fontSizes.md }}>
-          No projects yet. Create one from a template, e.g. <code>niq project create demo --template dev</code>.
+          No projects yet. Create one from a template, e.g. <code>niq project create demo --template default</code>.
         </div>
       ) : (
         projects.map((p) => (

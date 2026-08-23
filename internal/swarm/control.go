@@ -250,7 +250,7 @@ func (c *Control) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Reque
 		return
 	}
 	if body.Template == "" {
-		body.Template = "dev"
+		body.Template = "default"
 	}
 	tmpl, err := LoadTemplate(TemplatesDir(), body.Template)
 	if err != nil {
