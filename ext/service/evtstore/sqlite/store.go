@@ -60,6 +60,9 @@ func (s *Store) migrate() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_events_worker_time ON events(worker_id, timestamp DESC);
 	CREATE INDEX IF NOT EXISTS idx_events_target_time ON events(target_worker_id, timestamp DESC);
+	-- Bare timestamp index: serves chronological pagination of "all history"
+	-- (no worker filter), which the worker-scoped indexes can't be used for at scale.
+	CREATE INDEX IF NOT EXISTS idx_events_time ON events(timestamp DESC);
 	`
 	_, err := s.db.Exec(query)
 	return err
