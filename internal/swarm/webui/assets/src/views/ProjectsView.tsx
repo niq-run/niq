@@ -38,6 +38,7 @@ export default function ProjectsView() {
     try {
       await createProject(name, newTemplate)
       setNewName('')
+      refresh()
     } catch (e) {
       setError('failed to create project ' + name)
     }
@@ -49,10 +50,17 @@ export default function ProjectsView() {
     setError('')
     try {
       await startProject(id)
+      refresh()
     } catch (e) {
       setError('failed to start project ' + id)
     }
     setStarting(null)
+  }
+
+  // Force an immediate project-list refresh (the 3s poll would otherwise leave a
+  // stale 'stopped' state up to an interval, briefly flashing the Start button).
+  const refresh = async () => {
+    try { setProjects(await fetchProjects()) } catch {}
   }
 
   const stop = async (id: string) => {
