@@ -36,19 +36,22 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var afterTs, beforeTs int64
+	// Pagination by insertion order (index into s.events): events are appended as
+	// they occur, so this is the deterministic chronological order — same rationale
+	// as the SQLite store's rowid ordering.
+	afterIdx, beforeIdx := -1, -1
 	if opts.AfterID != "" {
-		for _, e := range s.events {
+		for i, e := range s.events {
 			if e.ID == opts.AfterID {
-				afterTs = e.Timestamp
+				afterIdx = i
 				break
 			}
 		}
 	}
 	if opts.BeforeID != "" {
-		for _, e := range s.events {
+		for i, e := range s.events {
 			if e.ID == opts.BeforeID {
-				beforeTs = e.Timestamp
+				beforeIdx = i
 				break
 			}
 		}
@@ -56,7 +59,7 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 
 	var result []event.Event
 	allWorkers := workerID == "*"
-	for _, e := range s.events {
+	for idx, e := range s.events {
 		idOK := allWorkers || e.WorkerId == workerID || e.TargetWorkerID == workerID || workerInRecipients(e, workerID)
 		if len(opts.WorkerIDs) > 0 {
 			idOK = workerMatchesAny(e, opts.WorkerIDs)
@@ -70,10 +73,11 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 		if opts.Since > 0 && e.Timestamp < opts.Since {
 			continue
 		}
-		if afterTs > 0 && e.Timestamp <= afterTs {
+		// Insertion-order pagination: strictly after/before the anchor index.
+		if afterIdx >= 0 && idx <= afterIdx {
 			continue
 		}
-		if beforeTs > 0 && e.Timestamp >= beforeTs {
+		if beforeIdx >= 0 && idx >= beforeIdx {
 			continue
 		}
 		result = append(result, e)

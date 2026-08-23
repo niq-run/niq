@@ -124,18 +124,25 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 		query += " AND timestamp >= ?"
 		args = append(args, opts.Since)
 	}
+	// Order and paginate by the implicit rowid (insertion order). Events are
+	// appended as they occur, so rowid is the true chronological order and
+	// deterministic — unlike the second-resolution timestamp (and even the
+	// millisecond uuid time, since same-ms events still tie). Ordering by
+	// timestamp alone made same-second events (e.g. thinking then response)
+	// come back in a random/undefined order after restart, and timestamp-based
+	// pagination silently skipped same-second events at page boundaries.
 	if opts.AfterID != "" {
-		query += " AND timestamp > COALESCE((SELECT timestamp FROM events WHERE id = ?), 0)"
+		query += " AND rowid > (SELECT rowid FROM events WHERE id = ?)"
 		args = append(args, opts.AfterID)
 	}
 	if opts.BeforeID != "" {
-		query += " AND timestamp < COALESCE((SELECT timestamp FROM events WHERE id = ?), 0)"
+		query += " AND rowid < (SELECT rowid FROM events WHERE id = ?)"
 		args = append(args, opts.BeforeID)
 	}
 	if opts.Desc {
-		query += " ORDER BY timestamp DESC"
+		query += " ORDER BY rowid DESC"
 	} else {
-		query += " ORDER BY timestamp ASC"
+		query += " ORDER BY rowid ASC"
 	}
 	if opts.Limit > 0 {
 		query += " LIMIT ?"
