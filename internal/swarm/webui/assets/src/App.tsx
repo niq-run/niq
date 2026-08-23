@@ -335,6 +335,7 @@ export default function App() {
           else setResponseOnly(v => !v)
         }}
         mode={mode}
+        project={context.project}
         projectsOpen={projectsOpen}
         onOpenProjects={() => setProjectsOpen(true)}
       />

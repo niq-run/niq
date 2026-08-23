@@ -20,11 +20,15 @@ interface SidebarProps {
   onToggleWorker: (id: string) => void
   viewSettings: ViewSettings
   onToggleViewSetting: (k: ViewSettingKey) => void
+  mode: 'control' | 'project'
+  project?: string
+  projectsOpen: boolean
+  onOpenProjects: () => void
 }
 
 const VIEW_LABELS: Record<ViewMode, string> = { talk: 'Talk', events: 'Events', workers: 'Workers' }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, projectsOpen, onOpenProjects }: SidebarProps) {
   const [rotation, setRotation] = useState(0)
   const { dark, toggle, colors } = useTheme()
 
@@ -51,7 +55,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       }}
     >
       {/* Logo */}
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 4 }}>
         <h2 style={{ margin: 0, color: colors.accent, fontSize: 40, fontFamily: "'Fira Mono', 'PT Mono', monospace", fontWeight: 'normal' }}>
           <span
             onClick={() => setRotation(r => r + 360)}
@@ -62,9 +66,32 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>p</span>
           </span>
         </h2>
+
+        {/* Current project name — shown only when attached to a project. */}
+        {mode === 'project' && project && (
+          <div
+            style={{
+              marginTop: 2,
+              color: colors.textDim,
+              fontSize: fontSizes.sm,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              border: '1px solid ' + colors.border,
+              borderRadius: 4,
+              padding: '4px 8px',
+              background: colors.bgLight,
+            }}
+            title={project}
+          >
+            {project}
+          </div>
+        )}
       </div>
 
-      {/* View selector */}
+      {/* View selector — the three agent views; absent in control mode (no
+          project is attached, so talk/events/workers are unavailable) */}
+      {mode === 'project' && (<>
       <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '8px 0 16px 0' }} />
       <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>View</strong>
       {(Object.keys(VIEW_LABELS) as ViewMode[]).map((v) => (
@@ -146,6 +173,18 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           )}
         </>
       )}
+      </>)}
+
+      {/* Projects — the 4th category. For a project instance it is a jump/start
+          hop to other projects; in control mode it is the only usable thing. */}
+      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0' }} />
+      <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>Projects</strong>
+      <div
+        onClick={onOpenProjects}
+        style={{ cursor: 'pointer', color: projectsOpen ? colors.accent : colors.textDim, fontSize: fontSizes.md, lineHeight: '20px' }}
+      >
+        Projects{projectsOpen ? ' \u25C9' : ''}
+      </div>
 
       {/* Spacer + theme toggle at bottom */}
       <div style={{ flex: 1 }} />
