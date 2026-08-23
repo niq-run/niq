@@ -1,7 +1,6 @@
 import { useTheme, fontSizes } from '../theme'
-import { type WorkerInfo, type EventPattern } from '../types'
+import { type WorkerInfo } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
-import { suspendWorker, resumeWorker } from '../services/api'
 
 interface WorkersViewProps {
   workers: WorkerInfo[]
@@ -9,21 +8,10 @@ interface WorkersViewProps {
   onSelect: (id: string) => void
   onOpenEvents: (id: string) => void
   archived: Set<string>
-  onToggleArchived: (id: string) => void
 }
 
-function fmtPatterns(subs?: EventPattern[]): string {
-  if (!subs || subs.length === 0) return '\u2014'
-  return subs.map(p => (p.source_id ? `${p.type}@${p.source_id}` : p.type)).join(', ')
-}
-
-export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived, onToggleArchived }: WorkersViewProps) {
+export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived }: WorkersViewProps) {
   const { colors } = useTheme()
-
-  const handleAction = async (id: string, state?: string) => {
-    if (state === 'suspended') await resumeWorker(id)
-    else await suspendWorker(id)
-  }
 
   // Single-line cells with ellipsis (same as the events table), with a taller
   // row: the worker list is less dense than the event stream.
@@ -64,8 +52,6 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
             <th style={{ padding: '6px 6px', width: 110, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>Type</th>
             <th style={{ padding: '6px 6px', width: 90, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="bus connection status (online/offline)">Connection</th>
             <th style={{ padding: '6px 6px', width: 120, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="host-managed lifecycle state (running/suspended)">Lifecycle</th>
-            <th style={{ padding: '6px 6px', position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="event patterns this worker subscribes to">Subscribe</th>
-            <th style={{ padding: '6px 6px', width: 80, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -107,31 +93,6 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                   {w.managed ? (
                     <span style={{ color: suspended ? colors.textDimmed : colors.toolCompleted }}>
                       {suspended ? 'suspended' : 'running'}
-                    </span>
-                  ) : (
-                    <span style={{ color: colors.textDimmed }}>{'\u2014'}</span>
-                  )}
-                </td>
-                <td style={{ ...cell, color: colors.textMuted }} title={fmtPatterns(w.subscribe_allow)}>
-                  {fmtPatterns(w.subscribe_allow)}
-                  {isArchived && <span style={{ color: colors.textDimmed }}> · archived</span>}
-                </td>
-                <td style={cell}>
-                  {w.managed ? (
-                    <span style={{ whiteSpace: 'nowrap' }}>
-                      <span
-                        onClick={(e) => { e.stopPropagation(); handleAction(w.id, w.state) }}
-                        style={{ cursor: 'pointer', color: colors.textDim, textDecoration: 'underline' }}
-                      >
-                        {suspended ? 'resume' : 'suspend'}
-                      </span>
-                      {' / '}
-                      <span
-                        onClick={(e) => { e.stopPropagation(); onToggleArchived(w.id) }}
-                        style={{ cursor: 'pointer', color: colors.textDim, textDecoration: 'underline' }}
-                      >
-                        {archived.has(w.id) ? 'restore' : 'archive'}
-                      </span>
                     </span>
                   ) : (
                     <span style={{ color: colors.textDimmed }}>{'\u2014'}</span>

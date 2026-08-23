@@ -407,7 +407,6 @@ export default function App() {
             <WorkersView
               workers={workers}
               archived={archived}
-              onToggleArchived={toggleArchived}
               selectedId={selectedWorkerId}
               onSelect={selectWorker}
               onOpenEvents={handleSelectWorker}
