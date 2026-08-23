@@ -112,15 +112,15 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
             </div>
             {worker.managed ? (
               <>
-                <div style={{ marginBottom: 12 }}>
+                <div style={{ marginBottom: 22 }}>
                   <span
                     onClick={handleAction}
                     className="btn-hover"
-                    style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 4, padding: '2px 10px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
                   >
                     {suspended ? 'resume' : 'suspend'}
                   </span>
-                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 4, lineHeight: 1.4 }}>
+                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>
                     {suspended
                       ? 'Resume the worker: reconnect it to the bus and restart it from its last snapshot.'
                       : 'Suspend the worker: stop it and release its bus connection (state is kept on disk).'}
@@ -130,11 +130,11 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
                   <span
                     onClick={() => onToggleArchived(worker.id)}
                     className="btn-hover"
-                    style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 4, padding: '2px 10px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
                   >
                     {isArchived ? 'restore' : 'archive'}
                   </span>
-                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 4, lineHeight: 1.4 }}>
+                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>
                     {isArchived
                       ? 'Restore the worker: show it again in the worker selector.'
                       : 'Archive the worker: hide it from the worker selector until you restore it here.'}
