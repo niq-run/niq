@@ -15,7 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/54c1/niq/core/store"
 	"github.com/54c1/niq/core/worker"
+	evtsqlite "github.com/54c1/niq/ext/service/evtstore/sqlite"
 	"github.com/54c1/niq/internal/swarm/webui"
 	"github.com/54c1/niq/pkg/service/eventbus"
 	eventbusapi "github.com/54c1/niq/pkg/service/eventbus/api"
@@ -67,6 +69,7 @@ func RunSwarm(opts RunOptions) error {
 		StateDir:     opts.StateDir,
 		ProgramsRoot: opts.ProgramsRoot,
 		WebUIAddr:    opts.WebUIAddr,
+		EventsDB:     filepath.Join(homeDir, ".niq", "state", "events.db"),
 		Banner:       "niq swarm",
 	})
 }
@@ -130,6 +133,7 @@ func RunProject(opts ProjectRunOptions) error {
 		ProgramsRoot: filepath.Join(projDir, "programs"),
 		BusAddr:      busAddr,
 		WebUIAddr:    webUIAddr,
+		EventsDB:     filepath.Join(projDir, "state", "events.db"),
 		Banner:       "project " + opts.ProjectID,
 		NoBrowser:    true, // the control WebUI drives the redirect, not this process
 		OnResolved:   onResolved,
@@ -154,6 +158,7 @@ type assemblyOptions struct {
 	NoBrowser    bool
 	OnResolved   func(bus, webui string)
 	ContextInfo  webui.ContextInfo
+	EventsDB     string // SQLite event store path (empty = in-memory)
 }
 
 // runAssembly is the shared core: build the bus, host the workers from cfg, and
@@ -169,8 +174,21 @@ func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
 		return fmt.Errorf("swarm: create registry: %w", err)
 	}
 
-	// Event bus engine with in-memory event store.
-	evtStore := eventbus.NewMemoryEventStore()
+	// Event bus engine with an event store: SQLite (per project) when configured,
+	// else in-memory (control/legacy).
+	var evtStore store.AppendStore
+	if opts.EventsDB != "" {
+		if err := os.MkdirAll(filepath.Dir(opts.EventsDB), 0755); err != nil {
+			return fmt.Errorf("swarm: mkdir events db: %w", err)
+		}
+		evts, err := evtsqlite.New(opts.EventsDB)
+		if err != nil {
+			return fmt.Errorf("swarm: open events db: %w", err)
+		}
+		evtStore = evts
+	} else {
+		evtStore = eventbus.NewMemoryEventStore()
+	}
 	engine := eventbus.NewEngine(registry, evtStore)
 
 	// EventLog: stream every routed event to SSE subscribers.
