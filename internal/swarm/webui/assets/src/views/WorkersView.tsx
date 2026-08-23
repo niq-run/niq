@@ -55,7 +55,11 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
           </tr>
         </thead>
         <tbody>
-          {workers.map((w) => {
+          {[...workers].sort((a, b) => {
+            const ar = archived.has(a.id) ? 1 : 0
+            const br = archived.has(b.id) ? 1 : 0
+            return ar - br // archived workers sink to the bottom
+          }).map((w) => {
             const suspended = w.managed && w.state === 'suspended'
             const connection = w.online === false ? 'offline' : 'online'
             const isSelected = selectedId === w.id
@@ -88,9 +92,11 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                 <td style={{ ...cell, color: connection === 'offline' ? colors.textDimmed : colors.toolCompleted }}>
                   {connection}
                 </td>
-                {/* Host status: running/suspended for managed workers, dash for unmanaged */}
+                {/* Host status: archived dominates; otherwise running/suspended */}
                 <td style={cell}>
-                  {w.managed ? (
+                  {w.managed && isArchived ? (
+                    <span style={{ color: colors.textDimmed }}>archived</span>
+                  ) : w.managed ? (
                     <span style={{ color: suspended ? colors.textDimmed : colors.toolCompleted }}>
                       {suspended ? 'suspended' : 'running'}
                     </span>
