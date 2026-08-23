@@ -6,6 +6,7 @@ import TalkView from './views/TalkView'
 import WorkersView from './views/WorkersView'
 import WorkerDetail from './views/WorkerDetail'
 import ProjectsView from './views/ProjectsView'
+import TemplatesView from './views/TemplatesView'
 import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
 import { useTheme, fontSizes } from './theme'
@@ -35,7 +36,7 @@ export default function App() {
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>('talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
-  const [projectsOpen, setProjectsOpen] = useState(false)
+  const [panel, setPanel] = useState<'projects' | 'templates' | null>(null)
   const [input, setInput] = useState('')
   const [inputMode, setInputMode] = useState('default')
   const [sending, setSending] = useState(false)
@@ -92,9 +93,9 @@ export default function App() {
     }
   }, [projectBase, devProjectBase])
 
-  // Picking a View (talk/events/workers) leaves the projects surface.
+  // Picking a View (talk/events/workers) leaves the management panels.
   const selectView = (v: ViewMode) => {
-    setProjectsOpen(false)
+    setPanel(null)
     setView(v)
   }
 
@@ -106,8 +107,8 @@ export default function App() {
   useEffect(() => {
     // No project → no event stream.
     if (mode !== 'project') return
-    // Projects surface shows project management, not this project's events.
-    if (projectsOpen) return
+    // A management panel is showing, not this project's events.
+    if (panel) return
     // The workers view is driven by polling; it has no event stream.
     if (view === 'workers') return
     const params = new URLSearchParams()
@@ -138,16 +139,16 @@ export default function App() {
       setEvents(eventsRef.current)
     }
     return () => es.close()
-  }, [sseKey, traceFilter, view, mode, projectBase, projectsOpen])
+  }, [sseKey, traceFilter, view, mode, projectBase, panel])
 
   // ── Polling (only meaningful when a project is attached). The URL is
   // prefixed with projectBase so in dev (?project=&port=) it hits the project's
   // own address, not the dev/control port.
   const workersURL = projectBase + '/api/workers'
-  // Poll only while an agent view (not the Projects surface) is showing. The
+  // Poll only while an agent view (not a management panel) is showing. The
   // immediate first load is required so the talk mention dropdown has the
   // worker list right away.
-  usePolling<WorkerInfo[]>(workersURL, 5000, setWorkers, mode === 'project' && !projectsOpen)
+  usePolling<WorkerInfo[]>(workersURL, 5000, setWorkers, mode === 'project' && !panel)
 
   // ── Callbacks ──
   const sendMessage = useCallback(() => {
@@ -340,12 +341,16 @@ export default function App() {
         }}
         mode={mode}
         project={projectName}
-        projectsOpen={projectsOpen}
-        onOpenProjects={() => setProjectsOpen(true)}
+        panel={panel}
+        onSelectPanel={setPanel}
       />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        {mode !== 'project' || projectsOpen ? (
+        {mode !== 'project' ? (
+          panel === 'templates' ? <TemplatesView /> : <ProjectsView />
+        ) : panel === 'templates' ? (
+          <TemplatesView />
+        ) : panel === 'projects' ? (
           <ProjectsView />
         ) : view === 'talk' ? (
           <>

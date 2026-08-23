@@ -22,13 +22,13 @@ interface SidebarProps {
   onToggleViewSetting: (k: ViewSettingKey) => void
   mode: 'control' | 'project'
   project?: string
-  projectsOpen: boolean
-  onOpenProjects: () => void
+  panel: 'projects' | 'templates' | null
+  onSelectPanel: (p: 'projects' | 'templates') => void
 }
 
 const VIEW_LABELS: Record<ViewMode, string> = { talk: 'Talk', events: 'Events', workers: 'Workers' }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, projectsOpen, onOpenProjects }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, panel, onSelectPanel }: SidebarProps) {
   const [rotation, setRotation] = useState(0)
   const { dark, toggle, colors } = useTheme()
 
@@ -71,16 +71,16 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         {mode === 'project' && project && (
           <div
             style={{
-              marginTop: 16,
+              marginTop: 40,
               color: colors.textDim,
               fontSize: fontSizes.sm,
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
             }}
-            title={project}
+            title={`[${project}]`}
           >
-            {project}
+            {`[${project}]`}
           </div>
         )}
       </div>
@@ -171,15 +171,22 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       )}
       </>)}
 
-      {/* Projects — the 4th category. For a project instance it is a jump/start
-          hop to other projects; in control mode it is the only usable thing. */}
+      {/* Projects — the 4th category: project + template management. For a
+          project instance it is a jump/start hop to other projects; in control
+          mode it is the only usable thing. */}
       <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0' }} />
       <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>Projects</strong>
       <div
-        onClick={onOpenProjects}
-        style={{ cursor: 'pointer', color: projectsOpen ? colors.accent : colors.textDim, fontSize: fontSizes.md, lineHeight: '20px' }}
+        onClick={() => onSelectPanel('projects')}
+        style={{ cursor: 'pointer', color: panel === 'projects' ? colors.accent : colors.textDim, fontSize: fontSizes.md, lineHeight: '20px' }}
       >
-        Projects{projectsOpen ? ' \u25C9' : ''}
+        Projects{panel === 'projects' ? ' \u25C9' : ''}
+      </div>
+      <div
+        onClick={() => onSelectPanel('templates')}
+        style={{ cursor: 'pointer', color: panel === 'templates' ? colors.accent : colors.textDim, fontSize: fontSizes.md, lineHeight: '20px' }}
+      >
+        Templates{panel === 'templates' ? ' \u25C9' : ''}
       </div>
 
       {/* Spacer + theme toggle at bottom */}

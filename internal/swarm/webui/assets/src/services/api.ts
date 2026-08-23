@@ -32,6 +32,22 @@ export async function fetchTemplates(): Promise<string[]> {
   return res.json()
 }
 
+// createTemplate clones an existing template into a new on-disk one.
+export async function createTemplate(id: string, copyFrom: string): Promise<void> {
+  const res = await fetch(CONTROL + '/api/templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, copy_from: copyFrom }),
+  })
+  if (!res.ok) throw new Error('create template failed: ' + res.status)
+}
+
+// deleteTemplate removes an on-disk template.
+export async function deleteTemplate(name: string): Promise<void> {
+  const res = await fetch(CONTROL + `/api/templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error('delete template failed: ' + res.status)
+}
+
 // createProject creates a project from a named template and starts it, returning
 // the redirect URL of the new project's WebUI.
 export async function createProject(id: string, template: string): Promise<ProjectStartResult> {

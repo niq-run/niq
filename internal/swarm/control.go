@@ -89,6 +89,8 @@ func (c *Control) Start(ctx context.Context) error {
 		json.NewEncoder(w).Encode(webui.ContextInfo{Mode: "control", ControlURL: c.controlURL})
 	})
 	mux.HandleFunc("GET /api/templates", c.handleListTemplates)
+	mux.HandleFunc("POST /api/templates", c.handleCreateTemplate)
+	mux.HandleFunc("DELETE /api/templates/{name}", c.handleDeleteTemplate)
 	mux.HandleFunc("GET /api/projects", c.handleListProjects)
 	mux.HandleFunc("POST /api/projects", c.handleCreateProject)
 	mux.HandleFunc("POST /api/projects/{id}/start", c.handleStartProject)
@@ -132,6 +134,47 @@ type projectView struct {
 	Running bool `json:"running"`
 }
 
+// handleCreateTemplate clones an existing template into a new on-disk one.
+func (c *Control) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	var body struct {
+		ID       string `json:"id"`
+		CopyFrom string `json:"copy_from"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" || body.CopyFrom == "" {
+		stdhttp.Error(w, "id and copy_from are required", 400)
+		return
+	}
+	src, err := ReadTemplateRaw(TemplatesDir(), body.CopyFrom)
+	if err != nil {
+		stdhttp.Error(w, "unknown template: "+body.CopyFrom, 400)
+		return
+	}
+	dest := TemplatePath(TemplatesDir(), body.ID)
+	if _, err := os.Stat(dest); err == nil {
+		stdhttp.Error(w, "template already exists", 409)
+		return
+	}
+	if err := os.MkdirAll(TemplatesDir(), 0755); err != nil {
+		stdhttp.Error(w, err.Error(), 500)
+		return
+	}
+	if err := os.WriteFile(dest, src, 0644); err != nil {
+		stdhttp.Error(w, err.Error(), 500)
+		return
+	}
+	w.WriteHeader(stdhttp.StatusCreated)
+}
+
+// handleDeleteTemplate removes an on-disk template file.
+func (c *Control) handleDeleteTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	name := r.PathValue("name")
+	if err := os.Remove(TemplatePath(TemplatesDir(), name)); err != nil {
+		stdhttp.Error(w, "template not found", 404)
+		return
+	}
+	w.WriteHeader(stdhttp.StatusNoContent)
+}
+
 // handleListProjects returns the project definitions plus live run state.
 func (c *Control) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	projects, err := ListProjects()
@@ -146,21 +189,36 @@ func (c *Control) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Reques
 	json.NewEncoder(w).Encode(views)
 }
 
-// isRunning reports whether the project's launch process is currently alive.
+// isRunning reports whether a project is actually up. A tracked subprocess is
+// the authoritative signal for one this control plane started; otherwise we probe
+// the project's persisted WebUI port, so a project started manually from the CLI
+// (outside the control plane) is still shown as running.
 func (c *Control) isRunning(id string) bool {
+	// 1) Live process that this control plane launched?
 	c.mu.Lock()
 	proc, ok := c.procs[id]
-	if !ok || proc == nil {
-		c.mu.Unlock()
-		return false
-	}
-	// Confirm liveness (signal 0 does not deliver a signal, just checks).
-	err := proc.Signal(syscall.Signal(0))
-	if err != nil {
-		delete(c.procs, id)
+	if ok && proc != nil {
+		err := proc.Signal(syscall.Signal(0))
+		if err != nil {
+			delete(c.procs, id)
+		} else {
+			c.mu.Unlock()
+			return true
+		}
 	}
 	c.mu.Unlock()
-	return err == nil
+
+	// 2) Fall back to probing the persisted WebUI port (catches manual starts).
+	p, err := LoadProject(id)
+	if err != nil || p.Ports.WebUI == 0 {
+		return false
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI), 300*time.Millisecond)
+	if err != nil {
+		return false // nothing listening on the last-known WebUI port
+	}
+	conn.Close()
+	return true
 }
 
 // handleStopProject terminates a running project's process and forgets it.

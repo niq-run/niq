@@ -95,6 +95,22 @@ func SeedTemplates(dir string) error {
 	return nil
 }
 
+// TemplatePath returns the on-disk path of a template file under the templates dir.
+func TemplatePath(dir, name string) string {
+	return filepath.Join(dir, name+".yaml")
+}
+
+// ReadTemplateRaw returns the raw YAML for a template, preferring the on-disk
+// copy over the embedded built-in (used to clone templates).
+func ReadTemplateRaw(dir, name string) ([]byte, error) {
+	if dir != "" {
+		if b, err := os.ReadFile(TemplatePath(dir, name)); err == nil {
+			return b, nil
+		}
+	}
+	return presetFS.ReadFile("preset/" + name + ".yaml")
+}
+
 // ListTemplates returns the available project template names (without the
 // .yaml suffix), preferring the on-disk common/templates dir (seeded + user
 // editable) and falling back to the embedded built-ins.

@@ -130,6 +130,42 @@ func TestControlCreateRejectsUnknownTemplate(t *testing.T) {
 	}
 }
 
+// TestControlTemplateCloneDelete verifies the template clone + delete endpoints
+// (isolated under a temp HOME; dev is seeded from the embedded built-in).
+func TestControlTemplateCloneDelete(t *testing.T) {
+	setupProjectsRoot(t)
+	base := newControl(t)
+
+	// Clone dev -> t1.
+	resp, err := http.Post(base+"/api/templates", "application/json", strings.NewReader(`{"id":"t1","copy_from":"dev"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 201 {
+		t.Fatalf("clone status=%d, want 201", resp.StatusCode)
+	}
+	_, body := doGet(t, base+"/api/templates")
+	if !strings.Contains(body, "t1") {
+		t.Fatalf("templates missing t1: %s", body)
+	}
+
+	// Delete t1.
+	req, _ := http.NewRequest("DELETE", base+"/api/templates/t1", nil)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("delete status=%d, want 204", resp.StatusCode)
+	}
+	_, body = doGet(t, base+"/api/templates")
+	if strings.Contains(body, "t1") {
+		t.Fatalf("templates still has t1: %s", body)
+	}
+}
+
 // TestControlStopNotRunning asserts stopping a project with no live process
 // returns 404.
 func TestControlStopNotRunning(t *testing.T) {
