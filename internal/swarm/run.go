@@ -139,7 +139,7 @@ func RunProject(opts ProjectRunOptions) error {
 		ProgramsRoot: filepath.Join(projDir, "programs"),
 		BusAddr:      busAddr,
 		WebUIAddr:    webUIAddr,
-		EventsDB:     filepath.Join(projDir, "events.db"),
+		EventsDB:     filepath.Join(projDir, "event", "events.db"),
 		Banner:       "project " + opts.ProjectID,
 		NoBrowser:    true, // the control WebUI drives the redirect, not this process
 		OnResolved:   onResolved,

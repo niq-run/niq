@@ -41,72 +41,69 @@ func ProjectDir(id string) string { return filepath.Join(ProjectsRoot(), sanitiz
 // ProjectPath returns the project.json path for a project id.
 func ProjectPath(id string) string { return filepath.Join(ProjectDir(id), "project.json") }
 
-// MigrateProjectLayout restructures an existing project from the old nested
-// layout (state/workers, state/events.db) to the flat one (workers/, events.db
-// directly under the project dir). Idempotent: no-op when there is no legacy
-// state/ dir. Best-effort per file so a partial move doesn't lose data.
+// MigrateProjectLayout moves a project into the current layout and consolidates
+// the sqlite event files under an event/ dir. Targets:
+//
+//	projects/<id>/ { project.json, id/, programs/, workers/, event/events.db[+-wal,-shm] }
+//
+// It handles both prior layouts: the nested state/ dir (state/workers, state/events.db)
+// and the intermediate flat one (workers/, events.db at the project root).
+// Idempotent and best-effort per file so a partial move never loses data.
 func MigrateProjectLayout(id string) error {
 	projDir := ProjectDir(id)
+	eventDir := filepath.Join(projDir, "event")
+
+	// 1) state/ -> workers/ (nested layout)
 	stateDir := filepath.Join(projDir, "state")
-	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
-		return nil
-	}
-
-	// state/workers -> workers
-	oldWorkers := filepath.Join(stateDir, "workers")
-	newWorkers := filepath.Join(projDir, "workers")
-	if _, err := os.Stat(oldWorkers); err == nil {
-		if _, err := os.Stat(newWorkers); os.IsNotExist(err) {
-			if err := os.Rename(oldWorkers, newWorkers); err != nil {
-				return fmt.Errorf("migrate: move workers: %w", err)
+	if _, err := os.Stat(stateDir); err == nil {
+		oldWorkers := filepath.Join(stateDir, "workers")
+		newWorkers := filepath.Join(projDir, "workers")
+		if _, err := os.Stat(oldWorkers); err == nil {
+			if _, err := os.Stat(newWorkers); os.IsNotExist(err) {
+				if err := os.Rename(oldWorkers, newWorkers); err != nil {
+					log.Printf("[migrate] move workers: %v", err)
+				}
+			} else {
+				// workers/ already exists: the old state/workers is a stale leftover
+				// (no config, old snapshots). Drop it — merging could clobber the
+				// current worker state with old data.
+				_ = os.RemoveAll(oldWorkers)
 			}
-		} else if err := copyDir(oldWorkers, newWorkers); err != nil {
-			return fmt.Errorf("migrate: copy workers: %w", err)
+		}
+		// state/events.db* -> event/
+		moveSQLiteFiles(stateDir, eventDir)
+		// Drop the now-empty state dir.
+		if ents, err := os.ReadDir(stateDir); err == nil && len(ents) == 0 {
+			_ = os.Remove(stateDir)
 		}
 	}
 
-	// Move the sqlite event db (and its WAL/SHM sidecars) up to the project root.
-	for _, suffix := range []string{"events.db", "events.db-wal", "events.db-shm"} {
-		src := filepath.Join(stateDir, suffix)
-		dst := filepath.Join(projDir, suffix)
-		if _, err := os.Stat(src); os.IsNotExist(err) {
-			continue
-		}
-		if _, err := os.Stat(dst); err == nil {
-			continue
-		}
-		if err := os.Rename(src, dst); err != nil {
-			log.Printf("[migrate] move %s: %v", suffix, err)
-		}
-	}
+	// 2) events.db* at the project root -> event/ (intermediate flat layout)
+	moveSQLiteFiles(projDir, eventDir)
 
-	// Remove the now-empty state dir.
-	if ents, err := os.ReadDir(stateDir); err == nil && len(ents) == 0 {
-		_ = os.Remove(stateDir)
-	}
 	return nil
 }
 
-// copyDir copies a directory tree; used when the target dir already exists.
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+// moveSQLiteFiles moves events.db and its WAL/SHM sidecars from src into dst,
+// creating dst and skipping any file that already exists at dst.
+func moveSQLiteFiles(src, dst string) {
+	if _, err := os.Stat(src); err != nil {
+		return
+	}
+	_ = os.MkdirAll(dst, 0755)
+	for _, suffix := range []string{"events.db", "events.db-wal", "events.db-shm"} {
+		from := filepath.Join(src, suffix)
+		to := filepath.Join(dst, suffix)
+		if _, err := os.Stat(from); os.IsNotExist(err) {
+			continue
 		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
+		if _, err := os.Stat(to); err == nil {
+			continue
 		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0755)
+		if err := os.Rename(from, to); err != nil {
+			log.Printf("[migrate] move %s -> %s: %v", suffix, dst, err)
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, 0644)
-	})
+	}
 }
 
 // CreateProject creates a project directory + project.json from a template's
