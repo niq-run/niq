@@ -74,10 +74,14 @@ export default function App() {
   // can keep several projects open at once — the control API still goes to 9527).
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
   const urlPort = urlParams.get('port')
+  const urlProject = urlParams.get('project')
   const devProjectBase = urlPort ? 'http://127.0.0.1:' + urlPort : ''
 
   const mode = devProjectBase !== '' ? 'project' : (context.mode === 'control' ? 'control' : 'project')
   const projectBase = devProjectBase
+  // In dev (?project=&port=) we skip /api/context, so take the project name
+  // from the URL; otherwise it comes from the served webui's context.
+  const projectName = devProjectBase !== '' ? (urlProject || '') : context.project
 
   useEffect(() => {
     setApiBase(projectBase)
@@ -335,7 +339,7 @@ export default function App() {
           else setResponseOnly(v => !v)
         }}
         mode={mode}
-        project={context.project}
+        project={projectName}
         projectsOpen={projectsOpen}
         onOpenProjects={() => setProjectsOpen(true)}
       />
