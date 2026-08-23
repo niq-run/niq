@@ -140,10 +140,10 @@ export default function App() {
   // prefixed with projectBase so in dev (?project=&port=) it hits the project's
   // own address, not the dev/control port.
   const workersURL = projectBase + '/api/workers'
-  // Poll only while an agent view (not the Projects surface) is showing, and
-  // don't fetch on activation so opening the page (even in project mode) sends
-  // no request until the view actually surfaces / the first interval ticks.
-  usePolling<WorkerInfo[]>(workersURL, 5000, setWorkers, mode === 'project' && !projectsOpen, false)
+  // Poll only while an agent view (not the Projects surface) is showing. The
+  // immediate first load is required so the talk mention dropdown has the
+  // worker list right away.
+  usePolling<WorkerInfo[]>(workersURL, 5000, setWorkers, mode === 'project' && !projectsOpen)
 
   // ── Callbacks ──
   const sendMessage = useCallback(() => {
