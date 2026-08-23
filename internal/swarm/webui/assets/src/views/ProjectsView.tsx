@@ -158,9 +158,11 @@ export default function ProjectsView() {
             {p.ports?.webui ? (
               <a
                 href={`?project=${encodeURIComponent(p.id)}&port=${p.ports.webui}`}
+                target={'_blank'}
+                rel="noopener noreferrer"
                 style={{ color: colors.accent, fontSize: fontSizes.sm, textDecoration: 'none' }}
               >
-                Jump
+                Jump ↗
               </a>
             ) : (
               <button
