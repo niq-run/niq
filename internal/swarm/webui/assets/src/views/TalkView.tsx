@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
 import { makeMdComponents } from '../components/MarkdownComponents'
 import ThinkingBlock from '../components/ThinkingBlock'
+import WorkerUpdateBlock from '../components/WorkerUpdateBlock'
 import ResponseBlock from '../components/ResponseBlock'
 import TimerElapsedBlock from '../components/TimerElapsedBlock'
 import {
@@ -32,19 +33,38 @@ const inputRenderers: Record<string, React.FC<{evt: EventPayload; onTraceClick: 
   'timer.elapsed': TimerElapsedBlock,
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'default hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'default-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly }: TalkViewProps) {
   const { dark, colors } = useTheme()
   // Only reason workers (the conversation partners) get a standalone avatar
   // row; other workers' events carry their worker ID inline in the block title.
   const isReason = (wid: string) => workerTypes[wid] === 'reason'
+  // Convert the human worker's id into a friendlier "you" for display.
+  const displayName = (wid?: string) => (wid && wid === humanId ? 'you' : wid ?? '')
   // Direction of the worker identity in a block title, relative to the reason
   // worker: "to X" for events the reason worker sends, "from: X" for events it
   // receives from another worker.
   const directionOf = (evt: EventPayload): string => {
     if (isReason(evt.worker_id)) {
-      return evt.target_worker_id ? `to ${evt.target_worker_id}` : ''
+      return evt.target_worker_id ? `to ${displayName(evt.target_worker_id)}` : ''
     }
-    return evt.worker_id ? `from: ${evt.worker_id}` : ''
+    return evt.worker_id ? `from: ${displayName(evt.worker_id)}` : ''
+  }
+  // Unified rule for which message bubbles sit on the right. The right side is
+  // reserved for messages addressed to a specific reason worker:
+  //   (b) the human (hiw) -> that reason worker
+  //   (a) a system worker (non-reason, non-hiw) -> that reason worker
+  //   (c) another reason worker -> that reason worker, but only when that
+  //       worker is the SINGLE currently selected talk worker
+  // Everything else — reason<->reason outside the single-select case, or a
+  // message with no (non-reason) target — goes to the left.
+  const isRightAligned = (evt: EventPayload): boolean => {
+    // The current user's own messages always sit on the right, whether they
+    // were directed at a reason worker or broadcast (e.g. a lone "@").
+    if (evt.worker_id === humanId) return true
+    const target = evt.target_worker_id
+    if (!target || !isReason(target)) return false
+    if (!isReason(evt.worker_id)) return true // (a) system -> reason
+    return talkWorkers.size === 1 && talkWorkers.has(target) // (c)
   }
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
@@ -69,7 +89,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // Filter events by selected workers. When no workers selected, show all.
   const relevantEvents = useMemo(() => {
     return events.filter(evt => {
-      if (evt.type.startsWith('worker.') && evt.type !== 'worker.input') return false
+      if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort' && evt.type !== 'worker.update' && evt.type !== 'worker.updated') return false
       // Delta / partial events are never rendered as standalone rows. When
       // streaming mode is on they're consumed to build the streaming UI;
       // when off they're dropped entirely.
@@ -190,24 +210,34 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     autoScrollRef.current = atBottom
   }, [])
 
-  // ── Worker name label ──
+  // ── Worker name label (avatar) ──
+  // Only reason workers are mentionable: they get the hover underline and a
+  // click-to-@ action. Other speakers' avatars are plain labels (no underline,
+  // no hover, no @). The human worker id renders as "you".
   function WorkerBadge({ id, show }: { id: string; show: boolean }) {
+    const [hover, setHover] = useState(false)
     if (!show) return null
+    const isHuman = id === humanId
+    const mentionable = !isHuman && isReason(id) && !!onMention
     return (
       <span
-        onClick={(e) => { e.stopPropagation(); onMention?.(id) }}
+        onClick={(e) => { e.stopPropagation(); if (mentionable) onMention?.(id) }}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        className={mentionable ? 'badge-mention' : undefined}
         style={{
-          cursor: onMention ? 'pointer' : undefined,
+          cursor: mentionable ? 'pointer' : 'default',
           fontSize: fontSizes.xxl,
           color: colors.accent,
           fontWeight: 'bold',
           fontFamily: 'monospace',
-          textDecoration: 'underline',
-          textDecorationStyle: 'dotted',
-          textUnderlineOffset: 2,
         }}
       >
-        {id}
+        {mentionable && (
+          <span style={{ display: 'inline-block', overflow: 'hidden', whiteSpace: 'nowrap', verticalAlign: 'bottom', maxWidth: hover ? '1ch' : 0, transition: 'max-width 0.18s' }}>@</span>
+        )}
+        {displayName(id)}
+        {mentionable && <span className="badge-tip">click to mention</span>}
       </span>
     )
   }
@@ -251,17 +281,19 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     if (isReasonBoundary(evt.type)) continue
     // Response-only mode: hide the intermediate process (thinking + tool calls,
     // including cancels).
-    if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'tool.cancel' || isToolEvent(evt.type))) continue
+    if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || evt.type === 'tool.cancel' || isToolEvent(evt.type) || evt.type === 'worker.update' || evt.type === 'worker.updated')) continue
 
-    const shouldShowAvatar = isReason(evt.worker_id) || evt.worker_id === humanId
+    // System events (timer/abort) always render their sender avatar, so they
+    // must also advance the avatar streak — otherwise the next reason worker
+    // event after a timer would wrongly see the same speaker and skip its avatar.
+    const alwaysAvatar = evt.type === 'timer.reminder' || evt.type === 'timer.timeout' || evt.type === 'worker.abort'
+    const shouldShowAvatar = alwaysAvatar || isReason(evt.worker_id) || evt.worker_id === humanId
     const showBadge = shouldShowAvatar && evt.worker_id !== lastAvatarId
     if (showBadge) lastAvatarId = evt.worker_id
 
     // worker.input
     if (evt.type === 'worker.input') {
-      const isFromHuman = evt.worker_id === humanId
-      const isIncoming = talkWorkers.size > 0 && talkWorkers.has(evt.target_worker_id)
-      const alignRight = isFromHuman || isIncoming
+      const alignRight = isRightAligned(evt)
       nodes.push(
         <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
           {showBadge && (
@@ -274,7 +306,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               maxWidth: '70%',
               display: alignRight ? 'inline-block' : undefined,
               textAlign: 'left',
-              background: isFromHuman ? colors.accentBg : alignRight ? (dark ? 'rgba(140, 120, 200, 0.15)' : 'rgba(140, 120, 200, 0.08)') : colors.bgChip,
+              background: colors.bgLight, // same card background as responses
               border: '1px solid ' + colors.border,
               padding: alignRight ? '10px 14px' : '6px 10px',
               fontSize: alignRight ? fontSizes.base : fontSizes.sm,
@@ -283,11 +315,21 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               color: colors.text,
             }}
           >
-            <div style={{ fontSize: fontSizes.sm, color: colors.textDim, marginBottom: 4, display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
+            {/* Message box title, styled like the avatar: sender@target. A
+                broadcast (no target) shows a "broadcast" label instead. */}
+            <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, width: '100%', justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap' }}>
               {evt.target_worker_id ? (
-                <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, fontFamily: 'monospace' }}>to {evt.target_worker_id}</span>
-              ) : null}
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs }}>{formatTime(evt.timestamp)}</span>
+                <>
+                  <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold', fontFamily: 'monospace' }}>
+                    {displayName(evt.worker_id)}
+                  </span>
+                  <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>@</span>
+                  <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontFamily: 'monospace' }}>{displayName(evt.target_worker_id)}</span>
+                </>
+              ) : (
+                <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold', fontFamily: 'monospace' }}>broadcast</span>
+              )}
+              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
             </div>
             <div className="md-content">
               <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>{getInputText(evt)}</Markdown>
@@ -309,8 +351,42 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       continue
     }
 
-    // timer.reminder — right-aligned bubble, like a message sent to the worker
+    // worker.abort — the human cancelled; a bubble shown right (if addressed
+    // to the selected reason worker) or left
+    if (evt.type === 'worker.abort') {
+      const alignRight = isRightAligned(evt)
+      nodes.push(
+        <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
+            <WorkerBadge id={evt.worker_id} show={true} />
+          </div>
+          <div
+            style={{
+              maxWidth: '70%',
+              display: alignRight ? 'inline-block' : undefined,
+              textAlign: 'left',
+              background: colors.bgLight,
+              border: '1px solid ' + colors.border,
+              padding: '8px 12px',
+              fontSize: fontSizes.sm,
+              color: colors.textDim,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {evt.target_worker_id && <span style={{ color: colors.textDimmed, fontFamily: 'monospace' }}>to: {displayName(evt.target_worker_id)}</span>}
+              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
+            </div>
+            <div style={{ color: colors.text, fontSize: fontSizes.sm, marginTop: 4 }}>worker.abort</div>
+          </div>
+        </div>
+      )
+      continue
+    }
+
+    // timer.reminder — a notice bubble shown right (if addressed to the
+    // selected reason worker) or left
     if (evt.type === 'timer.reminder') {
+      const alignRight = isRightAligned(evt)
       let reminderText = (evt.payload?.text as string) || (evt.payload?.purpose as string) || ''
       if (!reminderText && evt.payload?.result) {
         const result = evt.payload.result
@@ -326,18 +402,16 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         }
       }
       nodes.push(
-        <div key={evt.id} style={{ marginBottom: 12, textAlign: 'right' }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: 'flex-end' }}>
-              <WorkerBadge id={evt.worker_id} show={true} />
-            </div>
-          )}
+        <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
+            <WorkerBadge id={evt.worker_id} show={true} />
+          </div>
           <div
             style={{
               maxWidth: '70%',
-              display: 'inline-block',
+              display: alignRight ? 'inline-block' : undefined,
               textAlign: 'left',
-              background: dark ? 'rgba(0, 188, 212, 0.1)' : 'rgba(0, 188, 212, 0.06)',
+              background: colors.bgLight,
               border: '1px solid ' + colors.border,
               padding: '10px 14px',
               fontSize: fontSizes.base,
@@ -346,11 +420,10 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             }}
           >
             <div style={{ fontSize: fontSizes.sm, color: colors.textDim, marginBottom: 4, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
-              <span style={{ color: colors.eventType.timer }}>⏱</span>
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, fontFamily: 'monospace' }}>{directionOf(evt)}</span>
+              {evt.target_worker_id && <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, fontFamily: 'monospace' }}>to: {displayName(evt.target_worker_id)}</span>}
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs }}>{formatTime(evt.timestamp)}</span>
             </div>
-            {reminderText && <div>{reminderText}</div>}
+            {reminderText && <div style={{ color: colors.text }}>{reminderText}</div>}
             {evt.trace_id && (
               <div style={{ marginTop: 6, textAlign: 'right' }}>
                 <span
@@ -368,18 +441,20 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       continue
     }
 
-    // timer.timeout — right-aligned notice that a tool call timed out
+    // timer.timeout — notice that a tool call timed out; right if addressed to
+    // the selected reason worker, otherwise left
     if (evt.type === 'timer.timeout') {
+      const alignRight = isRightAligned(evt)
       nodes.push(
-        <div key={evt.id} style={{ marginBottom: 12, textAlign: 'right' }}>
+        <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
           {/* Sender avatar: always show the timer worker for this system event */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
             <WorkerBadge id={evt.worker_id} show={true} />
           </div>
           <div
             style={{
               maxWidth: '70%',
-              display: 'inline-block',
+              display: alignRight ? 'inline-block' : undefined,
               textAlign: 'left',
               background: colors.bgLight,
               border: '1px solid ' + colors.border,
@@ -389,8 +464,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ color: colors.textDim }}>⏱ timeout</span>
-              {evt.target_worker_id && <span style={{ color: colors.textDimmed, fontFamily: 'monospace' }}>to {evt.target_worker_id}</span>}
+              <span style={{ color: colors.text }}>timeout</span>
+              {evt.target_worker_id && <span style={{ color: colors.textDimmed, fontFamily: 'monospace' }}>to: {displayName(evt.target_worker_id)}</span>}
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
             </div>
           </div>
@@ -417,6 +492,35 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               )}
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
             </div>
+          </div>
+        </div>
+      )
+      continue
+    }
+
+    // reason.interrupted — a reasoning round was preempted (new input, abort)
+    if (evt.type === 'reason.interrupted') {
+      const reason = (evt.payload?.reason as string) || ''
+      const preserved = (evt.payload?.preserved_chars as number) || 0
+      nodes.push(
+        <div key={evt.id} style={{ maxWidth: '70%', marginBottom: compactMode ? 8 : 12 }}>
+          <div style={{ border: '1px solid ' + colors.border, padding: tPad, fontSize: tFontSize, lineHeight: 1.5, color: colors.textDim }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 4, background: colors.textDim, flexShrink: 0, opacity: 0.5 }} />
+                <span>reasoning interrupted</span>
+              </span>
+              {reason && (
+                <>
+                  <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
+                  <span style={{ color: colors.textDimmed, fontFamily: 'monospace' }}>{reason}</span>
+                </>
+              )}
+              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
+            </div>
+            {preserved > 0 && (
+              <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginTop: 4 }}>{preserved} chars preserved</div>
+            )}
           </div>
         </div>
       )
@@ -462,6 +566,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             </div>
           )}
           <div
+            className={!isExpanded ? 'block-card' : undefined}
             style={{
               border: '1px solid ' + colors.border,
               padding: tPad,
@@ -569,6 +674,17 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} />
         </div>
       )
+    } else if (evt.type === 'worker.update' || evt.type === 'worker.updated') {
+      nodes.push(
+        <div key={evt.id} style={{ maxWidth: '70%' }}>
+          {showBadge && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
+              <WorkerBadge id={evt.worker_id} show={true} />
+            </div>
+          )}
+          <WorkerUpdateBlock evt={evt} compact={compactMode} />
+        </div>
+      )
     } else {
       nodes.push(
         <div key={evt.id} style={{ maxWidth: '70%', marginBottom: 12, fontSize: fontSizes.sm, color: colors.textDimmed }}>
@@ -587,7 +703,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     }
   }
 
-  if (nodes.length === 0) {
+  if (nodes.length === 0 && streamingTraces.length === 0) {
     const label = talkWorkers.size > 0
       ? [...talkWorkers].join(', ')
       : 'all workers'
@@ -601,11 +717,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   return (
     <>
       {/* Header: always visible, not in scroll area */}
-      <div style={{ fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'center', gap: 16, marginTop: 24, marginBottom: 12 }}>
-        <span>
-          Watching <strong style={{ color: colors.textMuted }}>{
+      <div style={{ fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 24, marginBottom: 12 }}>
+        <strong>Talk</strong>
+        <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
+          watching <strong style={{ color: colors.textDim }}>{
             talkWorkers.size > 0
-              ? '[selected]'
+              ? `[${[...talkWorkers].join(', ')}]`
               : '[all workers]'
           }</strong>
         </span>

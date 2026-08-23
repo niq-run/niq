@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useTheme, fontSizes } from '../theme'
+import PickerDropdown, { type PickerOption } from './PickerDropdown'
 import type { WorkerInfo } from '../types'
 
 interface TalkInputProps {
@@ -14,14 +15,17 @@ interface TalkInputProps {
   mentionKey: number
   mentionTarget: string
   onClearMentionTarget: () => void
+  onSelectTarget: (id: string) => void
 }
 
-export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, mentionKey, mentionTarget, onClearMentionTarget }: TalkInputProps) {
+export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget }: TalkInputProps) {
   const { colors } = useTheme()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const [showMentions, setShowMentions] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerMode, setPickerMode] = useState<'mention' | 'target'>('target')
   const [mentionQuery, setMentionQuery] = useState('')
   const [mentionIndex, setMentionIndex] = useState(0)
+  const [modeOpen, setModeOpen] = useState(false)
 
   const reasonWorkers = useMemo(() => workers.filter(w => w.type === 'reason'), [workers])
 
@@ -34,11 +38,12 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     const beforeCursor = val.slice(0, cursorPos)
     const atMatch = beforeCursor.match(/@(\w*)$/)
     if (atMatch) {
-      setShowMentions(true)
+      setPickerOpen(true)
+      setPickerMode('mention')
       setMentionQuery(atMatch[1].toLowerCase())
       setMentionIndex(0)
     } else {
-      setShowMentions(false)
+      setPickerOpen(false)
     }
   }
 
@@ -60,7 +65,14 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         }
       })
     }
-    setShowMentions(false)
+  }
+
+  // Commit a picker selection: in mention mode insert @id into the input, in
+  // target mode set the persistent target. Either way close the picker.
+  const commitPicker = (id: string) => {
+    if (pickerMode === 'mention') selectMention(id)
+    else onSelectTarget(id)
+    setPickerOpen(false)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -75,11 +87,13 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
       return
     }
 
-    if (showMentions && !composing) {
-      const filtered = reasonWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery))
+    if (pickerOpen && !composing) {
+      const list = pickerMode === 'mention'
+        ? reasonWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery))
+        : reasonWorkers
       if ((e.ctrlKey && e.key.toLowerCase() === 'n') || e.key === 'ArrowDown') {
         e.preventDefault()
-        setMentionIndex(i => Math.min(i + 1, filtered.length - 1))
+        setMentionIndex(i => Math.min(i + 1, list.length - 1))
         return
       }
       if ((e.ctrlKey && e.key.toLowerCase() === 'p') || e.key === 'ArrowUp') {
@@ -88,14 +102,14 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         return
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
-        if (filtered.length > 0) {
+        if (list.length > 0) {
           e.preventDefault()
-          selectMention(filtered[mentionIndex].id)
+          commitPicker(list[mentionIndex].id)
           return
         }
       }
       if (e.key === 'Escape') {
-        setShowMentions(false)
+        setPickerOpen(false)
         return
       }
     }
@@ -105,19 +119,19 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     }
   }
 
-  // Parse current @mention target for display
+  // Parse current @mention target for display. Matches an @mention at any
+  // position (not only at the start), showing the most recent one.
   const currentTarget = useMemo(() => {
-    const m = input.match(/^@(\S+)\s/)
-    if (m) {
-      const w = reasonWorkers.find(r => r.id === m[1])
-      return w ? w.id : null
-    }
-    return null
+    const matches = [...input.matchAll(/@(\w+)/g)]
+    if (matches.length === 0) return null
+    const last = matches[matches.length - 1]
+    const w = reasonWorkers.find(r => r.id === last[1])
+    return w ? w.id : null
   }, [input, reasonWorkers])
 
-  // Close mentions on blur
+  // Close the picker on a click outside.
   useEffect(() => {
-    const handler = () => setShowMentions(false)
+    const handler = () => { setPickerOpen(false); setModeOpen(false) }
     window.addEventListener('click', handler)
     return () => window.removeEventListener('click', handler)
   }, [])
@@ -129,67 +143,64 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     }
   }, [mentionKey])
 
-  const filtered = showMentions ? reasonWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery)) : []
+  const pickList = (pickerOpen && pickerMode === 'mention')
+    ? reasonWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery))
+    : reasonWorkers
+
+  // Persistent target: a specific reason worker, or '' (broadcast).
+  const persistentTarget = mentionTarget && reasonWorkers.some(r => r.id === mentionTarget) ? mentionTarget : ''
+  // The single visible target: an immediate @ in the input takes priority, then
+  // the persistent target, otherwise broadcast.
+  const shownTarget = currentTarget || persistentTarget
+
+  // Input-mode selector options. Descriptions condensed from pkg/reason:
+  //   interrupt = level 3 (cancel in-flight reasoning, handle now)
+  //   schedule  = level 2 (no interrupt; respond promptly next round)
+  //   append    = level 1 (only when idle; least intrusive)
+  const modeOptions: PickerOption[] = [
+    { id: 'default', label: 'interrupt', description: 'cancel in-flight reasoning and handle now', hint: "interrupt in-flight reasoning and handle now (level 3)" },
+    { id: 'schedule', label: 'schedule', description: 'no interrupt; respond promptly next round', hint: "wake gently; don't interrupt in-flight reasoning (level 2)" },
+    { id: 'append', label: 'append', description: 'only when idle; least intrusive', hint: "only when idle (no reasoning, no pending tools) (level 1)" },
+  ]
+  const currentModeLabel = modeOptions.find(m => m.id === inputMode)?.label ?? inputMode
 
   return (
     <div style={{ padding: '12px 24px', borderTop: '1px solid ' + colors.border, position: 'relative' }}>
-      {/* Target indicator: immediate @ in the input, or the persisted target */}
-      {currentTarget ? (
-        <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4 }}>
-          → <span style={{ color: colors.accent, fontWeight: 'bold' }}>{currentTarget}</span>
-        </div>
-      ) : mentionTarget ? (
-        <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>
-            → <span style={{ color: colors.accent, fontWeight: 'bold' }}>{mentionTarget}</span>
-            <span style={{ color: colors.textDimmed, fontStyle: 'italic', marginLeft: 4 }}>(persistent)</span>
-          </span>
-          <span
-            onClick={onClearMentionTarget}
-            title="clear persistent target"
-            style={{ cursor: 'pointer', color: colors.textDimmed, border: '1px solid ' + colors.border, borderRadius: 3, padding: '0 5px', fontSize: fontSizes.xs, lineHeight: '14px', userSelect: 'none' }}
-          >
-            {'\u2715'}
-          </span>
-        </div>
-      ) : null}
-
-      {/* Mention dropdown */}
-      {showMentions && filtered.length > 0 && (
-        <div
+      {/* Target indicator: a single always-on chip reflecting the current target
+          (an immediate @ in the input takes priority, else the persistent target,
+          else broadcast). Click to open the target/mention picker. */}
+      <div style={{ position: 'relative', display: 'inline-block', marginBottom: 4 }}>
+        <span
+          onClick={(e) => { e.stopPropagation(); setPickerMode('target'); setPickerOpen(v => !v) }}
+          title={shownTarget ? `targeting ${shownTarget} — click to change` : 'broadcasting; click to target a worker'}
           style={{
-            position: 'absolute',
-            bottom: '100%',
-            left: 48,
-            right: 48,
-            background: colors.bgLight,
-            border: '1px solid ' + colors.border,
-            borderRadius: 6,
-            maxHeight: 160,
-            overflowY: 'auto',
-            zIndex: 100,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, lineHeight: '16px',
+            color: shownTarget ? colors.accent : colors.textDimmed,
+            border: '1px solid ' + (shownTarget ? colors.accentBorder : colors.border),
+            borderRadius: 4, padding: '1px 8px', cursor: 'pointer', userSelect: 'none',
           }}
         >
-          {filtered.map((w, i) => (
-            <div
-              key={w.id}
-              onClick={() => selectMention(w.id)}
-              style={{
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: fontSizes.sm,
-                color: i === mentionIndex ? colors.accent : colors.textDim,
-                background: i === mentionIndex ? (colors.bgChip || 'rgba(128,128,128,0.1)') : 'transparent',
-                fontFamily: 'monospace',
-              }}
-            >
-              {w.id}
-              <span style={{ color: colors.textDimmed, fontStyle: 'italic', marginLeft: 8 }}>{w.type}</span>
-            </div>
-          ))}
-        </div>
-      )}
+          {shownTarget ? `→ ${shownTarget}` : '→ broadcast'}
+        </span>
+
+        {pickerOpen && (
+          <div style={{ position: 'absolute', left: 0, bottom: '100%', marginBottom: 4, zIndex: 100 }}>
+            <PickerDropdown
+              header={pickerMode === 'mention' ? 'mention' : 'target'}
+              options={pickList.map(w => ({ id: w.id, label: w.id, sublabel: w.type }))}
+              selectedId={pickerMode === 'target' ? (shownTarget || undefined) : undefined}
+              activeIndex={pickerMode === 'mention' ? mentionIndex : undefined}
+              onSelect={commitPicker}
+              onActivate={(i) => { if (pickerMode === 'mention') setMentionIndex(i) }}
+              footer={pickerMode !== 'mention' ? {
+                label: 'broadcast (no target)',
+                checked: !shownTarget,
+                onChoose: () => { onClearMentionTarget(); setPickerOpen(false) },
+              } : undefined}
+            />
+          </div>
+        )}
+      </div>
 
       <textarea
         ref={textareaRef}
@@ -213,23 +224,32 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         }}
       />
       <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', alignItems: 'center' }}>
-        <select
-          value={inputMode}
-          onChange={(e) => onModeChange(e.target.value)}
-          style={{
-            background: 'transparent',
-            color: colors.textDim,
-            border: 'none',
-            outline: 'none',
-            fontSize: 12,
-            fontFamily: 'monospace',
-            cursor: 'pointer',
-          }}
-        >
-          <option value="default" title="interrupt in-flight reasoning and handle now">interrupt</option>
-          <option value="schedule" title="wake gently; don't interrupt in-flight reasoning">schedule</option>
-          <option value="append" title="only when idle (no reasoning, no pending tools)">append</option>
-        </select>
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <span
+            onClick={(e) => { e.stopPropagation(); setModeOpen(v => !v) }}
+            title={modeOptions.find(m => m.id === inputMode)?.hint}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: fontSizes.base, lineHeight: '18px',
+              color: colors.textDim,
+              border: '1px solid ' + colors.border, borderRadius: 4, padding: '1px 8px',
+              cursor: 'pointer', userSelect: 'none',
+            }}
+          >
+            {`mode: ${currentModeLabel}`}
+            <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed }}>▾</span>
+          </span>
+          {modeOpen && (
+            <div style={{ position: 'absolute', right: 0, bottom: '100%', marginBottom: 4, zIndex: 100 }}>
+              <PickerDropdown
+                header="mode"
+                options={modeOptions}
+                selectedId={inputMode}
+                onSelect={(id) => { onModeChange(id); setModeOpen(false) }}
+                width={420}
+              />
+            </div>
+          )}
+        </div>
         <button
           onClick={onAbort}
           className="btn-stop"

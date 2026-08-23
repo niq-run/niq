@@ -57,6 +57,9 @@ export default function App() {
   const listRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
   const sentinelRef = useRef<HTMLDivElement>(null)
+  // When the events view (re)mounts / reconnects, the initial population should
+  // land at the bottom instantly; only later live updates smooth-scroll.
+  const eventsMountedAt = useRef(0)
 
   // ── SSE: subscribe to the selected workers (backend filters) ──
   const sseKey = view === 'talk' ? 'talk-all'
@@ -77,6 +80,7 @@ export default function App() {
     setDeliveries({})
     deliveriesRef.current = {}
     setSelectedEventId(null)
+    if (view === 'events') eventsMountedAt.current = Date.now()
     const es = new EventSource(url)
     es.onmessage = (msg) => {
       const evt = JSON.parse(msg.data) as EventPayload
@@ -136,10 +140,18 @@ export default function App() {
 
   const handleAbort = useCallback(() => {
     const reasonWorkers = workers.filter(w => w.type === 'reason')
-    if (reasonWorkers.length > 0) {
-      abortWorker(reasonWorkers[0].id)
+    const isReason = (id: string) => reasonWorkers.some(r => r.id === id)
+    // Abort the worker the input is currently @-targeted at, falling back to a
+    // selected reason worker, then the first reason worker.
+    let target = isReason(mentionTarget) ? mentionTarget : ''
+    if (!target) {
+      const selected = [...talkWorkers].find(isReason)
+      target = selected ?? (reasonWorkers.length > 0 ? reasonWorkers[0].id : '')
     }
-  }, [workers])
+    if (target) {
+      abortWorker(target)
+    }
+  }, [workers, mentionTarget, talkWorkers])
 
   const toggleWorker = useCallback((id: string) => {
     setTalkWorkers(prev => {
@@ -220,7 +232,10 @@ export default function App() {
   // ── Events list auto-scroll ──
   useEffect(() => {
     if (autoScrollRef.current && listRef.current) {
-      listRef.current.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
+      // Instantly position after switching in / initial population (within the
+      // first second); smooth-scroll only for later live updates.
+      const animated = Date.now() - eventsMountedAt.current > 1000
+      listRef.current.scrollTo({ top: listRef.current.scrollHeight, behavior: animated ? 'smooth' : 'auto' })
     }
   }, [events])
 
@@ -286,7 +301,7 @@ export default function App() {
               talkWorkers={talkWorkers}
               onTraceClick={handleTraceClick}
               onLoadMore={loadMore}
-              onMention={(id) => { setInput(prev => prev + '@' + id + ' '); setMentionKey(k => k + 1) }}
+              onMention={(id) => { setInput(prev => prev + '@' + id + ' '); setMentionTarget(id); setMentionKey(k => k + 1) }}
               deliveries={deliveries}
               workerTypes={workerTypes}
               thinkingExpanded={thinkingExpanded}
@@ -307,6 +322,7 @@ export default function App() {
               mentionKey={mentionKey}
               mentionTarget={mentionTarget}
               onClearMentionTarget={() => setMentionTarget('')}
+              onSelectTarget={(id) => setMentionTarget(id)}
             />
           </>
         ) : view === 'workers' ? (
@@ -325,18 +341,32 @@ export default function App() {
           </div>
         ) : (
           <>
-            <div style={{ marginTop: 24, marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, padding: '0 24px' }}>
-              Events
-              {filterWorkers.size > 0 && <span> <strong style={{ color: colors.textMuted }}>[{[...filterWorkers].join(', ')}]</strong></span>}
-              {traceFilter && <span> — trace <strong style={{ color: colors.textMuted }}>{traceFilter}</strong></span>}
-              {traceFilter && (
-                <span
-                  onClick={clearTraceFilter}
-                  style={{ cursor: 'pointer', color: colors.textDimmed, textDecoration: 'underline', marginLeft: 12, fontSize: fontSizes.sm }}
-                >
-                  Clear
-                </span>
-              )}
+            <div style={{ marginTop: 24, marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16 }}>
+              <strong>Events</strong>
+              <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
+                {filterWorkers.size > 0 && (
+                  <>
+                    filtering <strong style={{ color: colors.textDim }}>[{[...filterWorkers].join(', ')}]</strong>
+                    {traceFilter && ' · '}
+                  </>
+                )}
+                {traceFilter && (
+                  <>
+                    trace <strong style={{ color: colors.textDim }}>{traceFilter}</strong>
+                  </>
+                )}
+                {filterWorkers.size === 0 && !traceFilter && (
+                  <strong style={{ color: colors.textDim }}>[all workers]</strong>
+                )}
+                {traceFilter && (
+                  <span
+                    onClick={clearTraceFilter}
+                    style={{ cursor: 'pointer', color: colors.textDimmed, textDecoration: 'underline', marginLeft: 12, fontSize: fontSizes.sm }}
+                  >
+                    Clear
+                  </span>
+                )}
+              </span>
             </div>
 
             <div style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>

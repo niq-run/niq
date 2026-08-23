@@ -59,6 +59,46 @@
   border-color: rgba(180, 140, 60, 0.8) !important;
 }
 
+/* ── Worker avatar badge: underline only on hover for reason workers ── */
+.badge-mention {
+  position: relative;
+  text-decoration: none;
+}
+.badge-mention:hover {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.badge-mention .badge-tip {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0,0,0,0.8);
+  color: #fff;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+  z-index: 50;
+}
+.badge-mention:hover .badge-tip {
+  opacity: 1;
+}
+
+/* ── Shared option dropdown rows ── */
+.picker-row { transition: background 0.12s; }
+.picker-row:hover { background: rgba(128,128,128,0.15); }
+
+/* ── Collapsible content blocks (thinking, tool cards, worker update): subtle
+   background on hover so their click-to-toggle affordance is visible */
+.block-card { transition: background 0.12s, border-color 0.12s; }
+.block-card:hover { background: rgba(128,128,128,0.10); }
+
 /* ── Shared hover effects ── */
 .btn-hover:hover { background: rgba(128,128,128,0.12); }
 .dropdown-opt:hover { background: rgba(128,128,128,0.15) !important; }

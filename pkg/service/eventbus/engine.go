@@ -86,7 +86,12 @@ func (e *Engine) handleSend(ctx context.Context, req corebus.Request, from strin
 
 	for _, evt := range req.Events {
 		evt.WorkerId = from // ensure identity is set by bus, not by sender
-		evt.TraceID = req.TraceID
+		// Only override the trace when the request actually carries one; the
+		// in-process transport leaves req.TraceID empty, so dropping it would
+		// clobber the trace_id the sender already stamped on the event.
+		if req.TraceID != "" {
+			evt.TraceID = req.TraceID
+		}
 		// For a single-target send, record the target so consumers (WebUI,
 		// event filters) can see where the event was addressed. Multi-target
 		// sends are ambiguous, so TargetWorkerID is left empty.
@@ -119,7 +124,11 @@ func (e *Engine) handleBroadcast(ctx context.Context, req corebus.Request, from 
 
 	for _, evt := range req.Events {
 		evt.WorkerId = from
-		evt.TraceID = req.TraceID
+		// Preserve the trace_id the sender stamped on the event when the request
+		// carries none (the in-process transport never sets req.TraceID).
+		if req.TraceID != "" {
+			evt.TraceID = req.TraceID
+		}
 
 		// Find all targets: online workers whose SubscribeAllow matches.
 		var targets []string

@@ -23,6 +23,7 @@ export default function ThinkingBlock({ evt, defaultExpanded = true, compact = f
 
   return (
     <div
+      className={collapsed ? 'block-card' : undefined}
       style={{
         marginBottom: compact ? 8 : 12,
         borderTop: tBorder,
