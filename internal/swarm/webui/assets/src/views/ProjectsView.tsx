@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
-import { fetchProjects, fetchTemplates, createProject, startProject } from '../services/api'
+import { usePolling } from '../hooks/usePolling'
+import { CONTROL, fetchProjects, fetchTemplates, createProject, startProject } from '../services/api'
 import type { ProjectInfo } from '../types'
 
 // ProjectsView is the management surface shown in the control plane (and as a
@@ -16,11 +17,12 @@ export default function ProjectsView() {
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
 
+  // Refresh the project list periodically so ports / running state stay fresh
+  // (projects are launched/unlaunched from this or another WebUI).
+  usePolling<ProjectInfo[]>(CONTROL + '/api/projects', 3000, setProjects, true)
+
   useEffect(() => {
     let active = true
-    fetchProjects()
-      .then((list) => { if (active) setProjects(list) })
-      .catch(() => { if (active) setError('could not reach the control plane') })
     fetchTemplates()
       .then((list) => { if (active && list.length > 0) setNewTemplate(list[0]); setTemplates(list) })
       .catch(() => {})
@@ -140,27 +142,39 @@ export default function ProjectsView() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ color: colors.text, fontSize: fontSizes.md }}>{p.id}</div>
               <div style={{ fontSize: fontSizes.xs, color: colors.textDim }}>
-                {p.workers?.length ?? 0} workers
+                <span style={{ color: p.ports?.webui ? colors.toolCompleted : colors.textDimmed }}>
+                  {p.ports?.webui ? 'running' : 'stopped'}
+                </span>
+                {' · '}{p.workers?.length ?? 0} workers
                 {p.ports?.webui ? ` · webui :${p.ports.webui}` : ''}
                 {p.ports?.bus ? ` · bus :${p.ports.bus}` : ''}
               </div>
             </div>
-            <button
-              onClick={() => start(p.id)}
-              disabled={starting === p.id}
-              style={{
-                cursor: starting === p.id ? 'default' : 'pointer',
-                background: colors.accent,
-                color: '#fff',
-                border: 'none',
-                borderRadius: 4,
-                padding: '6px 14px',
-                fontSize: fontSizes.sm,
-                opacity: starting === p.id ? 0.6 : 1,
-              }}
-            >
-              {starting === p.id ? 'Starting…' : 'Start'}
-            </button>
+            {p.ports?.webui ? (
+              <a
+                href={'http://localhost:' + p.ports.webui}
+                style={{ color: colors.accent, fontSize: fontSizes.sm, textDecoration: 'none' }}
+              >
+                Jump
+              </a>
+            ) : (
+              <button
+                onClick={() => start(p.id)}
+                disabled={starting === p.id}
+                style={{
+                  cursor: starting === p.id ? 'default' : 'pointer',
+                  background: colors.accent,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 4,
+                  padding: '6px 14px',
+                  fontSize: fontSizes.sm,
+                  opacity: starting === p.id ? 0.6 : 1,
+                }}
+              >
+                {starting === p.id ? 'Starting…' : 'Start'}
+              </button>
+            )}
           </div>
         ))
       )}

@@ -5,12 +5,13 @@ import EventDetail from './views/EventDetail'
 import TalkView from './views/TalkView'
 import WorkersView from './views/WorkersView'
 import WorkerDetail from './views/WorkerDetail'
+import ProjectsView from './views/ProjectsView'
 import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
 import { useTheme, fontSizes } from './theme'
 import { usePolling } from './hooks/usePolling'
-import { sendInput, abortWorker, fetchWorkers, loadEventsBefore } from './services/api'
-import type { EventPayload, ViewMode, WorkerInfo } from './types'
+import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase } from './services/api'
+import type { ContextInfo, EventPayload, ViewMode, WorkerInfo } from './types'
 
 // Right-hand event detail panel: default 40% of the viewport, resizable by
 // dragging its left edge, never narrower than this.
@@ -33,6 +34,8 @@ export default function App() {
   const [events, setEvents] = useState<EventPayload[]>([])
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>('talk')
+  const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
+  const [projectsOpen, setProjectsOpen] = useState(false)
   const [input, setInput] = useState('')
   const [inputMode, setInputMode] = useState('default')
   const [sending, setSending] = useState(false)
@@ -61,12 +64,44 @@ export default function App() {
   // land at the bottom instantly; only later live updates smooth-scroll.
   const eventsMountedAt = useRef(0)
 
+  // ── Mode: control (no project attached) vs project. In control mode only the
+  // projects surface is usable; talk/events/workers need an attached project, so
+  // they are hidden and their SSE + polling are disabled. The projects API lives
+  // on the control plane — same-origin in control mode, via context.control_url
+  // from a project instance.
+  // A query-string ?project=<id>&port=<port> names a specific running project to
+  // develop against, so the whole UI talks to that project's own address (and
+  // can keep several projects open at once — the control API still goes to 9527).
+  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
+  const urlPort = urlParams.get('port')
+  const devProjectBase = urlPort ? 'http://127.0.0.1:' + urlPort : ''
+
+  const mode = devProjectBase !== '' ? 'project' : (context.mode === 'control' ? 'control' : 'project')
+  const projectBase = devProjectBase
+
+  useEffect(() => {
+    setApiBase(projectBase)
+    // Unless a project+port was given in the URL, ask /api/context to learn the
+    // mode (dev proxy → 9527 control, or a served project webui answers locally).
+    if (devProjectBase === '') {
+      fetchContext().then(setContext).catch(() => {})
+    }
+  }, [projectBase, devProjectBase])
+
+  // Picking a View (talk/events/workers) leaves the projects surface.
+  const selectView = (v: ViewMode) => {
+    setProjectsOpen(false)
+    setView(v)
+  }
+
   // ── SSE: subscribe to the selected workers (backend filters) ──
   const sseKey = view === 'talk' ? 'talk-all'
     : view === 'events' ? 'events-' + [...filterWorkers].sort().join(',')
     : 'workers-none'
 
   useEffect(() => {
+    // No project → no event stream.
+    if (mode !== 'project') return
     // The workers view is driven by polling; it has no event stream.
     if (view === 'workers') return
     const params = new URLSearchParams()
@@ -74,7 +109,7 @@ export default function App() {
       for (const id of filterWorkers) params.append('worker', id)
       if (traceFilter) params.set('trace', traceFilter)
     }
-    const url = `/api/stream?${params}`
+    const url = projectBase + `/api/stream?${params}`
     setEvents([])
     eventsRef.current = []
     setDeliveries({})
@@ -97,10 +132,13 @@ export default function App() {
       setEvents(eventsRef.current)
     }
     return () => es.close()
-  }, [sseKey, traceFilter, view])
+  }, [sseKey, traceFilter, view, mode, projectBase])
 
-  // ── Polling ──
-  usePolling<WorkerInfo[]>('/api/workers', 5000, setWorkers)
+  // ── Polling (only meaningful when a project is attached). The URL is
+  // prefixed with projectBase so in dev (?project=&port=) it hits the project's
+  // own address, not the dev/control port.
+  const workersURL = projectBase + '/api/workers'
+  usePolling<WorkerInfo[]>(workersURL, 5000, setWorkers, mode === 'project')
 
   // ── Callbacks ──
   const sendMessage = useCallback(() => {
@@ -278,7 +316,7 @@ export default function App() {
     <div data-theme={dark ? 'dark' : 'light'} style={{ display: 'flex', height: '100vh', fontFamily: 'monospace', color: colors.text, background: colors.bg }}>
       <Sidebar
         view={view}
-        setView={setView}
+        setView={selectView}
         filterWorkers={filterWorkers}
         onToggleFilterWorker={toggleFilterWorker}
         workers={workers}
@@ -291,10 +329,15 @@ export default function App() {
           else if (k === 'streamingMode') setStreamingMode(v => !v)
           else setResponseOnly(v => !v)
         }}
+        mode={mode}
+        projectsOpen={projectsOpen}
+        onOpenProjects={() => setProjectsOpen(true)}
       />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        {view === 'talk' ? (
+        {mode !== 'project' || projectsOpen ? (
+          <ProjectsView />
+        ) : view === 'talk' ? (
           <>
             <TalkView
               events={events}
