@@ -14,8 +14,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 //go:embed preset/*.json
@@ -23,26 +21,25 @@ var presetFS embed.FS
 
 // SwarmConfig is the top-level structure of a swarm config file.
 type SwarmConfig struct {
-	Workers []WorkerConfig `json:"workers" yaml:"workers"`
+	Workers []WorkerConfig `json:"workers"`
 }
 
-// WorkerConfig describes a single worker instance declaration. JSON is the
-// template/config format; yaml tags keep legacy --config files working.
+// WorkerConfig describes a single worker instance declaration.
 type WorkerConfig struct {
-	Type          string   `json:"type" yaml:"type"` // reason / workspace / host / timer / hiw
-	ID            string   `json:"id" yaml:"id"`
-	Instruction   string   `json:"instruction,omitempty" yaml:"instruction,omitempty"`
-	Provider      string   `json:"provider,omitempty" yaml:"provider,omitempty"`
-	APIKey        string   `json:"api_key,omitempty" yaml:"api_key,omitempty"`
-	BaseURL       string   `json:"base_url,omitempty" yaml:"base_url,omitempty"`
-	Model         string   `json:"model,omitempty" yaml:"model,omitempty"`
-	Subscriptions []string `json:"subscriptions,omitempty" yaml:"subscriptions,omitempty"`
-	Publish       []string `json:"publish,omitempty" yaml:"publish,omitempty"`
-	RootDir       string   `json:"root_dir,omitempty" yaml:"root_dir,omitempty"`
-	Archived      bool     `json:"archived,omitempty" yaml:"archived,omitempty"`
+	Type          string   `json:"type"` // reason / workspace / host / timer / hiw
+	ID            string   `json:"id"`
+	Instruction   string   `json:"instruction,omitempty"`
+	Provider      string   `json:"provider,omitempty"`
+	APIKey        string   `json:"api_key,omitempty"`
+	BaseURL       string   `json:"base_url,omitempty"`
+	Model         string   `json:"model,omitempty"`
+	Subscriptions []string `json:"subscriptions,omitempty"`
+	Publish       []string `json:"publish,omitempty"`
+	RootDir       string   `json:"root_dir,omitempty"`
+	Archived      bool     `json:"archived,omitempty"`
 }
 
-// ParseConfig reads and parses a swarm config file (JSON preferred, YAML accepted).
+// ParseConfig reads and parses a swarm JSON config file.
 func ParseConfig(path string) (*SwarmConfig, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -60,6 +57,15 @@ func LoadPreset(name string) (*SwarmConfig, error) {
 	return parseConfig(raw)
 }
 
+// parseConfig parses a JSON config/template.
+func parseConfig(raw []byte) (*SwarmConfig, error) {
+	var cfg SwarmConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("swarm: parse config: %w", err)
+	}
+	return validateWorkers(&cfg)
+}
+
 // TemplatesDir returns the on-disk template directory under the shared
 // "common" layer: ~/.niq/common/templates. Templates are seeded here from the
 // built-ins on first run and become user-editable files from then on.
@@ -73,12 +79,6 @@ func TemplatesDir() string {
 func SeedTemplates(dir string) error {
 	if dir == "" {
 		return nil
-	}
-	// Drop the superseded built-in YAML templates (the JSON built-ins replace
-	// them; dev -> default). Runs regardless of seeding so leftover .yaml files
-	// from before the JSON migration are cleaned up on next startup.
-	for _, legacy := range []string{"dev", "test-headless"} {
-		_ = os.Remove(filepath.Join(dir, legacy+".yaml"))
 	}
 	existing, _ := filepath.Glob(filepath.Join(dir, "*.json"))
 	if len(existing) > 0 {
@@ -158,19 +158,6 @@ func LoadTemplate(dir, name string) (*SwarmConfig, error) {
 		}
 	}
 	return LoadPreset(name)
-}
-
-// parseConfig parses a config/template. JSON is the canonical format; YAML is
-// still accepted for backwards compatibility (e.g. an old --config file).
-func parseConfig(raw []byte) (*SwarmConfig, error) {
-	var cfg SwarmConfig
-	if err := json.Unmarshal(raw, &cfg); err == nil {
-		return validateWorkers(&cfg)
-	}
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("swarm: parse config: %w", err)
-	}
-	return validateWorkers(&cfg)
 }
 
 func validateWorkers(cfg *SwarmConfig) (*SwarmConfig, error) {
