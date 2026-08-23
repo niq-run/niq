@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/54c1/niq/core/worker"
 	"github.com/54c1/niq/internal/swarm/webui"
@@ -119,7 +122,7 @@ func RunSwarm(opts RunOptions) error {
 		log.Printf("[swarm] worker bootstrap: %v", err)
 	}
 
-	// 10. Start WebUI server if configured.
+	// 10. Start WebUI server if configured, and try to open it in the browser.
 	if opts.WebUIAddr != "" && hiwID != "" {
 		var hiwWorker *hiw.Worker
 		if w, ok := workerSvc.Worker(hiwID); ok {
@@ -128,11 +131,20 @@ func RunSwarm(opts RunOptions) error {
 			}
 		}
 		if hiwWorker != nil {
-			log.Printf("[swarm] WebUI: %s", webuiURL(opts.WebUIAddr))
+			url := webuiURL(opts.WebUIAddr)
+			log.Printf("[swarm] WebUI: %s", url)
+			fmt.Printf("WebUI listening at %s\n", url)
 			s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, opts.WebUIAddr, false)
 			go func() {
 				if err := s.Start(ctx); err != nil {
 					log.Printf("[swarm] webui error: %v", err)
+				}
+			}()
+			// Give the listener a moment to bind before opening the browser.
+			go func() {
+				time.Sleep(400 * time.Millisecond)
+				if err := openBrowser(url); err != nil {
+					log.Printf("[swarm] open browser: %v", err)
 				}
 			}()
 		} else {
@@ -169,6 +181,27 @@ func webuiURL(addr string) string {
 		return "http://" + addr
 	}
 	return addr
+}
+
+// openBrowser opens the given URL in the user's default browser. It is
+// best-effort: the child process is launched detached, and any failure is
+// returned to the caller for logging rather than aborting the swarm.
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		// Linux and other unix-like systems.
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }
 
 func workerConfigParams(wc WorkerConfig) map[string]any {
