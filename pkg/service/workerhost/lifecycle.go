@@ -116,6 +116,66 @@ func (s *WorkerService) spawn(ctx context.Context, spec worker.SpawnSpec) error 
 	return nil
 }
 
+// RestoreAndRun materializes a worker from its persisted params and snapshot
+// and starts it running — full recovery of a previously-persisted worker,
+// making persisted state authoritative over any (template-sourced) definition.
+// When snapshot is non-empty it is applied before Start. Used by project
+// recovery; it records the worker as running and persists it again.
+func (s *WorkerService) RestoreAndRun(ctx context.Context, cfg worker.WorkerConfig, snapshot []byte) error {
+	s.mu.Lock()
+	b, ok := s.builders[cfg.Type]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("workerhost: no builder for type %q", cfg.Type)
+	}
+	spec, err := b(cfg)
+	if err != nil {
+		return fmt.Errorf("workerhost: build %q: %w", cfg.ID, err)
+	}
+
+	ch, err := spec.Connect()
+	if err != nil {
+		return fmt.Errorf("workerhost: connect %q: %w", spec.ID(), err)
+	}
+	w := spec.Build(ch)
+	if len(snapshot) > 0 {
+		if err := w.Restore(snapshot); err != nil {
+			_ = ch.Close()
+			return fmt.Errorf("workerhost: restore %q: %w", spec.ID(), err)
+		}
+	}
+	if err := w.Start(ctx); err != nil {
+		_ = ch.Close()
+		return fmt.Errorf("workerhost: start %q: %w", spec.ID(), err)
+	}
+
+	s.mu.Lock()
+	if s.findLocked(spec.ID()) != nil {
+		_ = w.Stop()
+		_ = ch.Close()
+		s.mu.Unlock()
+		return fmt.Errorf("workerhost: worker %s already exists", spec.ID())
+	}
+	s.entries = append(s.entries, workerEntry{
+		spec:   spec,
+		ch:     ch,
+		worker: w,
+		typ:    spec.Type(),
+		state:  worker.StateRunning,
+	})
+	s.mu.Unlock()
+	if s.store != nil {
+		if err := s.store.SaveConfig(spec.Config); err != nil {
+			log.Printf("[workerhost] persist config %s: %v", spec.ID(), err)
+		}
+		if err := s.store.SaveState(spec.ID(), worker.StateRunning, snapshot); err != nil {
+			log.Printf("[workerhost] persist state %s: %v", spec.ID(), err)
+		}
+	}
+	log.Printf("[workerhost] restored worker %s (type=%s)", spec.ID(), spec.Type())
+	return nil
+}
+
 // SuspendWorker stops a running worker: snapshots its state, stops its
 // goroutine, and releases its bus connection. The worker's identity and
 // definition are retained so it can be resumed. no-op if already suspended.

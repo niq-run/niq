@@ -209,13 +209,38 @@ func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
 	}
 	RegisterBuilders(buildCtx, workerSvc)
 
-	// Create workers from config.
+	// Create workers. Recovery is persisted-authoritative: a declared worker
+	// with a persisted snapshot is restored from that snapshot (params + state)
+	// rather than rebuilt fresh, so an existing project resumes exactly where it
+	// left off. A declared worker with no persisted state is created fresh from
+	// its definition (first run / new worker).
 	var hiwID string
+	declared := map[string]bool{}
+	recByID := map[string]workerhost.WorkerRecord{}
+	if recs, err := workerSvc.LoadAllWorkers(); err == nil {
+		for _, rec := range recs {
+			recByID[rec.ID] = rec
+		}
+	}
 	for _, wc := range cfg.Workers {
-		log.Printf("[swarm] creating worker: %s (type=%s)", wc.ID, wc.Type)
-		wcfg := worker.WorkerConfig{ID: wc.ID, Type: wc.Type, Params: workerConfigParams(wc)}
-		if err := workerSvc.CreateWorker(ctx, wcfg); err != nil {
-			return fmt.Errorf("swarm: create worker %q: %w", wc.ID, err)
+		declared[wc.ID] = true
+		wcfg := func() worker.WorkerConfig { // fresh-create from declared definition
+			return worker.WorkerConfig{ID: wc.ID, Type: wc.Type, Params: workerConfigParams(wc)}
+		}
+		if rec, ok := recByID[wc.ID]; ok && len(rec.Snapshot) > 0 {
+			log.Printf("[swarm] recovering worker: %s (type=%s) from persisted state", wc.ID, wc.Type)
+			if err := workerSvc.RestoreAndRun(ctx,
+				worker.WorkerConfig{ID: rec.ID, Type: rec.Type, Params: rec.Params}, rec.Snapshot); err != nil {
+				log.Printf("[swarm] restore worker %s: %v; falling back to fresh create", wc.ID, err)
+				if err := workerSvc.CreateWorker(ctx, wcfg()); err != nil {
+					return fmt.Errorf("swarm: create worker %q: %w", wc.ID, err)
+				}
+			}
+		} else {
+			log.Printf("[swarm] creating worker: %s (type=%s)", wc.ID, wc.Type)
+			if err := workerSvc.CreateWorker(ctx, wcfg()); err != nil {
+				return fmt.Errorf("swarm: create worker %q: %w", wc.ID, err)
+			}
 		}
 		if wc.Type == "hiw" {
 			hiwID = wc.ID
