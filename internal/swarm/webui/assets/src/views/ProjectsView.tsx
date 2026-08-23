@@ -36,13 +36,8 @@ export default function ProjectsView() {
     setCreating(true)
     setError('')
     try {
-      const res = await createProject(name, newTemplate)
-      if (res.webui_port) {
-        // Stay in this (dev/control) WebUI, just attach to the new project.
-        window.location.href = `?project=${encodeURIComponent(name)}&port=${res.webui_port}`
-        return
-      }
-      fetchProjects().then(setProjects).catch(() => {})
+      await createProject(name, newTemplate)
+      setNewName('')
     } catch (e) {
       setError('failed to create project ' + name)
     }
@@ -53,12 +48,7 @@ export default function ProjectsView() {
     setStarting(id)
     setError('')
     try {
-      const res = await startProject(id)
-      if (res.webui_port) {
-        // Stay in this WebUI, just attach to the (re)started project.
-        window.location.href = `?project=${encodeURIComponent(id)}&port=${res.webui_port}`
-        return
-      }
+      await startProject(id)
     } catch (e) {
       setError('failed to start project ' + id)
     }
