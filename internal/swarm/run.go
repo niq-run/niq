@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/54c1/niq/internal/swarm/webui"
 	"github.com/54c1/niq/pkg/service/eventbus"
 	eventbusapi "github.com/54c1/niq/pkg/service/eventbus/api"
+	"github.com/54c1/niq/pkg/service/eventbus/transport/httptrans"
 	"github.com/54c1/niq/pkg/service/eventbus/transport/inprocess"
 	"github.com/54c1/niq/pkg/service/workerhost"
 	"github.com/54c1/niq/pkg/worker/hiw"
@@ -31,11 +34,11 @@ type RunOptions struct {
 	StateDir     string // state root for worker persistence (default ~/.niq/state/workers)
 }
 
-// RunSwarm is the core entry point for the `niq swarm` command.
-// It parses the config, creates the event bus, builds workers, and manages their lifecycle.
+// RunSwarm resolves a config (template/--config) and runs a single swarm in the
+// shared, non-project "control" layout.
 func RunSwarm(opts RunOptions) error {
-	// 1. Parse config from the shared templates dir (seeded from the built-ins
-	// on first run) or an explicit --config file.
+	// Parse config from the shared templates dir (seeded from the built-ins on
+	// first run) or an explicit --config file.
 	homeDir, _ := os.UserHomeDir()
 	templatesDir := filepath.Join(homeDir, ".niq", "common", "templates")
 	if err := SeedTemplates(templatesDir); err != nil {
@@ -55,28 +58,114 @@ func RunSwarm(opts RunOptions) error {
 	if err != nil {
 		return err
 	}
+	if opts.StateDir == "" {
+		opts.StateDir = filepath.Join(homeDir, ".niq", "state", "workers")
+	}
 
-	// 2. Create identity registry (file-backed).
-	idDir := filepath.Join(homeDir, ".niq", "id")
-	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(idDir, "identities.json"))
+	return runAssembly(cfg, assemblyOptions{
+		IDDir:        filepath.Join(homeDir, ".niq", "id"),
+		StateDir:     opts.StateDir,
+		ProgramsRoot: opts.ProgramsRoot,
+		WebUIAddr:    opts.WebUIAddr,
+		Banner:       "niq swarm",
+	})
+}
+
+// ProjectRunOptions controls running a single project instance (its own bus and
+// WebUI on its own ports, its own data dirs under projects/<id>/).
+type ProjectRunOptions struct {
+	ProjectID string
+	BusAddr   string // httptrans bus listen address (":0" = dynamic)
+	WebUIAddr string // webui listen address (":0" = dynamic)
+}
+
+// RunProject loads a project's authoritative project.json and runs it as its
+// own process-scoped instance: per-project registry/state, its httptrans bus
+// on the project's bus port, and its WebUI on the project's webui port.
+// Resolved (possibly dynamically assigned) ports are persisted back to
+// project.json.
+func RunProject(opts ProjectRunOptions) error {
+	p, err := LoadProject(opts.ProjectID)
+	if err != nil {
+		return err
+	}
+	projDir := ProjectDir(opts.ProjectID)
+
+	busAddr := opts.BusAddr
+	if busAddr == "" && p.Ports.Bus != 0 {
+		busAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.Bus)
+	}
+	if busAddr == "" {
+		busAddr = ":0"
+	}
+	webUIAddr := opts.WebUIAddr
+	if webUIAddr == "" && p.Ports.WebUI != 0 {
+		webUIAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
+	}
+	if webUIAddr == "" {
+		webUIAddr = ":0"
+	}
+
+	onResolved := func(bus, webui string) {
+		if p.Ports.Bus = portOf(bus); p.Ports.Bus == 0 {
+			p.Ports.Bus = resolvePort(busAddr)
+		}
+		if p.Ports.WebUI = portOf(webui); p.Ports.WebUI == 0 {
+			p.Ports.WebUI = resolvePort(webUIAddr)
+		}
+		if err := SaveProject(p); err != nil {
+			log.Printf("[project %s] persist ports: %v", opts.ProjectID, err)
+		}
+	}
+
+	return runAssembly(&SwarmConfig{Workers: p.Workers}, assemblyOptions{
+		IDDir:        filepath.Join(projDir, "id"),
+		StateDir:     filepath.Join(projDir, "state", "workers"),
+		ProgramsRoot: filepath.Join(projDir, "programs"),
+		BusAddr:      busAddr,
+		WebUIAddr:    webUIAddr,
+		Banner:       "project " + opts.ProjectID,
+		NoBrowser:    true, // the control WebUI drives the redirect, not this process
+		OnResolved:   onResolved,
+	})
+}
+
+// assemblyOptions parameterizes runAssembly: where the bus/identities/workers
+// live (shared control vs per-project) and which network services to expose.
+type assemblyOptions struct {
+	IDDir        string
+	StateDir     string
+	ProgramsRoot string
+	BusAddr      string // "" disables the HTTP bus (legacy control swarm)
+	WebUIAddr    string // "" disables the WebUI
+	Banner       string
+	NoBrowser    bool
+	OnResolved   func(bus, webui string)
+}
+
+// runAssembly is the shared core: build the bus, host the workers from cfg, and
+// (optionally) expose an HTTP transport bus and a WebUI. Used by RunSwarm
+// (control layout) and RunProject (per-project layout).
+func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	// Identity registry (file-backed).
+	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(opts.IDDir, "identities.json"))
 	if err != nil {
 		return fmt.Errorf("swarm: create registry: %w", err)
 	}
 
-	// 3. Create event bus engine with in-memory event store.
+	// Event bus engine with in-memory event store.
 	evtStore := eventbus.NewMemoryEventStore()
 	engine := eventbus.NewEngine(registry, evtStore)
 
-	// 4. Create EventLog and hook it to the engine so every routed event
-	// (both Send and Broadcast) is pushed to SSE subscribers.
+	// EventLog: stream every routed event to SSE subscribers.
 	eventLog := eventbusapi.NewEventLog(engine, evtStore)
 	engine.OnEvent(eventLog.Hook())
 
-	// 5. Create in-process listener and start accepting connections.
+	// In-process listener (host-managed workers).
 	listener := inprocess.NewInProcListener()
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
 	go func() {
 		for {
 			ch, err := listener.Accept(ctx)
@@ -87,19 +176,29 @@ func RunSwarm(opts RunOptions) error {
 		}
 	}()
 
-	// 6. Create WorkerService (control-plane lifecycle manager) and its store.
+	// WorkerService: control-plane lifecycle manager + persistence store.
 	workerSvc := workerhost.New()
-	stateRoot := opts.StateDir
-	if stateRoot == "" {
-		stateRoot = filepath.Join(homeDir, ".niq", "state", "workers")
-	}
-	store, err := workerhost.NewFileWorkerStore(stateRoot)
+	store, err := workerhost.NewFileWorkerStore(opts.StateDir)
 	if err != nil {
 		return fmt.Errorf("swarm: create worker store: %w", err)
 	}
 	workerSvc.SetStore(store)
 
-	// 7. Build build context and register builders.
+	// Optional HTTP transport bus (for external/three-party workers).
+	var busAddr string
+	if opts.BusAddr != "" {
+		busSrv := httptrans.NewServer(engine, registry, opts.BusAddr)
+		if busAddr, err = busSrv.Bind(); err != nil {
+			return fmt.Errorf("swarm: bind bus: %w", err)
+		}
+		go func() {
+			if err := busSrv.Start(ctx); err != nil {
+				log.Printf("[swarm] httptrans error: %v", err)
+			}
+		}()
+	}
+
+	// Build context and register builders.
 	buildCtx := BuildContext{
 		Registry:     registry,
 		Listener:     listener,
@@ -110,7 +209,7 @@ func RunSwarm(opts RunOptions) error {
 	}
 	RegisterBuilders(buildCtx, workerSvc)
 
-	// 8. Create workers from config.
+	// Create workers from config.
 	var hiwID string
 	for _, wc := range cfg.Workers {
 		log.Printf("[swarm] creating worker: %s (type=%s)", wc.ID, wc.Type)
@@ -123,93 +222,50 @@ func RunSwarm(opts RunOptions) error {
 		}
 	}
 
-	// 9. Bootstrap persisted spawned workers not declared in config, as suspended.
+	// Bootstrap persisted spawned workers not declared in config, as suspended.
 	if err := bootstrapPersisted(buildCtx, workerSvc, cfg); err != nil {
 		log.Printf("[swarm] worker bootstrap: %v", err)
 	}
 
-	// 10. Start WebUI server if configured, and try to open it in the browser.
+	// Optional WebUI, served on the project/control address.
+	var webUIAddr string
 	if opts.WebUIAddr != "" && hiwID != "" {
-		var hiwWorker *hiw.Worker
-		if w, ok := workerSvc.Worker(hiwID); ok {
-			if h, ok := w.(*hiw.Worker); ok {
-				hiwWorker = h
+		if h, ok := workerSvc.Worker(hiwID); ok {
+			if hiwWorker, ok := h.(*hiw.Worker); ok {
+				s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, opts.WebUIAddr, false)
+				if webUIAddr, err = s.Bind(); err != nil {
+					return fmt.Errorf("swarm: bind webui: %w", err)
+				}
+				url := localhostURL(webUIAddr)
+				log.Printf("[%s] WebUI: %s", opts.Banner, url)
+				fmt.Printf("%s WebUI listening at %s\n", opts.Banner, url)
+				go func() {
+					if err := s.Start(ctx); err != nil {
+						log.Printf("[%s] webui error: %v", opts.Banner, err)
+					}
+				}()
+				if !opts.NoBrowser {
+					time.Sleep(400 * time.Millisecond)
+					_ = openBrowser(url)
+				}
 			}
 		}
-		if hiwWorker != nil {
-			url := webuiURL(opts.WebUIAddr)
-			log.Printf("[swarm] WebUI: %s", url)
-			fmt.Printf("WebUI listening at %s\n", url)
-			s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, opts.WebUIAddr, false)
-			go func() {
-				if err := s.Start(ctx); err != nil {
-					log.Printf("[swarm] webui error: %v", err)
-				}
-			}()
-			// Give the listener a moment to bind before opening the browser.
-			go func() {
-				time.Sleep(400 * time.Millisecond)
-				if err := openBrowser(url); err != nil {
-					log.Printf("[swarm] open browser: %v", err)
-				}
-			}()
-		} else {
-			log.Printf("[swarm] webui: hiw worker %q not running; skipping WebUI", hiwID)
-		}
+	}
+	if opts.OnResolved != nil {
+		opts.OnResolved(busAddr, webUIAddr)
 	}
 
-	// 11. Run — blocks until ctx is cancelled. On shutdown, ShutdownSnapshot
-	// persists the latest state before workers are stopped.
-	fmt.Println("niq swarm started. Press Ctrl+C to stop.")
+	// Run — blocks until ctx is cancelled; ShutdownSnapshot persists state.
+	fmt.Printf("%s started. Press Ctrl+C to stop.\n", opts.Banner)
 	if err := workerSvc.Run(ctx); err != nil && err != context.Canceled {
-		return fmt.Errorf("swarm: %w", err)
+		return fmt.Errorf("%s: %w", opts.Banner, err)
 	}
-
-	fmt.Println("\nniq swarm stopped.")
+	fmt.Printf("\n%s stopped.\n", opts.Banner)
 	return nil
 }
 
-// workerConfigParams converts a YAML WorkerConfig into the Params map consumed
-// by the builders.
-// webuiURL turns a listen address (":19763", "127.0.0.1:8080") into a
-// clickable URL for the startup banner. 0.0.0.0 maps to localhost.
-func webuiURL(addr string) string {
-	if addr == "" {
-		return ""
-	}
-	if strings.HasPrefix(addr, ":") {
-		return "http://localhost" + addr
-	}
-	if strings.HasPrefix(addr, "0.0.0.0:") {
-		return "http://localhost:" + strings.TrimPrefix(addr, "0.0.0.0:")
-	}
-	if !strings.Contains(addr, "://") {
-		return "http://" + addr
-	}
-	return addr
-}
-
-// openBrowser opens the given URL in the user's default browser. It is
-// best-effort: the child process is launched detached, and any failure is
-// returned to the caller for logging rather than aborting the swarm.
-func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		// Linux and other unix-like systems.
-		cmd = exec.Command("xdg-open", url)
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	go cmd.Wait()
-	return nil
-}
-
+// workerConfigParams converts a WorkerConfig into the Params map consumed by
+// the builders.
 func workerConfigParams(wc WorkerConfig) map[string]any {
 	p := map[string]any{}
 	if wc.Instruction != "" {
@@ -245,6 +301,61 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 		p["root_dir"] = wc.RootDir
 	}
 	return p
+}
+
+// localhostURL turns a resolved listen address (e.g. "[::]:19763") into a
+// clickable localhost URL.
+func localhostURL(resolved string) string {
+	if resolved == "" {
+		return ""
+	}
+	if _, port, err := net.SplitHostPort(resolved); err == nil {
+		return "http://localhost:" + port
+	}
+	return "http://" + resolved
+}
+
+// portOf parses the numeric port from a host:port address, 0 on failure.
+func portOf(addr string) int {
+	if _, port, err := net.SplitHostPort(addr); err == nil {
+		if n, err := strconv.Atoi(port); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// resolvePort reads the numeric port of a flat ":N" or "host:N" address
+// without actually binding (used only as a fallback sync for known ports).
+func resolvePort(addr string) int {
+	if n := portOf(addr); n != 0 {
+		return n
+	}
+	trimmed := strings.TrimPrefix(addr, ":")
+	if n, err := strconv.Atoi(trimmed); err == nil {
+		return n
+	}
+	return 0
+}
+
+// openBrowser opens the given URL in the user's default browser. It is
+// best-effort: the child process is launched detached, and any failure is
+// returned to the caller for logging rather than aborting the swarm.
+func openBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }
 
 // bootstrapPersisted re-materializes spawned workers persisted by a previous

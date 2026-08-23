@@ -100,8 +100,21 @@ func runProject(args []string) error {
 		fmt.Printf("created project %q (%d workers) -> %s\n", p.ID, len(p.Workers), path)
 		return nil
 
+	case len(args) >= 2 && args[0] == "run":
+		id := args[1]
+		busAddr := fs.String("bus", ":0", "httptrans bus listen address")
+		webUIAddr := fs.String("webui", ":0", "WebUI listen address")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		return swarm.RunProject(swarm.ProjectRunOptions{
+			ProjectID: id,
+			BusAddr:   *busAddr,
+			WebUIAddr: *webUIAddr,
+		})
+
 	default:
-		return fmt.Errorf("usage: niq project list | niq project create <id> [--template <name>]")
+		return fmt.Errorf("usage: niq project list | niq project create <id> [--template <name>] | niq project run <id> [--bus :0] [--webui :0]")
 	}
 }
 
