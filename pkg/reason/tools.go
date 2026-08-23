@@ -3,7 +3,12 @@
 // handleWorkerReady / handleWorkerGone: learn/forget a worker's tools & events
 // allTools: return all known tools (discovered + own)
 // handleToolRequest: process tool.requested for this worker's tools
-// toolDefs / sanitize: build LLM tool definitions (dot → underscore names)
+// toolDefs: build LLM tool definitions from the encoded tool names
+// encodeToolName + toolNameMap: encode a declared tool name for the LLM (dots
+//
+//	-> underscores, provider__ prefix) and remember the original declared name
+//	so dispatch can restore it (e.g. provider__program.search -> program.search).
+//
 // publishToolRequests: send tool.requested to target workers
 package reason
 
@@ -199,6 +204,10 @@ func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 					IsMetaTool:  isMeta,
 				}
 				t.Name = encodeToolName(w, t)
+				// Save the reverse mapping (encoded name -> original declared
+				// name) so dispatch can hand a worker back its exact dotted
+				// tool name, e.g. provider__program.search -> program.search.
+				w.toolNameMap[t.Name] = name
 				w.tools[t.Name] = t
 			}
 			log.Printf("[reason %s] received %d tool(s) from %s", w.ID(), len(toolsRaw), workerID)
@@ -223,6 +232,7 @@ func (w *BaseReasonWorker) handleWorkerGone(evt event.Event) {
 	for name, tool := range w.tools {
 		if tool.Provider == workerID {
 			delete(w.tools, name)
+			delete(w.toolNameMap, name)
 		}
 	}
 	delete(w.publishMap, workerID)
@@ -410,6 +420,10 @@ func toolDefs(w *BaseReasonWorker, tools []worker.Tool) []llm.ToolDef {
 // (with inner '.' -> '_'); tools backed by another worker become provider__name, so
 // the worker/tool boundary is unambiguous. Invariant: worker IDs and tool
 // names must not contain "__" (double underscore); '__' is the separator.
+//
+// The original declared name is preserved in w.toolNameMap (see
+// handleWorkerReady); dispatch restores it so a worker receives its exact
+// dotted tool name rather than the encoded form.
 func encodeToolName(w *BaseReasonWorker, t worker.Tool) string {
 	p, n := t.Provider, t.Name
 	if p == "" || p == w.ID() {

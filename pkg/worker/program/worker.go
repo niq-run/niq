@@ -2,8 +2,11 @@
 // manages Program discovery, loading, and registration.
 //
 // Program Worker is a domain service worker, like GitHub Worker. It exposes
-// program.search, program.load, program.register (and program.execute
-// in the future) as tools on the bus.
+// search, load, edit, register, delete (and execute in the future) as tools on
+// the bus, namespaced under this worker's ID (e.g. program__search,
+// program__edit). Other workers may declare dotted tool names (e.g.
+// foo.bar) — the reason worker restores those via a reverse mapping on
+// dispatch, while this worker keeps flat names.
 package program
 
 import (
@@ -28,7 +31,7 @@ type Config struct {
 
 // Worker is a bus-facing worker that manages Program lifecycle.
 // It subscribes to tool.requested and worker.discover, and exposes
-// program.search/load/register tools on the bus.
+// search/load/edit/register/delete tools on the bus.
 //
 // Programs are discovered from the Backend at startup and cached in the
 // programs map. The map is the single source of truth for registered programs;
@@ -209,8 +212,8 @@ func (w *Worker) publishReady() {
 		"type":      "program",
 		"tools": []map[string]any{
 			{
-				"name":        "program.search",
-				"description": "Search for available programs by name, description, or tag. Returns matching programs with their metadata (name, content_type, description, tags, locked). Use program.load to read the actual content.",
+				"name":        "search",
+				"description": "Search for available programs by name, description, or tag. Returns matching programs with their metadata (name, content_type, description, tags, locked). Use load to read the actual content.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -228,8 +231,8 @@ func (w *Worker) publishReady() {
 				},
 			},
 			{
-				"name":        "program.load",
-				"description": "Load a specific content file from a program. Use this to progressively load sub-contents after reading the entry content via program.search.",
+				"name":        "load",
+				"description": "Load a specific content file from a program. Use this to progressively load sub-contents after reading the entry content via the search tool.",
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -246,7 +249,33 @@ func (w *Worker) publishReady() {
 				},
 			},
 			{
-				"name":        "program.register",
+				"name":        "edit",
+				"description": "Edit a program's content file with an atomic find-and-replace. Cannot edit locked programs.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"program": map[string]any{
+							"type":        "string",
+							"description": "Program name (also the directory name).",
+						},
+						"path": map[string]any{
+							"type":        "string",
+							"description": "Relative path to the content file within the program directory (e.g. 'PROGRAM.md' or 'rules/go.md').",
+						},
+						"old_text": map[string]any{
+							"type":        "string",
+							"description": "The exact text to find and replace.",
+						},
+						"new_text": map[string]any{
+							"type":        "string",
+							"description": "The replacement text. May be empty to delete the matched text.",
+						},
+					},
+					"required": []any{"program", "path", "old_text"},
+				},
+			},
+			{
+				"name":        "register",
 				"description": "Register a new program at runtime. Creates the program directory and PROGRAM.md file on disk. Cannot modify or overwrite locked programs.",
 				"parameters": map[string]any{
 					"type": "object",
@@ -278,7 +307,7 @@ func (w *Worker) publishReady() {
 				},
 			},
 			{
-				"name":        "program.delete",
+				"name":        "delete",
 				"description": "Delete a program and all its contents. Cannot delete locked programs.",
 				"parameters": map[string]any{
 					"type": "object",

@@ -1,9 +1,11 @@
 package reason
 
 import (
+	"context"
 	"testing"
 
 	"github.com/54c1/niq/core/event"
+	llm "github.com/54c1/niq/core/llm"
 	"github.com/54c1/niq/core/worker"
 )
 
@@ -122,5 +124,45 @@ func TestDefaultProviderExposesDefaultTools(t *testing.T) {
 	}
 	if len(w.tools) != len(want) {
 		t.Fatalf("expected exactly %d exposed tools, got %+v", len(want), keys(w.tools))
+	}
+}
+
+// TestToolNameMapRestoresDottedNames verifies that when a worker declares a
+// dotted tool name (e.g. program.search), the encoded LLM-facing name is
+// recorded in toolNameMap and dispatch hands the worker back its original
+// dotted name instead of the encoded/underscore form.
+func TestToolNameMapRestoresDottedNames(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+
+	// A worker announces a dotted tool name.
+	ready := event.New(event.TypeWorkerReady, "program", map[string]any{
+		"worker_id": "program",
+		"tools": []map[string]any{
+			{"name": "program.search", "description": "find a program"},
+		},
+	})
+	w.handleWorkerReady(ready)
+
+	// It is encoded as provider__name for the LLM, with the mapping kept.
+	if got := w.toolNameMap["program__program_search"]; got != "program.search" {
+		t.Fatalf("toolNameMap = %q, want %q", got, "program.search")
+	}
+
+	// Dispatch restores the original dotted name to the provider.
+	calls := []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "program__program_search"},
+	}
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), calls, "trace1")
+
+	var gotName string
+	for _, e := range ch.eventsOf(event.TypeToolRequested) {
+		if n, _ := e.Payload["name"].(string); n != "" {
+			gotName = n
+		}
+	}
+	if gotName != "program.search" {
+		t.Fatalf("dispatched tool name = %q, want %q", gotName, "program.search")
 	}
 }

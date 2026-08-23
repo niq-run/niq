@@ -26,7 +26,7 @@ type Backend interface {
 	Edit(ctx context.Context, path, oldStr, newStr string) error
 
 	// Remove deletes a program directory and all its contents.
-	// Used by program.delete to remove a program from the backend.
+	// Used by the delete tool to remove a program from the backend.
 	Remove(ctx context.Context, path string) error
 
 	// List discovers the child entries within a Program directory.

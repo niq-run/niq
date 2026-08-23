@@ -40,28 +40,71 @@ func TestPrepareReasoningBuildsRequest(t *testing.T) {
 }
 
 // TestHandleToolCallsDispatches verifies tool calls are grouped by target and a
-// tool.requested is sent to each provider.
+// tool.requested is sent to each provider with the mapped (original) tool name.
 func TestHandleToolCallsDispatches(t *testing.T) {
 	ch := newTestChannel()
 	w := newTestWorker(nil, ch)
-	w.tools["workspace.bash"] = worker.Tool{Name: "workspace.bash", Provider: "workspace"}
+	w.tools["workspace__bash"] = worker.Tool{Name: "workspace__bash", Provider: "workspace"}
+	w.toolNameMap["workspace__bash"] = "bash"
 
 	calls := []llm.ContentBlock{
-		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace.bash"},
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace__bash"},
 	}
 	w.mu.Lock()
 	w.handleToolCalls(context.Background(), calls, "trace1")
 	// handleToolCalls unlocks internally.
 
-	// The tool.requested should be directed to workspace with the stripped name.
-	var found bool
+	// The tool.requested should be directed to workspace with the mapped name.
+	var name string
 	for _, e := range ch.eventsOf(event.TypeToolRequested) {
-		if e.WorkerId == w.ID() {
-			found = true
+		name, _ = e.Payload["name"].(string)
+	}
+	if name != "bash" {
+		t.Fatalf("expected tool.requested with mapped name %q, got %q", "bash", name)
+	}
+}
+
+// TestHandleToolCallsNoMappingFails verifies a tool known to w.tools but absent
+// from the toolNameMap is treated as a mismatch: it is NOT dispatched, an error
+// tool_result lands in the transcript, and a tool_unavailable notice is
+// broadcast (no silent trim-based guess).
+func TestHandleToolCallsNoMappingFails(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+	// Known to w.tools but deliberately missing from toolNameMap.
+	w.tools["workspace__bash"] = worker.Tool{Name: "workspace__bash", Provider: "workspace"}
+
+	calls := []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace__bash"},
+	}
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), calls, "trace1")
+
+	// Nothing dispatched.
+	if n := len(ch.eventsOf(event.TypeToolRequested)); n != 0 {
+		t.Fatalf("expected no tool.requested (mapping missing), got %d", n)
+	}
+
+	// The mismatch surfaces as a tool_unavailable notice broadcast.
+	var gotStop string
+	for _, e := range ch.eventsOf(event.EventType("reason.response")) {
+		if sr, _ := e.Payload["stop_reason"].(string); sr != "" {
+			gotStop = sr
 		}
 	}
-	if !found {
-		t.Fatal("expected a tool.requested published by the worker")
+	if gotStop != "tool_unavailable" {
+		t.Fatalf("expected a tool_unavailable notice, got stop_reason %q", gotStop)
+	}
+
+	// An error tool_result is recorded in the transcript.
+	foundErr := false
+	for _, m := range w.transcript.Render() {
+		if m.ToolCallID == "c1" && m.IsError {
+			foundErr = true
+		}
+	}
+	if !foundErr {
+		t.Fatal("transcript should carry an error tool_result for the unmapped tool")
 	}
 }
 

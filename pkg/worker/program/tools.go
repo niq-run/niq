@@ -17,20 +17,22 @@ func (w *Worker) handleToolCall(ctx context.Context, evt event.Event) {
 	tc := worker.ParseToolCall(evt)
 
 	switch tc.Name {
-	case "program.search":
+	case "search":
 		w.handleSearch(ctx, tc)
-	case "program.load":
+	case "load":
 		w.handleLoad(ctx, tc)
-	case "program.register":
+	case "edit":
+		w.handleEdit(ctx, tc)
+	case "register":
 		w.handleRegister(ctx, tc)
-	case "program.delete":
+	case "delete":
 		w.handleDelete(ctx, tc)
 	default:
 		w.ReplyUnknownTool(tc)
 	}
 }
 
-// handleSearch handles program.search tool calls.
+// handleSearch handles the search tool call.
 func (w *Worker) handleSearch(ctx context.Context, tc worker.ToolCall) {
 	query, _ := tc.Args["query"].(string)
 	ctStr, _ := tc.Args["content_type"].(string)
@@ -78,7 +80,7 @@ func (w *Worker) handleSearch(ctx context.Context, tc worker.ToolCall) {
 	log.Printf("[program] search query=%q ct=%q → %d results", query, ctStr, len(results))
 }
 
-// handleLoad handles program.load tool calls.
+// handleLoad handles the load tool call.
 func (w *Worker) handleLoad(ctx context.Context, tc worker.ToolCall) {
 	progName, _ := tc.Args["program"].(string)
 	contentPath, _ := tc.Args["path"].(string)
@@ -106,7 +108,38 @@ func (w *Worker) handleLoad(ctx context.Context, tc worker.ToolCall) {
 	log.Printf("[program] load %s/%s → backend (%d chars)", progName, contentPath, len(raw))
 }
 
-// handleRegister handles program.register tool calls.
+// handleEdit handles the edit tool call.
+// Locked programs cannot be edited via this tool.
+func (w *Worker) handleEdit(ctx context.Context, tc worker.ToolCall) {
+	progName, _ := tc.Args["program"].(string)
+	contentPath, _ := tc.Args["path"].(string)
+	oldText, _ := tc.Args["old_text"].(string)
+	newText, _ := tc.Args["new_text"].(string)
+
+	if progName == "" || contentPath == "" || oldText == "" {
+		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "program, path, and old_text are required", tc.TraceID)
+		return
+	}
+
+	// Locked programs cannot be modified via meta-capabilities.
+	if existing, err := w.get(progName); err == nil && existing.Locked {
+		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name,
+			fmt.Sprintf("cannot edit locked program: %q", progName), tc.TraceID)
+		return
+	}
+
+	fullPath := joinPath(progName, contentPath)
+	if err := w.backend.Edit(ctx, fullPath, oldText, newText); err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("edit %s: %v", fullPath, err), tc.TraceID)
+		return
+	}
+
+	w.ReplyCompleted(tc.CallerID, tc.CallID, tc.Name,
+		fmt.Sprintf("edited %s in program %q", contentPath, progName), tc.TraceID)
+	log.Printf("[program] edit %s/%s", progName, contentPath)
+}
+
+// handleRegister handles the register tool call.
 // Programs registered via this tool are always created as unlocked.
 // The Locked flag can only be set through the backend (writing to disk directly)
 // — meta-capabilities cannot create locked programs.
@@ -179,7 +212,7 @@ func (w *Worker) handleRegister(ctx context.Context, tc worker.ToolCall) {
 	log.Printf("[program] register: %s (%s)", name, ct)
 }
 
-// handleDelete handles program.delete tool calls.
+// handleDelete handles the delete tool call.
 // Locked programs cannot be deleted via this tool.
 func (w *Worker) handleDelete(ctx context.Context, tc worker.ToolCall) {
 	name, _ := tc.Args["name"].(string)

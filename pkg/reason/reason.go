@@ -477,22 +477,35 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	callsByTarget := make(map[string][]llm.ContentBlock)
 	var unavailable []string
 	for _, tc := range busCalls {
+		var failReason string
 		t, ok := w.tools[tc.ToolName]
 		if !ok {
-			log.Printf("[reason %s] unavailable tool: %s - not dispatched", w.ID(), tc.ToolName)
-			unavailable = append(unavailable, tc.ToolName)
-			w.transcript.Apply(ToolResultPatch{
-				CallID: tc.ToolCallID,
-				Name:   tc.ToolName,
-				Text:   "Unknown tool '" + tc.ToolName + "': not dispatched - tool not available.",
-				IsErr:  true,
-			})
+			// Unknown / hallucinated: nothing on the bus declares it.
+			failReason = "tool not available"
+		} else if orig, ok := w.toolNameMap[tc.ToolName]; ok {
+			// Hand the target worker back its original declared tool name via
+			// the saved mapping (provider__program.search -> program.search).
+			tc.ToolName = orig
+			callsByTarget[t.Provider] = append(callsByTarget[t.Provider], tc)
 			continue
+		} else {
+			// Known to w.tools but absent from the mapping: a name mismatch.
+			// Do not guess by stripping a prefix; fail it like an unavailable
+			// tool (no dispatch, error tool_result, and a tool_unavailable notice).
+			failReason = "no reverse mapping"
 		}
-		// The target worker receives its bare tool name (strip the
-		// provider prefix: "timer__set_tool_timeout" → "set_tool_timeout").
-		tc.ToolName = strings.TrimPrefix(tc.ToolName, t.Provider+"__")
-		callsByTarget[t.Provider] = append(callsByTarget[t.Provider], tc)
+
+		// Shared failure tail for undispatchable calls (not found, or mapping
+		// missing): record in the unavailable list, write an error tool_result
+		// into the transcript, and do not dispatch.
+		log.Printf("[reason %s] unavailable tool %s (%s) - not dispatched", w.ID(), tc.ToolName, failReason)
+		unavailable = append(unavailable, tc.ToolName)
+		w.transcript.Apply(ToolResultPatch{
+			CallID: tc.ToolCallID,
+			Name:   tc.ToolName,
+			Text:   "Unknown tool '" + tc.ToolName + "': " + failReason + " - not dispatched.",
+			IsErr:  true,
+		})
 	}
 	for target, calls := range callsByTarget {
 		w.toolCallTracker.Add(target, calls)
