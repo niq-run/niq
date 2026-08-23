@@ -102,6 +102,8 @@ export default function App() {
   useEffect(() => {
     // No project → no event stream.
     if (mode !== 'project') return
+    // Projects surface shows project management, not this project's events.
+    if (projectsOpen) return
     // The workers view is driven by polling; it has no event stream.
     if (view === 'workers') return
     const params = new URLSearchParams()
@@ -132,13 +134,14 @@ export default function App() {
       setEvents(eventsRef.current)
     }
     return () => es.close()
-  }, [sseKey, traceFilter, view, mode, projectBase])
+  }, [sseKey, traceFilter, view, mode, projectBase, projectsOpen])
 
   // ── Polling (only meaningful when a project is attached). The URL is
   // prefixed with projectBase so in dev (?project=&port=) it hits the project's
   // own address, not the dev/control port.
   const workersURL = projectBase + '/api/workers'
-  usePolling<WorkerInfo[]>(workersURL, 5000, setWorkers, mode === 'project')
+  // Poll only while an agent view (not the Projects surface) is showing.
+  usePolling<WorkerInfo[]>(workersURL, 5000, setWorkers, mode === 'project' && !projectsOpen)
 
   // ── Callbacks ──
   const sendMessage = useCallback(() => {
