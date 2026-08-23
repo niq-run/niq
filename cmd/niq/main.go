@@ -36,6 +36,15 @@ func main() {
 		}
 	}
 
+	// Detect subcommand: "niq project ..."
+	if len(os.Args) > 1 && os.Args[1] == "project" {
+		if err := runProject(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Detect subcommand: "niq swarm ..."
 	if len(os.Args) > 1 && os.Args[1] == "swarm" {
 		if err := runSwarm(os.Args[2:]); err != nil {
@@ -50,6 +59,49 @@ func main() {
 	if err := runSwarm(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func runProject(args []string) error {
+	fs := flag.NewFlagSet("niq project", flag.ContinueOnError)
+	switch {
+	case len(args) >= 1 && args[0] == "list":
+		projects, err := swarm.ListProjects()
+		if err != nil {
+			return err
+		}
+		if len(projects) == 0 {
+			fmt.Println("(no projects)")
+			return nil
+		}
+		for _, p := range projects {
+			fmt.Printf("%-24s webui=%d bus=%d workers=%d\n", p.ID, p.Ports.WebUI, p.Ports.Bus, len(p.Workers))
+		}
+		return nil
+
+	case len(args) >= 2 && args[0] == "create":
+		id := args[1]
+		templateName := fs.String("template", "dev", "Template to create the project from")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		path := swarm.ProjectPath(id)
+		if _, err := swarm.LoadProject(id); err == nil {
+			return fmt.Errorf("project %q already exists at %s", id, path)
+		}
+		tmpl, err := swarm.LoadTemplate(swarm.TemplatesDir(), *templateName)
+		if err != nil {
+			return err
+		}
+		p, err := swarm.CreateProject(id, tmpl)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("created project %q (%d workers) -> %s\n", p.ID, len(p.Workers), path)
+		return nil
+
+	default:
+		return fmt.Errorf("usage: niq project list | niq project create <id> [--template <name>]")
 	}
 }
 

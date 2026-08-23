@@ -25,16 +25,16 @@ type SwarmConfig struct {
 
 // WorkerConfig describes a single worker instance declaration.
 type WorkerConfig struct {
-	Type          string   `yaml:"type"` // reason / workspace / host / timer / hiw
-	ID            string   `yaml:"id"`
-	Instruction   string   `yaml:"instruction,omitempty"`
-	Provider      string   `yaml:"provider,omitempty"`
-	APIKey        string   `yaml:"api_key,omitempty"`
-	BaseURL       string   `yaml:"base_url,omitempty"`
-	Model         string   `yaml:"model,omitempty"`
-	Subscriptions []string `yaml:"subscriptions,omitempty"`
-	Publish       []string `yaml:"publish,omitempty"`
-	RootDir       string   `yaml:"root_dir,omitempty"`
+	Type          string   `yaml:"type" json:"type"` // reason / workspace / host / timer / hiw
+	ID            string   `yaml:"id" json:"id"`
+	Instruction   string   `yaml:"instruction,omitempty" json:"instruction,omitempty"`
+	Provider      string   `yaml:"provider,omitempty" json:"provider,omitempty"`
+	APIKey        string   `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	BaseURL       string   `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	Model         string   `yaml:"model,omitempty" json:"model,omitempty"`
+	Subscriptions []string `yaml:"subscriptions,omitempty" json:"subscriptions,omitempty"`
+	Publish       []string `yaml:"publish,omitempty" json:"publish,omitempty"`
+	RootDir       string   `yaml:"root_dir,omitempty" json:"root_dir,omitempty"`
 }
 
 // ParseConfig reads and parses a swarm YAML config file.
