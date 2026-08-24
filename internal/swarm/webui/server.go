@@ -187,7 +187,8 @@ func (s *Server) handleGetArchived(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(s.archived.Archived())
 }
 
-// handleSetArchived toggles whether a worker is archived, persisting the change.
+// handleSetArchived toggles whether a worker is archived. Archiving suspends the
+// worker first (archive == suspend + mark); restoring resumes it and unmarks it.
 func (s *Server) handleSetArchived(w http.ResponseWriter, r *http.Request) {
 	if s.archived == nil {
 		http.Error(w, "archive store unavailable", 404)
@@ -201,6 +202,30 @@ func (s *Server) handleSetArchived(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", 400)
 		return
 	}
+
+	// Is this worker managed by this project's host? Managed workers are the ones
+	// archive may suspend/resume; unmanaged ones are hidden only.
+	managed := false
+	if s.workerSvc != nil {
+		for _, wi := range s.workerSvc.ListWorkers("") {
+			if wi.ID == id {
+				managed = true
+				break
+			}
+		}
+	}
+	if body.Archived {
+		if managed {
+			// Archive == suspend first, then mark.
+			if err := s.workerSvc.SuspendWorker(id); err != nil {
+				http.Error(w, "suspend before archive: "+err.Error(), 500)
+				return
+			}
+		}
+	} else if managed {
+		_ = s.workerSvc.ResumeWorker(r.Context(), id)
+	}
+
 	if err := s.archived.SetArchived(id, body.Archived); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
