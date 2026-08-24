@@ -155,12 +155,10 @@ func RunProject(opts ProjectRunOptions) error {
 		return err
 	}
 
-	// Kill a leftover process from a prior run of this same project (such orphans
-	// hold the persisted ports and made re-starts fall to new random ports), then
-	// record our own pid and check that the persisted ports are actually free.
-	reclaimStaleProjectProcess(projDir)
+	// The persisted ports are authoritative: kill any holder so the project binds
+	// its recorded address (no fallback-jumping), then record our own pid.
+	freeProjectPorts(busAddr, webUIAddr)
 	_ = os.WriteFile(filepath.Join(projDir, "run.pid"), []byte(strconv.Itoa(os.Getpid())), 0644)
-	checkProjectPorts(projDir, busAddr, webUIAddr)
 
 	// Build the authoritative per-worker configs (from each config.json).
 	var cfgs []worker.WorkerConfig
@@ -420,33 +418,9 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 	return p
 }
 
-// reclaimStaleProjectProcess kills a leftover process from a prior run of this
-// same project (recorded in run.pid). Those orphans hold the project's persisted
-// ports and caused re-starts to fall back to new random ports.
-func reclaimStaleProjectProcess(projDir string) {
-	raw, err := os.ReadFile(filepath.Join(projDir, "run.pid"))
-	if err != nil {
-		return
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || pid <= 0 || pid == os.Getpid() {
-		return
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return
-	}
-	if p.Signal(syscall.Signal(0)) != nil {
-		return // not alive; stale pid file
-	}
-	log.Printf("[project] stale process pid %d from a prior run; killing to reclaim ports", pid)
-	_ = p.Kill()
-	_, _ = p.Wait() // give the socket a moment to release
-}
-
-// checkProjectPorts reports persisted ports that are still occupied (after the
-// stale-process reclaim), so a fallback to a fresh port is explained, not silent.
-func checkProjectPorts(projDir string, addrs ...string) {
+// freeProjectPorts makes the persisted ports authoritative: if a port is currently
+// occupied, it kills the holder(s) so the project binds its recorded address.
+func freeProjectPorts(addrs ...string) {
 	for _, a := range addrs {
 		if a == "" || a == ":0" {
 			continue
@@ -455,11 +429,39 @@ func checkProjectPorts(projDir string, addrs ...string) {
 		if err != nil {
 			continue
 		}
-		if n, err := strconv.Atoi(port); err == nil && n != 0 {
-			if conn, err := net.DialTimeout("tcp", "127.0.0.1:"+port, 200*time.Millisecond); err == nil {
-				conn.Close()
-				log.Printf("[project] persisted port %s is still occupied (not reclaimable); will fall back to a fresh port", port)
-			}
+		if n, err := strconv.Atoi(port); err != nil || n == 0 {
+			continue
+		}
+		if conn, err := net.DialTimeout("tcp", "127.0.0.1:"+port, 200*time.Millisecond); err != nil {
+			continue // free already
+		} else {
+			conn.Close()
+		}
+		log.Printf("[project] port %s occupied; killing holder(s) to reuse it", port)
+		killPortHolders(port)
+	}
+	// Give the sockets a moment to release before binding.
+	time.Sleep(300 * time.Millisecond)
+}
+
+// killPortHolders kills every process bound to a TCP port, via lsof.
+func killPortHolders(port string) {
+	out, err := exec.Command("lsof", "-ti", "tcp:"+port).Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		pidStr := strings.TrimSpace(line)
+		if pidStr == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil || pid <= 1 { // never kill init/pid 1
+			continue
+		}
+		if p, err := os.FindProcess(pid); err == nil {
+			log.Printf("[project] killing pid %d holding port %s", pid, port)
+			_ = p.Kill()
 		}
 	}
 }
