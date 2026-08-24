@@ -86,6 +86,14 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     })
   }
 
+  // A reason worker is a party (caller/target/recipient) to the event.
+  const involvesReason = (evt: EventPayload): boolean => {
+    const reason = (id?: string) => (id ? workerTypes[id] === 'reason' : false)
+    return reason(evt.worker_id) || reason(evt.target_worker_id) ||
+      (evt.recipients || []).some(id => reason(id))
+  }
+  const hasAnyReason = Object.values(workerTypes).some(t => t === 'reason')
+
   // Filter events by selected workers. When no workers selected, show all.
   const relevantEvents = useMemo(() => {
     return events.filter(evt => {
@@ -94,9 +102,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       // streaming mode is on they're consumed to build the streaming UI;
       // when off they're dropped entirely.
       if (evt.type === 'reason.thinking_delta' || evt.type === 'reason.text_delta' || evt.type === 'tool.partial') return false
-      // Hide host lifecycle management tool calls (suspend/resume) — they are
-      // internal operations, not conversation.
-      if (evt.type === 'tool.requested' && (evt.payload?.name === 'suspend' || evt.payload?.name === 'resume')) return false
+      // Tool events belong to the reasoning conversation only when a reason
+      // worker is a party (caller or target). Host lifecycle calls (hiw->host
+      // suspend/resume), which involve no reason worker, stay out of talk.
+      // The hasAnyReason guard defers filtering until we know the worker types,
+      // so a not-yet-loaded list doesn't hide everything on first paint.
+      if (isToolEvent(evt.type) && hasAnyReason && !involvesReason(evt)) return false
       if (talkWorkers.size === 0) return true // show all when none selected
       const recipients = deliveries[evt.id] || evt.recipients
       if (evt.type === 'worker.input') {
@@ -110,7 +121,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       if (recipients && recipients.some(r => talkWorkers.has(r))) return true
       return false
     })
-  }, [events, talkWorkers, deliveries])
+  }, [events, talkWorkers, deliveries, workerTypes])
 
   // Active streaming traces: accumulate reason.*_delta by trace_id, drop a
   // trace once its final reason.thinking / reason.response arrives.
