@@ -58,6 +58,7 @@ export default function App() {
   const [traceFilter, setTraceFilter] = useState('')
 
   const eventsRef = useRef<EventPayload[]>([])
+  const seenRef = useRef<Set<string>>(new Set())
   const deliveriesRef = useRef<Record<string, string[]>>({})
   const listRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
@@ -135,12 +136,19 @@ export default function App() {
       if (traceFilter) params.set('trace', traceFilter)
     }
     const url = projectBase + `/api/stream?${params}`
-    setEvents([])
-    eventsRef.current = []
-    setDeliveries({})
-    deliveriesRef.current = {}
+    // Reset only when the stream scope actually changes (the events view's
+    // worker/trace filter). Switching to talk keeps the existing events — resetting
+    // there caused an empty render followed by replay (the visible "flash").
+    // Duplicates across reconnects are dropped by seenRef.
+    if (view === 'events') {
+      setEvents([])
+      eventsRef.current = []
+      seenRef.current.clear()
+      setDeliveries({})
+      deliveriesRef.current = {}
+      eventsMountedAt.current = Date.now()
+    }
     setSelectedEventId(null)
-    if (view === 'events') eventsMountedAt.current = Date.now()
     const es = new EventSource(url)
     es.onmessage = (msg) => {
       const evt = JSON.parse(msg.data) as EventPayload
@@ -153,6 +161,8 @@ export default function App() {
         }
         return
       }
+      if (seenRef.current.has(evt.id)) return
+      seenRef.current.add(evt.id)
       eventsRef.current = [...eventsRef.current.slice(-200), evt]
       setEvents(eventsRef.current)
     }
