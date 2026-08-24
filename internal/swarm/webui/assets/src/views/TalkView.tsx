@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect, useCallback, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
@@ -263,18 +263,34 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
 
   // Load more button at the top of the scrollable area
   const sentinelRef = useRef<HTMLDivElement>(null)
+  const topLockRef = useRef(false)          // a loadMore prepend is in flight
+  const prevScrollHeightRef = useRef(0)
   useEffect(() => {
     if (!onLoadMore || events.length === 0) return
     const el = sentinelRef.current
     if (!el) return
     const observer = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting) {
+        topLockRef.current = true // keep viewport stable across the prepend
         onLoadMore()
       }
     }, { rootMargin: '200px 0px' })
     observer.observe(el)
     return () => observer.disconnect()
   }, [onLoadMore, events.length])
+
+  // After older events are prepended at the top, nudge scrollTop down by the
+  // amount the content grew so the visible frame doesn't jump.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (topLockRef.current) {
+      topLockRef.current = false
+      const grew = el.scrollHeight - prevScrollHeightRef.current
+      if (grew > 0) el.scrollTop = Math.max(0, el.scrollTop + grew)
+    }
+    prevScrollHeightRef.current = el.scrollHeight
+  }, [relevantEvents])
 
   // Track the last DISPLAYED avatar's worker id. Avatars render for reason
   // workers and the human; hidden workers (workspace, timer, ...) don't reset
