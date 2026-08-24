@@ -146,6 +146,13 @@ func RunProject(opts ProjectRunOptions) error {
 		return err
 	}
 
+	// Kill a leftover process from a prior run of this same project (such orphans
+	// hold the persisted ports and made re-starts fall to new random ports), then
+	// record our own pid and check that the persisted ports are actually free.
+	reclaimStaleProjectProcess(projDir)
+	_ = os.WriteFile(filepath.Join(projDir, "run.pid"), []byte(strconv.Itoa(os.Getpid())), 0644)
+	checkProjectPorts(projDir, busAddr, webUIAddr)
+
 	// Build the authoritative per-worker configs (from each config.json).
 	var cfgs []worker.WorkerConfig
 	for _, pw := range p.Workers {
@@ -402,6 +409,50 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 		p["root_dir"] = wc.RootDir
 	}
 	return p
+}
+
+// reclaimStaleProjectProcess kills a leftover process from a prior run of this
+// same project (recorded in run.pid). Those orphans hold the project's persisted
+// ports and caused re-starts to fall back to new random ports.
+func reclaimStaleProjectProcess(projDir string) {
+	raw, err := os.ReadFile(filepath.Join(projDir, "run.pid"))
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 || pid == os.Getpid() {
+		return
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	if p.Signal(syscall.Signal(0)) != nil {
+		return // not alive; stale pid file
+	}
+	log.Printf("[project] stale process pid %d from a prior run; killing to reclaim ports", pid)
+	_ = p.Kill()
+	_, _ = p.Wait() // give the socket a moment to release
+}
+
+// checkProjectPorts reports persisted ports that are still occupied (after the
+// stale-process reclaim), so a fallback to a fresh port is explained, not silent.
+func checkProjectPorts(projDir string, addrs ...string) {
+	for _, a := range addrs {
+		if a == "" || a == ":0" {
+			continue
+		}
+		_, port, err := net.SplitHostPort(a)
+		if err != nil {
+			continue
+		}
+		if n, err := strconv.Atoi(port); err == nil && n != 0 {
+			if conn, err := net.DialTimeout("tcp", "127.0.0.1:"+port, 200*time.Millisecond); err == nil {
+				conn.Close()
+				log.Printf("[project] persisted port %s is still occupied (not reclaimable); will fall back to a fresh port", port)
+			}
+		}
+	}
 }
 
 // bindServer binds a listener at reqAddr via start; if a specific (non-":0")
