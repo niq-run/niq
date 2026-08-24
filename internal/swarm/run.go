@@ -103,6 +103,16 @@ func RunProject(opts ProjectRunOptions) error {
 	// so a restarted project lands on the same addresses. Only fall back to an
 	// ephemeral (:0) port when none is persisted yet (first run) or the caller
 	// explicitly overrides with --bus/--webui.
+	// Validate persisted ports up front: an invalid value (>65535 or <=0) would
+	// fail to bind and silently fall back to a random port — warn instead.
+	if p.Ports.Bus != 0 && !validPort(p.Ports.Bus) {
+		log.Printf("[project %s] ignoring invalid bus port %d (must be 1-65535)", opts.ProjectID, p.Ports.Bus)
+		p.Ports.Bus = 0
+	}
+	if p.Ports.WebUI != 0 && !validPort(p.Ports.WebUI) {
+		log.Printf("[project %s] ignoring invalid webui port %d (must be 1-65535)", opts.ProjectID, p.Ports.WebUI)
+		p.Ports.WebUI = 0
+	}
 	busAddr := opts.BusAddr
 	if busAddr == "" {
 		if p.Ports.Bus != 0 {
@@ -417,6 +427,9 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 	}
 	return p
 }
+
+// validPort reports whether n is a usable TCP port (1-65535).
+func validPort(n int) bool { return n > 0 && n <= 65535 }
 
 // freeProjectPorts makes the persisted ports authoritative: if a port is currently
 // occupied, it kills the holder(s) so the project binds its recorded address.
