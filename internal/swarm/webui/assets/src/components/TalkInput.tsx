@@ -12,13 +12,14 @@ interface TalkInputProps {
   onAbort: () => void
   onModeChange: (m: string) => void
   workers: WorkerInfo[]
+  archived: Set<string>
   mentionKey: number
   mentionTarget: string
   onClearMentionTarget: () => void
   onSelectTarget: (id: string) => void
 }
 
-export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget }: TalkInputProps) {
+export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget }: TalkInputProps) {
   const { colors } = useTheme()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -143,9 +144,11 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     }
   }, [mentionKey])
 
+  // Archived or suspended reason workers are not mentionable / targetable.
+  const pickableWorkers = reasonWorkers.filter(w => !archived.has(w.id) && w.state !== 'suspended')
   const pickList = (pickerOpen && pickerMode === 'mention')
-    ? reasonWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery))
-    : reasonWorkers
+    ? pickableWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery))
+    : pickableWorkers
 
   // Persistent target: a specific reason worker, or '' (broadcast).
   const persistentTarget = mentionTarget && reasonWorkers.some(r => r.id === mentionTarget) ? mentionTarget : ''

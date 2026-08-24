@@ -396,6 +396,7 @@ export default function App() {
               onAbort={handleAbort}
               onModeChange={setInputMode}
               workers={workers}
+              archived={archived}
               mentionKey={mentionKey}
               mentionTarget={mentionTarget}
               onClearMentionTarget={() => setMentionTarget('')}

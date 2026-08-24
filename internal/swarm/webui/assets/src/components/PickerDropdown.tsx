@@ -28,7 +28,8 @@ interface PickerDropdownProps {
 
 // Reusable option dropdown (used for the talk target picker, the @mention
 // picker, and the input-mode selector). Rows never wrap; the active row is
-// highlighted and the selected row carries a check. Header sits with a little
+// highlighted and the selected row carries a check at the far right (in its own
+// reserved column, so it never squeezes the text). Header sits with a little
 // breathing room under the top border, and each row has a hover style.
 export default function PickerDropdown({
   header,
@@ -98,20 +99,18 @@ export default function PickerDropdown({
               background: active ? highlightBg : undefined,
             }}
           >
-            {/* Dedicated left column for the check; spans the full row height, so\n                the value line and the description line share the same left x. */}
+            {/* Text block: left-aligned, flexes to fill. */}
             <span
               style={{
-                flexShrink: 0,
-                width: 16,
-                color: colors.accent,
+                flex: '1 1 auto',
+                minWidth: 0,
                 display: 'flex',
-                alignItems: 'center',
+                flexDirection: 'column',
+                gap: 2,
+                textAlign: 'left',
               }}
             >
-              {selected ? '✓' : ''}
-            </span>
-            <span style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'monospace', minWidth: 0 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'monospace', minWidth: 0, textAlign: 'left' }}>
                 <span style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {opt.label}
                 </span>
@@ -135,6 +134,19 @@ export default function PickerDropdown({
                   {opt.description}
                 </span>
               )}
+            </span>
+            {/* Reserved right column for the selection check — the check never
+                squeezes the text, and the text always starts flush left. */}
+            <span
+              style={{
+                flexShrink: 0,
+                width: 16,
+                textAlign: 'right',
+                color: colors.accent,
+                lineHeight: 1,
+              }}
+            >
+              {selected ? '✓' : ''}
             </span>
           </div>
         )
