@@ -288,9 +288,25 @@ func (c *Control) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Reques
 	c.launchProject(w, id)
 }
 
-// launchProject spawns `niq project run <id>` on dynamic ports and answers with
-// the project's resolved WebUI URL.
+// launchProject spawns `niq project run <id>` on its (re-used) ports and answers
+// with the project's resolved WebUI URL. If the project is already running it
+// does NOT spawn a duplicate — that would collide on the persisted ports and
+// force the fallback to a fresh random port each start (the visible "jumping").
 func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
+	if c.isRunning(id) {
+		p, err := LoadProject(id)
+		var webui string
+		if err == nil && p.Ports.WebUI != 0 {
+			webui = fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"project":    id,
+			"already":    true,
+			"webui_url":  localhostURL(webui),
+			"webui_port": portOf(webui),
+		})
+		return
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		stdhttp.Error(w, "control: resolve executable: "+err.Error(), 500)
