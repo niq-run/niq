@@ -72,6 +72,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
   const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set())
+  const [wrapCode, setWrapCode] = useState(true) // soft-wrap tool JSON
   const prevEventCount = useRef(0)
   const prevStreamLen = useRef(0)
   const hasInitialScrolled = useRef(false)
@@ -631,6 +632,18 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, fontFamily: 'monospace' }}>{directionOf(evt)}</span>
                   </>
                 )}
+                {isExpanded && contentLen > 0 && (
+                  <>
+                    <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
+                    <span
+                      onClick={(e) => { e.stopPropagation(); setWrapCode(v => !v) }}
+                      title="toggle soft wrap"
+                      style={{ cursor: 'pointer', color: colors.accentDim, fontSize: fontSizes.sm, textDecoration: wrapCode ? undefined : 'underline dotted' }}
+                    >
+                      {wrapCode ? 'wrap' : 'no-wrap'}
+                    </span>
+                  </>
+                )}
                 <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
               </div>
             </div>
@@ -646,7 +659,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     borderRadius: 4,
                     fontSize: fontSizes.sm,
                     lineHeight: 1.4,
-                    wordBreak: 'break-word',
+                    whiteSpace: wrapCode ? 'pre-wrap' : 'pre',
+                    wordBreak: wrapCode ? 'break-word' : 'normal',
                     maxHeight: 320,
                     overflowY: 'auto',
                     overflowX: 'auto',
@@ -668,7 +682,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     borderRadius: 4,
                     fontSize: fontSizes.sm,
                     lineHeight: 1.4,
-                    wordBreak: 'break-word',
+                    whiteSpace: wrapCode ? 'pre-wrap' : 'pre',
+                    wordBreak: wrapCode ? 'break-word' : 'normal',
                     maxHeight: 320,
                     overflowY: 'auto',
                     overflowX: 'auto',
@@ -771,7 +786,18 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   return (
     <>
       {header}
-      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px' }}>
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        onClick={(e) => {
+          // Clicking blank space (the container itself) collapses any expanded
+          // tool call/result blocks.
+          if (e.target === scrollRef.current && expandedContent.size > 0) {
+            setExpandedContent(new Set())
+          }
+        }}
+        style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px' }}
+      >
         {nodes}
         {!responseOnly && streamingTraces.map(({ traceId, thinking, text, workerId, lastTs }) => {
           if (!thinking && !text) return null
