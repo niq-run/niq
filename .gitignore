@@ -5,3 +5,6 @@ bin/
 .DS_Store
 /niq
 dist/
+
+# frontend dependencies / build caches
+internal/swarm/webui/assets/node_modules/
