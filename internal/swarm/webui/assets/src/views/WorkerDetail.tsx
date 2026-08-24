@@ -90,14 +90,14 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
             <DetailRow label="Credential" value={worker.credential || '(none)'} colors={colors} />
           </div>
 
-          <div style={{ marginTop: 8, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 8 }}>
-            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
+          <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
+            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
               Publish Allow
             </div>
             <div style={{ color: colors.detailValue, wordBreak: 'break-all', lineHeight: 1.5 }}>
               {(worker.publish_allow || []).join(', ') || '\u2014'}
             </div>
-            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, margin: '8px 0 6px', textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
+            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, margin: '16px 0 8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
               Subscribe Allow
             </div>
             <div style={{ color: colors.detailValue, wordBreak: 'break-all', lineHeight: 1.5 }}>
@@ -106,7 +106,7 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
           </div>
 
           {/* Action area, separated by a horizontal line */}
-          <div style={{ marginTop: 12, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 12 }}>
+          <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 18 }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
               Actions
             </div>
