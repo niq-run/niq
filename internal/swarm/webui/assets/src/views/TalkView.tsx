@@ -647,6 +647,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     fontSize: fontSizes.sm,
                     lineHeight: 1.4,
                     wordBreak: 'break-word',
+                    maxHeight: 320,
+                    overflowY: 'auto',
+                    overflowX: 'auto',
                   }}
                 >
                   {content}
@@ -666,6 +669,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     fontSize: fontSizes.sm,
                     lineHeight: 1.4,
                     wordBreak: 'break-word',
+                    maxHeight: 320,
+                    overflowY: 'auto',
+                    overflowX: 'auto',
                   }}
                 >
                   {partialText}
