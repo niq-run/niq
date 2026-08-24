@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/54c1/niq/core/worker"
 )
 
 // ProjectPorts records the ports assigned to a project instance: its event-bus
@@ -21,12 +23,23 @@ type ProjectPorts struct {
 	WebUI int `json:"webui,omitempty"`
 }
 
-// Project is the on-disk startup definition for one project.
+// ProjectWorker is the metadata-only entry project.json carries for a managed
+// worker. The authoritative config lives in workers/<id>/config.json; project.json
+// only records which workers belong to the project and whether they are archived.
+type ProjectWorker struct {
+	Type     string `json:"type"`
+	ID       string `json:"id"`
+	Archived bool   `json:"archived,omitempty"`
+}
+
+// Project is the on-disk definition for one project. Its workers array is
+// metadata only ({type, id, archived}); the real per-worker config is in each
+// worker's config.json under workers/.
 type Project struct {
-	ID        string         `json:"id"`
-	CreatedAt string         `json:"created_at,omitempty"`
-	Ports     ProjectPorts   `json:"ports,omitempty"`
-	Workers   []WorkerConfig `json:"workers,omitempty"` // managed workers to launch
+	ID        string          `json:"id"`
+	CreatedAt string          `json:"created_at,omitempty"`
+	Ports     ProjectPorts    `json:"ports,omitempty"`
+	Workers   []ProjectWorker `json:"workers,omitempty"`
 }
 
 // ProjectsRoot returns ~/.niq/projects (created lazily on write).
@@ -129,15 +142,93 @@ func CreateProject(id string, template *SwarmConfig) (*Project, error) {
 	if err := os.MkdirAll(ProjectDir(id), 0755); err != nil {
 		return nil, fmt.Errorf("project: mkdir: %w", err)
 	}
-	var workers []WorkerConfig
+	// project.json carries metadata only; each worker's authoritative config is
+	// seeded to workers/<id>/config.json from the (template) full definition.
+	var meta []ProjectWorker
 	if template != nil {
-		workers = template.Workers
+		for _, wc := range template.Workers {
+			meta = append(meta, ProjectWorker{Type: wc.Type, ID: wc.ID, Archived: wc.Archived})
+			if err := seedWorkerConfig(ProjectDir(id), wc); err != nil {
+				return nil, err
+			}
+		}
 	}
-	p := &Project{ID: id, CreatedAt: time.Now().Format(time.RFC3339), Workers: workers}
+	p := &Project{ID: id, CreatedAt: time.Now().Format(time.RFC3339), Workers: meta}
 	if err := saveProject(p); err != nil {
 		return nil, err
 	}
 	return p, nil
+}
+
+// workerConfigPath returns the authoritative config.json path for a worker.
+func workerConfigPath(projDir, id string) string {
+	return filepath.Join(projDir, "workers", sanitizeProjectID(id), "config.json")
+}
+
+// seedWorkerConfig writes a worker's authoritative config.json from its full
+// (template) definition. Never overwrites an existing config (config.json wins).
+func seedWorkerConfig(projDir string, wc WorkerConfig) error {
+	path := workerConfigPath(projDir, wc.ID)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("seed worker config: %w", err)
+	}
+	cfg := worker.WorkerConfig{ID: wc.ID, Type: wc.Type, Params: workerConfigParams(wc)}
+	return writeWorkerConfig(path, cfg)
+}
+
+// readWorkerConfig loads a worker's authoritative config.json.
+func readWorkerConfig(projDir, id string) (worker.WorkerConfig, bool) {
+	raw, err := os.ReadFile(workerConfigPath(projDir, id))
+	if err != nil {
+		return worker.WorkerConfig{}, false
+	}
+	var cfg worker.WorkerConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return worker.WorkerConfig{}, false
+	}
+	return cfg, true
+}
+
+func writeWorkerConfig(path string, cfg worker.WorkerConfig) error {
+	raw, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	return os.WriteFile(path, raw, 0644)
+}
+
+// MigrateConfigAuthority converges a project to the config.json-authoritative
+// layout: seed config.json for any declared worker that lacks one and rewrite
+// project.json's workers to metadata ({type, id, archived}). Idempotent, run on
+// project start.
+func MigrateConfigAuthority(id string) error {
+	projDir := ProjectDir(id)
+	raw, err := os.ReadFile(ProjectPath(id))
+	if err != nil {
+		return err
+	}
+	var legacy struct {
+		Workers []WorkerConfig `json:"workers"`
+	}
+	// Reads whatever is present: full definitions, or already metadata-only.
+	json.Unmarshal(raw, &legacy)
+
+	var meta []ProjectWorker
+	for _, wc := range legacy.Workers {
+		meta = append(meta, ProjectWorker{Type: wc.Type, ID: wc.ID, Archived: wc.Archived})
+		if err := seedWorkerConfig(projDir, wc); err != nil {
+			log.Printf("[migrate] seed %s:%s: %v", id, wc.ID, err)
+		}
+	}
+
+	var p Project
+	json.Unmarshal(raw, &p)
+	p.Workers = meta
+	return saveProject(&p)
 }
 
 // LoadProject loads a project's definition from its project.json.

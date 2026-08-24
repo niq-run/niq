@@ -64,7 +64,12 @@ func RunSwarm(opts RunOptions) error {
 		opts.StateDir = filepath.Join(homeDir, ".niq", "state", "workers")
 	}
 
-	return runAssembly(cfg, assemblyOptions{
+	var cfgs []worker.WorkerConfig
+	for _, wc := range cfg.Workers {
+		cfgs = append(cfgs, worker.WorkerConfig{ID: wc.ID, Type: wc.Type, Params: workerConfigParams(wc)})
+	}
+
+	return runAssembly(cfgs, assemblyOptions{
 		IDDir:        filepath.Join(homeDir, ".niq", "id"),
 		StateDir:     opts.StateDir,
 		ProgramsRoot: opts.ProgramsRoot,
@@ -128,12 +133,31 @@ func RunProject(opts ProjectRunOptions) error {
 	}
 
 	// New flat layout: state/ is gone, workers/ and events.db live directly under
-	// the project dir. Migrate any legacy state/ directory in place first.
+	// the project dir. Migrate any legacy state/ directory in place first, then
+	// converge to the config.json-authoritative layout.
 	if err := MigrateProjectLayout(opts.ProjectID); err != nil {
 		log.Printf("[project %s] migrate layout: %v", opts.ProjectID, err)
 	}
+	if err := MigrateConfigAuthority(opts.ProjectID); err != nil {
+		log.Printf("[project %s] converge config: %v", opts.ProjectID, err)
+	}
+	// Reload: project.json workers are now metadata-only.
+	if p, err = LoadProject(opts.ProjectID); err != nil {
+		return err
+	}
 
-	return runAssembly(&SwarmConfig{Workers: p.Workers}, assemblyOptions{
+	// Build the authoritative per-worker configs (from each config.json).
+	var cfgs []worker.WorkerConfig
+	for _, pw := range p.Workers {
+		if cfg, ok := readWorkerConfig(projDir, pw.ID); ok {
+			cfgs = append(cfgs, cfg)
+			continue
+		}
+		// No authoritative config yet (rare post-seed): bare declaration.
+		cfgs = append(cfgs, worker.WorkerConfig{ID: pw.ID, Type: pw.Type, Params: map[string]any{}})
+	}
+
+	return runAssembly(cfgs, assemblyOptions{
 		IDDir:        filepath.Join(projDir, "id"),
 		StateDir:     filepath.Join(projDir, "workers"),
 		ProgramsRoot: filepath.Join(projDir, "programs"),
@@ -170,7 +194,7 @@ type assemblyOptions struct {
 // runAssembly is the shared core: build the bus, host the workers from cfg, and
 // (optionally) expose an HTTP transport bus and a WebUI. Used by RunSwarm
 // (control layout) and RunProject (per-project layout).
-func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
+func runAssembly(cfgs []worker.WorkerConfig, opts assemblyOptions) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -266,23 +290,20 @@ func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
 			recByID[rec.ID] = rec
 		}
 	}
-	for _, wc := range cfg.Workers {
+	for _, wc := range cfgs {
 		declared[wc.ID] = true
-		wcfg := func() worker.WorkerConfig { // fresh-create from declared definition
-			return worker.WorkerConfig{ID: wc.ID, Type: wc.Type, Params: workerConfigParams(wc)}
-		}
 		if rec, ok := recByID[wc.ID]; ok && len(rec.Snapshot) > 0 {
 			log.Printf("[swarm] recovering worker: %s (type=%s) from persisted state", wc.ID, wc.Type)
 			if err := workerSvc.RestoreAndRun(ctx,
 				worker.WorkerConfig{ID: rec.ID, Type: rec.Type, Params: rec.Params}, rec.Snapshot); err != nil {
 				log.Printf("[swarm] restore worker %s: %v; falling back to fresh create", wc.ID, err)
-				if err := workerSvc.CreateWorker(ctx, wcfg()); err != nil {
+				if err := workerSvc.CreateWorker(ctx, wc); err != nil {
 					return fmt.Errorf("swarm: create worker %q: %w", wc.ID, err)
 				}
 			}
 		} else {
 			log.Printf("[swarm] creating worker: %s (type=%s)", wc.ID, wc.Type)
-			if err := workerSvc.CreateWorker(ctx, wcfg()); err != nil {
+			if err := workerSvc.CreateWorker(ctx, wc); err != nil {
 				return fmt.Errorf("swarm: create worker %q: %w", wc.ID, err)
 			}
 		}
@@ -292,7 +313,7 @@ func runAssembly(cfg *SwarmConfig, opts assemblyOptions) error {
 	}
 
 	// Bootstrap persisted spawned workers not declared in config, as suspended.
-	if err := bootstrapPersisted(buildCtx, workerSvc, cfg); err != nil {
+	if err := bootstrapPersisted(buildCtx, workerSvc, cfgs); err != nil {
 		log.Printf("[swarm] worker bootstrap: %v", err)
 	}
 
@@ -456,13 +477,13 @@ func openBrowser(url string) error {
 
 // bootstrapPersisted re-materializes spawned workers persisted by a previous
 // run that are not declared in the current config, leaving them suspended.
-func bootstrapPersisted(ctx BuildContext, svc *workerhost.WorkerService, cfg *SwarmConfig) error {
+func bootstrapPersisted(ctx BuildContext, svc *workerhost.WorkerService, cfgs []worker.WorkerConfig) error {
 	recs, err := svc.LoadAllWorkers()
 	if err != nil {
 		return err
 	}
 	declared := map[string]bool{}
-	for _, wc := range cfg.Workers {
+	for _, wc := range cfgs {
 		declared[wc.ID] = true
 	}
 	for _, rec := range recs {

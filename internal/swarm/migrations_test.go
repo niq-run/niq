@@ -66,16 +66,22 @@ func TestMigrateLegacyProject(t *testing.T) {
 	if p.ID != "default" || len(p.Workers) != 2 {
 		t.Fatalf("project = %+v, want id=default with 2 workers", p)
 	}
-	var niq WorkerConfig
+	var niq ProjectWorker
 	for _, w := range p.Workers {
 		if w.ID == "niq" {
 			niq = w
 		}
 	}
-	if niq.Type != "reason" || niq.Model != "deepseek-v4-flash" || niq.Provider != "deepseek" {
-		t.Fatalf("niq worker = %+v, want reason/deepseek-v4-flash", niq)
+	if niq.Type != "reason" {
+		t.Fatalf("niq worker = %+v, want reason", niq)
 	}
-
+	rawCfg, err := os.ReadFile(filepath.Join(dir, "workers", "niq", "config.json"))
+	if err != nil {
+		t.Fatalf("seeded config.json missing: %v", err)
+	}
+	if !strings.Contains(string(rawCfg), "deepseek-v4-flash") {
+		t.Fatalf("seeded config.json missing full config: %s", rawCfg)
+	}
 	// Idempotent: second migrate errors because the project exists.
 	if _, err := MigrateLegacyProject("default", base); err == nil {
 		t.Fatal("expected error on duplicate migrate")

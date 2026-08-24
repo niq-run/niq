@@ -64,7 +64,7 @@ func TestSaveProjectMutatesWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _ := LoadProject("beta")
-	p.Workers = append(p.Workers, WorkerConfig{Type: "workspace", ID: "ws"})
+	p.Workers = append(p.Workers, ProjectWorker{Type: "workspace", ID: "ws"})
 	if err := SaveProject(p); err != nil {
 		t.Fatal(err)
 	}

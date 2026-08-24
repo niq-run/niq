@@ -33,10 +33,15 @@ func MigrateLegacyProject(id, base string) (string, error) {
 	}
 
 	workers := legacyWorkersFromState(filepath.Join(base, "state", "workers"))
+	meta := make([]ProjectWorker, 0, len(workers))
+	for _, wc := range workers {
+		meta = append(meta, ProjectWorker{Type: wc.Type, ID: wc.ID, Archived: wc.Archived})
+		_ = seedWorkerConfig(projDir, wc) // best-effort; real config.json comes along with workers/
+	}
 	proj := Project{
 		ID:        id,
 		CreatedAt: time.Now().Format(time.RFC3339),
-		Workers:   workers,
+		Workers:   meta,
 	}
 
 	// Move the legacy global dirs into the project. Dirs that are missing or
