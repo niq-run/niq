@@ -1,6 +1,9 @@
 import { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useTheme, fontSizes } from '../theme'
 import { makeMdComponents } from '../components/MarkdownComponents'
 import ThinkingBlock from '../components/ThinkingBlock'
@@ -633,42 +636,40 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             </div>
             {isExpanded && content && (
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
-                <pre
-                  style={{
+                <SyntaxHighlighter
+                  language="json"
+                  style={dark ? vscDarkPlus : oneLight}
+                  PreTag="div"
+                  customStyle={{
                     margin: 0,
                     padding: '6px 8px',
-                    background: dark ? '#1e1e1e' : '#f5f5f5',
                     borderRadius: 4,
                     fontSize: fontSizes.sm,
                     lineHeight: 1.4,
-                    overflowX: 'auto',
-                    whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
-                    color: isDimmed ? colors.textDimmed : colors.text,
                   }}
                 >
                   {content}
-                </pre>
+                </SyntaxHighlighter>
               </div>
             )}
             {partialText && (
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
-                <pre
-                  style={{
+                <SyntaxHighlighter
+                  language="json"
+                  style={dark ? vscDarkPlus : oneLight}
+                  PreTag="div"
+                  customStyle={{
                     margin: 0,
                     padding: '6px 8px',
-                    background: dark ? '#1e1e1e' : '#f5f5f5',
                     borderRadius: 4,
                     fontSize: fontSizes.sm,
                     lineHeight: 1.4,
-                    overflowX: 'auto',
-                    whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
-                    color: isDimmed ? colors.textDimmed : colors.text,
                   }}
                 >
                   {partialText}
-                </pre>
+                </SyntaxHighlighter>
                 <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, fontStyle: 'italic' }}>⏳ output streaming…</div>
               </div>
             )}
