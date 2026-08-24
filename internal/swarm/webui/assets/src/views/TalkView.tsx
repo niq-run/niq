@@ -94,6 +94,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       // streaming mode is on they're consumed to build the streaming UI;
       // when off they're dropped entirely.
       if (evt.type === 'reason.thinking_delta' || evt.type === 'reason.text_delta' || evt.type === 'tool.partial') return false
+      // Hide host lifecycle management tool calls (suspend/resume) — they are
+      // internal operations, not conversation.
+      if (evt.type === 'tool.requested' && (evt.payload?.name === 'suspend' || evt.payload?.name === 'resume')) return false
       if (talkWorkers.size === 0) return true // show all when none selected
       const recipients = deliveries[evt.id] || evt.recipients
       if (evt.type === 'worker.input') {
