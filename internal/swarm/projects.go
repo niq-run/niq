@@ -227,9 +227,40 @@ func MigrateConfigAuthority(id string) error {
 
 	var p Project
 	json.Unmarshal(raw, &p)
+
+	// Skip writing when nothing actually changed (workers already metadata-only),
+	// so starting a stable project doesn't churn project.json.
+	if sameWorkers(p.Workers, meta) {
+		return nil
+	}
+	p.Workers = meta
+	if sameWorkers(p.Workers, meta) {
+		return nil
+	}
 	p.Workers = meta
 	return saveProject(&p)
 }
+
+// sameWorkers reports whether two worker-metadata lists are equivalent (same set
+// of type/id/archived, order-insensitive).
+func sameWorkers(a, b []ProjectWorker) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	key := func(w ProjectWorker) string { return fmt.Sprintf("%s\x00%s\x00%v", w.Type, w.ID, w.Archived) }
+	set := map[string]bool{}
+	for _, w := range a {
+		set[key(w)] = true
+	}
+	for _, w := range b {
+		if !set[key(w)] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameWorkers reports whether two worker-metadata lists are equivalent (same set\n// of type/id/archived, order-insensitive).\nfunc sameWorkers(a, b []ProjectWorker) bool {\n\tif len(a) != len(b) {\n\t\treturn false\n\t}\n\tkey := func(w ProjectWorker) string { return fmt.Sprintf(\"%s\\x00%s\\x00%v\", w.Type, w.ID, w.Archived) }\n\tset := map[string]bool{}\n\tfor _, w := range a {\n\t\tset[key(w)] = true\n\t}\n\tfor _, w := range b {\n\t\tif !set[key(w)] {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn true\n}"}]
 
 // LoadProject loads a project's definition from its project.json.
 func LoadProject(id string) (*Project, error) {

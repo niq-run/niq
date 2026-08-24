@@ -121,12 +121,21 @@ func RunProject(opts ProjectRunOptions) error {
 	}
 
 	onResolved := func(bus, webui string) {
-		if p.Ports.Bus = portOf(bus); p.Ports.Bus == 0 {
-			p.Ports.Bus = resolvePort(busAddr)
+		newBus := portOf(bus)
+		if newBus == 0 {
+			newBus = resolvePort(busAddr)
 		}
-		if p.Ports.WebUI = portOf(webui); p.Ports.WebUI == 0 {
-			p.Ports.WebUI = resolvePort(webUIAddr)
+		newWeb := portOf(webui)
+		if newWeb == 0 {
+			newWeb = resolvePort(webUIAddr)
 		}
+		// Only persist when the ports actually changed, so a stable re-start does
+		// not churn project.json.
+		if newBus == p.Ports.Bus && newWeb == p.Ports.WebUI {
+			return
+		}
+		p.Ports.Bus = newBus
+		p.Ports.WebUI = newWeb
 		if err := SaveProject(p); err != nil {
 			log.Printf("[project %s] persist ports: %v", opts.ProjectID, err)
 		}
