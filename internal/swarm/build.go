@@ -183,7 +183,12 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	if err != nil {
 		return worker.SpawnSpec{}, fmt.Errorf("workspace: bad root_dir: %w", err)
 	}
-	id := "ws-" + sanitizeWorkerID(abs)
+	// Use the id passed in from the project/config definition. Only fall back to
+	// a path-derived id when none was given (legacy bare workspace).
+	id := cfg.ID
+	if id == "" {
+		id = "ws-" + sanitizeWorkerID(abs)
+	}
 	params := p
 	params["root_dir"] = abs
 	cfg.ID = id
