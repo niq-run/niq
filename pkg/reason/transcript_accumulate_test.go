@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/54c1/niq/core/llm"
 )
@@ -308,5 +309,140 @@ func TestCommitEditStripsDanglingMetaToolCall(t *testing.T) {
 	}
 	if len(last.Content) != 0 {
 		t.Fatalf("dangling meta tool_call survived CommitEdit: %+v", last.Content)
+	}
+}
+
+// ── payload truncation ──
+
+// TestPayloadTruncationToolResult verifies an oversized tool result is capped
+// to the transcript's payload limit: head kept, truncation note appended,
+// original size carried, and the kept text + note fit within the cap.
+func TestPayloadTruncationToolResult(t *testing.T) {
+	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
+	b.Apply(ToolPlaceholdersPatch{Calls: []llm.ContentBlock{toolCall("c1", "bash")}})
+	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Text: strings.Repeat("x", 1000)})
+
+	got := b.Render()
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1", len(got))
+	}
+	text := got[0].Content[0].Text
+	if !strings.Contains(text, "[truncated, kept") {
+		t.Fatalf("oversized tool result must carry a truncation note: %q", text)
+	}
+	if !strings.Contains(text, "of 1000 bytes") {
+		t.Fatalf("note must carry the original size: %q", text)
+	}
+	if len(text) > 64 {
+		t.Fatalf("truncated payload exceeds cap: %d bytes > 64", len(text))
+	}
+	if !strings.HasPrefix(text, strings.Repeat("x", 1)) {
+		t.Fatalf("truncated payload must keep the head: %q", text)
+	}
+}
+
+// TestPayloadTruncationRuneSafe verifies the byte-based cut never splits a
+// multi-byte UTF-8 rune (e.g. Chinese).
+func TestPayloadTruncationRuneSafe(t *testing.T) {
+	b := NewAccumulateTranscript(WithMaxPayloadBytes(32))
+	b.Apply(InputPatch{Messages: []llm.Message{userMsg(strings.Repeat("中", 100))}})
+
+	text := b.Render()[0].Content[0].Text
+	if !utf8.ValidString(text) {
+		t.Fatalf("truncated payload must not split UTF-8: %q", text)
+	}
+	if !strings.Contains(text, "[truncated, kept") {
+		t.Fatalf("oversized input must be truncated: %q", text)
+	}
+}
+
+// TestPayloadTruncationInput verifies an oversized external input message is
+// capped the same way as a tool result.
+func TestPayloadTruncationInput(t *testing.T) {
+	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
+	b.Apply(InputPatch{Messages: []llm.Message{userMsg(strings.Repeat("y", 200))}})
+
+	text := b.Render()[0].Content[0].Text
+	if !strings.Contains(text, "[truncated, kept") || len(text) > 64 {
+		t.Fatalf("oversized input not truncated: %q (%d bytes)", text, len(text))
+	}
+}
+
+// TestPayloadTruncationLateResult verifies an oversized late-arriving tool
+// result is capped as well.
+func TestPayloadTruncationLateResult(t *testing.T) {
+	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
+	b.Apply(LateResultPatch{CallID: "c1", Name: "bash", Text: strings.Repeat("z", 300), Cause: "timeout"})
+
+	text := b.Render()[0].Content[0].Text
+	if !strings.Contains(text, "[truncated, kept") || len(text) > 64 {
+		t.Fatalf("oversized late result not truncated: %q (%d bytes)", text, len(text))
+	}
+}
+
+// TestPayloadNotTruncatedAssistantOutput verifies model-produced output is
+// applied verbatim: truncation is for external payloads only.
+func TestPayloadNotTruncatedAssistantOutput(t *testing.T) {
+	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
+	big := strings.Repeat("a", 500)
+	b.Apply(AssistantOutputPatch{Message: assistantMsg(big)})
+
+	got := b.Render()
+	if len(got) != 1 || got[0].Content[0].Text != big {
+		t.Fatalf("assistant output must be preserved verbatim: %+v", got)
+	}
+}
+
+// TestPayloadUnderLimitUntouched verifies payloads within the cap pass through
+// unchanged.
+func TestPayloadUnderLimitUntouched(t *testing.T) {
+	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
+	small := "ok"
+	b.Apply(ToolPlaceholdersPatch{Calls: []llm.ContentBlock{toolCall("c1", "bash")}})
+	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Text: small})
+
+	got := b.Render()
+	if len(got) != 1 || got[0].Content[0].Text != small {
+		t.Fatalf("under-limit payload must be untouched: %+v", got)
+	}
+}
+
+// TestPayloadDefaultLimit verifies the default transcript caps over-limit
+// payloads at DefaultMaxPayloadBytes, and that max <= 0 falls back to it.
+func TestPayloadDefaultLimit(t *testing.T) {
+	for _, b := range []*AccumulateTranscript{
+		NewAccumulateTranscript(),
+		NewAccumulateTranscript(WithMaxPayloadBytes(0)),
+		NewAccumulateTranscript(WithMaxPayloadBytes(-1)),
+	} {
+		b.Apply(InputPatch{Messages: []llm.Message{userMsg(strings.Repeat("x", DefaultMaxPayloadBytes+1))}})
+		text := b.Render()[0].Content[0].Text
+		if !strings.Contains(text, "[truncated, kept") {
+			t.Fatalf("default cap must truncate over-limit payload")
+		}
+		if len(text) > DefaultMaxPayloadBytes {
+			t.Fatalf("truncated payload exceeds default cap: %d > %d", len(text), DefaultMaxPayloadBytes)
+		}
+	}
+}
+
+// TestPayloadTruncationDuringEdit verifies inputs buffered across an edit are
+// truncated too — a large payload must not bypass the cap through the edit
+// buffer.
+func TestPayloadTruncationDuringEdit(t *testing.T) {
+	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
+	b.Apply(InputPatch{Messages: []llm.Message{userMsg("a")}})
+
+	b.BeginEdit()
+	b.Apply(InputPatch{Messages: []llm.Message{userMsg(strings.Repeat("q", 300))}})
+	b.CommitEdit("digest", 0)
+
+	got := b.Render()
+	if len(got) != 2 {
+		t.Fatalf("got %d messages, want 2 (digest + buffered)", len(got))
+	}
+	text := got[1].Content[0].Text
+	if !strings.Contains(text, "[truncated, kept") || len(text) > 64 {
+		t.Fatalf("buffered input during edit must be truncated: %q (%d bytes)", text, len(text))
 	}
 }

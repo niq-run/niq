@@ -82,6 +82,12 @@ type Config struct {
 	KeepTail         int
 	CompactDirective string
 
+	// MaxPayloadBytes caps a single text payload (tool result, external input
+	// message) folded into the transcript; oversized payloads are truncated to
+	// the head with a truncation note. 0 uses the default. Only applies to the
+	// default AccumulateTranscript; a custom Transcript implements its own cap.
+	MaxPayloadBytes int
+
 	SeedMessages []llm.Message
 }
 
@@ -90,7 +96,7 @@ type Config struct {
 // tracker, and seeds the transcript with any handover brief.
 func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	if cfg.Transcript == nil {
-		cfg.Transcript = NewAccumulateTranscript()
+		cfg.Transcript = NewAccumulateTranscript(WithMaxPayloadBytes(cfg.MaxPayloadBytes))
 	}
 	if cfg.BudgetSoft <= 0 {
 		cfg.BudgetSoft = DefaultBudgetSoft

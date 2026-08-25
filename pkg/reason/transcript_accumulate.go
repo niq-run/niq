@@ -8,10 +8,17 @@ package reason
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/54c1/niq/core/llm"
 )
+
+// DefaultMaxPayloadBytes caps a single text payload folded into the transcript
+// (a tool result, an external input message). Larger payloads are truncated to
+// the head with a truncation note so one event cannot flood the context.
+const DefaultMaxPayloadBytes = 20 * 1024
 
 // digestMessage wraps a compacted transcript summary as the head message of
 // the new projection. User role: it must read as system-provided context to
@@ -36,11 +43,32 @@ type AccumulateTranscript struct {
 	messages     []llm.Message
 	editing      bool          // an edit is in progress
 	pendingInput []llm.Message // Apply inputs buffered during the edit
+
+	maxPayloadBytes int // per-message text cap; <= 0 means no truncation
 }
 
-// NewAccumulateTranscript creates an empty transcript.
-func NewAccumulateTranscript() *AccumulateTranscript {
-	return &AccumulateTranscript{}
+// AccumulateOption configures an AccumulateTranscript at construction.
+type AccumulateOption func(*AccumulateTranscript)
+
+// WithMaxPayloadBytes caps text payloads folded into the transcript at max
+// bytes; oversized payloads are truncated to their head with a truncation
+// note. max <= 0 leaves the default cap.
+func WithMaxPayloadBytes(max int) AccumulateOption {
+	return func(b *AccumulateTranscript) {
+		if max > 0 {
+			b.maxPayloadBytes = max
+		}
+	}
+}
+
+// NewAccumulateTranscript creates an empty transcript with the default payload
+// cap, optionally overridden by opts.
+func NewAccumulateTranscript(opts ...AccumulateOption) *AccumulateTranscript {
+	b := &AccumulateTranscript{maxPayloadBytes: DefaultMaxPayloadBytes}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // Apply folds one lifecycle fact into the transcript. If an edit is in
@@ -61,18 +89,24 @@ func (b *AccumulateTranscript) applyLocked(input TranscriptPatch) {
 		// variant is a stale worker-lifecycle action and is dropped.
 		switch in := input.(type) {
 		case InputPatch:
-			b.pendingInput = append(b.pendingInput, in.Messages...)
+			for _, m := range in.Messages {
+				b.pendingInput = append(b.pendingInput, b.limitMessageText(m))
+			}
 		case LateResultPatch:
 			if in.Text != "" {
 				b.pendingInput = append(b.pendingInput,
-					lateResultMessage(in.CallID, in.Name, in.Text, in.Cause))
+					b.limitMessageText(lateResultMessage(in.CallID, in.Name, in.Text, in.Cause)))
 			}
 		}
 		return
 	}
 	switch in := input.(type) {
 	case InputPatch:
-		b.messages = append(b.messages, in.Messages...)
+		msgs := make([]llm.Message, 0, len(in.Messages))
+		for _, m := range in.Messages {
+			msgs = append(msgs, b.limitMessageText(m))
+		}
+		b.messages = append(b.messages, msgs...)
 	case AssistantOutputPatch:
 		b.messages = append(b.messages, in.Message)
 	case PartialOutputPatch:
@@ -83,18 +117,78 @@ func (b *AccumulateTranscript) applyLocked(input TranscriptPatch) {
 		}
 	case ToolResultPatch:
 		b.messages = replacePlaceholder(b.messages, in.CallID,
-			toolResultMessage(in.CallID, in.Name, in.Text, in.IsErr))
+			b.limitMessageText(toolResultMessage(in.CallID, in.Name, in.Text, in.IsErr)))
 	case ToolParkedPatch:
 		b.messages = replacePlaceholder(b.messages, in.CallID,
-			toolResultMessage(in.CallID, in.Name, parkReason(in.Cause), false))
+			b.limitMessageText(toolResultMessage(in.CallID, in.Name, parkReason(in.Cause), false)))
 	case LateResultPatch:
 		if in.Text != "" {
-			b.messages = append(b.messages, lateResultMessage(in.CallID, in.Name, in.Text, in.Cause))
+			b.messages = append(b.messages,
+				b.limitMessageText(lateResultMessage(in.CallID, in.Name, in.Text, in.Cause)))
 		}
 	default:
 		// Unknown variants are ignored: the sealed algebra grows at the
 		// interface, old snapshots stay readable.
 	}
+}
+
+// limitMessageText truncates oversized text blocks in a message to the
+// transcript's payload cap, keeping the head of each and appending a
+// truncation note. Only payload-carrying messages (tool results, external
+// inputs) are routed through here; model-produced output is applied verbatim.
+// The caller's message is never mutated: truncation copies message and content
+// blocks (copy-on-write), so concurrent producers sharing a slice stay intact.
+func (b *AccumulateTranscript) limitMessageText(m llm.Message) llm.Message {
+	if b.maxPayloadBytes <= 0 {
+		return m
+	}
+	truncated := false
+	for _, blk := range m.Content {
+		if blk.Type == llm.ContentText && len(blk.Text) > b.maxPayloadBytes {
+			truncated = true
+			break
+		}
+	}
+	if !truncated {
+		return m
+	}
+	out := m
+	out.Content = append([]llm.ContentBlock(nil), m.Content...)
+	for i := range out.Content {
+		if out.Content[i].Type == llm.ContentText && len(out.Content[i].Text) > b.maxPayloadBytes {
+			out.Content[i].Text = truncateText(out.Content[i].Text, b.maxPayloadBytes)
+		}
+	}
+	return out
+}
+
+// truncateNote is appended to a truncated payload; both %d placeholders are
+// byte counts (kept, original).
+const truncateNote = "...[truncated, kept %d of %d bytes]"
+
+// truncateText keeps the head of a text under a byte cap and appends a note
+// carrying the original size. The cut falls on a rune boundary so multi-byte
+// UTF-8 (e.g. Chinese) is never split mid-character. Room for the note is
+// reserved up front (sized for the worst-case kept digit count), so the kept
+// head plus note fit within maxBytes; for absurdly small caps the head shrinks
+// instead of the note overflowing the entire budget.
+func truncateText(text string, maxBytes int) string {
+	if len(text) <= maxBytes {
+		return text
+	}
+	noteLen := len("...[truncated, kept ") + len(strconv.Itoa(maxBytes)) +
+		len(" of ") + len(strconv.Itoa(len(text))) + len(" bytes]")
+	room := maxBytes - noteLen
+	if room < 1 {
+		room = maxBytes/2 + 1
+	}
+	if room > len(text) {
+		room = len(text)
+	}
+	for room > 0 && !utf8.RuneStart(text[room]) {
+		room--
+	}
+	return text[:room] + fmt.Sprintf(truncateNote, room, len(text))
 }
 
 // Render returns the transcript for the next LLM round. The returned slice

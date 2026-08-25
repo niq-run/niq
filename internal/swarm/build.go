@@ -156,7 +156,10 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 			BudgetHard:       budgetHard,
 			KeepTail:         keepTail,
 			CompactDirective: compactDirective,
-			SeedMessages:     seedBrief,
+			// Fixed per-message payload cap for tool results / inputs; not
+			// configurable through worker params.
+			MaxPayloadBytes: 20 * 1024,
+			SeedMessages:    seedBrief,
 		})
 		return w
 	}

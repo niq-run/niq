@@ -32,6 +32,10 @@ type Config struct {
 	KeepTail         int
 	CompactDirective string
 
+	// MaxPayloadBytes caps a single text payload folded into the transcript
+	// (see reasonBase.Config). 0 uses the default.
+	MaxPayloadBytes int
+
 	// Compactor is how this worker compresses its transcript under window
 	// pressure. nil uses the default LLM-summary compactor.
 	Compactor reasonBase.Compactor
@@ -103,6 +107,7 @@ func NewWorker(cfg Config) *Worker {
 		BudgetHard:       cfg.BudgetHard,
 		KeepTail:         cfg.KeepTail,
 		CompactDirective: cfg.CompactDirective,
+		MaxPayloadBytes:  cfg.MaxPayloadBytes,
 		Compactor:        cfg.Compactor,
 		ToolProvider:     cfg.ToolProvider,
 		SeedMessages:     cfg.SeedMessages,
