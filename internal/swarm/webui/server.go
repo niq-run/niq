@@ -352,7 +352,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 // the host worker (data-plane, auditable).
 func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	evts := []event.Event{event.New(event.TypeToolRequested, "hiw", map[string]any{
+	evts := []event.Event{event.New(event.TypeToolRequested, "webui-hiw", map[string]any{
 		"call_id":   "webui-suspend-" + id,
 		"name":      "suspend",
 		"arguments": map[string]any{"worker_id": id},
@@ -364,7 +364,7 @@ func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
 // handleResume resumes a host-managed worker via the host worker's tools.
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	evt := event.New(event.TypeToolRequested, "hiw", map[string]any{
+	evt := event.New(event.TypeToolRequested, "webui-hiw", map[string]any{
 		"call_id":   "webui-resume-" + id,
 		"name":      "resume",
 		"arguments": map[string]any{"worker_id": id},
@@ -379,8 +379,8 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 
-	evt := event.New(event.TypeWorkerAbort, "hiw", map[string]any{
-		"worker_id": "hiw",
+	evt := event.New(event.TypeWorkerAbort, "webui-hiw", map[string]any{
+		"worker_id": "webui-hiw",
 	})
 	if body.Target != "" {
 		_ = s.hiw.Channel.Send(r.Context(), evt, body.Target)

@@ -36,7 +36,7 @@ const inputRenderers: Record<string, React.FC<{evt: EventPayload; onTraceClick: 
   'timer.elapsed': TimerElapsedBlock,
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'default-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly }: TalkViewProps) {
   const { dark, colors } = useTheme()
   // Only reason workers (the conversation partners) get a standalone avatar
   // row; other workers' events carry their worker ID inline in the block title.
@@ -757,16 +757,19 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
 
   // Header: always visible, not in scroll area — shown even when empty.
   const header = (
-    <div style={{ fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 24, marginBottom: 12 }}>
-      <strong>Talk</strong>
-      <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
-        watching <strong style={{ color: colors.textDim }}>{
-          talkWorkers.size > 0
-            ? `[${[...talkWorkers].join(', ')}]`
-            : '[all workers]'
-        }</strong>
-      </span>
-    </div>
+    <>
+      <div style={{ fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 24 }}>
+        <strong>Talk</strong>
+        <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
+          watching <strong style={{ color: colors.textDim }}>{
+            talkWorkers.size > 0
+              ? `[${[...talkWorkers].join(', ')}]`
+              : '[all workers]'
+          }</strong>
+        </span>
+      </div>
+      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0' }} />
+    </>
   )
 
   if (nodes.length === 0 && streamingTraces.length === 0) {

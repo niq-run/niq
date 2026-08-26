@@ -1,5 +1,5 @@
 // Package hiw provides the Human Interface Worker — a minimal worker that
-// publishes user input to the bus as the "hiw" identity.
+// publishes user input to the bus as the webui-hiw identity.
 //
 // HIW is the human's voice in the swarm. It does not manage UI lifecycle,
 // stream events, or serve HTTP — those are the swarm's responsibility.
@@ -26,7 +26,7 @@ type Worker struct {
 
 // Config holds the configuration for a HIW.
 type Config struct {
-	ID  string // worker ID, defaults to "hiw"
+	ID  string // worker ID, defaults to "webui-hiw"
 	Bus corebus.WorkerSideChannel
 }
 
@@ -34,7 +34,7 @@ type Config struct {
 func New(cfg Config) *Worker {
 	id := cfg.ID
 	if id == "" {
-		id = "hiw"
+		id = "webui-hiw"
 	}
 	return &Worker{
 		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
