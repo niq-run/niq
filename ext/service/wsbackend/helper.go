@@ -1,7 +1,6 @@
 package wsbackend
 
 import (
-	
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,8 +11,16 @@ import (
 const (
 	maxReadLines = 2000
 	maxReadBytes = 50_000
-	maxGrepLines = 500
-	maxGrepBytes = 50_000
+	maxGrepLines = 10_000
+	maxGrepBytes = 1_000_000
+)
+
+// MaxBashBytes / MaxBashLines cap a single bash tool result (stdout+stderr
+// combined). Oversized output is truncated to head+tail and the process is
+// killed so a runaway command cannot flood the event bus or leave orphans.
+const (
+	MaxBashBytes = 20 * 1024
+	MaxBashLines = 2000
 )
 
 // FormatRead formats file contents with line numbering. The backend
@@ -59,21 +66,24 @@ func FormatRead(path, content string, args map[string]any) string {
 }
 
 // FormatBash formats a command result (exit code, stdout, stderr) for
-// LLM consumption.
-func FormatBash(stdout, stderr string, exitCode int) string {
+// LLM consumption. When the result was truncated, a guidance note is
+// appended so the model knows how to narrow the output.
+func FormatBash(r BashResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Exit code: %d\n", exitCode)
-	if stdout != "" {
-		b.WriteString("STDOUT:\n")
-		b.WriteString(strings.TrimRight(stdout, "\n"))
-		b.WriteString("\n")
+	fmt.Fprintf(&b, "Exit code: %d", r.ExitCode)
+	if r.Stdout != "" {
+		b.WriteString("\nSTDOUT:\n")
+		b.WriteString(strings.TrimRight(r.Stdout, "\n"))
 	}
-	if stderr != "" {
-		b.WriteString("STDERR:\n")
-		b.WriteString(strings.TrimRight(stderr, "\n"))
-		b.WriteString("\n")
+	if r.Stderr != "" {
+		b.WriteString("\nSTDERR:\n")
+		b.WriteString(strings.TrimRight(r.Stderr, "\n"))
 	}
-	return strings.TrimRight(b.String(), "\n")
+	if r.Truncated {
+		fmt.Fprintf(&b, "\n[Output truncated: total %d bytes. "+
+			"Use head/tail/grep/filter to narrow output, or redirect to file then use read_file.]", r.TotalBytes)
+	}
+	return b.String()
 }
 
 // FormatLs formats a directory listing with [dir] / [file] tags and a
@@ -104,14 +114,14 @@ func NormalizeQuotes(s string) string {
 }
 
 var quoteMap = strings.NewReplacer(
-	"\u201c", `"`,  // "
-	"\u201d", `"`,  // "
-	"\u2018", "'",  // '
-	"\u2019", "'",  // '
+	"\u201c", `"`, // "
+	"\u201d", `"`, // "
+	"\u2018", "'", // '
+	"\u2019", "'", // '
 	"\u2013", "--", // –
 	"\u2014", "--", // —
-	"\u00ab", `"`,  // «
-	"\u00bb", `"`,  // »
+	"\u00ab", `"`, // «
+	"\u00bb", `"`, // »
 )
 
 // ShellQuote wraps a string in single quotes for safe shell usage.
@@ -172,6 +182,7 @@ func GetIntArg(args map[string]any, key string, defaultVal int) int {
 	}
 	return defaultVal
 }
+
 // resolvePath cleans and absolutises a path, then checks that it stays
 // within rootDir. Returns the resolved path or an error.
 // expandHome expands a leading ~ in path to the user's home directory.

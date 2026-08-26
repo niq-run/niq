@@ -41,21 +41,36 @@ type DirLister interface {
 	List(ctx context.Context, path string) ([]DirEntry, error)
 }
 
+// BashLimits caps a single command execution. Zero values mean unlimited.
+// MaxBytes/MaxLines apply to stdout+stderr combined; when either is exceeded
+// the process group is killed and the captured output is truncated.
+type BashLimits struct {
+	MaxBytes int
+	MaxLines int
+}
+
 // BashResult holds the structured output of a bash command.
 type BashResult struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+
+	// Truncated reports whether the output exceeded the call's limits: the
+	// process group was killed and the captured streams are head+tail slices
+	// of what was produced (the middle omitted, marked inline).
+	Truncated  bool
+	TotalBytes int
+	TotalLines int
 }
 
 // BashOperator provides command execution.
 type BashOperator interface {
-	Bash(ctx context.Context, command, cwd string) (BashResult, error)
+	Bash(ctx context.Context, command, cwd string, limits BashLimits) (BashResult, error)
 
 	// BashStream executes a command and calls onLine for each output
 	// line during execution. Backends may throttle the callback rate.
-	// When onLine is nil, falls back to synchronous collection.
-	BashStream(ctx context.Context, command, cwd string, onLine func(line string)) (BashResult, error)
+	// When onLine is nil, behaves identically to Bash.
+	BashStream(ctx context.Context, command, cwd string, onLine func(line string), limits BashLimits) (BashResult, error)
 }
 
 // GrepOperator provides recursive regex pattern search. Backends

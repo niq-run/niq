@@ -29,15 +29,25 @@ type FileOperator interface {
     Edit(ctx context.Context, path, oldStr, newStr string) error
 }
 
-// BashOperator — shell command execution
+// BashOperator — shell command execution, capped by BashLimits
 type BashOperator interface {
-    Bash(ctx context.Context, command, cwd string) (BashResult, error)
+    Bash(ctx context.Context, command, cwd string, limits BashLimits) (BashResult, error)
+    BashStream(ctx context.Context, command, cwd string, onLine func(line string), limits BashLimits) (BashResult, error)
+}
+
+type BashLimits struct {
+    MaxBytes int // combined stdout+stderr byte cap; 0 = unlimited
+    MaxLines int // combined line cap; 0 = unlimited
 }
 
 type BashResult struct {
     Stdout   string
     Stderr   string
     ExitCode int
+
+    Truncated  bool // output exceeded limits; streams are head+tail slices
+    TotalBytes int
+    TotalLines int
 }
 ```
 

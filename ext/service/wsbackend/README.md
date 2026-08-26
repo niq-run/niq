@@ -36,7 +36,7 @@ Also defines `CommandResult` and `WithOnUpdate` / `OnUpdate` (streaming callback
 - **per-file mutex**: Write and Edit on the same file are serialised; different files proceed concurrently
 - **path safety**: `resolvePath` prevents `../` and symlink escapes from the root directory
 - **fuzzy fallback**: when an Edit `old_string` is not found, the backend retries with Unicode quote normalisation (curly quotes → straight, em-dashes → `--`)
-- **streaming bash**: `BashStream` reads from stdout/stderr pipes line-by-line, batching callbacks at most once per 5 lines or 500ms
+- **bounded streaming bash**: `BashStream`/`Bash` run each command in its own process group, capture output through a head+tail bounded buffer (never the full stream), and kill the whole group when the combined output exceeds `BashLimits` (bytes/lines) or the context is cancelled. Oversized output is truncated to head+tail with the omitted middle marked inline.
 
 ### helper.go — pure utilities
 
@@ -45,7 +45,7 @@ Zero-dependency functions shared by `embedded.go` and the workspace worker:
 | Function | Purpose |
 |---|---|
 | `FormatRead` | line numbering + offset/limit pagination + truncation |
-| `FormatBash` | exit code + stdout + stderr formatting |
+| `FormatBash` | exit code + stdout/stderr formatting + truncation guidance note |
 | `FormatLs` | `[dir]` / `[file]` structured summary |
 | `NormalizeQuotes` | Unicode quotes → ASCII (fuzzy edit fallback) |
 | `ShellQuote` | safe shell argument quoting |

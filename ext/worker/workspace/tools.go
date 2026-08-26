@@ -14,6 +14,10 @@ import (
 // buildHandlers probes the backend's low-level interfaces and assembles
 // tool handlers using backend helper functions. No ToolProvider — the
 // worker checks what the backend can do and registers accordingly.
+// maxBashTimeoutSec is the global hard cap on the bash tool's timeout
+// argument: no caller can run a command longer than this, whatever they pass.
+const maxBashTimeoutSec = 300 // 5 minutes
+
 func (w *WorkspaceWorker) buildHandlers() {
 	m := make(map[string]worker.ToolFunc)
 
@@ -82,6 +86,9 @@ func (w *WorkspaceWorker) buildHandlers() {
 			cwd, _ := args["cwd"].(string)
 
 			timeoutSec := backend.GetIntArg(args, "timeout", 0)
+			if timeoutSec > maxBashTimeoutSec {
+				timeoutSec = maxBashTimeoutSec
+			}
 			if timeoutSec > 0 {
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
@@ -91,16 +98,17 @@ func (w *WorkspaceWorker) buildHandlers() {
 			var result backend.BashResult
 			var err error
 
+			limits := backend.BashLimits{MaxBytes: backend.MaxBashBytes, MaxLines: backend.MaxBashLines}
 			onUpdate := backend.OnUpdate(ctx)
 			if onUpdate != nil {
-				result, err = bo.BashStream(ctx, command, cwd, onUpdate)
+				result, err = bo.BashStream(ctx, command, cwd, onUpdate, limits)
 			} else {
-				result, err = bo.Bash(ctx, command, cwd)
+				result, err = bo.Bash(ctx, command, cwd, limits)
 			}
 			if err != nil {
 				return "", err
 			}
-			return backend.FormatBash(result.Stdout, result.Stderr, result.ExitCode), nil
+			return backend.FormatBash(result), nil
 		}
 	}
 
@@ -274,13 +282,13 @@ func (w *WorkspaceWorker) publishReady() {
 	if _, ok := w.handlers["bash"]; ok {
 		ts = append(ts, map[string]any{
 			"name":        "bash",
-			"description": "Run a shell command within the workspace root directory. Returns exit code, stdout, and stderr. Supports optional timeout.",
+			"description": "Run a shell command within the workspace root directory. Returns exit code, stdout, and stderr. Output larger than 20KB is truncated to its head and tail. Supports optional timeout.",
 			"parameters": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"command": map[string]any{"type": "string", "description": "The shell command to execute."},
 					"cwd":     map[string]any{"type": "string", "description": "Working directory relative to workspace root."},
-					"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional)."},
+					"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional, capped at 300)."},
 				},
 				"required": []any{"command"},
 			},
