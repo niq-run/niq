@@ -94,42 +94,42 @@ func TestProviderConfigPathOverride(t *testing.T) {
 	}
 }
 
-// TestMigrateLegacy verifies a pre-common-layout provider.json at ~/.niq is
-// copied into the common layout on first Load (preserving existing keys) and
-// that the migration is idempotent / does not overwrite a newer common file.
-func TestMigrateLegacy(t *testing.T) {
-	// Isolate HOME so we never touch a real ~/.niq.
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("NIQ_PROVIDER_CONFIG", "")
+// TestEnsureExampleAndConfigured verifies the example skeleton is seeded only
+// when missing (never overwriting a user config) and that Configured stays
+// false for the empty example but true once a provider has an api_key.
+func TestEnsureExampleAndConfigured(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "provider.json")
+	t.Setenv("NIQ_PROVIDER_CONFIG", path)
 
-	legacy := filepath.Join(home, ".niq", "provider.json")
-	if err := os.MkdirAll(filepath.Dir(legacy), 0755); err != nil {
-		t.Fatal(err)
+	if Configured() {
+		t.Fatal("Configured should be false before EnsureExample")
 	}
-	if err := os.WriteFile(legacy, []byte(`{"active":"legacy","providers":[]}`), 0644); err != nil {
-		t.Fatal(err)
+	if err := EnsureExample(); err != nil {
+		t.Fatalf("EnsureExample: %v", err)
 	}
-
-	cfg, err := Load()
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("example file missing: %v", err)
 	}
-	if cfg.Active != "legacy" {
-		t.Fatalf("Active = %q, want legacy", cfg.Active)
+	if !strings.Contains(string(raw), "api_key") {
+		t.Fatalf("example file lacks provider skeleton: %s", raw)
 	}
-	// The common-layout file should now exist and match the legacy content.
-	dest := Path()
-	raw, err := os.ReadFile(dest)
-	if err != nil {
-		t.Fatalf("migrated file missing: %v", err)
-	}
-	if !strings.Contains(string(raw), `"legacy"`) {
-		t.Fatalf("migrated file does not carry legacy data: %s", raw)
+	if Configured() {
+		t.Fatal("Configured should be false for the empty example")
 	}
 
-	// Second Load must not touch the (now existing) common file.
-	if _, err := os.Stat(dest); err != nil {
-		t.Fatalf("common file should still exist: %v", err)
+	// EnsureExample must not overwrite an existing config.
+	if err := Write(&Config{Providers: []Provider{{Name: "real", Type: "deepseek", APIKey: "sk-x"}}}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := EnsureExample(); err != nil {
+		t.Fatalf("EnsureExample on existing: %v", err)
+	}
+	if !Configured() {
+		t.Fatal("Configured should be true with a real api_key")
+	}
+	raw2, _ := os.ReadFile(path)
+	if !strings.Contains(string(raw2), "sk-x") {
+		t.Fatalf("EnsureExample clobbered user config: %s", raw2)
 	}
 }

@@ -38,15 +38,19 @@ type workerEntry struct {
 // or subscriptions — it only knows about worker.SpawnSpec, ManagedWorker and
 // lifecycle operations.
 type WorkerService struct {
-	entries  []workerEntry
-	builders map[string]Builder
-	store    WorkerStore // optional; nil disables persistence
-	mu       sync.Mutex
+	entries   []workerEntry
+	builders  map[string]Builder
+	store     WorkerStore     // optional; nil disables persistence
+	protected map[string]bool // essential worker ids: cannot be suspended/destroyed
+	mu        sync.Mutex
 }
 
 // New creates an empty WorkerService.
 func New() *WorkerService {
-	return &WorkerService{builders: make(map[string]Builder)}
+	return &WorkerService{
+		builders:  make(map[string]Builder),
+		protected: map[string]bool{},
+	}
 }
 
 // SetStore attaches a persistence backend. May be nil to disable persistence.
@@ -181,6 +185,10 @@ func (s *WorkerService) RestoreAndRun(ctx context.Context, cfg worker.WorkerConf
 // definition are retained so it can be resumed. no-op if already suspended.
 func (s *WorkerService) SuspendWorker(id string) error {
 	s.mu.Lock()
+	if s.protected[id] {
+		s.mu.Unlock()
+		return fmt.Errorf("workerhost: worker %s is protected and cannot be suspended", id)
+	}
 	e := s.findLocked(id)
 	if e == nil {
 		s.mu.Unlock()
@@ -273,6 +281,10 @@ func (s *WorkerService) ResumeWorker(ctx context.Context, id string) error {
 // persisted store. The worker's identity remains registered on the bus.
 func (s *WorkerService) DestroyWorker(id string) error {
 	s.mu.Lock()
+	if s.protected[id] {
+		s.mu.Unlock()
+		return fmt.Errorf("workerhost: worker %s is protected and cannot be destroyed", id)
+	}
 	for i, e := range s.entries {
 		if e.spec.ID() == id {
 			if e.worker != nil {
@@ -392,8 +404,10 @@ func (s *WorkerService) LoadAllWorkers() ([]WorkerRecord, error) {
 
 // RestoreSuspended re-materializes a persisted worker as suspended — it builds
 // the SpawnSpec via the registered builder but does not connect or start it.
+// The snapshot from the persisted record is retained on the entry so a later
+// ResumeWorker replays it (without it, a resumed worker would start empty).
 // The worker is available for a later manual ResumeWorker.
-func (s *WorkerService) RestoreSuspended(cfg worker.WorkerConfig) error {
+func (s *WorkerService) RestoreSuspended(cfg worker.WorkerConfig, snapshot []byte) error {
 	s.mu.Lock()
 	b, ok := s.builders[cfg.Type]
 	s.mu.Unlock()
@@ -411,11 +425,94 @@ func (s *WorkerService) RestoreSuspended(cfg worker.WorkerConfig) error {
 		return nil
 	}
 	s.entries = append(s.entries, workerEntry{
-		spec:  spec,
-		typ:   spec.Type(),
-		state: worker.StateSuspended,
+		spec:     spec,
+		typ:      spec.Type(),
+		state:    worker.StateSuspended,
+		snapshot: snapshot,
 	})
 	log.Printf("[workerhost] restored suspended worker %s (type=%s)", spec.ID(), spec.Type())
+	return nil
+}
+
+// RecoverOptions parameterizes RecoverAll: which workers must exist and run,
+// and which must be suspended regardless of their persisted state.
+type RecoverOptions struct {
+	// Essential workers must exist and run: created fresh when absent from the
+	// store, restored to running even when persisted suspended. Their ids are
+	// protected — SuspendWorker and DestroyWorker refuse them.
+	Essential []worker.WorkerConfig
+	// Suspend lists ids that must be suspended regardless of persisted state
+	// (e.g. the webui worker when the webui is not started). Ignored for
+	// Essential workers.
+	Suspend []string
+}
+
+// RecoverAll restores the whole worker set from the store: every persisted
+// worker is re-materialized per its state (running → restore+run, suspended →
+// suspended), then the Essential/Suspend overrides are applied. It is the
+// single startup entry point — the assembly layer only boots the service.
+func (s *WorkerService) RecoverAll(ctx context.Context, opts RecoverOptions) error {
+	recs, err := s.LoadAllWorkers()
+	if err != nil {
+		return fmt.Errorf("workerhost: load all: %w", err)
+	}
+	byID := map[string]WorkerRecord{}
+	for _, rec := range recs {
+		byID[rec.ID] = rec
+	}
+
+	// Essential ids are protected from suspend/destroy.
+	essentialIDs := map[string]bool{}
+	for _, cfg := range opts.Essential {
+		essentialIDs[cfg.ID] = true
+	}
+	s.mu.Lock()
+	s.protected = essentialIDs
+	s.mu.Unlock()
+
+	suspended := map[string]bool{}
+	for _, id := range opts.Suspend {
+		suspended[id] = true
+	}
+
+	restored := map[string]bool{}
+	restoreOne := func(id string, cfg worker.WorkerConfig, rec WorkerRecord, forceRun bool) error {
+		restored[id] = true
+		if !forceRun && suspended[id] {
+			return s.RestoreSuspended(cfg, rec.Snapshot)
+		}
+		if forceRun || rec.State == worker.StateRunning {
+			if len(rec.Snapshot) > 0 {
+				return s.RestoreAndRun(ctx, cfg, rec.Snapshot)
+			}
+			return s.CreateWorker(ctx, cfg)
+		}
+		return s.RestoreSuspended(cfg, rec.Snapshot)
+	}
+
+	for _, cfg := range opts.Essential {
+		rec, ok := byID[cfg.ID]
+		if !ok {
+			if err := s.CreateWorker(ctx, cfg); err != nil {
+				return fmt.Errorf("workerhost: recover essential %q: %w", cfg.ID, err)
+			}
+			restored[cfg.ID] = true
+			continue
+		}
+		if err := restoreOne(cfg.ID, cfg, rec, true); err != nil {
+			return fmt.Errorf("workerhost: recover essential %q: %w", cfg.ID, err)
+		}
+	}
+
+	for id, rec := range byID {
+		if restored[id] {
+			continue
+		}
+		cfg := worker.WorkerConfig{ID: rec.ID, Type: rec.Type, Params: rec.Params}
+		if err := restoreOne(id, cfg, rec, false); err != nil {
+			log.Printf("[workerhost] recover worker %s: %v", id, err)
+		}
+	}
 	return nil
 }
 

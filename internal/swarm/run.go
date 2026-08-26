@@ -63,13 +63,13 @@ func RunSwarm(opts RunOptions) error {
 	if opts.StateDir == "" {
 		opts.StateDir = filepath.Join(homeDir, ".niq", "state", "workers")
 	}
-
-	var cfgs []worker.WorkerConfig
-	for _, wc := range cfg.Workers {
-		cfgs = append(cfgs, worker.WorkerConfig{ID: wc.ID, Type: wc.Type, Params: workerConfigParams(wc)})
+	// Seed the declared workers' authoritative config.json into the store so
+	// RecoverAll can create them on first run (workers/ dir is the truth).
+	if err := seedStoreConfigs(opts.StateDir, cfg.Workers); err != nil {
+		return fmt.Errorf("swarm: seed workers: %w", err)
 	}
 
-	return runAssembly(cfgs, assemblyOptions{
+	return runAssembly(assemblyOptions{
 		IDDir:        filepath.Join(homeDir, ".niq", "id"),
 		StateDir:     opts.StateDir,
 		ProgramsRoot: opts.ProgramsRoot,
@@ -151,37 +151,12 @@ func RunProject(opts ProjectRunOptions) error {
 		}
 	}
 
-	// New flat layout: state/ is gone, workers/ and events.db live directly under
-	// the project dir. Migrate any legacy state/ directory in place first, then
-	// converge to the config.json-authoritative layout.
-	if err := MigrateProjectLayout(opts.ProjectID); err != nil {
-		log.Printf("[project %s] migrate layout: %v", opts.ProjectID, err)
-	}
-	if err := MigrateConfigAuthority(opts.ProjectID); err != nil {
-		log.Printf("[project %s] converge config: %v", opts.ProjectID, err)
-	}
-	// Reload: project.json workers are now metadata-only.
-	if p, err = LoadProject(opts.ProjectID); err != nil {
-		return err
-	}
-
 	// The persisted ports are authoritative: kill any holder so the project binds
 	// its recorded address (no fallback-jumping), then record our own pid.
 	freeProjectPorts(busAddr, webUIAddr)
 	_ = os.WriteFile(filepath.Join(projDir, "run.pid"), []byte(strconv.Itoa(os.Getpid())), 0644)
 
-	// Build the authoritative per-worker configs (from each config.json).
-	var cfgs []worker.WorkerConfig
-	for _, pw := range p.Workers {
-		if cfg, ok := readWorkerConfig(projDir, pw.ID); ok {
-			cfgs = append(cfgs, cfg)
-			continue
-		}
-		// No authoritative config yet (rare post-seed): bare declaration.
-		cfgs = append(cfgs, worker.WorkerConfig{ID: pw.ID, Type: pw.Type, Params: map[string]any{}})
-	}
-
-	return runAssembly(cfgs, assemblyOptions{
+	return runAssembly(assemblyOptions{
 		IDDir:        filepath.Join(projDir, "id"),
 		StateDir:     filepath.Join(projDir, "workers"),
 		ProgramsRoot: filepath.Join(projDir, "programs"),
@@ -215,10 +190,15 @@ type assemblyOptions struct {
 	EventsDB     string // SQLite event store path (empty = in-memory)
 }
 
-// runAssembly is the shared core: build the bus, host the workers from cfg, and
-// (optionally) expose an HTTP transport bus and a WebUI. Used by RunSwarm
-// (control layout) and RunProject (per-project layout).
-func runAssembly(cfgs []worker.WorkerConfig, opts assemblyOptions) error {
+// webuiHIWID is the swarm-owned hiw worker that drives the WebUI. It is
+// ensured (created + run + protected) only when the WebUI is started; when the
+// WebUI is off, an existing webui-hiw is suspended.
+const webuiHIWID = "webui-hiw"
+
+// runAssembly is the shared core: build the bus, host the workers from the
+// persisted store, and (optionally) expose an HTTP transport bus and a WebUI.
+// Used by RunSwarm (control layout) and RunProject (per-project layout).
+func runAssembly(opts assemblyOptions) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -263,7 +243,7 @@ func runAssembly(cfgs []worker.WorkerConfig, opts assemblyOptions) error {
 
 	// WorkerService: control-plane lifecycle manager + persistence store.
 	workerSvc := workerhost.New()
-	store, err := workerhost.NewFileWorkerStore(opts.StateDir)
+	store, err := NewFileWorkerStore(opts.StateDir)
 	if err != nil {
 		return fmt.Errorf("swarm: create worker store: %w", err)
 	}
@@ -301,50 +281,29 @@ func runAssembly(cfgs []worker.WorkerConfig, opts assemblyOptions) error {
 	}
 	RegisterBuilders(buildCtx, workerSvc)
 
-	// Create workers. Recovery is persisted-authoritative: a declared worker
-	// with a persisted snapshot is restored from that snapshot (params + state)
-	// rather than rebuilt fresh, so an existing project resumes exactly where it
-	// left off. A declared worker with no persisted state is created fresh from
-	// its definition (first run / new worker).
-	var hiwID string
-	declared := map[string]bool{}
-	recByID := map[string]workerhost.WorkerRecord{}
-	if recs, err := workerSvc.LoadAllWorkers(); err == nil {
-		for _, rec := range recs {
-			recByID[rec.ID] = rec
-		}
-	}
-	for _, wc := range cfgs {
-		declared[wc.ID] = true
-		if rec, ok := recByID[wc.ID]; ok && len(rec.Snapshot) > 0 {
-			log.Printf("[swarm] recovering worker: %s (type=%s) from persisted state", wc.ID, wc.Type)
-			if err := workerSvc.RestoreAndRun(ctx,
-				worker.WorkerConfig{ID: rec.ID, Type: rec.Type, Params: rec.Params}, rec.Snapshot); err != nil {
-				log.Printf("[swarm] restore worker %s: %v; falling back to fresh create", wc.ID, err)
-				if err := workerSvc.CreateWorker(ctx, wc); err != nil {
-					return fmt.Errorf("swarm: create worker %q: %w", wc.ID, err)
-				}
-			}
-		} else {
-			log.Printf("[swarm] creating worker: %s (type=%s)", wc.ID, wc.Type)
-			if err := workerSvc.CreateWorker(ctx, wc); err != nil {
-				return fmt.Errorf("swarm: create worker %q: %w", wc.ID, err)
-			}
-		}
-		if wc.Type == "hiw" {
-			hiwID = wc.ID
-		}
+	// Gate startup on an LLM provider when any persisted worker needs one.
+	if err := ensureLLMConfigured(workerSvc); err != nil {
+		return err
 	}
 
-	// Bootstrap persisted spawned workers not declared in config, as suspended.
-	if err := bootstrapPersisted(buildCtx, workerSvc, cfgs); err != nil {
-		log.Printf("[swarm] worker bootstrap: %v", err)
+	// Recover the whole worker set from the store. webui-hiw is only ensured
+	// when the WebUI runs; when it does not, an existing webui-hiw is suspended.
+	webUIOn := opts.WebUIAddr != ""
+	var essential []worker.WorkerConfig
+	var suspend []string
+	if webUIOn {
+		essential = []worker.WorkerConfig{{ID: webuiHIWID, Type: "hiw"}}
+	} else {
+		suspend = []string{webuiHIWID}
+	}
+	if err := workerSvc.RecoverAll(ctx, workerhost.RecoverOptions{Essential: essential, Suspend: suspend}); err != nil {
+		return fmt.Errorf("swarm: recover workers: %w", err)
 	}
 
 	// Optional WebUI, served on the project/control address.
 	var webUIAddr string
-	if opts.WebUIAddr != "" && hiwID != "" {
-		if h, ok := workerSvc.Worker(hiwID); ok {
+	if opts.WebUIAddr != "" {
+		if h, ok := workerSvc.Worker(webuiHIWID); ok {
 			if hiwWorker, ok := h.(*hiw.Worker); ok {
 				startWebUI := func(addr string) (string, error) {
 					s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, addr, false)
@@ -550,30 +509,22 @@ func openBrowser(url string) error {
 	return nil
 }
 
-// bootstrapPersisted re-materializes spawned workers persisted by a previous
-// run that are not declared in the current config, leaving them suspended.
-func bootstrapPersisted(ctx BuildContext, svc *workerhost.WorkerService, cfgs []worker.WorkerConfig) error {
-	recs, err := svc.LoadAllWorkers()
-	if err != nil {
-		return err
-	}
-	declared := map[string]bool{}
-	for _, wc := range cfgs {
-		declared[wc.ID] = true
-	}
-	for _, rec := range recs {
-		if declared[rec.ID] {
+// seedStoreConfigs writes each declared worker's authoritative config.json into
+// a worker store root (never overwriting an existing config), so a first run of
+// the legacy control swarm can create the declared workers via RecoverAll.
+func seedStoreConfigs(root string, workers []WorkerConfig) error {
+	for _, wc := range workers {
+		dir := filepath.Join(root, sanitizeID(wc.ID))
+		path := filepath.Join(dir, "config.json")
+		if _, err := os.Stat(path); err == nil {
 			continue
 		}
-		if svc.HasWorker(rec.ID) {
-			continue
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
 		}
-		if err := svc.RestoreSuspended(worker.WorkerConfig{
-			ID:     rec.ID,
-			Type:   rec.Type,
-			Params: rec.Params,
-		}); err != nil {
-			log.Printf("[swarm] restore worker %s: %v", rec.ID, err)
+		cfg := worker.WorkerConfig{ID: wc.ID, Type: wc.Type, Params: workerConfigParams(wc)}
+		if err := writeWorkerConfig(path, cfg); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -5,11 +5,41 @@ package swarm
 
 import (
 	"fmt"
+	"log"
 
 	llm "github.com/54c1/niq/core/llm"
 	"github.com/54c1/niq/pkg/providercfg"
 	"github.com/54c1/niq/pkg/reason"
+	"github.com/54c1/niq/pkg/service/workerhost"
 )
+
+// ensureLLMConfigured gates swarm startup on an LLM provider being configured
+// when the persisted worker set includes a reason worker. On a missing or
+// empty config it seeds the example provider.json and returns an actionable
+// error, so the swarm exits before any worker starts.
+func ensureLLMConfigured(svc *workerhost.WorkerService) error {
+	recs, err := svc.LoadAllWorkers()
+	if err != nil {
+		return err
+	}
+	needsLLM := false
+	for _, rec := range recs {
+		if rec.Type == "reason" {
+			needsLLM = true
+			break
+		}
+	}
+	if !needsLLM {
+		return nil
+	}
+	if providercfg.Configured() {
+		return nil
+	}
+	if err := providercfg.EnsureExample(); err != nil {
+		return fmt.Errorf("swarm: seed provider example: %w", err)
+	}
+	return fmt.Errorf("no LLM provider configured: edit %s and re-run", providercfg.Path())
+}
 
 // swarmProviderSources exposes every provider configured in provider.json. The
 // initial provider honors any explicit spawn-time selection (the legacy
@@ -44,8 +74,11 @@ func (s *swarmProviderSources) Default() llm.LLMProvider {
 	}
 	p, ok := providercfg.Default()
 	if !ok {
+		log.Printf("[swarm] provider sources: no default provider configured (provider.json missing or empty)")
 		return nil
 	}
+	log.Printf("[swarm] resolved default provider: name=%s type=%s model=%s base_url=%s",
+		p.Name, p.Type, p.ResolveDefaultModel(), p.BaseURL)
 	return providercfg.Build(p)
 }
 
@@ -55,11 +88,18 @@ func (s *swarmProviderSources) Default() llm.LLMProvider {
 func (s *swarmProviderSources) Build(name, model string) (llm.LLMProvider, error) {
 	p, ok := providercfg.Find(name)
 	if !ok {
+		log.Printf("[swarm] provider switch failed: unknown provider %q", name)
 		return nil, fmt.Errorf("swarm: unknown provider %q", name)
 	}
 	if model != "" && !modelContains(p.ListModels(), model) {
 		return nil, fmt.Errorf("swarm: model %q not available for provider %q", model, name)
 	}
+	effModel := model
+	if effModel == "" {
+		effModel = p.ResolveDefaultModel()
+	}
+	log.Printf("[swarm] building provider: name=%s type=%s model=%s base_url=%s",
+		name, p.Type, effModel, p.BaseURL)
 	return providercfg.BuildWithOverrides(p, "", "", model), nil
 }
 

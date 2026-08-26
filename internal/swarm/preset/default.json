@@ -1,6 +1,5 @@
 {
   "workers": [
-    { "type": "hiw", "id": "default-hiw", "subscriptions": ["*"] },
     {
       "type": "reason",
       "id": "niq",
@@ -21,7 +20,6 @@
     },
     { "type": "timer", "id": "timer" },
     { "type": "host", "id": "host" },
-    { "type": "workspace", "id": "workspace", "root_dir": "/tmp/niq-test", "subscriptions": ["tool.requested"] },
     { "type": "program", "id": "program", "subscriptions": ["tool.requested", "worker.discover"] }
   ]
 }

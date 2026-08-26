@@ -36,8 +36,25 @@ func TestCreateLoadListProject(t *testing.T) {
 	}
 	if p, err := LoadProject("alpha"); err != nil {
 		t.Fatalf("LoadProject: %v", err)
-	} else if len(p.Workers) != 2 {
-		t.Fatalf("workers = %d, want 2", len(p.Workers))
+	} else if p.ID != "alpha" {
+		t.Fatalf("project = %+v, want id alpha", p)
+	}
+
+	// Each template worker's authoritative config.json is seeded.
+	for _, id := range []string{"default-hiw", "niq"} {
+		cfg, ok := readWorkerConfig(ProjectDir("alpha"), id)
+		if !ok {
+			t.Fatalf("worker %s config.json not seeded", id)
+		}
+		if cfg.Type == "" {
+			t.Fatalf("worker %s config has no type", id)
+		}
+	}
+	// The reason worker's template params (provider/model) carried over.
+	if cfg, ok := readWorkerConfig(ProjectDir("alpha"), "niq"); ok {
+		if cfg.Params["provider"] != "volcan-ark" {
+			t.Fatalf("niq provider = %v, want volcan-ark", cfg.Params["provider"])
+		}
 	}
 
 	// Duplicate create must fail.
@@ -58,19 +75,28 @@ func TestCreateLoadListProject(t *testing.T) {
 	}
 }
 
-func TestSaveProjectMutatesWorkers(t *testing.T) {
+func TestSaveProjectMutatesArchived(t *testing.T) {
 	setupProjectsRoot(t)
 	if _, err := CreateProject("beta", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := LoadProject("beta")
-	p.Workers = append(p.Workers, ProjectWorker{Type: "workspace", ID: "ws"})
+	p.Archived = map[string]bool{"ws": true}
 	if err := SaveProject(p); err != nil {
 		t.Fatal(err)
 	}
 	reloaded, _ := LoadProject("beta")
-	if len(reloaded.Workers) != 3 {
-		t.Fatalf("workers = %d, want 3 after save", len(reloaded.Workers))
+	if !reloaded.Archived["ws"] {
+		t.Fatalf("archived = %+v, want ws=true", reloaded.Archived)
+	}
+
+	// Toggle off through the archiver.
+	arc := projectArchiver{id: "beta"}
+	if err := arc.SetArchived("ws", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := arc.Archived(); len(got) != 0 {
+		t.Fatalf("Archived() = %+v, want empty", got)
 	}
 }
 
@@ -81,11 +107,11 @@ func TestListProjectsEmpty(t *testing.T) {
 	}
 }
 
-func TestSanitizeProjectID(t *testing.T) {
-	if got := sanitizeProjectID("my proj/1"); got != "my_proj_1" {
+func TestSanitizeID(t *testing.T) {
+	if got := sanitizeID("my proj/1"); got != "my_proj_1" {
 		t.Fatalf("sanitize = %q, want my_proj_1", got)
 	}
-	if got := sanitizeProjectID("ok-id_1.x"); got != "ok-id_1.x" {
+	if got := sanitizeID("ok-id_1.x"); got != "ok-id_1.x" {
 		t.Fatalf("sanitize = %q, want ok-id_1.x", got)
 	}
 }

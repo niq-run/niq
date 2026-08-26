@@ -1,16 +1,16 @@
-// Project storage: each project lives under ~/.niq/projects/<id>/ with a
-// project.json carrying the full startup definition (the workers to launch)
-// and the ports it last ran on. project.json is generated from a template on
-// project creation and is the authoritative, continuously-edited definition
-// afterwards — it has no ongoing relationship with the template.
+// Project storage: each project lives under ~/.niq/projects/<id>/. project.json
+// carries the ports it last ran on and the archived-worker set; the worker
+// definitions and lifecycle state live in the workers/ directory
+// (workers/<id>/config.json + state.json) — that directory is the source of
+// truth for which workers exist.
 package swarm
 
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/54c1/niq/core/worker"
@@ -23,23 +23,13 @@ type ProjectPorts struct {
 	WebUI int `json:"webui,omitempty"`
 }
 
-// ProjectWorker is the metadata-only entry project.json carries for a managed
-// worker. The authoritative config lives in workers/<id>/config.json; project.json
-// only records which workers belong to the project and whether they are archived.
-type ProjectWorker struct {
-	Type     string `json:"type"`
-	ID       string `json:"id"`
-	Archived bool   `json:"archived,omitempty"`
-}
-
-// Project is the on-disk definition for one project. Its workers array is
-// metadata only ({type, id, archived}); the real per-worker config is in each
-// worker's config.json under workers/.
+// Project is the on-disk definition for one project. Worker existence and
+// configuration are not listed here — the project's workers/ directory is.
 type Project struct {
 	ID        string          `json:"id"`
 	CreatedAt string          `json:"created_at,omitempty"`
 	Ports     ProjectPorts    `json:"ports,omitempty"`
-	Workers   []ProjectWorker `json:"workers,omitempty"`
+	Archived  map[string]bool `json:"archived,omitempty"`
 }
 
 // ProjectsRoot returns ~/.niq/projects (created lazily on write).
@@ -49,88 +39,14 @@ func ProjectsRoot() string {
 }
 
 // ProjectDir returns the directory for a project id.
-func ProjectDir(id string) string { return filepath.Join(ProjectsRoot(), sanitizeProjectID(id)) }
+func ProjectDir(id string) string { return filepath.Join(ProjectsRoot(), sanitizeID(id)) }
 
 // ProjectPath returns the project.json path for a project id.
 func ProjectPath(id string) string { return filepath.Join(ProjectDir(id), "project.json") }
 
-// MigrateProjectLayout moves a project into the current layout and consolidates
-// the sqlite event files under an event/ dir. Targets:
-//
-//	projects/<id>/ { project.json, id/, programs/, workers/, events/events.db[+-wal,-shm] }
-//
-// It handles both prior layouts: the nested state/ dir (state/workers, state/events.db)
-// and the intermediate flat one (workers/, events.db at the project root).
-// Idempotent and best-effort per file so a partial move never loses data.
-func MigrateProjectLayout(id string) error {
-	projDir := ProjectDir(id)
-	eventsDir := filepath.Join(projDir, "events")
-
-	// A previously-created singular event/ dir → events/.
-	singularEvent := filepath.Join(projDir, "event")
-	if _, err := os.Stat(singularEvent); err == nil {
-		if _, err := os.Stat(eventsDir); os.IsNotExist(err) {
-			if err := os.Rename(singularEvent, eventsDir); err != nil {
-				log.Printf("[migrate] event -> events: %v", err)
-			}
-		}
-	}
-
-	// 1) state/ -> workers/ (nested layout)
-	stateDir := filepath.Join(projDir, "state")
-	if _, err := os.Stat(stateDir); err == nil {
-		oldWorkers := filepath.Join(stateDir, "workers")
-		newWorkers := filepath.Join(projDir, "workers")
-		if _, err := os.Stat(oldWorkers); err == nil {
-			if _, err := os.Stat(newWorkers); os.IsNotExist(err) {
-				if err := os.Rename(oldWorkers, newWorkers); err != nil {
-					log.Printf("[migrate] move workers: %v", err)
-				}
-			} else {
-				// workers/ already exists: the old state/workers is a stale leftover
-				// (no config, old snapshots). Drop it — merging could clobber the
-				// current worker state with old data.
-				_ = os.RemoveAll(oldWorkers)
-			}
-		}
-		// state/events.db* -> event/
-		moveSQLiteFiles(stateDir, eventsDir)
-		// Drop the now-empty state dir.
-		if ents, err := os.ReadDir(stateDir); err == nil && len(ents) == 0 {
-			_ = os.Remove(stateDir)
-		}
-	}
-
-	// 2) events.db* at the project root -> event/ (intermediate flat layout)
-	moveSQLiteFiles(projDir, eventsDir)
-
-	return nil
-}
-
-// moveSQLiteFiles moves events.db and its WAL/SHM sidecars from src into dst,
-// creating dst and skipping any file that already exists at dst.
-func moveSQLiteFiles(src, dst string) {
-	if _, err := os.Stat(src); err != nil {
-		return
-	}
-	_ = os.MkdirAll(dst, 0755)
-	for _, suffix := range []string{"events.db", "events.db-wal", "events.db-shm"} {
-		from := filepath.Join(src, suffix)
-		to := filepath.Join(dst, suffix)
-		if _, err := os.Stat(from); os.IsNotExist(err) {
-			continue
-		}
-		if _, err := os.Stat(to); err == nil {
-			continue
-		}
-		if err := os.Rename(from, to); err != nil {
-			log.Printf("[migrate] move %s -> %s: %v", suffix, dst, err)
-		}
-	}
-}
-
-// CreateProject creates a project directory + project.json from a template's
-// worker definitions. It fails if a project with the same id already exists.
+// CreateProject creates a project directory + project.json and seeds each
+// template worker's authoritative config.json into workers/. It fails if a
+// project with the same id already exists.
 func CreateProject(id string, template *SwarmConfig) (*Project, error) {
 	if id == "" {
 		return nil, fmt.Errorf("project: id is required")
@@ -142,18 +58,14 @@ func CreateProject(id string, template *SwarmConfig) (*Project, error) {
 	if err := os.MkdirAll(ProjectDir(id), 0755); err != nil {
 		return nil, fmt.Errorf("project: mkdir: %w", err)
 	}
-	// project.json carries metadata only; each worker's authoritative config is
-	// seeded to workers/<id>/config.json from the (template) full definition.
-	var meta []ProjectWorker
 	if template != nil {
 		for _, wc := range template.Workers {
-			meta = append(meta, ProjectWorker{Type: wc.Type, ID: wc.ID, Archived: wc.Archived})
 			if err := seedWorkerConfig(ProjectDir(id), wc); err != nil {
 				return nil, err
 			}
 		}
 	}
-	p := &Project{ID: id, CreatedAt: time.Now().Format(time.RFC3339), Workers: meta}
+	p := &Project{ID: id, CreatedAt: time.Now().Format(time.RFC3339)}
 	if err := saveProject(p); err != nil {
 		return nil, err
 	}
@@ -162,7 +74,7 @@ func CreateProject(id string, template *SwarmConfig) (*Project, error) {
 
 // workerConfigPath returns the authoritative config.json path for a worker.
 func workerConfigPath(projDir, id string) string {
-	return filepath.Join(projDir, "workers", sanitizeProjectID(id), "config.json")
+	return filepath.Join(projDir, "workers", sanitizeID(id), "config.json")
 }
 
 // seedWorkerConfig writes a worker's authoritative config.json from its full
@@ -200,67 +112,6 @@ func writeWorkerConfig(path string, cfg worker.WorkerConfig) error {
 	raw = append(raw, '\n')
 	return os.WriteFile(path, raw, 0644)
 }
-
-// MigrateConfigAuthority converges a project to the config.json-authoritative
-// layout: seed config.json for any declared worker that lacks one and rewrite
-// project.json's workers to metadata ({type, id, archived}). Idempotent, run on
-// project start.
-func MigrateConfigAuthority(id string) error {
-	projDir := ProjectDir(id)
-	raw, err := os.ReadFile(ProjectPath(id))
-	if err != nil {
-		return err
-	}
-	var legacy struct {
-		Workers []WorkerConfig `json:"workers"`
-	}
-	// Reads whatever is present: full definitions, or already metadata-only.
-	json.Unmarshal(raw, &legacy)
-
-	var meta []ProjectWorker
-	for _, wc := range legacy.Workers {
-		meta = append(meta, ProjectWorker{Type: wc.Type, ID: wc.ID, Archived: wc.Archived})
-		if err := seedWorkerConfig(projDir, wc); err != nil {
-			log.Printf("[migrate] seed %s:%s: %v", id, wc.ID, err)
-		}
-	}
-
-	var p Project
-	json.Unmarshal(raw, &p)
-
-	// Skip writing when nothing actually changed (workers already metadata-only),
-	// so starting a stable project doesn't churn project.json.
-	if sameWorkers(p.Workers, meta) {
-		return nil
-	}
-	p.Workers = meta
-	if sameWorkers(p.Workers, meta) {
-		return nil
-	}
-	p.Workers = meta
-	return saveProject(&p)
-}
-
-// sameWorkers reports whether two worker-metadata lists are equivalent (same set
-// of type/id/archived, order-insensitive).
-func sameWorkers(a, b []ProjectWorker) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	key := func(w ProjectWorker) string { return fmt.Sprintf("%s\x00%s\x00%v", w.Type, w.ID, w.Archived) }
-	set := map[string]bool{}
-	for _, w := range a {
-		set[key(w)] = true
-	}
-	for _, w := range b {
-		if !set[key(w)] {
-			return false
-		}
-	}
-	return true
-}
-
-// sameWorkers reports whether two worker-metadata lists are equivalent (same set\n// of type/id/archived, order-insensitive).\nfunc sameWorkers(a, b []ProjectWorker) bool {\n\tif len(a) != len(b) {\n\t\treturn false\n\t}\n\tkey := func(w ProjectWorker) string { return fmt.Sprintf(\"%s\\x00%s\\x00%v\", w.Type, w.ID, w.Archived) }\n\tset := map[string]bool{}\n\tfor _, w := range a {\n\t\tset[key(w)] = true\n\t}\n\tfor _, w := range b {\n\t\tif !set[key(w)] {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn true\n}"}]
 
 // LoadProject loads a project's definition from its project.json.
 func LoadProject(id string) (*Project, error) {
@@ -321,18 +172,13 @@ func ListProjects() ([]Project, error) {
 		}
 		out = append(out, *p)
 	}
-	// deterministic order by id
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].ID < out[j-1].ID; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
 
 // projectArchiver implements the webui.ArchivedStore backed by a project's
-// project.json worker definitions, so archived-worker state persists and the
-// project WebUI can read/toggle it.
+// project.json archived map, so archived-worker state persists and the project
+// WebUI can read/toggle it.
 type projectArchiver struct {
 	id string
 }
@@ -343,11 +189,12 @@ func (a projectArchiver) Archived() []string {
 		return nil
 	}
 	out := []string{}
-	for _, w := range p.Workers {
-		if w.Archived {
-			out = append(out, w.ID)
+	for id, v := range p.Archived {
+		if v {
+			out = append(out, id)
 		}
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -356,21 +203,18 @@ func (a projectArchiver) SetArchived(id string, v bool) error {
 	if err != nil {
 		return err
 	}
-	found := false
-	for i := range p.Workers {
-		if p.Workers[i].ID == id {
-			p.Workers[i].Archived = v
-			found = true
-			break
-		}
+	if p.Archived == nil {
+		p.Archived = map[string]bool{}
 	}
-	if !found {
-		return fmt.Errorf("worker %q not found in project %q", id, a.id)
+	if v {
+		p.Archived[id] = true
+	} else {
+		delete(p.Archived, id)
 	}
 	return SaveProject(p)
 }
 
-func sanitizeProjectID(id string) string {
+func sanitizeID(id string) string {
 	out := make([]rune, 0, len(id))
 	for _, r := range id {
 		switch {

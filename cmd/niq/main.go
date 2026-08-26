@@ -94,7 +94,7 @@ func runProject(args []string) error {
 			return nil
 		}
 		for _, p := range projects {
-			fmt.Printf("%-24s webui=%d bus=%d workers=%d\n", p.ID, p.Ports.WebUI, p.Ports.Bus, len(p.Workers))
+			fmt.Printf("%-24s webui=%d bus=%d\n", p.ID, p.Ports.WebUI, p.Ports.Bus)
 		}
 		return nil
 
@@ -116,23 +116,10 @@ func runProject(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("created project %q (%d workers) -> %s\n", p.ID, len(p.Workers), path)
+		fmt.Printf("created project %q -> %s\n", p.ID, path)
 		return nil
 
-	case len(args) >= 1 && args[0] == "migrate":
-		id := "default"
-		if len(args) >= 2 {
-			id = args[1]
-		}
-		home, _ := os.UserHomeDir()
-		projDir, err := swarm.MigrateLegacyProject(id, filepath.Join(home, ".niq"))
-		if err != nil {
-			return err
-		}
-		fmt.Printf("migrated legacy swarm into project %q -> %s\n", id, projDir)
-		return nil
-
-	case len(args) >= 2 && args[0] == "run":
+	case len(args) >= 1 && args[0] == "run":
 		id := args[1]
 		busAddr := fs.String("bus", "", "httptrans bus listen address (empty reuses the project's persisted port)")
 		webUIAddr := fs.String("webui", "", "WebUI listen address (empty reuses the project's persisted port)")
@@ -194,7 +181,7 @@ func runSwarm(args []string) error {
 
 	fs := flag.NewFlagSet("niq", flag.ContinueOnError)
 	configPath := fs.String("config", "", "Path to swarm YAML config")
-	preset := fs.String("preset", "", "Built-in preset name (dev, test-headless, etc.)")
+	preset := fs.String("preset", "", "Built-in preset name (default, etc.)")
 	webUIAddr := fs.String("webui", ":19763", "WebUI listen address (e.g. :19763)")
 	programsRoot := fs.String("programs-root", "", "Program storage root directory (default: ~/.niq/programs)")
 	if err := fs.Parse(args); err != nil {

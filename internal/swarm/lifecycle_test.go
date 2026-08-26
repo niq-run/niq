@@ -51,7 +51,7 @@ func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService, strin
 func newServiceWithStore(t *testing.T, storeDir string) *workerhost.WorkerService {
 	t.Helper()
 	svc := workerhost.New()
-	store, err := workerhost.NewFileWorkerStore(storeDir)
+	store, err := NewFileWorkerStore(storeDir)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestSpawnedWorkerSurvivesRestart(t *testing.T) {
 	}
 
 	// RestoreSuspended re-materializes it as suspended (not running).
-	if err := svc2.RestoreSuspended(worker.WorkerConfig{ID: wsID, Type: "workspace", Params: recParams(svc2, wsID)}); err != nil {
+	if err := svc2.RestoreSuspended(worker.WorkerConfig{ID: wsID, Type: "workspace", Params: recParams(svc2, wsID)}, nil); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	if info := workerStatus(svc2, wsID); info.State != worker.StateSuspended {

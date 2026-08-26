@@ -69,10 +69,6 @@ type Config struct {
 	Providers []Provider `json:"providers"`
 }
 
-// legacyProviderPath is the pre-common-layout location the provider config
-// lived at before providers moved under ~/.niq/common/providers.
-const legacyProviderPath = ".niq/provider.json"
-
 // Path returns the provider config path. NIQ_PROVIDER_CONFIG overrides the
 // default ~/.niq/common/providers/provider.json.
 func Path() string {
@@ -83,36 +79,9 @@ func Path() string {
 	return filepath.Join(home, ".niq", "common", "providers", "provider.json")
 }
 
-// migrateLegacy migrates a pre-common-layout provider.json (at ~/.niq/provider.json)
-// into the common layout, but only when the common-layout file does not exist
-// yet, so an existing config (with real keys) is not lost on upgrade. Idempotent.
-func migrateLegacy() {
-	if os.Getenv("NIQ_PROVIDER_CONFIG") != "" {
-		return // explicit override: never migrate
-	}
-	dest := Path()
-	home, _ := os.UserHomeDir()
-	src := filepath.Join(home, legacyProviderPath)
-	if _, err := os.Stat(dest); err == nil {
-		return // new file already present
-	}
-	raw, err := os.ReadFile(src)
-	if os.IsNotExist(err) {
-		return // nothing to migrate
-	}
-	if err != nil {
-		return // best-effort: don't fail config load on a read hiccup
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return
-	}
-	os.WriteFile(dest, raw, 0644)
-}
-
 // Load reads the provider config. A missing file is not an error and returns
 // an empty config.
 func Load() (*Config, error) {
-	migrateLegacy()
 	path := Path()
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -127,6 +96,56 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("providercfg: parse %s: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// exampleJSON is the skeleton provider config written by EnsureExample. The
+// api_key is intentionally empty: the user fills it in before the swarm starts.
+const exampleJSON = `{
+  "active": "deepseek",
+  "providers": [
+    {
+      "name": "deepseek",
+      "type": "deepseek",
+      "api_key": "",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4-flash",
+      "models": ["deepseek-v4-pro", "deepseek-v4-flash"]
+    }
+  ]
+}
+`
+
+// EnsureExample writes the example provider config to Path() when the file is
+// missing. It never overwrites an existing file: once a config exists it is
+// user-maintained.
+func EnsureExample() error {
+	path := Path()
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("providercfg: mkdir: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(exampleJSON), 0644); err != nil {
+		return fmt.Errorf("providercfg: write example %s: %w", path, err)
+	}
+	return nil
+}
+
+// Configured reports whether a usable provider is configured: at least one
+// provider with a non-empty api_key. The example skeleton (empty api_key) does
+// not count.
+func Configured() bool {
+	cfg, err := Load()
+	if err != nil {
+		return false
+	}
+	for _, p := range cfg.Providers {
+		if p.APIKey != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Default returns the active provider, or the first configured provider when
