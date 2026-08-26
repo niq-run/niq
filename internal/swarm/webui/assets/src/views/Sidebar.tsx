@@ -89,7 +89,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       {/* View selector — the three agent views; absent in control mode (no
           project is attached, so talk/events/workers are unavailable) */}
       {mode === 'project' && (<>
-      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '8px 0 16px 0' }} />
+      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '8px -16px 16px' }} />
       <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>View</strong>
       {(Object.keys(VIEW_LABELS) as ViewMode[]).map((v) => (
         <div
@@ -106,7 +106,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           the workers view doesn't leave a stray line. */}
       {view !== 'workers' && (
         <>
-          <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0' }} />
+          <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px -16px' }} />
           <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>Worker Selector</strong>
           {workers.filter(w => (view !== 'talk' || w.type === 'reason') && !archived.has(w.id)).map((w) => {
             const isActive = view === 'talk'
@@ -160,7 +160,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           {/* View Settings — talk view only */}
           {view === 'talk' && (
             <>
-              <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0' }} />
+              <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px -16px' }} />
               <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>View Settings</strong>
               <ToggleRow label="Expand Thinking" on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} />
               <ToggleRow label="Compact Mode" on={viewSettings.compactMode} onToggle={() => onToggleViewSetting('compactMode')} colors={colors} />
@@ -175,7 +175,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       {/* Projects — the 4th category: project + template management. For a
           project instance it is a jump/start hop to other projects; in control
           mode it is the only usable thing. */}
-      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0' }} />
+      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px -16px' }} />
       <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>Projects</strong>
       <div
         onClick={() => onSelectPanel('projects')}

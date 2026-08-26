@@ -768,7 +768,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           }</strong>
         </span>
       </div>
-      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0' }} />
+      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0 0' }} />
     </>
   )
 
