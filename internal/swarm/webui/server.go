@@ -34,8 +34,8 @@ var embeddedAssets embed.FS
 // attached — only project management is available) or project (a specific
 // project is attached — talk/events run against it).
 type ContextInfo struct {
-	Mode       string `json:"mode"`                // "control" | "project"
-	Project    string `json:"project,omitempty"`  // project id in project mode
+	Mode       string `json:"mode"`                  // "control" | "project"
+	Project    string `json:"project,omitempty"`     // project id in project mode
 	ControlURL string `json:"control_url,omitempty"` // control-plane base URL (for project→control jumps)
 }
 
@@ -45,6 +45,23 @@ type ContextInfo struct {
 type ArchivedStore interface {
 	Archived() []string
 	SetArchived(id string, v bool) error
+}
+
+// UnmanagedStatus is a read-only view of an external (unmanaged) worker.
+type UnmanagedStatus struct {
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	State string `json:"state"` // "running" | "stopped"
+	Alive bool   `json:"alive"`
+}
+
+// UnmanagedController controls external (unmanaged) workers. Implemented by
+// the swarm assembly layer; nil disables the endpoints.
+type UnmanagedController interface {
+	Start(id string) error
+	Stop(id string) error
+	Restart(id string) error
+	List() []UnmanagedStatus
 }
 
 // AssetsFS exposes the embedded SPA static assets for reuse by the control server.
@@ -67,6 +84,7 @@ type Server struct {
 	ctxMu    sync.RWMutex
 	context  ContextInfo
 	archived ArchivedStore
+	unmngd   UnmanagedController
 }
 
 // New creates a WebUI Server.
@@ -90,6 +108,11 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// Suspend / resume a host-managed worker (via the host worker's tools).
 	mux.HandleFunc("POST /api/workers/{id}/suspend", s.handleSuspend)
 	mux.HandleFunc("POST /api/workers/{id}/resume", s.handleResume)
+
+	// Start / stop / restart an external (unmanaged) worker.
+	mux.HandleFunc("POST /api/workers/{id}/start", s.handleUnmanagedStart)
+	mux.HandleFunc("POST /api/workers/{id}/stop", s.handleUnmanagedStop)
+	mux.HandleFunc("POST /api/workers/{id}/restart", s.handleUnmanagedRestart)
 
 	// Events pagination: load events before a given anchor.
 	mux.HandleFunc("GET /api/events/before/{id}", s.handleLoadBefore)
@@ -168,6 +191,12 @@ func (s *Server) Start(ctx context.Context) error {
 // SetArchivedStore attaches the project's archived-worker store (nil to disable).
 func (s *Server) SetArchivedStore(as ArchivedStore) {
 	s.archived = as
+}
+
+// SetUnmanagedController attaches the external-worker controller (nil disables
+// the start/stop/restart endpoints).
+func (s *Server) SetUnmanagedController(c UnmanagedController) {
+	s.unmngd = c
 }
 
 // SetContext records the mode context the single SPA should render in. Safe to
@@ -294,7 +323,7 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 
 // WorkerView is the unified view of a worker: its registered identity (from
 // the bus registry), its connection status, and — if host-managed — its
-// lifecycle state.
+// lifecycle state, or if external — its supervision state.
 type WorkerView struct {
 	ID             string               `json:"id"`
 	Type           string               `json:"type"`
@@ -304,6 +333,8 @@ type WorkerView struct {
 	Online         bool                 `json:"online"`
 	Managed        bool                 `json:"managed"`
 	State          string               `json:"state,omitempty"` // "running" | "suspended" (managed only)
+	Unmanaged      bool                 `json:"unmanaged,omitempty"`
+	UnmanagedState string               `json:"unmanaged_state,omitempty"` // "running" | "stopped"
 }
 
 // handleWorkers returns every registered worker identity merged with its
@@ -319,6 +350,13 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		managed[wi.ID] = string(wi.State)
 	}
 
+	unmngd := map[string]UnmanagedStatus{}
+	if s.unmngd != nil {
+		for _, st := range s.unmngd.List() {
+			unmngd[st.ID] = st
+		}
+	}
+
 	var views []WorkerView
 	for _, id := range s.registry.List() {
 		v := WorkerView{ID: id.WorkerID, Type: id.Type, Credential: id.Credential,
@@ -327,6 +365,10 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		if state, ok := managed[id.WorkerID]; ok {
 			v.Managed = true
 			v.State = state
+		}
+		if st, ok := unmngd[id.WorkerID]; ok {
+			v.Unmanaged = true
+			v.UnmanagedState = st.State
 		}
 		views = append(views, v)
 	}
@@ -370,6 +412,44 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 		"arguments": map[string]any{"worker_id": id},
 	})
 	_ = s.hiw.Channel.Send(r.Context(), evt, "host")
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleUnmanagedStart/Stop/Restart control external (unmanaged) workers via
+// the assembly-provided UnmanagedController.
+func (s *Server) handleUnmanagedStart(w http.ResponseWriter, r *http.Request) {
+	if s.unmngd == nil {
+		http.Error(w, "unmanaged control unavailable", 404)
+		return
+	}
+	if err := s.unmngd.Start(r.PathValue("id")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) handleUnmanagedStop(w http.ResponseWriter, r *http.Request) {
+	if s.unmngd == nil {
+		http.Error(w, "unmanaged control unavailable", 404)
+		return
+	}
+	if err := s.unmngd.Stop(r.PathValue("id")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) handleUnmanagedRestart(w http.ResponseWriter, r *http.Request) {
+	if s.unmngd == nil {
+		http.Error(w, "unmanaged control unavailable", 404)
+		return
+	}
+	if err := s.unmngd.Restart(r.PathValue("id")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	w.WriteHeader(http.StatusAccepted)
 }
 

@@ -23,13 +23,33 @@ type ProjectPorts struct {
 	WebUI int `json:"webui,omitempty"`
 }
 
-// Project is the on-disk definition for one project. Worker existence and
-// configuration are not listed here — the project's workers/ directory is.
+// ProjectWorker is a project worker declaration. Managed workers keep their
+// authoritative config in the worker directory; the entry here is a light
+// reference (id + type). Unmanaged workers are external processes swarm
+// launches after the bus is up, using Command/Env/Cwd; their bus credential is
+// generated on first launch and persisted here.
+type ProjectWorker struct {
+	ID            string            `json:"id"`
+	Type          string            `json:"type"`
+	Managed       bool              `json:"managed"`
+	Credential    string            `json:"credential,omitempty"`
+	Command       []string          `json:"command,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	Cwd           string            `json:"cwd,omitempty"`
+	Subscriptions []string          `json:"subscriptions,omitempty"`
+	Publish       []string          `json:"publish,omitempty"`
+}
+
+// Project is the on-disk definition for one project: its ports, archived
+// worker ids, and the worker declarations. Managed workers' authoritative
+// config lives in the workers/ directory; the project.json entry is a light
+// reference. Unmanaged workers are declared here with their launch spec.
 type Project struct {
 	ID        string          `json:"id"`
 	CreatedAt string          `json:"created_at,omitempty"`
 	Ports     ProjectPorts    `json:"ports,omitempty"`
 	Archived  map[string]bool `json:"archived,omitempty"`
+	Workers   []ProjectWorker `json:"workers,omitempty"`
 }
 
 // ProjectsRoot returns ~/.niq/projects (created lazily on write).
@@ -45,8 +65,10 @@ func ProjectDir(id string) string { return filepath.Join(ProjectsRoot(), sanitiz
 func ProjectPath(id string) string { return filepath.Join(ProjectDir(id), "project.json") }
 
 // CreateProject creates a project directory + project.json and seeds each
-// template worker's authoritative config.json into workers/. It fails if a
-// project with the same id already exists.
+// template worker. Managed workers get an authoritative config.json in
+// workers/ (and a light entry in project.json); unmanaged workers are declared
+// in project.json with their full launch spec. It fails if a project with the
+// same id already exists.
 func CreateProject(id string, template *SwarmConfig) (*Project, error) {
 	if id == "" {
 		return nil, fmt.Errorf("project: id is required")
@@ -58,18 +80,62 @@ func CreateProject(id string, template *SwarmConfig) (*Project, error) {
 	if err := os.MkdirAll(ProjectDir(id), 0755); err != nil {
 		return nil, fmt.Errorf("project: mkdir: %w", err)
 	}
+	var workers []ProjectWorker
 	if template != nil {
 		for _, wc := range template.Workers {
-			if err := seedWorkerConfig(ProjectDir(id), wc); err != nil {
-				return nil, err
+			if isManagedWorker(wc) {
+				if err := seedWorkerConfig(ProjectDir(id), wc); err != nil {
+					return nil, err
+				}
+				workers = append(workers, ProjectWorker{ID: wc.ID, Type: wc.Type, Managed: true})
+				continue
 			}
+			workers = append(workers, ProjectWorker{
+				ID:            wc.ID,
+				Type:          wc.Type,
+				Managed:       false,
+				Credential:    wc.Credential,
+				Command:       wc.Command,
+				Env:           wc.Env,
+				Cwd:           wc.Cwd,
+				Subscriptions: wc.Subscriptions,
+				Publish:       wc.Publish,
+			})
 		}
 	}
-	p := &Project{ID: id, CreatedAt: time.Now().Format(time.RFC3339)}
+	p := &Project{ID: id, CreatedAt: time.Now().Format(time.RFC3339), Workers: workers}
 	if err := saveProject(p); err != nil {
 		return nil, err
 	}
 	return p, nil
+}
+
+// isManagedWorker reports whether a template worker is host-managed. The
+// managed field defaults to true (nil → managed); only an explicit false
+// marks a worker as an external process.
+func isManagedWorker(wc WorkerConfig) bool {
+	return wc.Managed == nil || *wc.Managed
+}
+
+// UnmanagedWorkers returns the external-process worker declarations.
+func UnmanagedWorkers(p *Project) []ProjectWorker {
+	var out []ProjectWorker
+	for _, w := range p.Workers {
+		if !w.Managed {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// FindWorker returns a project's worker declaration by id.
+func FindWorker(p *Project, id string) (ProjectWorker, bool) {
+	for _, w := range p.Workers {
+		if w.ID == id {
+			return w, true
+		}
+	}
+	return ProjectWorker{}, false
 }
 
 // workerConfigPath returns the authoritative config.json path for a worker.

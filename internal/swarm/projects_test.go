@@ -100,6 +100,43 @@ func TestSaveProjectMutatesArchived(t *testing.T) {
 	}
 }
 
+func TestCreateProjectUnmanagedWorker(t *testing.T) {
+	setupProjectsRoot(t)
+	tmpl := &SwarmConfig{Workers: []WorkerConfig{
+		{Type: "reason", ID: "niq"},
+		{Type: "mcp", ID: "mcp-fs", Managed: boolPtr(false),
+			Command: []string{"npx", "mcp-fs"}, Env: map[string]string{"K": "V"}, Cwd: "/tmp"},
+	}}
+	if _, err := CreateProject("gamma", tmpl); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := LoadProject("gamma")
+	if len(p.Workers) != 2 {
+		t.Fatalf("workers = %d, want 2", len(p.Workers))
+	}
+	var mcp *ProjectWorker
+	for i := range p.Workers {
+		if p.Workers[i].ID == "mcp-fs" {
+			mcp = &p.Workers[i]
+		}
+	}
+	if mcp == nil || mcp.Managed {
+		t.Fatalf("mcp-fs entry = %+v, want unmanaged", mcp)
+	}
+	if len(mcp.Command) != 2 || mcp.Cwd != "/tmp" || mcp.Env["K"] != "V" {
+		t.Fatalf("mcp-fs launch spec = %+v", mcp)
+	}
+	// The managed worker still gets its authoritative worker-dir config.
+	if _, ok := readWorkerConfig(ProjectDir("gamma"), "niq"); !ok {
+		t.Fatal("niq config not seeded to worker dir")
+	}
+	// Unmanaged workers are not seeded to the worker dir.
+	unm := UnmanagedWorkers(p)
+	if len(unm) != 1 || unm[0].ID != "mcp-fs" {
+		t.Fatalf("UnmanagedWorkers = %+v", unm)
+	}
+}
+
 func TestListProjectsEmpty(t *testing.T) {
 	setupProjectsRoot(t)
 	if _, err := ListProjects(); err != nil {

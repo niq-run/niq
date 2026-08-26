@@ -26,7 +26,7 @@ type SwarmConfig struct {
 
 // WorkerConfig describes a single worker instance declaration.
 type WorkerConfig struct {
-	Type          string   `json:"type"` // reason / workspace / host / timer / hiw
+	Type          string   `json:"type"` // reason / workspace / host / timer / hiw / program
 	ID            string   `json:"id"`
 	Instruction   string   `json:"instruction,omitempty"`
 	Provider      string   `json:"provider,omitempty"`
@@ -37,6 +37,14 @@ type WorkerConfig struct {
 	Publish       []string `json:"publish,omitempty"`
 	RootDir       string   `json:"root_dir,omitempty"`
 	Archived      bool     `json:"archived,omitempty"`
+	// Managed marks the worker as host-managed (in-process, worker dir is the
+	// config authority). nil or true = managed; false = an external process
+	// launched by swarm via Command/Env/Cwd.
+	Managed    *bool             `json:"managed,omitempty"`
+	Credential string            `json:"credential,omitempty"`
+	Command    []string          `json:"command,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	Cwd        string            `json:"cwd,omitempty"`
 }
 
 // ParseConfig reads and parses a swarm JSON config file.

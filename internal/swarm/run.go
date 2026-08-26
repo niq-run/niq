@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	corebus "github.com/54c1/niq/core/bus"
 	"github.com/54c1/niq/core/store"
 	"github.com/54c1/niq/core/worker"
 	evtsqlite "github.com/54c1/niq/ext/service/evtstore/sqlite"
@@ -166,6 +167,7 @@ func RunProject(opts ProjectRunOptions) error {
 		Banner:       "project " + opts.ProjectID,
 		NoBrowser:    true, // the control WebUI drives the redirect, not this process
 		OnResolved:   onResolved,
+		Unmanaged:    UnmanagedWorkers(p),
 		ContextInfo: webui.ContextInfo{
 			Mode:    "project",
 			Project: opts.ProjectID,
@@ -187,7 +189,8 @@ type assemblyOptions struct {
 	NoBrowser    bool
 	OnResolved   func(bus, webui string)
 	ContextInfo  webui.ContextInfo
-	EventsDB     string // SQLite event store path (empty = in-memory)
+	EventsDB     string          // SQLite event store path (empty = in-memory)
+	Unmanaged    []ProjectWorker // external processes to launch after the bus is up
 }
 
 // webuiHIWID is the swarm-owned hiw worker that drives the WebUI. It is
@@ -300,6 +303,27 @@ func runAssembly(opts assemblyOptions) error {
 		return fmt.Errorf("swarm: recover workers: %w", err)
 	}
 
+	// Launch unmanaged (external) workers now that the bus is up: provision
+	// each one (credential + identity) and hand it to the supervisor.
+	var supervisor *UnmanagedSupervisor
+	if busAddr != "" && len(opts.Unmanaged) > 0 {
+		supervisor = NewUnmanagedSupervisor(localhostURL(busAddr), log.Printf)
+		for _, spec := range opts.Unmanaged {
+			s := spec
+			if len(s.Command) == 0 {
+				log.Printf("[swarm] unmanaged worker %s: empty command, skipping", s.ID)
+				continue
+			}
+			if err := provisionUnmanaged(registry, opts.ContextInfo.Project, &s); err != nil {
+				log.Printf("[swarm] provision unmanaged worker %s: %v", s.ID, err)
+				continue
+			}
+			if err := supervisor.Start(s); err != nil {
+				log.Printf("[swarm] start unmanaged worker %s: %v", s.ID, err)
+			}
+		}
+	}
+
 	// Optional WebUI, served on the project/control address.
 	var webUIAddr string
 	if opts.WebUIAddr != "" {
@@ -310,6 +334,13 @@ func runAssembly(opts assemblyOptions) error {
 					s.SetContext(opts.ContextInfo)
 					if opts.ContextInfo.Project != "" {
 						s.SetArchivedStore(projectArchiver{id: opts.ContextInfo.Project})
+					}
+					if supervisor != nil {
+						s.SetUnmanagedController(&webuiUnmanagedAdapter{
+							supervisor: supervisor,
+							registry:   registry,
+							projectID:  opts.ContextInfo.Project,
+						})
 					}
 					b, err := s.Bind()
 					if err != nil {
@@ -342,7 +373,13 @@ func runAssembly(opts assemblyOptions) error {
 	// Run — blocks until ctx is cancelled; ShutdownSnapshot persists state.
 	fmt.Printf("%s started. Press Ctrl+C to stop.\n", opts.Banner)
 	if err := workerSvc.Run(ctx); err != nil && err != context.Canceled {
+		if supervisor != nil {
+			supervisor.Shutdown()
+		}
 		return fmt.Errorf("%s: %w", opts.Banner, err)
+	}
+	if supervisor != nil {
+		supervisor.Shutdown()
 	}
 	fmt.Printf("\n%s stopped.\n", opts.Banner)
 	return nil
@@ -509,11 +546,55 @@ func openBrowser(url string) error {
 	return nil
 }
 
+// webuiUnmanagedAdapter implements webui.UnmanagedController, routing the
+// project WebUI's external-worker controls to the swarm supervisor.
+type webuiUnmanagedAdapter struct {
+	supervisor *UnmanagedSupervisor
+	registry   corebus.IdentityRegistry
+	projectID  string
+}
+
+func (a *webuiUnmanagedAdapter) Start(id string) error {
+	if a.projectID == "" {
+		return fmt.Errorf("unmanaged control requires a project")
+	}
+	p, err := LoadProject(a.projectID)
+	if err != nil {
+		return err
+	}
+	spec, ok := FindWorker(p, id)
+	if !ok {
+		return fmt.Errorf("worker %s not found", id)
+	}
+	if spec.Managed {
+		return fmt.Errorf("worker %s is managed, not an external process", id)
+	}
+	if err := provisionUnmanaged(a.registry, a.projectID, &spec); err != nil {
+		return err
+	}
+	return a.supervisor.Start(spec)
+}
+
+func (a *webuiUnmanagedAdapter) Stop(id string) error    { return a.supervisor.Stop(id) }
+func (a *webuiUnmanagedAdapter) Restart(id string) error { return a.supervisor.Restart(id) }
+
+func (a *webuiUnmanagedAdapter) List() []webui.UnmanagedStatus {
+	out := make([]webui.UnmanagedStatus, 0, 4)
+	for _, st := range a.supervisor.List() {
+		out = append(out, webui.UnmanagedStatus{ID: st.ID, Type: st.Type, State: st.State, Alive: st.Alive})
+	}
+	return out
+}
+
 // seedStoreConfigs writes each declared worker's authoritative config.json into
 // a worker store root (never overwriting an existing config), so a first run of
 // the legacy control swarm can create the declared workers via RecoverAll.
+// Unmanaged workers are skipped — they are external processes, not store entries.
 func seedStoreConfigs(root string, workers []WorkerConfig) error {
 	for _, wc := range workers {
+		if !isManagedWorker(wc) {
+			continue
+		}
 		dir := filepath.Join(root, sanitizeID(wc.ID))
 		path := filepath.Join(dir, "config.json")
 		if _, err := os.Stat(path); err == nil {
