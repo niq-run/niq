@@ -4,7 +4,6 @@
 package swarm
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,7 +17,7 @@ import (
 // per worker:
 //
 //	<root>/<workerID>/config.json   — definition (authoritative)
-//	<root>/<workerID>/state.json    — {"state": "...", "snapshot": "<base64>"}
+//	<root>/<workerID>/state.json    — {"state": "...", "snapshot": "<raw text>"}
 //
 // The root is the project's workers/ dir, so config.json doubles as the
 // authoritative per-worker definition read by the assembly layer.
@@ -58,7 +57,9 @@ func (s *FileWorkerStore) SaveState(id string, state worker.WorkerState, snapsho
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("workerhost: mkdir %s: %w", dir, err)
 	}
-	rec := stateFile{State: state, Snapshot: base64.StdEncoding.EncodeToString(snapshot)}
+	// The snapshot is stored as a raw string, not base64: every worker snapshot
+	// is text (JSON transcripts) and staying raw keeps state.json readable.
+	rec := stateFile{State: state, Snapshot: string(snapshot)}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("workerhost: marshal state %s: %w", id, err)
@@ -127,9 +128,5 @@ func readStateFile(path string) (worker.WorkerState, []byte, error) {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return worker.StateRunning, nil, err
 	}
-	snap, err := base64.StdEncoding.DecodeString(rec.Snapshot)
-	if err != nil {
-		snap = nil
-	}
-	return rec.State, snap, nil
+	return rec.State, []byte(rec.Snapshot), nil
 }
