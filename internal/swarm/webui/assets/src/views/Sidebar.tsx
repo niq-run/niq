@@ -86,14 +86,21 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)
     globalThis.localStorage?.setItem('niq-sidebar-width', String(DEFAULT_SIDEBAR_WIDTH))
   }
-  // Logo motion: transitions use an ease-in-out bezier (slow-fast-slow), and
-  // the duration scales with the travel distance so the perceived speed is the
-  // same on every platform (mobile drags travel further but take proportionally
-  // longer).
+  // Logo motion. Two separate timings:
+  //  - durFor: the single-click round trip (out to the apex and back), which
+  //    plays as one continuous move and keeps its slower, distance-scaled
+  //    duration so the perceived speed stays even across platforms.
+  //  - returnDurFor: the spring-back released at the end of a manual drag. That
+  //    one is deliberately quick — the finger already did the work, so the logo
+  //    should come home promptly instead of lingering at the rightmost apex.
   const [moveDur, setMoveDur] = useState('0.5s')
   const lastDragX = useRef(0)
   const durFor = (px: number) => Math.max(140, Math.round((px / 300) * 1000)) + 'ms'
-  const logoEasing = 'cubic-bezier(0.42, 0, 0.58, 1)'
+  // Spring-back: roughly half of durFor, still scaled by distance.
+  const returnDurFor = (px: number) => Math.max(110, Math.round((px / 300) * 1000)) + 'ms'
+  // Decelerating bezier (fast off the apex, slow into rest) so the return reads
+  // as fast-then-slow rather than the old slow-fast-slow ease-in-out.
+  const logoEasing = 'cubic-bezier(0.2, 1, 0.7, 1)'
   const draggingRef = useRef(false)
   const dragStartX = useRef(0)
   const dragMoved = useRef(false)
@@ -140,7 +147,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       armedRef.current = false
       setFlipped(f => !f) // mirror flip animates together with the spring-back
     }
-    setMoveDur(durFor(Math.abs(lastDragX.current))) // constant perceived speed
+    setMoveDur(returnDurFor(Math.abs(lastDragX.current))) // quick, decelerating return
     setDragX(0) // spring back to the resting position
     e.currentTarget.releasePointerCapture?.(e.pointerId)
   }
@@ -304,8 +311,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               cursor: dragging ? 'grabbing' : 'grab',
               display: 'inline-block',
               transform: `perspective(200px) translateX(${dragX}px) rotateY(${flipped ? 180 : 0}deg)`,
-              // No transition while dragging; motion uses an ease-in-out bezier
-              // (slow-fast-slow) with a distance-scaled duration.
+              // No transition while dragging; on release the transform springs
+              // back with a decelerating bezier (fast-then-slow) and a short,
+              // distance-scaled duration.
               transition: dragging ? 'none' : `transform ${moveDur} ${logoEasing}`,
               // Swallow touch gestures on the logo so the drag wins over page
               // scrolling on any touch device.
