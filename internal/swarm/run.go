@@ -19,6 +19,7 @@ import (
 	"github.com/54c1/niq/core/store"
 	"github.com/54c1/niq/core/worker"
 	evtsqlite "github.com/54c1/niq/ext/service/evtstore/sqlite"
+	providerpkg "github.com/54c1/niq/internal/swarm/provider"
 	"github.com/54c1/niq/internal/swarm/webui"
 	"github.com/54c1/niq/pkg/service/eventbus"
 	eventbusapi "github.com/54c1/niq/pkg/service/eventbus/api"
@@ -285,7 +286,7 @@ func runAssembly(opts assemblyOptions) error {
 	RegisterBuilders(buildCtx, workerSvc)
 
 	// Gate startup on an LLM provider when any persisted worker needs one.
-	if err := ensureLLMConfigured(workerSvc); err != nil {
+	if err := providerpkg.EnsureLLMConfigured(workerSvc); err != nil {
 		return err
 	}
 

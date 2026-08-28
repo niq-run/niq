@@ -15,7 +15,7 @@ import (
 	"github.com/54c1/niq/ext/service/pgbackend"
 	"github.com/54c1/niq/ext/service/wsbackend"
 	"github.com/54c1/niq/ext/worker/workspace"
-	"github.com/54c1/niq/pkg/providercfg"
+	providerpkg "github.com/54c1/niq/internal/swarm/provider"
 	"github.com/54c1/niq/pkg/service/eventbus"
 	eventbusapi "github.com/54c1/niq/pkg/service/eventbus/api"
 	"github.com/54c1/niq/pkg/service/eventbus/transport/inprocess"
@@ -143,8 +143,8 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	compactDirective, _ := p["compact_directive"].(string)
 
 	connect := specConnect(ctx, id, "reason", pubAllow, subAllow)
-	providerSources := newSwarmProviderSources(provider, apiKey, baseURL, model)
-	pname, pmodel := initialProviderInfo(provider, apiKey, baseURL, model)
+	providerSources := providerpkg.NewSwarmProviderSources(provider, apiKey, baseURL, model)
+	pname, pmodel := providerpkg.InitialProviderInfo(provider, apiKey, baseURL, model)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		w := reason.NewWorker(reason.Config{
 			ID:               id,
@@ -326,34 +326,6 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 		Connect: connect,
 		Build:   build,
 	}, nil
-}
-
-// ── helpers ──
-
-func providerFromArgs(provider, apiKey, baseURL, model string) llm.LLMProvider {
-	if provider != "" {
-		if p, ok := providercfg.Find(provider); ok {
-			return providercfg.BuildWithOverrides(p, apiKey, baseURL, model)
-		}
-		if p, ok := providercfg.FindByType(provider); ok {
-			return providercfg.BuildWithOverrides(p, apiKey, baseURL, model)
-		}
-		return providercfg.Build(providercfg.Provider{
-			Type:    provider,
-			APIKey:  apiKey,
-			BaseURL: baseURL,
-			Model:   model,
-		})
-	}
-	if p, ok := providercfg.Default(); ok {
-		return providercfg.BuildWithOverrides(p, apiKey, baseURL, model)
-	}
-	return providercfg.Build(providercfg.Provider{
-		Type:    "deepseek",
-		APIKey:  apiKey,
-		BaseURL: baseURL,
-		Model:   model,
-	})
 }
 
 // programSeed builds the goal instruction program for a spawned reason
