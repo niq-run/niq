@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState, type ReactNode, type CSSProperties } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -30,14 +30,20 @@ interface TalkViewProps {
   compactMode: boolean
   streamingMode: boolean
   responseOnly: boolean
+  // Mobile changes bubble widths and the tool title layout; desktop keeps the
+  // original look.
+  isMobile: boolean
 }
 
 const inputRenderers: Record<string, React.FC<{evt: EventPayload; onTraceClick: (id: string) => void}>> = {
   'timer.elapsed': TimerElapsedBlock,
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile }: TalkViewProps) {
   const { dark, colors } = useTheme()
+  // Left-side bubbles are wider on phones (90%) and keep the original 70% on
+  // desktop.
+  const bubbleMax = isMobile ? '90%' : '70%'
   // Only reason workers (the conversation partners) get a standalone avatar
   // row; other workers' events carry their worker ID inline in the block title.
   const isReason = (wid: string) => workerTypes[wid] === 'reason'
@@ -164,7 +170,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
 
   // Live tool output: accumulate tool.partial by call_id. Only populated when
   // streaming mode is on; the partial text renders inside the matching
-  // tool.requested card.
+  // tool.request card.
   const toolPartials = useMemo(() => {
     if (!streamingMode) return {} as Record<string, string>
     const map: Record<string, string> = {}
@@ -183,10 +189,10 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       map[callId] = (map[callId] || '') + partial
     }
     // Once a tool has a terminal event (completed/failed/rejected), its result
-    // card takes over and the live streaming content in the tool.requested
+    // card takes over and the live streaming content in the tool.request
     // card is cleared.
     for (const evt of events) {
-      if (isToolEvent(evt.type) && evt.type !== 'tool.requested') {
+      if (isToolEvent(evt.type) && evt.type !== 'tool.request') {
         const callId = (evt.payload?.call_id as string) || ''
         if (callId) delete map[callId]
       }
@@ -304,6 +310,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // Shared box metrics for tool-style blocks (tool calls, results, cancels).
   const tPad = compactMode ? '4px 8px' : '6px 12px'
   const tFontSize = compactMode ? fontSizes.xs : fontSizes.base
+  // Separator between title segments: a left border on each segment (instead
+  // of a standalone "|"), so a wrapped line never ends with a dangling bar.
+  const itemSep: CSSProperties = { borderLeft: '1px solid ' + colors.textDimmed, paddingLeft: 8 }
 
   // Sentinel for auto-scroll-to-top loading
   const sentinel = onLoadMore && events.length > 0 ? (
@@ -315,7 +324,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     if (isReasonBoundary(evt.type)) continue
     // Response-only mode: hide the intermediate process (thinking + tool calls,
     // including cancels).
-    if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || evt.type === 'tool.cancel' || isToolEvent(evt.type) || evt.type === 'worker.update' || evt.type === 'worker.updated')) continue
+    if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || evt.type === 'tool.cancel' || isToolEvent(evt.type) || evt.type === 'worker.update' || evt.type === 'worker.updated' || evt.type === 'worker.query' || evt.type === 'worker.status')) continue
 
     // System events (timer/abort) always render their sender avatar, so they
     // must also advance the avatar streak — otherwise the next reason worker
@@ -337,7 +346,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           )}
           <div
             style={{
-              maxWidth: '70%',
+              maxWidth: alignRight ? '70%' : bubbleMax,
               display: alignRight ? 'inline-block' : undefined,
               textAlign: 'left',
               background: colors.bgLight, // same card background as responses
@@ -396,7 +405,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           </div>
           <div
             style={{
-              maxWidth: '70%',
+              maxWidth: alignRight ? '70%' : bubbleMax,
               display: alignRight ? 'inline-block' : undefined,
               textAlign: 'left',
               background: colors.bgLight,
@@ -442,7 +451,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           </div>
           <div
             style={{
-              maxWidth: '70%',
+              maxWidth: alignRight ? '70%' : bubbleMax,
               display: alignRight ? 'inline-block' : undefined,
               textAlign: 'left',
               background: colors.bgLight,
@@ -487,7 +496,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           </div>
           <div
             style={{
-              maxWidth: '70%',
+              maxWidth: alignRight ? '70%' : bubbleMax,
               display: alignRight ? 'inline-block' : undefined,
               textAlign: 'left',
               background: colors.bgLight,
@@ -511,22 +520,19 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     // tool.cancel — a cancelled tool call notice, styled like the tool blocks
     if (evt.type === 'tool.cancel') {
       nodes.push(
-        <div key={evt.id} style={{ maxWidth: '70%', marginBottom: compactMode ? 8 : 12 }}>
-          <div style={{ border: '1px solid ' + colors.border, padding: tPad, fontSize: tFontSize, lineHeight: 1.5, color: colors.textDim }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 4, background: colors.textDim, flexShrink: 0, opacity: 0.5 }} />
-                <span>tool call cancelled</span>
-              </span>
-              {directionOf(evt) && (
-                <>
-                  <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
-                  <span style={{ color: colors.textDimmed, fontFamily: 'monospace' }}>{directionOf(evt)}</span>
-                </>
-              )}
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
+        <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
+<div style={{ border: '1px solid ' + colors.border, padding: tPad, fontSize: tFontSize, lineHeight: 1.5, color: colors.textDim }}>
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4, columnGap: 8 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, background: colors.textDim, flexShrink: 0, opacity: 0.5 }} />
+                  <span>tool call cancelled</span>
+                </span>
+                {directionOf(evt) && (
+                  <span style={{ ...itemSep, color: colors.textDimmed, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{directionOf(evt)}</span>
+                )}
+                <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto', whiteSpace: 'nowrap' }}>{formatTime(evt.timestamp)}</span>
+              </div>
             </div>
-          </div>
         </div>
       )
       continue
@@ -537,7 +543,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const reason = (evt.payload?.reason as string) || ''
       const preserved = (evt.payload?.preserved_chars as number) || 0
       nodes.push(
-        <div key={evt.id} style={{ maxWidth: '70%', marginBottom: compactMode ? 8 : 12 }}>
+        <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
           <div style={{ border: '1px solid ' + colors.border, padding: tPad, fontSize: tFontSize, lineHeight: 1.5, color: colors.textDim }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -575,12 +581,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const content = toolContent(evt, isExpanded)
       const contentLen = toolContent(evt, false).length
       const summary = toolSummary(evt)
-      const statusColor = evt.type === 'tool.requested' ? colors.toolRequested
+      const statusColor = evt.type === 'tool.request' ? colors.toolRequested
         : evt.type === 'tool.completed' ? colors.toolCompleted
         : evt.type === 'tool.failed' ? colors.toolFailed
         : colors.textDim
 
-      const toolLabel = evt.type === 'tool.requested' ? 'Tool Call'
+      const toolLabel = evt.type === 'tool.request' ? 'Tool Call'
         : evt.type === 'tool.completed' ? 'Tool Result'
         : evt.type === 'tool.failed' ? 'Tool Failed'
         : 'Tool Rejected'
@@ -589,11 +595,11 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const isDimmed = anyToolExpanded && !isExpanded
 
       // Streaming: accumulated tool.partial output shown live in the
-      // tool.requested card while the call is in flight.
-      const partialText = evt.type === 'tool.requested' ? (toolPartials[callId] || '') : ''
+      // tool.request card while the call is in flight.
+      const partialText = evt.type === 'tool.request' ? (toolPartials[callId] || '') : ''
 
       nodes.push(
-        <div key={evt.id} style={{ maxWidth: '70%', marginBottom: compactMode ? 8 : 12 }}>
+        <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
               <WorkerBadge id={evt.worker_id} show={true} />
@@ -615,38 +621,61 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               onClick={() => toggleToolContent(callId)}
               style={{ cursor: 'pointer', userSelect: 'none' }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 4, background: isDimmed ? colors.textDimmed : statusColor, flexShrink: 0, opacity: 0.5 }} />
-                  <span style={{ color: isDimmed ? colors.textDimmed : colors.textDim, fontSize: tFontSize }}>{toolLabel} {summary}</span>
-                </span>
-                {(evt.type === 'tool.completed' || evt.type === 'tool.requested') && contentLen > 0 && (
-                  <>
-                    <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
-                    <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{contentLen} chars</span>
-                  </>
-                )}
-                {directionOf(evt) && (
-                  <>
-                    <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
-                    <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, fontFamily: 'monospace' }}>{directionOf(evt)}</span>
-                  </>
-                )}
-                {isExpanded && contentLen > 0 && (
-                  <>
-                    <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
-                    <span
-                      onClick={(e) => { e.stopPropagation(); setWrapCode(v => !v) }}
-                      title="toggle soft wrap"
-                      style={{ cursor: 'pointer', color: colors.accentDim, fontSize: fontSizes.sm, textDecoration: wrapCode ? undefined : 'underline dotted' }}
-                    >
-                      {wrapCode ? 'wrap' : 'no-wrap'}
-                    </span>
-                  </>
-                )}
-                <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
-              </div>
+              {isMobile ? (
+                /* Mobile: title is just the label + a chevron; the metadata
+                    moves to a dedicated second line once expanded. */
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 4, background: isDimmed ? colors.textDimmed : statusColor, flexShrink: 0, opacity: 0.5 }} />
+                    <span style={{ color: isDimmed ? colors.textDimmed : colors.textDim, fontSize: tFontSize }}>{toolLabel} {summary}</span>
+                  </span>
+                  <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                    {isExpanded ? '▾' : '▸'}
+                  </span>
+                </div>
+              ) : (
+                /* Desktop: original single-row title with all metadata. */
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 4, background: isDimmed ? colors.textDimmed : statusColor, flexShrink: 0, opacity: 0.5 }} />
+                    <span style={{ color: isDimmed ? colors.textDimmed : colors.textDim, fontSize: tFontSize }}>{toolLabel} {summary}</span>
+                  </span>
+                  {(evt.type === 'tool.completed' || evt.type === 'tool.request') && contentLen > 0 && (
+                    <>
+                      <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
+                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{contentLen} chars</span>
+                    </>
+                  )}
+                  {directionOf(evt) && (
+                    <>
+                      <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
+                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, fontFamily: 'monospace' }}>{directionOf(evt)}</span>
+                    </>
+                  )}
+                  {isExpanded && contentLen > 0 && (
+                    <>
+                      <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
+                      <span
+                        onClick={(e) => { e.stopPropagation(); setWrapCode(v => !v) }}
+                        title="toggle soft wrap"
+                        style={{ cursor: 'pointer', color: colors.accentDim, fontSize: fontSizes.sm, textDecoration: wrapCode ? undefined : 'underline dotted' }}
+                      >
+                        {wrapCode ? 'wrap' : 'no-wrap'}
+                      </span>
+                    </>
+                  )}
+                  <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
+                </div>
+              )}
             </div>
+            {isMobile && isExpanded && (
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4, columnGap: 8, marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)'), fontSize: fontSizes.sm, color: colors.textDimmed }}>
+                {directionOf(evt) && (
+                  <span style={{ whiteSpace: 'nowrap' }}>{directionOf(evt)}</span>
+                )}
+                <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}>{formatTime(evt.timestamp)}</span>
+              </div>
+            )}
             {isExpanded && content && (
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
                 <SyntaxHighlighter
@@ -704,7 +733,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     if (evt.type === 'reason.thinking') {
       const isDimmed = anyToolExpanded
       nodes.push(
-        <div key={evt.id + '-thinking-' + thinkingExpanded} style={{ maxWidth: '70%', opacity: isDimmed ? 0.35 : 1, transition: 'opacity 0.15s' }}>
+        <div key={evt.id + '-thinking-' + thinkingExpanded} style={{ maxWidth: bubbleMax, opacity: isDimmed ? 0.35 : 1, transition: 'opacity 0.15s' }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
               <WorkerBadge id={evt.worker_id} show={true} />
@@ -717,7 +746,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const ref = findReferencedInput(events, evt)
       const isDimmed = anyToolExpanded
       nodes.push(
-        <div key={evt.id} style={{ maxWidth: '70%', opacity: isDimmed ? 0.35 : 1, transition: 'opacity 0.15s' }}>
+        <div key={evt.id} style={{ maxWidth: bubbleMax, opacity: isDimmed ? 0.35 : 1, transition: 'opacity 0.15s' }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
               <WorkerBadge id={evt.worker_id} show={true} />
@@ -726,9 +755,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} />
         </div>
       )
-    } else if (evt.type === 'worker.update' || evt.type === 'worker.updated') {
+    } else if (evt.type === 'worker.update' || evt.type === 'worker.updated' || evt.type === 'worker.status') {
       nodes.push(
-        <div key={evt.id} style={{ maxWidth: '70%' }}>
+        <div key={evt.id} style={{ maxWidth: bubbleMax }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
               <WorkerBadge id={evt.worker_id} show={true} />
@@ -739,7 +768,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       )
     } else {
       nodes.push(
-        <div key={evt.id} style={{ maxWidth: '70%', marginBottom: 12, fontSize: fontSizes.sm, color: colors.textDimmed }}>
+        <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: 12, fontSize: fontSizes.sm, color: colors.textDimmed }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
               <WorkerBadge id={evt.worker_id} show={true} />
@@ -755,8 +784,10 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     }
   }
 
-  // Header: always visible, not in scroll area — shown even when empty.
-  const header = (
+  // Header: always visible, not in scroll area — shown even when empty. On
+  // mobile the app-level top bar (hamburger + view label) already heads the
+  // page, so this in-view header is skipped to avoid a double header.
+  const header = !isMobile ? (
     <>
       <div style={{ fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 24 }}>
         <strong>Talk</strong>
@@ -770,7 +801,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       </div>
       <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0 0' }} />
     </>
-  )
+  ) : null
 
   if (nodes.length === 0 && streamingTraces.length === 0) {
     const label = talkWorkers.size > 0
@@ -814,7 +845,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             payload: { content: [content] },
           })
           return (
-            <div key={`stream-${traceId}`} style={{ maxWidth: '70%', marginBottom: 12 }}>
+            <div key={`stream-${traceId}`} style={{ maxWidth: bubbleMax, marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <WorkerBadge id={workerId} show={true} />
                 <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, fontStyle: 'italic' }}>● streaming</span>

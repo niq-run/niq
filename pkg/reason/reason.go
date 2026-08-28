@@ -14,7 +14,6 @@ import (
 
 	"github.com/54c1/niq/core/event"
 	llm "github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/core/worker"
 )
 
 func (w *BaseReasonWorker) reason(ctx context.Context) {
@@ -79,11 +78,11 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	w.parkPending(cause)
 
 	traceID = w.currentTraceID
-	tools := w.allTools()
+	tools := w.llmToolDefs()
 	c := &llm.Context{
 		SystemPrompt:    w.buildInstruction(),
 		Messages:        w.transcript.Render(),
-		Tools:           toolDefs(w, tools),
+		Tools:           tools,
 		ReasoningEffort: w.reasoningEffort,
 	}
 	req = &llm.CompletionRequest{Context: c}
@@ -331,7 +330,7 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// The applied assistant message carries only thinking/text; handleToolCalls
 	// still sees the calls and emits worker.update.
 	appliedMsg := finalMsg
-	if w.hasMetaToolCall(finalMsg) {
+	if _, isMeta := w.metaCapabilityCall(finalMsg); isMeta {
 		appliedMsg = stripToolCalls(finalMsg)
 	}
 	w.transcript.Apply(AssistantOutputPatch{Message: appliedMsg})
@@ -374,18 +373,19 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	w.tryReason(ctx)
 }
 
-// hasMetaToolCall reports whether any tool call in msg targets a meta tool
-// (IsMetaTool). When present, the round's tool calls are excluded from the
-// transcript and the meta operation runs via worker.update.
-func (w *BaseReasonWorker) hasMetaToolCall(msg llm.Message) bool {
+// metaCapabilityCall reports whether any tool call in msg targets a registered
+// meta capability (one whose event is worker.update / worker.query, exposed to
+// the LLM by its default tool name). When present, the round's tool calls are excluded
+// from the transcript and the meta operation runs via its own event.
+func (w *BaseReasonWorker) metaCapabilityCall(msg llm.Message) (llm.ContentBlock, bool) {
 	for _, b := range msg.Content {
 		if b.Type == llm.ContentToolCall {
-			if t, ok := w.tools[b.ToolName]; ok && t.IsMetaTool {
-				return true
+			if cap, ok := w.capabilityByToolName(b.ToolName); ok && cap.Event != event.TypeToolRequest {
+				return b, true
 			}
 		}
 	}
-	return false
+	return llm.ContentBlock{}, false
 }
 
 // stripToolCalls returns a copy of msg with all ContentToolCall blocks removed,
@@ -406,42 +406,49 @@ func stripToolCalls(msg llm.Message) llm.Message {
 func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.ContentBlock, traceID string) {
 	busCalls := toolCalls
 
-	// Meta tools (IsMetaTool) directly edit this worker's own state and bypass
-	// the tool lifecycle: no placeholder, no tracker, no dispatch. If any call
-	// in this batch is a meta tool, the batch is handled by the meta path:
-	// non-meta calls are rejected (pairing is preserved via their
-	// placeholders), and the meta tool emits a worker.update event to self,
-	// which reason processes asynchronously.
+	// Meta capabilities (event != tool.request) directly edit this worker's
+	// own state and bypass the tool lifecycle: no placeholder, no tracker, no
+	// dispatch. If any call in this batch targets a meta capability, the batch
+	// is handled by the meta path: the meta call is converted back into its
+	// worker.update / worker.query event and sent to self, which reason
+	// processes asynchronously.
 	var metaCall *llm.ContentBlock
-	var metaTool *worker.Tool
+	var metaCap Capability
 	for i := range busCalls {
-		if t, ok := w.tools[busCalls[i].ToolName]; ok && t.IsMetaTool {
+		if cap, ok := w.capabilityByToolName(busCalls[i].ToolName); ok && cap.Event != event.TypeToolRequest {
 			metaCall = &busCalls[i]
-			metaTool = &t
+			metaCap = cap
 			break
 		}
 	}
 	if metaCall != nil {
 		// All tool calls were already excluded from the transcript in
-		// finishReasoning once a meta tool was present, so nothing here needs
-		// pairing. If a newer input already requested reasoning, the meta
-		// operation yields (dropped — nothing is dispatched or applied); the
-		// next round re-decides.
+		// finishReasoning once a meta capability was present, so nothing here
+		// needs pairing. If a newer input already requested reasoning, the
+		// meta operation yields (dropped — nothing is dispatched or applied);
+		// the next round re-decides.
 		if w.needReason {
-			log.Printf("[reason %s] meta tool %s yielded to pending input", w.ID(), metaCall.ToolName)
+			log.Printf("[reason %s] meta capability %s yielded to pending input", w.ID(), metaCall.ToolName)
 			w.isReasoning = false
 			w.mu.Unlock()
 			w.tryReason(ctx)
 			return
 		}
 
-		// Emit worker.update to self, routed via the bus for audit; the meta
-		// operation completes asynchronously and schedules the next round.
-		var argsMap map[string]any
+		// Convert the tool call back into the capability's event (e.g.
+		// context_compress → worker.update op=context.compress) and send it to
+		// self, routed via the bus for audit; the meta operation completes
+		// asynchronously and schedules the next round.
+		argsMap := map[string]any{}
 		if metaCall.ToolArguments != "" {
 			json.Unmarshal([]byte(metaCall.ToolArguments), &argsMap)
 		}
-		w.emitMetaUpdateRequest(ctx, metaOpOf(metaTool.Name), argsMap)
+		if metaCap.KeyField != "" {
+			argsMap[metaCap.KeyField] = metaCap.Key
+		}
+		evt := event.New(metaCap.Event, w.ID(), argsMap)
+		evt.TraceID = w.currentTraceID
+		_ = w.Channel.Send(ctx, evt, w.ID())
 
 		w.isReasoning = false
 		w.mu.Unlock()
@@ -464,11 +471,11 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 
 	w.transcript.Apply(ToolPlaceholdersPatch{Calls: busCalls})
 
-	// Group tool calls by target worker, then publish tool.requested
+	// Group tool calls by target worker, then publish tool.request
 	// for each group. The bus routes each batch to the correct worker.
 	// Unknown tools (not in w.tools, e.g. hallucinated by the LLM) are
 	// failed immediately instead of broadcast — broadcasting confuses
-	// other workers that subscribe to tool.requested.
+	// other workers that subscribe to tool.request.
 	toolNames := make([]string, len(busCalls))
 	for i, tc := range busCalls {
 		toolNames[i] = tc.ToolName
@@ -478,6 +485,12 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	var unavailable []string
 	for _, tc := range busCalls {
 		var failReason string
+		// Own tool capabilities (default tool name = tool name) loop back to
+		// this worker; they are served by the registered tool handler.
+		if cap, ok := w.capabilityByToolName(tc.ToolName); ok && cap.Event == event.TypeToolRequest {
+			callsByTarget[w.ID()] = append(callsByTarget[w.ID()], tc)
+			continue
+		}
 		t, ok := w.tools[tc.ToolName]
 		if !ok {
 			// Unknown / hallucinated: nothing on the bus declares it.

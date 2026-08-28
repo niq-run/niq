@@ -104,7 +104,8 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 		for _, t := range []string{
 			"tool.completed", "tool.failed", "tool.rejected",
 			"worker.ready", "worker.gone", "worker.discover", "worker.abort",
-			"timer.timeout", "timer.reminder", "worker.input", "tool.requested",
+			"worker.update", "worker.query",
+			"timer.timeout", "timer.reminder", "worker.input", "tool.request",
 		} {
 			subAllow = append(subAllow, event.NewPattern(event.EventType(t)))
 		}
@@ -143,11 +144,14 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 
 	connect := specConnect(ctx, id, "reason", pubAllow, subAllow)
 	providerSources := newSwarmProviderSources(provider, apiKey, baseURL, model)
+	pname, pmodel := initialProviderInfo(provider, apiKey, baseURL, model)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		w := reason.NewWorker(reason.Config{
 			ID:               id,
 			Provider:         providerSources.Default(),
 			ProviderSources:  providerSources,
+			ProviderName:     pname,
+			ProviderModel:    pmodel,
 			Programs:         programs,
 			EventConverters:  events,
 			Bus:              ch,
@@ -198,7 +202,7 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	cfg.Params = params
 
 	connect := specConnect(ctx, id, "workspace", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeToolRequested),
+		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeWorkerDiscover),
 	})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
@@ -224,7 +228,7 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 		id = "host"
 	}
 	connect := specConnect(ctx, id, "host", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeToolRequested),
+		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeToolCancel),
 		event.NewPattern(event.TypeWorkerDiscover),
 	})
@@ -248,7 +252,7 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 		id = "timer"
 	}
 	connect := specConnect(ctx, id, "timer", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeToolRequested),
+		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeWorkerDiscover),
 	})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
@@ -305,7 +309,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	os.MkdirAll(abs, 0755)
 
 	connect := specConnect(ctx, id, "program", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeToolRequested),
+		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeWorkerDiscover),
 	})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {

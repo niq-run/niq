@@ -43,10 +43,10 @@ func (w *BaseWorker) Start(ctx context.Context) error {
 // ── Tool-serving helpers ──
 //
 // These cover the repetitive parts every worker that exposes tools over the
-// bus repeats: parsing a tool.requested event and replying with a completed
+// bus repeats: parsing a tool.request event and replying with a completed
 // or failed result. Workers embed BaseWorker and call these directly.
 
-// ToolCall holds the parsed, common fields of a tool.requested event.
+// ToolCall holds the parsed, common fields of a tool.request event.
 type ToolCall struct {
 	CallID   string
 	Name     string
@@ -55,7 +55,7 @@ type ToolCall struct {
 	TraceID  string
 }
 
-// ParseToolCall extracts the common fields from a tool.requested event.
+// ParseToolCall extracts the common fields from a tool.request event.
 // Args is always a non-nil map so handlers can write into it safely.
 func ParseToolCall(evt event.Event) ToolCall {
 	args, _ := evt.Payload["arguments"].(map[string]any)
@@ -71,7 +71,7 @@ func ParseToolCall(evt event.Event) ToolCall {
 	}
 }
 
-// ReplyCompleted replies to a tool.requested caller with a tool.completed
+// ReplyCompleted replies to a tool.request caller with a tool.completed
 // result, propagating the trace ID.
 func (w *BaseWorker) ReplyCompleted(callerID, callID, name, result, traceID string) {
 	evt := event.New(event.TypeToolCompleted, w.ID(), map[string]any{
@@ -83,7 +83,7 @@ func (w *BaseWorker) ReplyCompleted(callerID, callID, name, result, traceID stri
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
-// ReplyFailed replies to a tool.requested caller with a tool.failed error
+// ReplyFailed replies to a tool.request caller with a tool.failed error
 // message, propagating the trace ID.
 func (w *BaseWorker) ReplyFailed(callerID, callID, name, errMsg, traceID string) {
 	evt := event.New(event.TypeToolFailed, w.ID(), map[string]any{
@@ -95,7 +95,7 @@ func (w *BaseWorker) ReplyFailed(callerID, callID, name, errMsg, traceID string)
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
-// ReplyRejected replies to a tool.requested caller with a tool.rejected
+// ReplyRejected replies to a tool.request caller with a tool.rejected
 // event, carrying the reason. It is used when a worker declines a call based
 // on its own rules (e.g. a safety guard) or after a human-in-the-loop approval
 // is denied. Propagates the trace ID.
@@ -109,7 +109,7 @@ func (w *BaseWorker) ReplyRejected(callerID, callID, name, reason, traceID strin
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
-// ReplyUnknownTool replies to a tool.requested whose name no handler matched.
+// ReplyUnknownTool replies to a tool.request whose name no handler matched.
 func (w *BaseWorker) ReplyUnknownTool(tc ToolCall) {
 	w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "unknown tool: "+tc.Name, tc.TraceID)
 }

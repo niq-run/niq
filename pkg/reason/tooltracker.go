@@ -2,7 +2,7 @@
 //
 // ToolCallTracker: track pending calls, match tool result events,
 // park / resolve / recall. It manages its own pending map only — the
-// caller is responsible for publishing tool.requested / cancel events
+// caller is responsible for publishing tool.request / cancel events
 // to the bus and for building outcome messages.
 //
 // Status only tracks the state of calls still present in the map:
@@ -48,13 +48,13 @@ const (
 type ToolCall struct {
 	CallID    string
 	Name      string
-	TargetID  string // worker the tool.requested was sent to (used for recall)
+	TargetID  string // worker the tool.request was sent to (used for recall)
 	Status    ToolReqStatus
 	ParkCause PreemptCause // meaningful when Status == ToolParked
 }
 
 // ToolCallTracker manages the lifecycle of tool calls in the pending map.
-// It tracks Pending/Parked calls; the caller publishes tool.requested / cancel
+// It tracks Pending/Parked calls; the caller publishes tool.request / cancel
 // events to the bus and resolves tool result events via handleResponse/resolveLate.
 type ToolCallTracker struct {
 	mu      sync.Mutex
@@ -71,7 +71,7 @@ func NewToolCallTracker() *ToolCallTracker {
 // Add begins tracking tool calls as Pending.
 // targetID is the worker the calls were/will be addressed to (recorded for
 // recall). The caller is responsible for publishing the corresponding
-// tool.requested events to each target.
+// tool.request events to each target.
 func (m *ToolCallTracker) Add(targetID string, toolCalls []llm.ContentBlock) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

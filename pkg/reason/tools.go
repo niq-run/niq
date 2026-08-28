@@ -1,21 +1,19 @@
 // worker presence tracking and tool aggregation.
 //
 // handleWorkerReady / handleWorkerGone: learn/forget a worker's tools & events
-// allTools: return all known tools (discovered + own)
-// handleToolRequest: process tool.requested for this worker's tools
+// allTools: return all known tools (discovered)
 // toolDefs: build LLM tool definitions from the encoded tool names
 // encodeToolName + toolNameMap: encode a declared tool name for the LLM (dots
 //
 //	-> underscores, provider__ prefix) and remember the original declared name
 //	so dispatch can restore it (e.g. provider__program.search -> program.search).
 //
-// publishToolRequests: send tool.requested to target workers
+// publishToolRequests: send tool.request to target workers
 package reason
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"strings"
 
@@ -32,158 +30,85 @@ func (w *BaseReasonWorker) allTools() []worker.Tool {
 	return tools
 }
 
-// ToolProvider supplies the tools this worker exposes on the bus — the
-// LLM-facing definitions it can invoke and how calls are served. This same
-// worker both calls and answers them (a call is routed back to it). The
-// embedding worker composes its own; nil uses the default provider. Tools
-// backed by other workers are discovered separately.
-type ToolProvider interface {
-	// ToolDefinitions returns the tools this provider can handle, as the table
-	// the LLM sees (send_message, list_workers, context_compress, ...).
-	ToolDefinitions() []worker.Tool
-	// HandleToolCall serves one tool.requested targeting this worker.
-	HandleToolCall(tc worker.ToolCall)
-}
-
-// DefaultTools is the default ToolProvider: the five domain-agnostic
-// capabilities any reason worker exposes on the bus. They are declared with
-// this worker as provider, so only this worker can call them, but they are
-// ordinary bus-declared abilities, not a special built-in set.
-type DefaultTools struct {
-	w *BaseReasonWorker
-}
-
-// metaOpOf maps a meta tool's bare name to its worker.update op: the tool is
-// the LLM-facing surface (context_compress), the op is the event payload's
-// operation name (compress).
-func metaOpOf(toolName string) string {
-	switch toolName {
-	case "context_compress":
-		return "compress"
-	case "context_rotate":
-		return "rotate"
-	default:
-		return toolName
-	}
-}
-
-// defaultToolDefinitions are the schemas of the four default tools.
-var defaultToolDefinitions = []worker.Tool{
-	{
-		Name:        "send_message",
-		Description: "Send a message to a specific worker on the bus.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"target": map[string]any{"type": "string", "description": "Target worker ID"},
-				"text":   map[string]any{"type": "string", "description": "Message text"},
-			},
-			"required": []any{"target", "text"},
-		},
-	},
-	{
-		Name:        "list_workers",
-		Description: "List all available workers and their capabilities. Returns tools and events published by each worker.",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		},
-	},
-	{
-		Name:        "list_llm_providers",
-		Description: "List the available LLM providers and their models (including each provider's default model). Useful before switching provider/model.",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		},
-	},
-	{
-		Name:        "context_compress",
-		Description: "Compact your own context history: older messages are replaced by a summary, the most recent messages are kept. Call this when the system reminds you about context budget, or when earlier history is no longer needed in full. This operation edits your own context; issue it alone (other tool calls in the same turn will be rejected while it runs).",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"directive": map[string]any{"type": "string",
-					"description": "Optional focus for the summary, e.g. what must be preserved."},
-			},
-		},
-		IsMetaTool: true,
-	},
-	{
-		Name:        "context_rotate",
-		Description: "Rotate your context: summarize the current transcript as a carried digest and start a fresh context containing only that digest. Use for periodic/discrete tasks when previous rounds are no longer relevant, or when starting a new topic. This operation edits your own context; issue it alone (other tool calls in the same turn will be rejected while it runs).",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"carry": map[string]any{"type": "string",
-					"description": "Optional instruction for what to carry into the digest (conclusions, open items, references)."},
-			},
-		},
-		IsMetaTool: true,
-	},
-}
-
-// selfToolDeclarations renders this worker's own tool + meta-tool declarations
-// as the worker.ready "tools" payload a reason worker publishes to itself. It
-// delegates to the tool provider, carrying each tool's schema and its IsMetaTool
-// flag so a discovering worker can route meta tools to worker.update instead of
-// tool.requested.
-func (w *BaseReasonWorker) selfToolDeclarations() []map[string]any {
-	defs := w.toolProvider.ToolDefinitions()
-	out := make([]map[string]any, 0, len(defs))
-	for _, td := range defs {
-		out = append(out, map[string]any{
-			"name":         td.Name,
-			"description":  td.Description,
-			"parameters":   td.Parameters,
-			"is_meta_tool": td.IsMetaTool,
-		})
+// watchDeclarations renders this worker's capability contract as the
+// worker.ready "watch" payload: the events this worker responds to, derived
+// from the capability registry. tool.request entries carry the tool name
+// top-level; worker.update / worker.query entries fold the discriminator (op /
+// subject) into parameters. The declaration is consumer-agnostic — whether a
+// capability is exposed to an LLM is a policy concern, not this declaration's.
+func (w *BaseReasonWorker) watchDeclarations() []map[string]any {
+	out := make([]map[string]any, 0, len(w.capabilities))
+	for _, rc := range w.capabilities {
+		cap := rc.cap
+		entry := map[string]any{
+			"event": string(cap.Event),
+			"desc":  cap.Description,
+		}
+		if cap.Event == event.TypeToolRequest {
+			entry["name"] = cap.Key
+		} else if cap.KeyField != "" {
+			params := cap.Parameters
+			if params == nil {
+				params = map[string]any{}
+			}
+			params = cloneParams(params)
+			params[cap.KeyField] = cap.Key
+			entry["parameters"] = params
+		} else if len(cap.Parameters) > 0 {
+			entry["parameters"] = cap.Parameters
+		}
+		out = append(out, entry)
 	}
 	return out
 }
 
-// NewDefaultTools builds the default provider bound to a worker.
-func NewDefaultTools(w *BaseReasonWorker) *DefaultTools {
-	return &DefaultTools{w: w}
-}
-
-// ToolDefinitions implements ToolProvider for the four default tools, tagged
-// with this worker's ID so they route back to it.
-func (t *DefaultTools) ToolDefinitions() []worker.Tool {
-	out := make([]worker.Tool, len(defaultToolDefinitions))
-	for i, td := range defaultToolDefinitions {
-		td.Provider = t.w.ID()
-		out[i] = td
+func cloneParams(p map[string]any) map[string]any {
+	out := make(map[string]any, len(p))
+	for k, v := range p {
+		out[k] = v
 	}
 	return out
 }
 
-// HandleToolCall implements ToolProvider, dispatching the four defaults.
-// compress/rotate are meta operations: they edit this worker's own state and
-// are reached via worker.update (from the LLM's tool call converted by
-// handleToolCalls, or from external requesters), not via tool.requested.
-func (t *DefaultTools) HandleToolCall(tc worker.ToolCall) {
-	switch tc.Name {
-	case "send_message":
-		t.w.handleSendMessage(tc.CallID, tc.Name, tc.CallerID, tc.Args)
-	case "list_workers":
-		t.w.handleListWorkers(tc.CallID, tc.Name, tc.CallerID, tc.Args)
-	case "list_llm_providers":
-		t.w.handleListLLMProvidersTool(tc.CallID, tc.Name, tc.CallerID, tc.Args)
-	case "context_compress", "context_rotate":
-		t.w.ReplyRejected(tc.CallerID, tc.CallID, tc.Name,
-			"meta operation: send a worker.update event to this worker instead of calling this as a tool", tc.TraceID)
-	default:
-		t.w.replyUnknownTool(tc)
-	}
-}
-
-// handleWorkerReady learns a worker's tools and published events from its
-// worker.ready announcement, updating the known tool set and publishes map.
+// handleWorkerReady learns a worker's capabilities and published events from
+// its worker.ready announcement, feeding the unified discovery universe
+// (discovered) and the tool table used for dispatch. The worker's own
+// self-directed announcement is processed the same way as any peer's (it
+// refreshes the own capabilities seeded at construction).
 func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 	workerID, _ := evt.Payload["worker_id"].(string)
+	if workerID == "" {
+		return
+	}
 
-	// Parse tools.
+	// Re-announcement is idempotent: drop this worker's previous view.
+	w.discovered = removeDiscoveredCaps(w.discovered, workerID)
+	for name, tool := range w.tools {
+		if tool.Provider == workerID {
+			delete(w.tools, name)
+			delete(w.toolNameMap, name)
+		}
+	}
+
+	// Parse the capability contract (watch) into the discovery universe.
+	if raw, ok := evt.Payload["watch"]; ok {
+		if b, err := json.Marshal(raw); err == nil {
+			var watchRaw []map[string]any
+			if err := json.Unmarshal(b, &watchRaw); err == nil {
+				for _, e := range watchRaw {
+					if dc, ok := discoveredFromWatch(workerID, e); ok {
+						w.discovered = append(w.discovered, dc)
+					}
+				}
+				if len(watchRaw) > 0 {
+					log.Printf("[reason %s] received watch from %s (%d entries)", w.ID(), workerID, len(watchRaw))
+				}
+			}
+		}
+	}
+
+	// Parse tools (legacy announcements) into both the discovery universe and
+	// the tool table used for dispatch.
 	b, err := json.Marshal(evt.Payload["tools"])
 	if err == nil {
 		var toolsRaw []map[string]any
@@ -192,16 +117,18 @@ func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 				name, _ := m["name"].(string)
 				desc, _ := m["description"].(string)
 				params, _ := m["parameters"].(map[string]any)
-				isMeta, _ := m["is_meta_tool"].(bool)
 				if name == "" {
 					continue
 				}
+				w.discovered = append(w.discovered, DiscoveredCap{
+					Source: workerID, Event: event.TypeToolRequest, KeyField: "name",
+					Key: name, Description: desc, Parameters: params,
+				})
 				t := worker.Tool{
 					Name:        name,
 					Description: desc,
 					Parameters:  params,
 					Provider:    workerID,
-					IsMetaTool:  isMeta,
 				}
 				t.Name = encodeToolName(w, t)
 				// Save the reverse mapping (encoded name -> original declared
@@ -210,7 +137,9 @@ func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 				w.toolNameMap[t.Name] = name
 				w.tools[t.Name] = t
 			}
-			log.Printf("[reason %s] received %d tool(s) from %s", w.ID(), len(toolsRaw), workerID)
+			if len(toolsRaw) > 0 {
+				log.Printf("[reason %s] received %d tool(s) from %s", w.ID(), len(toolsRaw), workerID)
+			}
 		}
 	}
 
@@ -225,10 +154,49 @@ func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 	}
 }
 
-// handleWorkerGone forgets a departed worker's tools and published events.
+// discoveredFromWatch parses a worker.ready "watch" entry into a DiscoveredCap.
+// tool.request entries carry the tool name top-level; worker.update / worker.query
+// entries fold the discriminator (op / subject) into parameters.
+func discoveredFromWatch(source string, e map[string]any) (DiscoveredCap, bool) {
+	typ, _ := e["event"].(string)
+	if typ == "" {
+		return DiscoveredCap{}, false
+	}
+	dc := DiscoveredCap{
+		Source: source,
+		Event:  event.EventType(typ),
+	}
+	dc.Description, _ = e["desc"].(string)
+	dc.Parameters, _ = e["parameters"].(map[string]any)
+	if name, ok := e["name"].(string); ok && name != "" {
+		dc.KeyField, dc.Key = "name", name
+	} else if dc.Parameters != nil {
+		if op, ok := dc.Parameters["op"].(string); ok && op != "" {
+			dc.KeyField, dc.Key = "op", op
+		} else if subj, ok := dc.Parameters["subject"].(string); ok && subj != "" {
+			dc.KeyField, dc.Key = "subject", subj
+		}
+	}
+	return dc, true
+}
+
+// removeDiscoveredCaps returns caps without the entries declared by source.
+func removeDiscoveredCaps(caps []DiscoveredCap, source string) []DiscoveredCap {
+	out := caps[:0]
+	for _, c := range caps {
+		if c.Source != source {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// handleWorkerGone forgets a departed worker's capabilities, tools and
+// published events.
 func (w *BaseReasonWorker) handleWorkerGone(evt event.Event) {
 	workerID, _ := evt.Payload["worker_id"].(string)
 
+	w.discovered = removeDiscoveredCaps(w.discovered, workerID)
 	for name, tool := range w.tools {
 		if tool.Provider == workerID {
 			delete(w.tools, name)
@@ -268,135 +236,9 @@ func bareToolName(t worker.Tool) string {
 	return strings.TrimPrefix(t.Name, t.Provider+"__")
 }
 
-// handleToolRequest processes a tool.requested event targeting this worker by
-// dispatching to its tool provider.
-func (w *BaseReasonWorker) handleToolRequest(evt event.Event) {
-	tc := worker.ParseToolCall(evt)
-	w.toolProvider.HandleToolCall(tc)
-}
-
-// replyUnknownTool replies to a tool call no provider handled.
+// replyUnknownTool replies to a tool call no capability handled.
 func (w *BaseReasonWorker) replyUnknownTool(tc worker.ToolCall) {
 	w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "Unknown tool: "+tc.Name, tc.TraceID)
-}
-
-func (w *BaseReasonWorker) handleSendMessage(callID, toolName, callerID string, args map[string]any) {
-	target, _ := args["target"].(string)
-	text, _ := args["text"].(string)
-	if target == "" || text == "" {
-		evt := event.New(event.TypeToolFailed, w.ID(), map[string]any{
-			"call_id": callID, "name": toolName,
-			"error": "target and text are required",
-		})
-		_ = w.Channel.Send(context.Background(), evt, callerID)
-		return
-	}
-
-	msgEvt := event.New(event.TypeWorkerInput, w.ID(), map[string]any{
-		"text": text,
-	})
-	msgEvt.TraceID = w.currentTraceID
-	_ = w.Channel.Send(context.Background(), msgEvt, target)
-
-	w.sendSuccess(callID, toolName, callerID,
-		fmt.Sprintf("message sent to %s", target))
-}
-
-// handleListWorkers returns all known workers with their tools and published
-// events, grouped by provider. It also triggers a worker.discover to refresh
-// the cache for the next call.
-func (w *BaseReasonWorker) handleListWorkers(callID, toolName, callerID string, args map[string]any) {
-	// Trigger re-discovery so the next call gets fresh data.
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerDiscover, w.ID(), nil))
-
-	// Aggregate tools and publishes by provider.
-	type workerInfo struct {
-		WorkerID  string         `json:"worker_id"`
-		Tools     []worker.Tool  `json:"tools,omitempty"`
-		Publishes []EventPublish `json:"publishes,omitempty"`
-	}
-
-	providers := make(map[string]*workerInfo)
-
-	// Collect tools grouped by provider.
-	for _, tool := range w.tools {
-		info, ok := providers[tool.Provider]
-		if !ok {
-			info = &workerInfo{
-				WorkerID:  tool.Provider,
-				Publishes: w.publishMap[tool.Provider],
-			}
-			providers[tool.Provider] = info
-		}
-		info.Tools = append(info.Tools, tool)
-	}
-
-	// Collect providers that only publish events (no tools).
-	for provider, events := range w.publishMap {
-		if _, ok := providers[provider]; !ok {
-			providers[provider] = &workerInfo{
-				WorkerID:  provider,
-				Publishes: events,
-			}
-		}
-	}
-
-	result := make([]workerInfo, 0, len(providers))
-	for _, info := range providers {
-		result = append(result, *info)
-	}
-
-	b, err := json.Marshal(result)
-	if err != nil {
-		w.sendFail(callID, toolName, callerID, fmt.Sprintf(
-			"list_workers could not serialize the worker list: a worker's announced tool/event carried "+
-				"a field that cannot be serialized (%v). This usually means a worker.ready declared an invalid "+
-				"schema. Ask that worker to fix its declaration, then retry.", err))
-		return
-	}
-
-	w.sendSuccess(callID, toolName, callerID, string(b))
-	log.Printf("[reason %s] list_workers → %d workers", w.ID(), len(result))
-}
-
-// handleListLLMProvidersTool serves the list_llm_providers tool: it returns
-// the configured LLM providers and their models (as JSON) so the LLM can pick
-// one before issuing a set-llm-provider switch. When no ProviderSources are
-// configured (a single fixed provider), it reports an empty list.
-func (w *BaseReasonWorker) handleListLLMProvidersTool(callID, toolName, callerID string, args map[string]any) {
-	infos := w.availableProviders()
-	b, err := json.Marshal(infos)
-	if err != nil {
-		w.sendFail(callID, toolName, callerID, "list_llm_providers could not serialize the provider list: "+err.Error())
-		return
-	}
-	w.sendSuccess(callID, toolName, callerID, string(b))
-	log.Printf("[reason %s] list_llm_providers → %d providers", w.ID(), len(infos))
-}
-
-func (w *BaseReasonWorker) availableProviders() []ProviderInfo {
-	if w.providerSources != nil {
-		return w.providerSources.List()
-	}
-	return nil
-}
-
-func (w *BaseReasonWorker) sendSuccess(callID, toolName, callerID, result string) {
-	evt := event.New(event.TypeToolCompleted, w.ID(), map[string]any{
-		"call_id": callID, "name": toolName,
-		"result": result,
-	})
-	evt.TraceID = w.currentTraceID
-	_ = w.Channel.Send(context.Background(), evt, callerID)
-}
-
-func (w *BaseReasonWorker) sendFail(callID, toolName, callerID, errMsg string) {
-	evt := event.New(event.TypeToolFailed, w.ID(), map[string]any{
-		"call_id": callID, "name": toolName,
-		"error": errMsg,
-	})
-	evt.TraceID = w.currentTraceID
-	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
 // toolDefs builds the LLM tool definitions from the known tools. Tools are
@@ -432,7 +274,7 @@ func encodeToolName(w *BaseReasonWorker, t worker.Tool) string {
 	return p + "__" + strings.ReplaceAll(n, ".", "_")
 }
 
-// sendToolRequests sends a directed tool.requested event for each tool call
+// sendToolRequests sends a directed tool.request event for each tool call
 // to its target worker. The tracker only manages the pending map; the caller
 // is responsible for delivering the requests to the bus.
 func (w *BaseReasonWorker) sendToolRequests(target, callerID string, calls []llm.ContentBlock, traceID string) {
@@ -441,7 +283,7 @@ func (w *BaseReasonWorker) sendToolRequests(target, callerID string, calls []llm
 		if tc.ToolArguments != "" {
 			json.Unmarshal([]byte(tc.ToolArguments), &argsMap)
 		}
-		evt := event.New(event.TypeToolRequested, callerID, map[string]any{
+		evt := event.New(event.TypeToolRequest, callerID, map[string]any{
 			"worker_id": callerID,
 			"call_id":   tc.ToolCallID,
 			"name":      tc.ToolName,

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react'
 import Sidebar from './views/Sidebar'
 import EventRow from './views/EventRow'
 import EventDetail from './views/EventDetail'
@@ -11,6 +11,7 @@ import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
 import { useTheme, fontSizes } from './theme'
 import { usePolling } from './hooks/usePolling'
+import { useIsMobile } from './hooks/useIsMobile'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived } from './services/api'
 import type { ContextInfo, EventPayload, ViewMode, WorkerInfo } from './types'
 
@@ -20,8 +21,23 @@ const DETAIL_MIN_WIDTH = 360
 const detailDefaultWidth = () =>
   Math.max(DETAIL_MIN_WIDTH, Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.4))
 
+// Mobile detail overlay: full screen width below the top bar, right-anchored.
+// top matches the top bar's box-border height so the panel starts exactly at
+// the bar's bottom border line.
+const MOBILE_TOP_BAR_HEIGHT = 44
+function MobileDetailPanel({ children }: { children: ReactNode }) {
+  const { colors } = useTheme()
+  return (
+    <div style={{ position: 'fixed', top: MOBILE_TOP_BAR_HEIGHT, right: 0, bottom: 0, width: '100%', zIndex: 20, display: 'flex', background: colors.bg }}>
+      {children}
+    </div>
+  )
+}
+
 export default function App() {
   const { dark, colors } = useTheme()
+  const isMobile = useIsMobile()
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   // ── Theme sync ──
   useEffect(() => {
@@ -86,6 +102,11 @@ export default function App() {
   // from the URL; otherwise it comes from the served webui's context.
   const projectName = devProjectBase !== '' ? (urlProject || '') : context.project
 
+  // Page title: append the attached project name when there is one.
+  useEffect(() => {
+    document.title = projectName ? `niq · ${projectName}` : 'niq'
+  }, [projectName])
+
   useEffect(() => {
     setApiBase(projectBase)
     // Unless a project+port was given in the URL, ask /api/context to learn the
@@ -112,10 +133,12 @@ export default function App() {
     } catch {}
   }, [archived])
 
-  // Picking a View (talk/events/workers) leaves the management panels.
+  // Picking a View (talk/events/workers) leaves the management panels and
+  // closes the mobile drawer.
   const selectView = (v: ViewMode) => {
     setPanel(null)
     setView(v)
+    setSidebarOpen(false)
   }
 
   // ── SSE: subscribe to the selected workers (backend filters) ──
@@ -134,6 +157,9 @@ export default function App() {
     if (view === 'events') {
       for (const id of filterWorkers) params.append('worker', id)
       if (traceFilter) params.set('trace', traceFilter)
+      // Initial history replay: 20 is enough to see recent activity without a
+      // long scroll; older events load on demand when scrolling up.
+      params.set('limit', '20')
     }
     const url = projectBase + `/api/stream?${params}`
     // Reset only when the stream scope actually changes (the events view's
@@ -295,7 +321,7 @@ export default function App() {
     const workers = view === 'events' ? [...filterWorkers] : []
     const trace = view === 'events' ? traceFilter : ''
     try {
-      const older = await loadEventsBefore(oldestId, 50, workers, trace)
+      const older = await loadEventsBefore(oldestId, 20, workers, trace)
       if (older.length === 0) return
       const filtered = older.filter((e: any) => e.type !== 'event.delivered')
       if (filtered.length === 0) return
@@ -306,10 +332,11 @@ export default function App() {
   }, [events, view, filterWorkers, traceFilter])
 
   // ── Events list auto-scroll ──
-  useEffect(() => {
+  // Layout effect (before paint) so the initial load lands directly at the
+  // bottom instead of painting the top first. Smooth-scroll only for later
+  // live updates; the first ~1s after mount is instant.
+  useLayoutEffect(() => {
     if (autoScrollRef.current && listRef.current) {
-      // Instantly position after switching in / initial population (within the
-      // first second); smooth-scroll only for later live updates.
       const animated = Date.now() - eventsMountedAt.current > 1000
       listRef.current.scrollTo({ top: listRef.current.scrollHeight, behavior: animated ? 'smooth' : 'auto' })
     }
@@ -372,9 +399,41 @@ export default function App() {
         panel={panel}
         onSelectPanel={setPanel}
         archived={archived}
+        isMobile={isMobile}
+        open={sidebarOpen}
+        onNavigate={() => setSidebarOpen(false)}
       />
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        {/* Mobile top bar: hamburger opens the sidebar drawer, label shows the
+            current view. Absent on desktop where the sidebar is always visible.
+            Fixed border-box height keeps the detail overlay's top aligned to
+            its bottom border. */}
+        {isMobile && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, height: MOBILE_TOP_BAR_HEIGHT, boxSizing: 'border-box', padding: '0 16px', borderBottom: '1px solid ' + colors.border, flexShrink: 0, background: colors.bg, zIndex: 10 }}>
+            <button
+              onClick={() => setSidebarOpen(true)}
+              title="menu"
+              style={{ background: 'none', border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              {/* Three drawn bars — the ☰ glyph is not vertically centered in
+                  the monospace font, so draw it with real lines instead. */}
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span style={{ width: 14, height: 2, background: colors.textDim, borderRadius: 1 }} />
+                <span style={{ width: 14, height: 2, background: colors.textDim, borderRadius: 1 }} />
+                <span style={{ width: 14, height: 2, background: colors.textDim, borderRadius: 1 }} />
+              </span>
+            </button>
+            <strong style={{ fontSize: fontSizes.md, color: colors.text }}>
+              {panel === 'templates' ? 'Templates'
+                : panel === 'projects' ? 'Projects'
+                : mode !== 'project' ? 'Projects'
+                : view === 'talk' ? 'Talk'
+                : view === 'events' ? 'Events'
+                : 'Workers'}
+            </strong>
+          </div>
+        )}
         {mode !== 'project' ? (
           panel === 'templates' ? <TemplatesView /> : <ProjectsView />
         ) : panel === 'templates' ? (
@@ -395,6 +454,7 @@ export default function App() {
               compactMode={compactMode}
               streamingMode={streamingMode}
               responseOnly={responseOnly}
+              isMobile={isMobile}
             />
 
             <TalkInput
@@ -411,6 +471,7 @@ export default function App() {
               mentionTarget={mentionTarget}
               onClearMentionTarget={() => setMentionTarget('')}
               onSelectTarget={(id) => setMentionTarget(id)}
+              isMobile={isMobile}
             />
           </>
         ) : view === 'workers' ? (
@@ -421,52 +482,70 @@ export default function App() {
               selectedId={selectedWorkerId}
               onSelect={selectWorker}
               onOpenEvents={handleSelectWorker}
+              isMobile={isMobile}
             />
             {selectedWorker && (
-              <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
-                <WorkerDetail
-                  worker={selectedWorker}
-                  onClose={() => setSelectedWorkerId(null)}
-                  archived={archived}
-                  onToggleArchived={toggleArchived}
-                />
-              </ResizablePanel>
+              isMobile ? (
+                <MobileDetailPanel>
+                  <WorkerDetail
+                    worker={selectedWorker}
+                    onClose={() => setSelectedWorkerId(null)}
+                    archived={archived}
+                    onToggleArchived={toggleArchived}
+                  />
+                </MobileDetailPanel>
+              ) : (
+                <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
+                  <WorkerDetail
+                    worker={selectedWorker}
+                    onClose={() => setSelectedWorkerId(null)}
+                    archived={archived}
+                    onToggleArchived={toggleArchived}
+                  />
+                </ResizablePanel>
+              )
             )}
           </div>
         ) : (
           <>
-            <div style={{ marginTop: 24, marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16 }}>
-              <strong>Events</strong>
-              <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
-                {filterWorkers.size > 0 && (
-                  <>
-                    filtering <strong style={{ color: colors.textDim }}>[{[...filterWorkers].join(', ')}]</strong>
-                    {traceFilter && ' · '}
-                  </>
-                )}
-                {traceFilter && (
-                  <>
-                    trace <strong style={{ color: colors.textDim }}>{traceFilter}</strong>
-                  </>
-                )}
-                {filterWorkers.size === 0 && !traceFilter && (
-                  <strong style={{ color: colors.textDim }}>[all workers]</strong>
-                )}
-                {traceFilter && (
-                  <span
-                    onClick={clearTraceFilter}
-                    style={{ cursor: 'pointer', color: colors.textDimmed, textDecoration: 'underline', marginLeft: 12, fontSize: fontSizes.sm }}
-                  >
-                    Clear
-                  </span>
-                )}
-              </span>
-            </div>
+            {/* On mobile the app-level top bar heads the page, so the in-view
+                header is skipped (same as the talk view). */}
+            {!isMobile && (
+              <div style={{ marginTop: 24, marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16 }}>
+                <strong>Events</strong>
+                <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
+                  {filterWorkers.size > 0 && (
+                    <>
+                      filtering <strong style={{ color: colors.textDim }}>[{[...filterWorkers].join(', ')}]</strong>
+                      {traceFilter && ' · '}
+                    </>
+                  )}
+                  {traceFilter && (
+                    <>
+                      trace <strong style={{ color: colors.textDim }}>{traceFilter}</strong>
+                    </>
+                  )}
+                  {filterWorkers.size === 0 && !traceFilter && (
+                    <strong style={{ color: colors.textDim }}>[all workers]</strong>
+                  )}
+                  {traceFilter && (
+                    <span
+                      onClick={clearTraceFilter}
+                      style={{ cursor: 'pointer', color: colors.textDimmed, textDecoration: 'underline', marginLeft: 12, fontSize: fontSizes.sm }}
+                    >
+                      Clear
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
 
             <div style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
-              <div ref={listRef} onScroll={handleScroll} style={{ flex: 1, minWidth: 0, overflowY: 'auto', fontSize: fontSizes.md, padding: '0 24px 16px 24px' }}>
+              <div ref={listRef} onScroll={handleScroll} style={{ flex: 1, minWidth: 0, overflow: 'auto', fontSize: fontSizes.md, padding: '0 24px 16px 24px' }}>
                 {events.length > 0 && <div ref={sentinelRef} style={{ height: 1 }} />}
-                <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
+                {/* min-width lets the wide fixed columns scroll horizontally on
+                    narrow (phone) viewports instead of collapsing. */}
+                <table style={{ width: '100%', minWidth: 680, borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
                   <thead>
                     <tr style={{ textAlign: 'left', color: colors.textDimmed, fontSize: fontSizes.xs }}>
                       <th style={{ padding: '6px 6px', width: 80, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="event timestamp">Time</th>
@@ -478,7 +557,7 @@ export default function App() {
                   </thead>
                   <tbody>
                     {events.map((evt) => (
-                      <EventRow key={evt.id} evt={evt} selected={evt.id === selectedEventId} onSelect={() => selectEvent(evt.id)} onOpenWorker={handleSelectWorker} deliveries={deliveries} workerTypes={workerTypes} />
+                      <EventRow key={evt.id} evt={evt} selected={evt.id === selectedEventId} onSelect={() => selectEvent(evt.id)} onOpenWorker={handleSelectWorker} deliveries={deliveries} workerTypes={workerTypes} isMobile={isMobile} />
                     ))}
                   </tbody>
                 </table>
@@ -487,9 +566,15 @@ export default function App() {
             {/* Detail panel anchored to the page-level column, so it spans the
                 full height including the Events title — same as the workers view. */}
             {selectedEvent && (
-              <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
-                <EventDetail evt={selectedEvent} deliveries={deliveries} onClose={() => setSelectedEventId(null)} />
-              </ResizablePanel>
+              isMobile ? (
+                <MobileDetailPanel>
+                  <EventDetail evt={selectedEvent} deliveries={deliveries} onClose={() => setSelectedEventId(null)} />
+                </MobileDetailPanel>
+              ) : (
+                <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
+                  <EventDetail evt={selectedEvent} deliveries={deliveries} onClose={() => setSelectedEventId(null)} />
+                </ResizablePanel>
+              )
             )}
           </>
         )}

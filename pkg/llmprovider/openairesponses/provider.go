@@ -27,6 +27,10 @@ type Config struct {
 	// Model to use when CompletionRequest.Model is empty.
 	Model string
 
+	// Headers are extra HTTP headers sent on every request, applied after the
+	// built-in auth headers so they may override them.
+	Headers map[string]string
+
 	// Client is an optional *http.Client. Uses http.DefaultClient if nil.
 	Client *http.Client
 }
@@ -49,6 +53,7 @@ type Provider struct {
 	apiKey  string
 	baseURL string
 	model   string
+	headers map[string]string
 	client  *http.Client
 }
 
@@ -59,6 +64,7 @@ func New(cfg Config) *Provider {
 		apiKey:  cfg.APIKey,
 		baseURL: cfg.BaseURL,
 		model:   cfg.Model,
+		headers: cfg.Headers,
 		client:  cfg.Client,
 	}
 }
@@ -140,9 +146,10 @@ func (p *Provider) ListModels(ctx context.Context) ([]llm.ModelInfo, error) {
 	models := make([]llm.ModelInfo, 0, len(mr.Data))
 	for _, m := range mr.Data {
 		models = append(models, llm.ModelInfo{
-			ID:       m.ID,
-			Name:     m.ID,
-			Provider: "openai-responses",
+			ID:            m.ID,
+			Name:          m.ID,
+			Provider:      "openai-responses",
+			ContextWindow: modelContextWindow(m),
 		})
 	}
 	return models, nil
@@ -171,6 +178,9 @@ func (p *Provider) setHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+	for k, v := range p.headers {
+		req.Header.Set(k, v)
 	}
 }
 
@@ -442,6 +452,20 @@ type modelsListResponse struct {
 
 type modelEntry struct {
 	ID string `json:"id"`
+	// Context window is reported inconsistently across OpenAI-compatible
+	// endpoints: some use context_window, others (e.g. OpenRouter) use
+	// context_length. Capture both and let modelContextWindow pick a non-zero.
+	ContextWindow int `json:"context_window"`
+	ContextLength int `json:"context_length"`
+}
+
+// modelContextWindow returns the model's context window from whichever field
+// the endpoint populated.
+func modelContextWindow(m modelEntry) int {
+	if m.ContextWindow > 0 {
+		return m.ContextWindow
+	}
+	return m.ContextLength
 }
 
 func (p *Provider) toCompletionResponse(rr *responsesResponse) *llm.CompletionResponse {

@@ -390,11 +390,11 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(views)
 }
 
-// handleSuspend suspends a host-managed worker by publishing tool.requested to
+// handleSuspend suspends a host-managed worker by publishing tool.request to
 // the host worker (data-plane, auditable).
 func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	evts := []event.Event{event.New(event.TypeToolRequested, "webui-hiw", map[string]any{
+	evts := []event.Event{event.New(event.TypeToolRequest, "webui-hiw", map[string]any{
 		"call_id":   "webui-suspend-" + id,
 		"name":      "suspend",
 		"arguments": map[string]any{"worker_id": id},
@@ -406,7 +406,7 @@ func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
 // handleResume resumes a host-managed worker via the host worker's tools.
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	evt := event.New(event.TypeToolRequested, "webui-hiw", map[string]any{
+	evt := event.New(event.TypeToolRequest, "webui-hiw", map[string]any{
 		"call_id":   "webui-resume-" + id,
 		"name":      "resume",
 		"arguments": map[string]any{"worker_id": id},

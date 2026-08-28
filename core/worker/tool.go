@@ -10,13 +10,6 @@ type Tool struct {
 	Description string         `json:"description"`
 	Parameters  map[string]any `json:"parameters"`         // JSON Schema
 	Provider    string         `json:"provider,omitempty"` // worker that provides this tool
-
-	// IsMetaTool marks a tool that directly edits this worker's own state (an
-	// operation on the worker itself, e.g. compress/rotate the transcript)
-	// rather than calling out to another worker for a result. Reason handles
-	// such tools specially: they bypass the tool lifecycle (placeholder,
-	// tracker, dispatch) and instead emit a worker.update event to self.
-	IsMetaTool bool `json:"is_meta_tool,omitempty"`
 }
 
 // ToolFunc is the runtime signature for executing a tool call.

@@ -12,7 +12,7 @@ import (
 	"github.com/54c1/niq/core/worker"
 )
 
-// handleToolCall dispatches tool.requested events to the appropriate handler.
+// handleToolCall dispatches tool.request events to the appropriate handler.
 func (w *Worker) handleToolCall(ctx context.Context, evt event.Event) {
 	tc := worker.ParseToolCall(evt)
 

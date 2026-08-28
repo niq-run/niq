@@ -12,8 +12,8 @@ import (
 )
 
 // buildHandlers probes the backend's low-level interfaces and assembles
-// tool handlers using backend helper functions. No ToolProvider — the
-// worker checks what the backend can do and registers accordingly.
+// tool handlers using backend helper functions. The worker checks what the
+// backend can do and registers accordingly.
 // maxBashTimeoutSec is the global hard cap on the bash tool's timeout
 // argument: no caller can run a command longer than this, whatever they pass.
 const maxBashTimeoutSec = 300 // 5 minutes

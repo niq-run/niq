@@ -17,9 +17,10 @@ interface TalkInputProps {
   mentionTarget: string
   onClearMentionTarget: () => void
   onSelectTarget: (id: string) => void
+  isMobile: boolean
 }
 
-export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget }: TalkInputProps) {
+export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget, isMobile }: TalkInputProps) {
   const { colors } = useTheme()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -167,6 +168,10 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   ]
   const currentModeLabel = modeOptions.find(m => m.id === inputMode)?.label ?? inputMode
 
+  // The mode dropdown is 420px wide on desktop; on phones it must fit the
+  // viewport (minus padding) or it overflows the screen.
+  const modePickerWidth = Math.min(420, Math.max(280, (typeof window !== 'undefined' ? window.innerWidth : 420) - 24))
+
   return (
     <div style={{ padding: '12px 24px', borderTop: '1px solid ' + colors.border, position: 'relative' }}>
       {/* Target indicator: a single always-on chip reflecting the current target
@@ -210,6 +215,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         value={input}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
+        className="talk-input"
         placeholder='Type a message... (@ to mention a worker, Shift+Enter for new line)'
         rows={3}
         style={{
@@ -232,9 +238,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             onClick={(e) => { e.stopPropagation(); setModeOpen(v => !v) }}
             title={modeOptions.find(m => m.id === inputMode)?.hint}
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: fontSizes.base, lineHeight: '18px',
+              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: isMobile ? 15 : fontSizes.base, lineHeight: isMobile ? '22px' : '18px',
               color: colors.textDim,
-              border: '1px solid ' + colors.border, borderRadius: 4, padding: '1px 8px',
+              border: '1px solid ' + colors.border, borderRadius: 4, padding: isMobile ? '5px 10px' : '1px 8px',
               cursor: 'pointer', userSelect: 'none',
             }}
           >
@@ -248,7 +254,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
                 options={modeOptions}
                 selectedId={inputMode}
                 onSelect={(id) => { onModeChange(id); setModeOpen(false) }}
-                width={420}
+                width={modePickerWidth}
               />
             </div>
           )}
@@ -259,11 +265,12 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           style={{
             background: 'none',
             color: colors.textDim,
-            border: 'none',
-            padding: '4px 12px',
+            border: isMobile ? '1px solid ' + colors.border : 'none',
+            padding: isMobile ? '6px 14px' : '4px 12px',
             borderRadius: 4,
             cursor: 'pointer',
-            fontSize: 13,
+            fontSize: isMobile ? 15 : 13,
+            lineHeight: '20px',
             fontFamily: 'monospace',
           }}
         >
@@ -275,12 +282,13 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           style={{
             background: 'none',
             color: colors.accent,
-            border: 'none',
-            padding: '4px 12px',
+            border: isMobile ? '1px solid ' + colors.accentBorder : 'none',
+            padding: isMobile ? '6px 14px' : '4px 12px',
             borderRadius: 4,
             cursor: 'pointer',
-            fontSize: 13,
+            fontSize: isMobile ? 15 : 13,
             fontWeight: 'bold',
+            lineHeight: '20px',
             fontFamily: 'monospace',
           }}
         >

@@ -13,7 +13,7 @@ over HTTP (SSE + POST).
 |---|---|
 | Connect to a bus over HTTP (`GET /events` SSE stream) | Identity registration (control-plane / `registryapi`) |
 | `send` (directed) and `broadcast` (subscription-matched) | Worker runtime / swarm assembly |
-| Receive routed events (`tool.requested`, etc.) | Program compilation |
+| Receive routed events (`tool.request`, etc.) | Program compilation |
 | Protocol event type constants | — |
 | Event construction helpers (`createEvent`, correctly timestamped + UUIDv7 ids) | — |
 
@@ -35,7 +35,7 @@ await worker.connect();
 
 // Handle events routed to this worker.
 for await (const evt of worker.events()) {
-  // respond to tool.requested, worker.input, ...
+  // respond to tool.request, worker.input, ...
 }
 
 // Directed delivery — "I know who should handle this."

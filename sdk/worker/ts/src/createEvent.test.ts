@@ -3,8 +3,8 @@ import { createEvent } from "./createEvent.js";
 
 describe("createEvent", () => {
   it("fills deterministic defaults", () => {
-    const evt = createEvent("tool.requested", { tool: "x" }, 1_700_000_000_000);
-    expect(evt.type).toBe("tool.requested");
+    const evt = createEvent("tool.request", { tool: "x" }, 1_700_000_000_000);
+    expect(evt.type).toBe("tool.request");
     expect(evt.status).toBe("created");
     expect(evt.payload).toEqual({ tool: "x" });
     expect(evt.worker_id).toBe(""); // stamped by the client at publish time

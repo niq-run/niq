@@ -15,8 +15,6 @@
 // own choice, not a property of the level.
 package reason
 
-import "errors"
-
 import (
 	"context"
 	"encoding/json"
@@ -25,6 +23,7 @@ import (
 
 	"github.com/54c1/niq/core/event"
 	"github.com/54c1/niq/core/llm"
+	"github.com/54c1/niq/core/worker"
 )
 
 // process routes an event through one of the dispatch paths:
@@ -48,7 +47,15 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 	case evt.Type == event.TypeWorkerAbort:
 		w.handleAbort(evt)
 	case evt.Type == event.TypeWorkerUpdate:
-		w.handleWorkerUpdate(evt)
+		// Capability channel: route to the registered handler by op.
+		if !w.dispatchCapability(evt) {
+			log.Printf("[reason %s] no capability for worker.update op=%v", w.ID(), evt.Payload["op"])
+		}
+	case evt.Type == event.TypeWorkerQuery:
+		// Capability channel: route to the registered handler by subject.
+		if !w.dispatchCapability(evt) {
+			log.Printf("[reason %s] no capability for worker.query subject=%v", w.ID(), evt.Payload["subject"])
+		}
 	case evt.Type == "timer.timeout":
 		w.handleTimeout(evt)
 	case evt.Type == "timer.reminder":
@@ -59,17 +66,22 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 		w.handleWorkerGone(evt)
 	case isToolResultEvent(evt.Type):
 		w.handleToolResult(evt)
-	case evt.Type == event.TypeToolRequested:
-		w.handleToolRequest(evt)
+	case evt.Type == event.TypeToolRequest:
+		// Capability channel: a tool.request targeting this worker. The
+		// registered tool handler serves it; an unknown tool is rejected.
+		tc := worker.ParseToolCall(evt)
+		if !w.dispatchCapability(evt) {
+			w.replyUnknownTool(tc)
+		}
 	case evt.Type == event.TypeWorkerInput:
 		w.handleInput(evt)
 	}
 }
 
-// emitMetaUpdateRequest sends a worker.update event to this worker, requesting
-// a meta operation (compress/rotate/...) through the bus for audit — the single
-// path every meta trigger converges on. Lock need not be held specially; the
-// event is queued to self and handled asynchronously by process.
+// emitMetaUpdateRequest sends a worker.update event to this worker,
+// requesting a meta operation (compress/rotate/...) through the bus for audit —
+// the single path every meta trigger converges on. Lock need not be held
+// specially; the event is queued to self and handled asynchronously by process.
 func (w *BaseReasonWorker) emitMetaUpdateRequest(ctx context.Context, op string, args map[string]any) {
 	if args == nil {
 		args = map[string]any{}
@@ -78,103 +90,6 @@ func (w *BaseReasonWorker) emitMetaUpdateRequest(ctx context.Context, op string,
 	evt := event.New(event.TypeWorkerUpdate, w.ID(), args)
 	evt.TraceID = w.currentTraceID
 	_ = w.Channel.Send(ctx, evt, w.ID())
-}
-
-// handleWorkerUpdate processes a worker.update event targeting this worker:
-// a meta operation (a direct edit of this worker's own state, e.g.
-// compress/rotate the transcript). The operation runs asynchronously (the
-// summary is an LLM call, seconds); input arriving meanwhile is buffered and
-// flushed after the operation completes, which then schedules the next round.
-func (w *BaseReasonWorker) handleWorkerUpdate(evt event.Event) {
-	op, _ := evt.Payload["op"].(string)
-
-	switch op {
-	case "compress", "rotate":
-		traceID := evt.TraceID
-		// The requester may carry a directive (compress focus) or a carry
-		// (rotate) - append either to the compaction directive.
-		directive := w.compactDirective()
-		if extra, _ := evt.Payload["directive"].(string); op == "compress" && extra != "" {
-			directive = directive + "\nCaller focus: " + extra
-		}
-		if carry, _ := evt.Payload["carry"].(string); op == "rotate" && carry != "" {
-			directive = directive + "\nCarry into the new episode: " + carry
-		}
-		go func() {
-			var err error
-			if op == "rotate" {
-				if c, ok := w.compactor.(*DefaultCompactor); ok {
-					err = c.Rotate(context.Background(), w.transcript, directive)
-				} else {
-					err = fmt.Errorf("rotate requested but compactor has no Rotate")
-				}
-			} else {
-				err = w.compactor.Compact(context.Background(), w.transcript, directive)
-			}
-			// The transcript self-buffers Apply inputs during the edit and merges
-			// them on commit, so no worker-side buffer is needed. Just note the
-			// operation finished and schedule the next round (a brief lock for
-			// the scheduling flags).
-			w.mu.Lock()
-			w.needReason = true
-			w.mu.Unlock()
-
-			log.Printf("[reason %s] meta op %s done: %v", w.ID(), op, err)
-			done := event.New(event.TypeWorkerUpdated, w.ID(), map[string]any{
-				"op": op, "done": true, "error": fmt.Sprintf("%v", err),
-			})
-			done.TraceID = traceID
-			_ = w.Channel.Broadcast(context.Background(), done)
-
-			w.tryReason(context.Background())
-		}()
-	case "set-llm-provider":
-		w.handleSetLLMProvider(evt)
-	default:
-		log.Printf("[reason %s] unknown worker.update op: %q", w.ID(), op)
-	}
-}
-
-// handleSetLLMProvider applies a worker.update set-llm-provider op: it builds
-// the named provider with an explicit model from the configured sources and
-// atomically rebinds this worker's active provider under the lock. Both
-// provider and model are required — an empty model is rejected rather than
-// silently defaulting. The switch takes effect from the next reasoning round.
-// Emits a worker.updated completion so the requester can observe success/failure.
-func (w *BaseReasonWorker) handleSetLLMProvider(evt event.Event) {
-	name, _ := evt.Payload["provider"].(string)
-	model, _ := evt.Payload["model"].(string)
-
-	payload := map[string]any{"op": "set-llm-provider", "provider": name, "model": model}
-
-	var err error
-	switch {
-	case name == "":
-		err = errors.New("provider is required")
-	case model == "":
-		err = errors.New("model is required (explicit model, no default fallback)")
-	default:
-		err = w.setActiveProvider(name, model)
-	}
-
-	if err != nil {
-		payload["done"] = false
-		payload["error"] = err.Error()
-	} else {
-		payload["done"] = true
-		w.needReason = true
-	}
-	log.Printf("[reason %s] set-llm-provider provider=%s model=%s done=%t err=%v", w.ID(), name, model, payload["done"], err)
-	w.emitWorkerUpdated(evt, payload)
-}
-
-// emitWorkerUpdated broadcasts a worker.updated completion for a meta op,
-// carrying the caller's trace id.
-func (w *BaseReasonWorker) emitWorkerUpdated(evt event.Event, payload map[string]any) {
-	payload["op"] = payload["op"].(string)
-	done := event.New(event.TypeWorkerUpdated, w.ID(), payload)
-	done.TraceID = evt.TraceID
-	_ = w.Channel.Broadcast(context.Background(), done)
 }
 
 // handleAbort cancels the current LLM call, parks all pending tools (so late
