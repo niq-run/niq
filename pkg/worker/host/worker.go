@@ -1,7 +1,7 @@
 // Package host provides the HostWorker — the bus-facing worker that exposes
 // spawn/suspend/resume tools for managing other workers' lifecycles.
 //
-// HostWorker is deliberately thin: it handles the bus protocol (tool.requested
+// HostWorker is deliberately thin: it handles the bus protocol (tool.request
 // events, replies) and forwards lifecycle operations to workerhost.WorkerService.
 // It holds no knowledge of how specific worker types are built — that lives in
 // the Builder registry the assembly layer registers on the WorkerService.
@@ -27,7 +27,7 @@ type Config struct {
 }
 
 // HostWorker is a bus-facing worker that manages other worker lifecycles.
-// It subscribes to tool.requested and worker.discover, and exposes
+// It subscribes to tool.request and worker.discover, and exposes
 // spawn/suspend/resume tools on the bus. Actual lifecycle operations are
 // delegated to workerhost.WorkerService.
 type HostWorker struct {
@@ -46,7 +46,7 @@ func New(cfg Config) *HostWorker {
 	}
 	return &HostWorker{
 		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern(event.TypeToolRequested),
+			event.NewPattern(event.TypeToolRequest),
 			event.NewPattern(event.TypeToolCancel),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),
@@ -118,7 +118,7 @@ func (w *HostWorker) process(evt event.Event) {
 	case event.TypeToolCancel:
 		callID, _ := evt.Payload["call_id"].(string)
 		log.Printf("[host %s] cancel requested for %s (best-effort)", w.ID(), callID)
-	case event.TypeToolRequested:
+	case event.TypeToolRequest:
 		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
 			return
 		}

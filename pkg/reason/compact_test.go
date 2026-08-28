@@ -89,11 +89,11 @@ func TestHardBudgetEmitsMetaRequest(t *testing.T) {
 
 	w.handleBudget(context.Background(), llm.Message{Usage: &llm.Usage{InputTokens: 990, OutputTokens: 5}})
 
-	// Hard budget routes compaction through a worker.update meta request to
-	// itself (single audit path), not a direct compactor call.
+	// Hard budget routes compaction through a worker.update meta
+	// request to itself (single audit path), not a direct compactor call.
 	var found bool
 	for _, e := range ch.eventsOf(event.TypeWorkerUpdate) {
-		if op, _ := e.Payload["op"].(string); op == "compress" {
+		if op, _ := e.Payload["op"].(string); op == "context.compress" {
 			found = true
 		}
 	}
@@ -102,10 +102,10 @@ func TestHardBudgetEmitsMetaRequest(t *testing.T) {
 	}
 }
 
-// TestMetaCompressViaWorkerUpdate verifies the compress meta operation, run via
-// handleWorkerUpdate, compacts the transcript asynchronously and schedules the
-// next round.
-func TestMetaCompressViaWorkerUpdate(t *testing.T) {
+// TestMetaCompressViaUpdateRequested verifies the compress meta operation, run
+// via handleContextOp, compacts the transcript asynchronously and
+// schedules the next round.
+func TestMetaCompressViaUpdateRequested(t *testing.T) {
 	prov := &summarizeProvider{summarized: "hard-budget",
 		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
 	ch := newTestChannel()
@@ -119,7 +119,7 @@ func TestMetaCompressViaWorkerUpdate(t *testing.T) {
 	}
 
 	w.mu.Lock()
-	w.handleWorkerUpdate(event.New(event.TypeWorkerUpdate, "me", map[string]any{"op": "compress"}))
+	w.handleContextOp(event.New(event.TypeWorkerUpdate, "me", map[string]any{"op": "context.compress"}))
 	w.mu.Unlock()
 
 	// The compress operation completes asynchronously, compacting the
@@ -137,11 +137,12 @@ func TestMetaCompressViaWorkerUpdate(t *testing.T) {
 	}, "compress to apply a digest head")
 }
 
-// TestMetaRotateViaWorkerUpdate verifies the rotate meta operation, triggered
-// via the worker.update event, runs asynchronously: it compacts the transcript
-// into a carried digest (keeping the rotate call's own pair), flushes any
-// buffered input, and sets needReason so a next round is scheduled.
-func TestMetaRotateViaWorkerUpdate(t *testing.T) {
+// TestMetaRotateViaUpdateRequested verifies the rotate meta operation,
+// triggered via the worker.update event, runs asynchronously: it
+// compacts the transcript into a carried digest (keeping the rotate call's own
+// pair), flushes any buffered input, and sets needReason so a next round is
+// scheduled.
+func TestMetaRotateViaUpdateRequested(t *testing.T) {
 	prov := &summarizeProvider{summarized: "episode",
 		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
 	ch := newTestChannel()
@@ -164,7 +165,7 @@ func TestMetaRotateViaWorkerUpdate(t *testing.T) {
 	}})
 
 	w.mu.Lock()
-	w.handleWorkerUpdate(event.New(event.TypeWorkerUpdate, "me", map[string]any{"op": "rotate"}))
+	w.handleContextOp(event.New(event.TypeWorkerUpdate, "me", map[string]any{"op": "context.rotate"}))
 	w.mu.Unlock()
 
 	// Rotate completes asynchronously.

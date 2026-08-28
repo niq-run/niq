@@ -63,13 +63,12 @@ type Config struct {
 
 	Provider        llm.LLMProvider
 	ProviderSources ProviderSources
+	// ProviderName / ProviderModel record the initially active provider for
+	// status reporting (worker.status op=providers carries the current choice).
+	// Empty when unknown.
+	ProviderName    string
+	ProviderModel   string
 	ReasoningEffort *string
-
-	// ToolProvider supplies the tools this worker exposes on the bus (a tool
-	// call routed back to the same worker). nil uses the default set; a custom
-	// provider lists every tool to serve, defaults included. Tools served by
-	// other workers are discovered separately.
-	ToolProvider ToolProvider
 
 	// Compactor is how this worker compresses its transcript under window
 	// pressure. nil uses the default LLM-summary compactor. It may also carry
@@ -125,9 +124,13 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		BaseWorker:               worker.NewBaseWorker(cfg.ID, cfg.Subscriptions, cfg.Bus),
 		llmProvider:              initialProvider,
 		providerSources:          cfg.ProviderSources,
+		providerName:             cfg.ProviderName,
+		providerModel:            cfg.ProviderModel,
 		transcript:               cfg.Transcript,
 		tools:                    make(map[string]worker.Tool),
 		publishMap:               make(map[string][]EventPublish),
+		capabilities:             make(map[string]registeredCapability),
+		toolListBuilder:          defaultToolListBuilder,
 		toolNameMap:              make(map[string]string),
 		eventConverters:          cfg.EventConverters,
 		programs:                 cfg.Programs,
@@ -143,14 +146,6 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		w.transcript.Apply(InputPatch{Messages: cfg.SeedMessages})
 	}
 
-	// Peer the tool provider (default DefaultTools if none supplied). Custom
-	// providers get a pointer to this worker so they can serve it.
-	if cfg.ToolProvider == nil {
-		w.toolProvider = NewDefaultTools(w)
-	} else {
-		w.toolProvider = cfg.ToolProvider
-	}
-
 	// Compactor: default LLM-summary compactor unless supplied. It needs the
 	// provider for summarization and the tail policy.
 	if cfg.Compactor == nil {
@@ -159,10 +154,17 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		w.compactor = cfg.Compactor
 	}
 
-	// Tools are not installed here: on Start, broadcastReady publishes a
-	// worker.ready directed to self carrying this worker's own tool + meta-tool
-	// declarations, which handleWorkerReady discovers into w.tools like any
-	// other worker's. So there is no hardcoded built-in tool set.
+	// Register the core capabilities (tools + context meta ops + provider
+	// switch/status). The capability registry is the extension point;
+	// reason-family workers call Register to add or replace capabilities.
+	w.registerCoreCapabilities()
+	// Seed the discovery universe with the worker's own capabilities.
+	w.seedOwnCapabilities()
+
+	// Resolve the context window for the selected provider/model so the budget
+	// thresholds use the real size (API-reported or configured) instead of the
+	// manual fallback (0 = disabled).
+	w.resolveContextWindow()
 
 	return w
 }
@@ -202,17 +204,24 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 // worker's - so its built-in tools are not a special hardcoded set but a
 // self-published declaration.
 func (w *BaseReasonWorker) broadcastReady() {
-	// Batch 1: broadcast - announce presence (no tool declaration needed).
+	// Batch 1: broadcast - announce presence and the worker's capability
+	// contract (watch: events it responds to). Peers / hiw discover the
+	// meta capabilities (worker.update / worker.query) from
+	// this declaration.
 	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 		"type":      "reason",
+		"watch":     w.watchDeclarations(),
 	}))
 
-	// Batch 2: directed to self - declare this worker's own tools + meta tools.
+	// Batch 2: directed to self - declare this worker's own capability
+	// contract (watch). Reason discovers its own capabilities from that
+	// directed announcement (via handleWorkerReady), the same way it discovers
+	// any other worker's.
 	_ = w.Channel.Send(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 		"type":      "reason",
-		"tools":     w.selfToolDeclarations(),
+		"watch":     w.watchDeclarations(),
 	}), w.ID())
 }
 
@@ -265,14 +274,18 @@ type BaseReasonWorker struct {
 
 	llmProvider     llm.LLMProvider
 	providerSources ProviderSources
+	providerName    string // active provider name (status reporting)
+	providerModel   string // active provider model (status reporting)
 	transcript      Transcript
-	tools           map[string]worker.Tool // tools from the bus + built-ins; read by dispatch
+	tools           map[string]worker.Tool          // tools from the bus + built-ins; read by dispatch
+	discovered      []DiscoveredCap                 // unified capability universe (own seeded + bus announcements)
+	capabilities    map[string]registeredCapability // capability registry (the extension point)
+	toolListBuilder ToolListBuilder                 // LLM tool list policy (extension point)
 	programs        []program.Program
 	publishMap      map[string][]EventPublish // worker ID -> published events
 	toolNameMap     map[string]string         // encoded LLM-facing name -> original declared name
 	toolCallTracker *ToolCallTracker
 
-	toolProvider    ToolProvider
 	compactor       Compactor
 	eventConverters []EventConverter
 

@@ -30,7 +30,7 @@ type Config struct {
 }
 
 // Worker is a bus-facing worker that manages Program lifecycle.
-// It subscribes to tool.requested and worker.discover, and exposes
+// It subscribes to tool.request and worker.discover, and exposes
 // search/load/edit/register/delete tools on the bus.
 //
 // Programs are discovered from the Backend at startup and cached in the
@@ -56,7 +56,7 @@ func New(cfg Config) *Worker {
 	}
 	return &Worker{
 		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern(event.TypeToolRequested),
+			event.NewPattern(event.TypeToolRequest),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),
 		backend:  cfg.Backend,
@@ -197,7 +197,7 @@ func (w *Worker) process(ctx context.Context, evt event.Event) {
 		if evt.WorkerId != w.ID() {
 			w.publishReady()
 		}
-	case event.TypeToolRequested:
+	case event.TypeToolRequest:
 		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
 			return
 		}

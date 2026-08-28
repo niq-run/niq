@@ -76,55 +76,51 @@ func keys(m map[string]worker.Tool) []string {
 	return ks
 }
 
-// loadSelfTools simulates reason discovering its own tool declarations: it
-// feeds a worker.ready directed to self (carrying selfToolDeclarations) into
-// handleWorkerReady, which loads the tools/meta-tools into w.tools home same
-// as any other worker's announcement.
-func loadSelfTools(t *testing.T, w *BaseReasonWorker) {
-	t.Helper()
-	ready := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "reason",
-		"tools":     w.selfToolDeclarations(),
-	})
-	w.handleWorkerReady(ready)
-}
-
-// TestSelfDeclaredToolsLoadable verifies reason's own tools (including meta
-// tools) are discovered from a worker.ready directed to self, and that meta
-// tools carry the IsMetaTool flag.
-func TestSelfDeclaredToolsLoadable(t *testing.T) {
+// TestCoreCapabilitiesRegistered verifies the core capabilities are registered
+// on the capability registry at construction: the two tools (send_message /
+// list_workers) as tool.request loop-backs, and the context meta ops
+// (context.compress / context.rotate) as worker.update meta capabilities
+// exposed to the LLM by their LLMName.
+func TestCoreCapabilitiesRegistered(t *testing.T) {
 	w := newTestWorker(nil, newTestChannel())
-	loadSelfTools(t, w)
 
-	if _, ok := w.tools["send_message"]; !ok {
-		t.Fatalf("send_message should be discovered from self ready, got %+v", keys(w.tools))
+	if cap, ok := w.capabilityByToolName("send_message"); !ok || cap.Event != event.TypeToolRequest {
+		t.Fatalf("send_message not registered as tool.request capability: %+v ok=%v", cap, ok)
 	}
-	if _, ok := w.tools["context_compress"]; !ok {
-		t.Fatalf("context_compress should be discovered, got %+v", keys(w.tools))
-	}
-	mt := w.tools["context_compress"]
-	if !mt.IsMetaTool {
-		t.Fatal("context_compress should be marked IsMetaTool from its declaration")
+	if cap, ok := w.capabilityByToolName("context_compress"); !ok || cap.Event != event.TypeWorkerUpdate {
+		t.Fatalf("context_compress not registered as worker.update capability: %+v ok=%v", cap, ok)
 	}
 }
 
-// TestDefaultProviderExposesDefaultTools verifies the default provider exposes
-// exactly the domain-agnostic tool set, (self-)discovered by this worker.
-func TestDefaultProviderExposesDefaultTools(t *testing.T) {
+// TestCoreCapabilitiesExposedToLLM verifies the LLM tool list is the union of
+// the worker's exposed capabilities (LLMName set) and nothing else — provider
+// switch/status are not exposed, and the context meta ops are.
+func TestCoreCapabilitiesExposedToLLM(t *testing.T) {
 	w := newTestWorker(nil, newTestChannel())
-	loadSelfTools(t, w)
 
-	want := map[string]bool{"send_message": true, "list_workers": true,
-		"list_llm_providers": true, "context_compress": true, "context_rotate": true}
-	for name := range want {
-		if _, ok := w.tools[name]; !ok {
-			t.Fatalf("expected exposed tool %q, got %+v", name, keys(w.tools))
+	defs := w.llmToolDefs()
+	got := make(map[string]bool)
+	for _, d := range defs {
+		got[d.Name] = true
+	}
+	for _, want := range []string{"send_message", "list_workers", "context_compress", "context_rotate"} {
+		if !got[want] {
+			t.Fatalf("expected %q in LLM tool list, got %v", want, keysOf(got))
 		}
 	}
-	if len(w.tools) != len(want) {
-		t.Fatalf("expected exactly %d exposed tools, got %+v", len(want), keys(w.tools))
+	for _, banned := range []string{"provider.switch", "provider.list", "provider.current"} {
+		if got[banned] {
+			t.Fatalf("provider capability %q must not be exposed to the LLM", banned)
+		}
 	}
+}
+
+func keysOf(m map[string]bool) []string {
+	var ks []string
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }
 
 // TestToolNameMapRestoresDottedNames verifies that when a worker declares a
@@ -157,7 +153,7 @@ func TestToolNameMapRestoresDottedNames(t *testing.T) {
 	w.handleToolCalls(context.Background(), calls, "trace1")
 
 	var gotName string
-	for _, e := range ch.eventsOf(event.TypeToolRequested) {
+	for _, e := range ch.eventsOf(event.TypeToolRequest) {
 		if n, _ := e.Payload["name"].(string); n != "" {
 			gotName = n
 		}

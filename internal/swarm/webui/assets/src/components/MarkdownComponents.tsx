@@ -19,5 +19,23 @@ export function makeMdComponents(dark: boolean, colors: any) {
     hr() {
       return <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '12px 0', opacity: 0.4 }} />
     },
+    // Links use the theme accent instead of the browser-default blue, which is
+    // hard to read on the dark background.
+    a({ href, children, ...props }: any) {
+      return (
+        <a
+          href={href}
+          {...props}
+          style={{
+            color: colors.accent,
+            textDecoration: 'underline',
+            textDecorationStyle: 'dotted',
+            textUnderlineOffset: 3,
+          }}
+        >
+          {children}
+        </a>
+      )
+    },
   }
 }

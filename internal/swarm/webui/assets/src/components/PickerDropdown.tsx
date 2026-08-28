@@ -1,4 +1,5 @@
 import { useTheme, fontSizes } from '../theme'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 export interface PickerOption {
   id: string
@@ -42,6 +43,7 @@ export default function PickerDropdown({
   width = 240,
 }: PickerDropdownProps) {
   const { colors } = useTheme()
+  const isMobile = useIsMobile()
 
   const rowBase: React.CSSProperties = {
     padding: '7px 12px',
@@ -58,20 +60,46 @@ export default function PickerDropdown({
   // would override the class :hover rule.
   const highlightBg = colors.bgChip
 
+  // Mobile: the picker becomes a centered dialog (it cannot fit an anchored
+  // dropdown beside the trigger on a phone). Desktop keeps the anchored panel
+  // that the caller positions.
+  const panelWidth = isMobile
+    ? Math.min(width, (typeof window !== 'undefined' ? window.innerWidth : width) - 32)
+    : width
+  const panelStyle: React.CSSProperties = isMobile ? {
+    position: 'fixed',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: panelWidth,
+    maxWidth: panelWidth + 20,
+    background: colors.bgLight,
+    border: '1px solid ' + colors.border,
+    borderRadius: 6,
+    maxHeight: '70vh',
+    overflowY: 'auto',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+    zIndex: 91,
+  } : {
+    width,
+    maxWidth: width + 20,
+    background: colors.bgLight,
+    border: '1px solid ' + colors.border,
+    borderRadius: 6,
+    maxHeight: 220,
+    overflowY: 'auto',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+  }
+
   return (
-    <div
-      className="picker-dropdown"
-      style={{
-        width,
-        maxWidth: width + 20,
-        background: colors.bgLight,
-        border: '1px solid ' + colors.border,
-        borderRadius: 6,
-        maxHeight: 220,
-        overflowY: 'auto',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-      }}
-    >
+    <>
+      {/* Backdrop: tapping it closes the dialog (the callers close via their
+          global window click handler, which this click bubbles to). */}
+      {isMobile && <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 90 }} />}
+      <div
+        className="picker-dropdown"
+        style={panelStyle}
+      >
       <div
         className="picker-header"
         style={{ padding: '8px 10px 3px 10px', fontSize: fontSizes.xs, color: colors.textDimmed }}
@@ -168,5 +196,6 @@ export default function PickerDropdown({
         </div>
       )}
     </div>
+    </>
   )
 }

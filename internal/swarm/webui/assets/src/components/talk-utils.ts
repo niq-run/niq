@@ -19,7 +19,7 @@ export function getInputText(evt: EventPayload): string {
 // ── Type checks ──
 
 export function isToolEvent(type: string): boolean {
-  return type === 'tool.requested' || type === 'tool.completed' || type === 'tool.failed' || type === 'tool.rejected'
+  return type === 'tool.request' || type === 'tool.completed' || type === 'tool.failed' || type === 'tool.rejected'
 }
 
 export function isReasonBoundary(type: string): boolean {
@@ -41,7 +41,7 @@ export function toolCallId(evt: EventPayload): string {
 export function toolContent(evt: EventPayload, formatted: boolean): string {
   const format = (v: any): string =>
     formatted ? JSON.stringify(v, null, 2) : JSON.stringify(v)
-  if (evt.type === 'tool.requested') {
+  if (evt.type === 'tool.request') {
     const args = evt.payload?.arguments
     if (args) return format(args)
     return ''

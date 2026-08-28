@@ -7,9 +7,10 @@
 //	everything else                      → retry with backoff
 //
 // The policy dispatcher is decideLLMError, called from openStream's retry
-// loop. Both recovery actions are event-driven through the bus (worker.update
-// for compression, tool.requested→timer.reminder for rate limits) so they stay
-// auditable and never block the reason goroutine with a synchronous sleep.
+// loop. Both recovery actions are event-driven through the bus
+// (worker.update for compression, tool.request→timer.reminder for
+// rate limits) so they stay auditable and never block the reason goroutine
+// with a synchronous sleep.
 package reason
 
 import (
@@ -41,7 +42,7 @@ func (w *BaseReasonWorker) decideLLMError(reasonCtx context.Context, traceID str
 		// return a non-retriable error so this round ends; the compaction
 		// completes asynchronously and schedules the next round on the
 		// shrunk context.
-		w.emitMetaUpdateRequest(reasonCtx, "compress", nil)
+		w.emitMetaUpdateRequest(reasonCtx, "context.compress", nil)
 		return false, callErr
 	case llm.ErrorRateLimit:
 		// Decide here, at 429 detection time, whether more retries remain: if
@@ -67,7 +68,7 @@ const (
 	// scheduled reminder before the round gives up.
 	maxRateLimitRetries = 5
 	// rateLimitBackoffDuration is the delay before each retry.
-	rateLimitBackoffDuration = 5 * time.Second
+	rateLimitBackoffDuration = time.Minute
 )
 
 // errRateLimitBackoff ends the current round quietly: a retry reminder has
@@ -117,7 +118,7 @@ func (w *BaseReasonWorker) scheduleRateLimitBackoff(traceID string, callErr erro
 // scheduleRateLimitBackoff, so the reminder only needs to wake the round up.
 func (w *BaseReasonWorker) dispatchElapseReminder(traceID string, attempt int) {
 	callID := fmt.Sprintf("niq_rl_%d_%d", time.Now().UnixNano(), attempt)
-	evt := event.New(event.TypeToolRequested, w.ID(), map[string]any{
+	evt := event.New(event.TypeToolRequest, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 		"call_id":   callID,
 		"name":      "elapse",

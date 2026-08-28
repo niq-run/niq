@@ -111,3 +111,8 @@
 [data-theme="light"] .event-row:hover td { background: #eeeeee; }
 [data-theme="dark"] .event-row.selected td { background: rgba(60,120,180,0.15); }
 [data-theme="light"] .event-row.selected td { background: rgba(40,90,150,0.1); }
+
+/* ── Talk input placeholder: dimmer than the palette's dimmest text, so it
+   reads as an affordance, not a message. ── */
+[data-theme="dark"] .talk-input::placeholder { color: #555; }
+[data-theme="light"] .talk-input::placeholder { color: #bbb; }

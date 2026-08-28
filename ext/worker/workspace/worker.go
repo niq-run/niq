@@ -43,7 +43,7 @@ type WorkspaceWorker struct {
 
 func New(cfg Config) *WorkspaceWorker {
 	subs := []event.EventPattern{
-		event.NewPattern(event.TypeToolRequested),
+		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeToolCancel),
 		event.NewPattern(event.TypeWorkerDiscover),
 	}
@@ -108,7 +108,7 @@ func (w *WorkspaceWorker) process(ctx context.Context, evt event.Event) {
 	case event.TypeToolCancel:
 		callID, _ := evt.Payload["call_id"].(string)
 		log.Printf("[workspace %s] cancel requested for %s (best-effort)", w.ID(), callID)
-	case event.TypeToolRequested:
+	case event.TypeToolRequest:
 		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
 			return
 		}

@@ -10,6 +10,16 @@
 //	    {"name": "deepseek-claude", "type": "claude", "base_url": "https://api.deepseek.com/anthropic", "model": "deepseek-v4-flash"}
 //	  ]
 //	}
+//
+// Each provider may also carry custom authentication headers:
+//
+//	{"name": "acme", "type": "openai-compatible", "base_url": "https://llm.acme.dev/v1",
+//	 "api_key": "${ACME_KEY}",
+//	 "headers": {"X-Tenant": "team-a", "Authorization": "Bearer ${ACME_KEY}"}}
+//
+// api_key and header values support ${VAR} / $VAR environment-variable
+// expansion; custom headers are applied after the built-in auth headers and
+// may therefore override them.
 package providercfg
 
 import (
@@ -28,22 +38,94 @@ import (
 // Provider describes one named LLM provider.
 //
 // Model is the default model used when none is selected explicitly; Models is
-// the full list of models the provider offers. When Model is empty and Models is
-// non-empty, Model falls back to Models[0] (see ResolveDefaultModel).
+// the full list of models the provider offers, each with optional per-model
+// metadata such as ContextWindow. When Model is empty and Models is non-empty,
+// Model falls back to Models[0] (see ResolveDefaultModel).
 type Provider struct {
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`
-	APIKey  string   `json:"api_key,omitempty"`
-	BaseURL string   `json:"base_url,omitempty"`
-	Model   string   `json:"model,omitempty"`
-	Models  []string `json:"models,omitempty"`
+	Name    string            `json:"name"`
+	Type    string            `json:"type"`
+	APIKey  string            `json:"api_key,omitempty"`
+	BaseURL string            `json:"base_url,omitempty"`
+	Model   string            `json:"model,omitempty"`
+	Models  Models            `json:"models,omitempty"`
+	// ContextWindow is the default context-window size (in tokens) applied to
+	// models that do not declare their own (see ModelSpec.ContextWindow) and
+	// when the model API does not report one. It backs the reason worker's
+	// context-budget thresholds.
+	ContextWindow int `json:"context_window,omitempty"`
+	// Headers are extra HTTP headers sent on every provider request, applied
+	// after the built-in auth headers so they may override them. Values (and
+	// api_key) support ${VAR} / $VAR environment-variable expansion.
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// ModelSpec describes one model offered by a provider, with optional per-model
+// metadata. ContextWindow is the model's context-window size in tokens; a zero
+// value means "unspecified" and defers to the provider's ContextWindow or the
+// model API.
+type ModelSpec struct {
+	Name          string `json:"name"`
+	ContextWindow int    `json:"context_window,omitempty"`
+}
+
+// Models is the provider's model list. It accepts both a JSON array of strings
+// (model names, the legacy form) and an array of objects
+// {"name", "context_window"} for per-model metadata, so existing string-array
+// configs keep working.
+type Models []ModelSpec
+
+// UnmarshalJSON accepts either ["a", "b"] or [{"name": "a", "context_window": 8}].
+func (m *Models) UnmarshalJSON(data []byte) error {
+	var names []string
+	if err := json.Unmarshal(data, &names); err == nil {
+		*m = make(Models, len(names))
+		for i, n := range names {
+			(*m)[i] = ModelSpec{Name: n}
+		}
+		return nil
+	}
+	var specs []ModelSpec
+	if err := json.Unmarshal(data, &specs); err != nil {
+		return err
+	}
+	*m = specs
+	return nil
+}
+
+// MarshalJSON emits a plain string array when no model carries metadata, keeping
+// configs compact and backward compatible on write; otherwise emits objects.
+func (m Models) MarshalJSON() ([]byte, error) {
+	hasMeta := false
+	for _, s := range m {
+		if s.ContextWindow != 0 {
+			hasMeta = true
+			break
+		}
+	}
+	if !hasMeta {
+		names := make([]string, 0, len(m))
+		for _, s := range m {
+			names = append(names, s.Name)
+		}
+		return json.Marshal(names)
+	}
+	type spec ModelSpec // alias to avoid infinite recursion
+	specs := make([]spec, 0, len(m))
+	for _, s := range m {
+		specs = append(specs, spec(s))
+	}
+	return json.Marshal(specs)
 }
 
 // ListModels returns the provider's full model list. When Models is empty it
 // transparently falls back to a single-element list [Model].
 func (p Provider) ListModels() []string {
 	if len(p.Models) > 0 {
-		return p.Models
+		names := make([]string, 0, len(p.Models))
+		for _, m := range p.Models {
+			names = append(names, m.Name)
+		}
+		return names
 	}
 	if p.Model != "" {
 		return []string{p.Model}
@@ -58,7 +140,7 @@ func (p Provider) ResolveDefaultModel() string {
 		return p.Model
 	}
 	if len(p.Models) > 0 {
-		return p.Models[0]
+		return p.Models[0].Name
 	}
 	return ""
 }
@@ -224,6 +306,13 @@ func Build(p Provider) llm.LLMProvider {
 	if resolved := p.ResolveDefaultModel(); resolved != "" {
 		p.Model = resolved
 	}
+	// Expand ${VAR}/$VAR in the API key and in every custom header value so
+	// secrets can live in the environment rather than provider.json.
+	p.APIKey = expandEnv(p.APIKey)
+	headers := make(map[string]string, len(p.Headers))
+	for k, v := range p.Headers {
+		headers[k] = expandEnv(v)
+	}
 	switch p.Type {
 	case "claude", "anthropic":
 		if p.APIKey == "" {
@@ -239,6 +328,7 @@ func Build(p Provider) llm.LLMProvider {
 			APIKey:  p.APIKey,
 			BaseURL: p.BaseURL,
 			Model:   p.Model,
+			Headers: headers,
 		})
 	case "openai-responses", "responses", "deepseek-responses":
 		if p.APIKey == "" {
@@ -254,6 +344,7 @@ func Build(p Provider) llm.LLMProvider {
 			APIKey:  p.APIKey,
 			BaseURL: p.BaseURL,
 			Model:   p.Model,
+			Headers: headers,
 		})
 	case "deepseek":
 		if p.APIKey == "" {
@@ -269,6 +360,7 @@ func Build(p Provider) llm.LLMProvider {
 			APIKey:  p.APIKey,
 			BaseURL: p.BaseURL,
 			Model:   p.Model,
+			Headers: headers,
 		})
 	default:
 		if p.APIKey == "" {
@@ -288,6 +380,7 @@ func Build(p Provider) llm.LLMProvider {
 			APIKey:  p.APIKey,
 			BaseURL: p.BaseURL,
 			Model:   p.Model,
+			Headers: headers,
 		})
 	}
 }
@@ -321,6 +414,14 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// expandEnv substitutes ${VAR} and $VAR references with the named environment
+// variable's value. A missing variable expands to an empty string.
+func expandEnv(s string) string {
+	return os.Expand(s, func(key string) string {
+		return os.Getenv(key)
+	})
 }
 
 // BuildWithOverrides constructs a provider but lets caller-supplied values win

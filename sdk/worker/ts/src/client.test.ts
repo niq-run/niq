@@ -33,7 +33,7 @@ describe("publish wire shape", () => {
       fetchImpl,
     });
     await client.connect();
-    await client.send({ id: "e1", type: "tool.requested", status: "created", worker_id: "attacker", payload: {}, timestamp: 1 }, "target");
+    await client.send({ id: "e1", type: "tool.request", status: "created", worker_id: "attacker", payload: {}, timestamp: 1 }, "target");
 
     expect(body).toEqual({
       worker_id: "w1",
@@ -42,7 +42,7 @@ describe("publish wire shape", () => {
       events: [
         {
           id: "e1",
-          type: "tool.requested",
+          type: "tool.request",
           status: "created",
           worker_id: "w1", // overwritten at the edge
           payload: {},

@@ -17,7 +17,7 @@ export const EventType = {
   WorkerAbort: "worker.abort",
 
   // Tool invocation lifecycle.
-  ToolRequested: "tool.requested",
+  ToolRequested: "tool.request",
   ToolCancel: "tool.cancel",
   ToolCompleted: "tool.completed",
   ToolFailed: "tool.failed",

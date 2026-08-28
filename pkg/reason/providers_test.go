@@ -2,6 +2,7 @@ package reason
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -47,16 +48,17 @@ func newSwitchableWorker(ch *testChannel) (*BaseReasonWorker, *staticProvider, *
 		provs: map[string]llm.LLMProvider{"a": pa, "b": pb},
 	}
 	w := NewBaseReasonWorker(Config{
-		ID:               "r1",
-		ProviderSources:  fake,
-		Subscriptions:    []event.EventPattern{event.NewPattern("*")},
-		Bus:              ch,
+		ID:              "r1",
+		ProviderSources: fake,
+		Subscriptions:   []event.EventPattern{event.NewPattern("*")},
+		Bus:             ch,
 	})
 	return w, pa, pb
 }
 
 // TestSetActiveProviderSwitches verifies setActiveProvider rebinds the active
-// provider and the default compactor, and rejects unknown providers/models.
+// provider and the default compactor, records the current name/model, and
+// rejects unknown providers/models.
 func TestSetActiveProviderSwitches(t *testing.T) {
 	ch := newTestChannel()
 	w, pa, pb := newSwitchableWorker(ch)
@@ -65,11 +67,14 @@ func TestSetActiveProviderSwitches(t *testing.T) {
 	if w.llmProvider != pa {
 		t.Fatal("expected initial provider to be the first source")
 	}
-	if err := w.setActiveProvider("b", ""); err != nil {
+	if err := w.setActiveProvider("b", "m3"); err != nil {
 		t.Fatalf("switch to b: %v", err)
 	}
 	if w.llmProvider != pb {
 		t.Fatal("active provider did not switch to b")
+	}
+	if w.providerName != "b" || w.providerModel != "m3" {
+		t.Fatalf("current provider = %s/%s, want b/m3", w.providerName, w.providerModel)
 	}
 	if dc, ok := w.compactor.(*DefaultCompactor); !ok || dc.llm != pb {
 		t.Fatal("default compactor should be rebound to the new provider")
@@ -84,15 +89,15 @@ func TestSetActiveProviderSwitches(t *testing.T) {
 	w.mu.Unlock()
 }
 
-// TestWorkerUpdateSetProviderEvent drives the worker.update op through the real
-// handler and asserts the switch applies and a worker.updated completion is
-// broadcast with the explicit model.
-func TestWorkerUpdateSetProviderEvent(t *testing.T) {
+// TestUpdateRequestedSetProviderEvent drives the worker.update
+// op=provider through the real handler and asserts the switch applies and a
+// worker.updated completion is broadcast with the explicit model.
+func TestUpdateRequestedSetProviderEvent(t *testing.T) {
 	ch := newTestChannel()
 	w, _, pb := newSwitchableWorker(ch)
 
 	evt := event.New(event.TypeWorkerUpdate, w.ID(), map[string]any{
-		"op": "set-llm-provider", "provider": "b", "model": "m3",
+		"op": "provider.switch", "provider": "b", "model": "m3",
 	})
 	evt.TraceID = "trace-switch"
 	w.process(context.Background(), evt)
@@ -112,7 +117,7 @@ func TestWorkerUpdateSetProviderEvent(t *testing.T) {
 		t.Fatalf("completion trace = %q, want trace-switch", u.TraceID)
 	}
 	if done, _ := u.Payload["done"].(bool); !done {
-		t.Fatalf("set-llm-provider not reported done: %v", u.Payload)
+		t.Fatalf("provider switch not reported done: %v", u.Payload)
 	}
 	if p := u.Payload["provider"]; p != "b" {
 		t.Fatalf("completion provider = %v, want b", p)
@@ -122,14 +127,14 @@ func TestWorkerUpdateSetProviderEvent(t *testing.T) {
 	}
 }
 
-// TestWorkerUpdateSetProviderRequiresModel asserts an empty model is rejected
-// (no default fallback) and the active provider stays unchanged.
-func TestWorkerUpdateSetProviderRequiresModel(t *testing.T) {
+// TestUpdateRequestedSetProviderRequiresModel asserts an empty model is
+// rejected (no default fallback) and the active provider stays unchanged.
+func TestUpdateRequestedSetProviderRequiresModel(t *testing.T) {
 	ch := newTestChannel()
 	w, pa, _ := newSwitchableWorker(ch)
 
 	evt := event.New(event.TypeWorkerUpdate, w.ID(), map[string]any{
-		"op": "set-llm-provider", "provider": "b",
+		"op": "provider.switch", "provider": "b",
 	})
 	w.process(context.Background(), evt)
 
@@ -151,14 +156,14 @@ func TestWorkerUpdateSetProviderRequiresModel(t *testing.T) {
 	}
 }
 
-// TestWorkerUpdateSetProviderRejectsUnknown asserts a failed switch reports
+// TestUpdateRequestedSetProviderRejectsUnknown asserts a failed switch reports
 // done=false with an error and leaves the active provider unchanged.
-func TestWorkerUpdateSetProviderRejectsUnknown(t *testing.T) {
+func TestUpdateRequestedSetProviderRejectsUnknown(t *testing.T) {
 	ch := newTestChannel()
 	w, pa, _ := newSwitchableWorker(ch)
 
 	evt := event.New(event.TypeWorkerUpdate, w.ID(), map[string]any{
-		"op": "set-llm-provider", "provider": "does-not-exist", "model": "m9",
+		"op": "provider.switch", "provider": "does-not-exist", "model": "m9",
 	})
 	w.process(context.Background(), evt)
 
@@ -180,20 +185,63 @@ func TestWorkerUpdateSetProviderRejectsUnknown(t *testing.T) {
 	}
 }
 
-// TestListLLMProvidersTool asserts the default list_llm_providers tool returns
-// the provider table via a normal tool.completed reply.
-func TestListLLMProvidersTool(t *testing.T) {
+// TestStatusQueryProviders asserts worker.query op=provider.list returns a
+// worker.status snapshot carrying the provider table and the current choice.
+func TestStatusQueryProviders(t *testing.T) {
 	ch := newTestChannel()
 	w, _, _ := newSwitchableWorker(ch)
 
-	w.handleListLLMProvidersTool("call1", "list_llm_providers", "caller", nil)
+	evt := event.New(event.TypeWorkerQuery, w.ID(), map[string]any{
+		"subject": "provider.list",
+	})
+	evt.TraceID = "trace-status"
+	w.process(context.Background(), evt)
 
-	comps := ch.eventsOf(event.TypeToolCompleted)
-	if len(comps) == 0 {
-		t.Fatal("expected a tool.completed reply")
+	statuses := ch.eventsOf(event.TypeWorkerStatus)
+	if len(statuses) == 0 {
+		t.Fatal("expected a worker.status snapshot")
 	}
-	result, _ := comps[len(comps)-1].Payload["result"].(string)
-	if !strings.Contains(result, "\"Name\":\"a\"") || !strings.Contains(result, "\"Name\":\"b\"") {
-		t.Fatalf("list_llm_providers did not include both providers: %s", result)
+	s := statuses[len(statuses)-1]
+	if s.TraceID != "trace-status" {
+		t.Fatalf("status trace = %q, want trace-status", s.TraceID)
+	}
+	if s.Payload["subject"] != "provider.list" {
+		t.Fatalf("status subject = %v, want provider.list", s.Payload["op"])
+	}
+	b, _ := json.Marshal(s.Payload["providers"])
+	if !strings.Contains(string(b), `"Name":"a"`) || !strings.Contains(string(b), `"Name":"b"`) {
+		t.Fatalf("status providers did not include both providers: %s", b)
+	}
+	current, _ := s.Payload["current"].(map[string]any)
+	if current["provider"] != "" {
+		t.Fatalf("initial current provider = %v, want empty", current["provider"])
+	}
+}
+
+// TestStatusQueryCurrent asserts worker.query op=provider.current returns just
+// the current provider/model, reflecting a prior provider.switch.
+func TestStatusQueryCurrent(t *testing.T) {
+	ch := newTestChannel()
+	w, _, _ := newSwitchableWorker(ch)
+
+	w.mu.Lock()
+	_ = w.setActiveProvider("b", "m3")
+	w.mu.Unlock()
+
+	evt := event.New(event.TypeWorkerQuery, w.ID(), map[string]any{
+		"subject": "provider.current",
+	})
+	w.process(context.Background(), evt)
+
+	statuses := ch.eventsOf(event.TypeWorkerStatus)
+	if len(statuses) == 0 {
+		t.Fatal("expected a worker.status snapshot")
+	}
+	s := statuses[len(statuses)-1]
+	if s.Payload["subject"] != "provider.current" {
+		t.Fatalf("status subject = %v, want provider.current", s.Payload["op"])
+	}
+	if s.Payload["provider"] != "b" || s.Payload["model"] != "m3" {
+		t.Fatalf("current = %v/%v, want b/m3", s.Payload["provider"], s.Payload["model"])
 	}
 }

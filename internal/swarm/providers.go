@@ -4,6 +4,7 @@
 package swarm
 
 import (
+	"context"
 	"fmt"
 	"log"
 
@@ -66,6 +67,24 @@ func newSwarmProviderSources(provider, apiKey, baseURL, model string) reason.Pro
 	return &swarmProviderSources{force: f}
 }
 
+// initialProviderInfo resolves the initially active provider's name and model,
+// mirroring newSwarmProviderSources' forced-vs-default selection, so the
+// reason worker can report its current choice via worker.status.
+func initialProviderInfo(provider, apiKey, baseURL, model string) (string, string) {
+	if provider != "" || apiKey != "" || baseURL != "" || model != "" {
+		if model == "" && provider != "" {
+			if p, ok := providercfg.Find(provider); ok {
+				model = p.ResolveDefaultModel()
+			}
+		}
+		return provider, model
+	}
+	if p, ok := providercfg.Default(); ok {
+		return p.Name, p.ResolveDefaultModel()
+	}
+	return "", ""
+}
+
 // Default returns the initially active provider: the explicit spawn-time
 // selection when given, otherwise the config's active (or first) provider.
 func (s *swarmProviderSources) Default() llm.LLMProvider {
@@ -83,16 +102,15 @@ func (s *swarmProviderSources) Default() llm.LLMProvider {
 }
 
 // Build constructs a provider bound to name and an explicit model (empty uses
-// the provider's default). The name must resolve to a configured provider and
-// the model must be in its list.
+// the provider's default). The name must resolve to a configured provider; the
+// model is not pre-validated against the model list — an unknown model is
+// rejected by the provider's API call itself, which lets models discovered only
+// via the provider API (see List) be selected at runtime.
 func (s *swarmProviderSources) Build(name, model string) (llm.LLMProvider, error) {
 	p, ok := providercfg.Find(name)
 	if !ok {
 		log.Printf("[swarm] provider switch failed: unknown provider %q", name)
 		return nil, fmt.Errorf("swarm: unknown provider %q", name)
-	}
-	if model != "" && !modelContains(p.ListModels(), model) {
-		return nil, fmt.Errorf("swarm: model %q not available for provider %q", model, name)
 	}
 	effModel := model
 	if effModel == "" {
@@ -103,7 +121,10 @@ func (s *swarmProviderSources) Build(name, model string) (llm.LLMProvider, error
 	return providercfg.BuildWithOverrides(p, "", "", model), nil
 }
 
-// List enumerates every configured provider and its models.
+// List enumerates every configured provider and its models. The model list is
+// the configured models merged (best-effort) with the models reported by the
+// provider's API; an API failure falls back to the configured list alone.
+// ModelDetails carries per-model metadata (e.g. ContextWindow) when available.
 func (s *swarmProviderSources) List() []reason.ProviderInfo {
 	cfg, err := providercfg.Load()
 	if err != nil {
@@ -111,20 +132,60 @@ func (s *swarmProviderSources) List() []reason.ProviderInfo {
 	}
 	out := make([]reason.ProviderInfo, 0, len(cfg.Providers))
 	for _, p := range cfg.Providers {
+		details := s.modelsFor(p)
+		ids := make([]string, 0, len(details))
+		for _, m := range details {
+			ids = append(ids, m.ID)
+		}
 		out = append(out, reason.ProviderInfo{
-			Name:    p.Name,
-			Default: p.ResolveDefaultModel(),
-			Models:  p.ListModels(),
+			Name:         p.Name,
+			Default:      p.ResolveDefaultModel(),
+			Models:       ids,
+			ModelDetails: details,
 		})
 	}
 	return out
 }
 
-func modelContains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
+// modelsFor returns the merged model set for a provider as []llm.ModelInfo:
+// configured models first, then any API-reported models not already present.
+// ContextWindow is taken from the API when reported, otherwise falls back to
+// the provider's configured context_window. If the provider API is
+// unreachable or errors, the configured models (with config context window) are
+// returned so the provider list query still works offline.
+func (s *swarmProviderSources) modelsFor(p providercfg.Provider) []llm.ModelInfo {
+	configModels := p.Models
+	details := make([]llm.ModelInfo, 0, len(configModels))
+	seen := make(map[string]struct{}, len(configModels))
+	for _, ms := range configModels {
+		seen[ms.Name] = struct{}{}
+		cw := ms.ContextWindow
+		if cw == 0 {
+			cw = p.ContextWindow
 		}
+		details = append(details, llm.ModelInfo{
+			ID:            ms.Name,
+			Name:          ms.Name,
+			Provider:      p.Type,
+			ContextWindow: cw,
+		})
 	}
-	return false
+	apiModels, err := providercfg.Build(p).ListModels(context.Background())
+	if err != nil {
+		log.Printf("[swarm] provider %q: model list from API unavailable (%v), using configured list", p.Name, err)
+		return details
+	}
+	for _, m := range apiModels {
+		if _, ok := seen[m.ID]; ok {
+			continue
+		}
+		seen[m.ID] = struct{}{}
+		// Prefer the API-reported window; fall back to the provider config.
+		if m.ContextWindow == 0 {
+			m.ContextWindow = p.ContextWindow
+		}
+		m.Provider = p.Type
+		details = append(details, m)
+	}
+	return details
 }

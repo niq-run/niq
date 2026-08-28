@@ -49,9 +49,9 @@ func TestScheduleRateLimitBackoff(t *testing.T) {
 	}
 
 	// Exactly maxRateLimitRetries elapse requests went to the timer worker.
-	reqs := ch.eventsOf(event.TypeToolRequested)
+	reqs := ch.eventsOf(event.TypeToolRequest)
 	if len(reqs) != maxRateLimitRetries {
-		t.Fatalf("dispatched %d tool.requested, want %d", len(reqs), maxRateLimitRetries)
+		t.Fatalf("dispatched %d tool.request, want %d", len(reqs), maxRateLimitRetries)
 	}
 	for i, evt := range reqs {
 		name, _ := evt.Payload["name"].(string)
@@ -159,7 +159,7 @@ func TestRateLimitRoundTrip(t *testing.T) {
 	// other reminder: injected into the transcript, then a retry round starts.
 	ch.in <- event.New("timer.reminder", "timer", map[string]any{
 		"caller_id": w.ID(),
-		"result":    fmt.Sprintf(`{"tick_type":"reminder","purpose":"API rate limit (HTTP 429) hit; retrying after 5s, attempt 1/%d","duration_ms":5000}`, maxRateLimitRetries),
+		"result":    fmt.Sprintf(`{"tick_type":"reminder","purpose":"API rate limit (HTTP 429) hit; retrying after 1m, attempt 1/%d","duration_ms":60000}`, maxRateLimitRetries),
 	})
 
 	// The retry succeeds and the round completes.

@@ -8,15 +8,17 @@ interface WorkersViewProps {
   onSelect: (id: string) => void
   onOpenEvents: (id: string) => void
   archived: Set<string>
+  isMobile: boolean
 }
 
-export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived }: WorkersViewProps) {
+export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived, isMobile }: WorkersViewProps) {
   const { colors } = useTheme()
 
   // Single-line cells with ellipsis (same as the events table), with a taller
-  // row: the worker list is less dense than the event stream.
+  // row: the worker list is less dense than the event stream. Mobile rows are
+  // taller still so they are easy to tap.
   const cell: React.CSSProperties = {
-    padding: '10px 6px',
+    padding: isMobile ? '16px 6px' : '10px 6px',
     verticalAlign: 'top',
     borderBottom: '1px solid ' + colors.eventRowBorder,
     whiteSpace: 'nowrap',
@@ -39,13 +41,19 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
   }
 
   return (
-    <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '24px 24px 16px 24px' }}>
-      <div style={{ marginBottom: 12, fontSize: fontSizes.xl, color: colors.text }}>
-        Workers{' '}
-        <span style={{ color: colors.textMuted, fontSize: fontSizes.md }}>({workers.length})</span>
-      </div>
+    <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '24px 24px 16px 24px' }}>
+      {/* On mobile the app-level top bar heads the page, so the in-view header
+          is skipped (same as the talk/events views). */}
+      {!isMobile && (
+        <div style={{ marginBottom: 12, fontSize: fontSizes.xl, color: colors.text }}>
+          Workers{' '}
+          <span style={{ color: colors.textMuted, fontSize: fontSizes.md }}>({workers.length})</span>
+        </div>
+      )}
 
-      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
+      {/* min-width lets the fixed columns scroll horizontally on narrow
+          (phone) viewports instead of collapsing. */}
+      <table style={{ width: '100%', minWidth: 540, borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
         <thead>
           <tr style={{ textAlign: 'left', color: colors.textDimmed, fontSize: fontSizes.xs }}>
             <th style={{ padding: '6px 6px', width: 190, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>Worker ID</th>

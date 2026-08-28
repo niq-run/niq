@@ -14,6 +14,11 @@ type Config struct {
 	EventConverters []reasonBase.EventConverter
 	Provider        llm.LLMProvider
 	ProviderSources reasonBase.ProviderSources
+	// ProviderName / ProviderModel record the initially active provider for
+	// status reporting (worker.status op=providers carries the current choice).
+	// Empty when unknown.
+	ProviderName    string
+	ProviderModel   string
 	Programs        []program.Program
 	Bus             corebus.WorkerSideChannel
 	ReasoningEffort *string
@@ -39,12 +44,6 @@ type Config struct {
 	// Compactor is how this worker compresses its transcript under window
 	// pressure. nil uses the default LLM-summary compactor.
 	Compactor reasonBase.Compactor
-
-	// ToolProvider supplies the tools this worker exposes on the bus. nil uses
-	// the default set (send_message, list_workers, list_llm_providers,
-	// context_compress, context_rotate). To customize, supply a provider listing
-	// every tool you want
-	ToolProvider reasonBase.ToolProvider
 
 	// SeedMessages are applied to the transcript at construction: the
 	// spawner's handover brief (goal goes to Programs instead). nil for a
@@ -81,13 +80,14 @@ func NewWorker(cfg Config) *Worker {
 		event.NewPattern(event.TypeToolCompleted),
 		event.NewPattern(event.TypeToolFailed),
 		event.NewPattern(event.TypeToolRejected),
-		event.NewPattern(event.TypeToolRequested),
+		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeWorkerReady),
 		event.NewPattern(event.TypeWorkerGone),
 		event.NewPattern(event.TypeWorkerDiscover),
 		event.NewPattern(event.TypeWorkerInput),
 		event.NewPattern(event.TypeWorkerAbort),
 		event.NewPattern(event.TypeWorkerUpdate),
+		event.NewPattern(event.TypeWorkerQuery),
 		event.NewPattern("timer.timeout"),
 		event.NewPattern("timer.reminder"),
 	)
@@ -98,6 +98,8 @@ func NewWorker(cfg Config) *Worker {
 		Subscriptions:    subs,
 		Provider:         cfg.Provider,
 		ProviderSources:  cfg.ProviderSources,
+		ProviderName:     cfg.ProviderName,
+		ProviderModel:    cfg.ProviderModel,
 		Programs:         cfg.Programs,
 		EventConverters:  cfg.EventConverters,
 		Transcript:       cfg.Transcript,
@@ -109,7 +111,6 @@ func NewWorker(cfg Config) *Worker {
 		CompactDirective: cfg.CompactDirective,
 		MaxPayloadBytes:  cfg.MaxPayloadBytes,
 		Compactor:        cfg.Compactor,
-		ToolProvider:     cfg.ToolProvider,
 		SeedMessages:     cfg.SeedMessages,
 	})
 

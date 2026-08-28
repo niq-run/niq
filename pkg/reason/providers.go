@@ -7,17 +7,20 @@ import (
 )
 
 // ProviderInfo describes one selectable provider a reason worker can switch to
-// at runtime: its name, the default model, and the full model list.
+// at runtime: its name, the default model, and the full model list. Models is
+// the list of model IDs (for display); ModelDetails carries the same models
+// with metadata such as ContextWindow when known.
 type ProviderInfo struct {
-	Name    string
-	Default string
-	Models  []string
+	Name         string
+	Default      string
+	Models       []string
+	ModelDetails []llm.ModelInfo
 }
 
 // ProviderSources is the runtime selection point for a reason worker's LLM
 // provider. A worker can be given many providers (instead of a single baked-in
-// one) and switch the active provider/model later via worker.update without
-// depending on any concrete provider or config package.
+// one) and switch the active provider/model later via worker.update
+// without depending on any concrete provider or config package.
 type ProviderSources interface {
 	// Default returns the initially active provider. It may be nil when no
 	// provider is configured.
@@ -45,10 +48,51 @@ func (w *BaseReasonWorker) setActiveProvider(name, model string) error {
 		return err
 	}
 	w.llmProvider = prov
+	w.providerName = name
+	w.providerModel = model
 	if _, ok := w.compactor.(*DefaultCompactor); ok {
 		// Rebind the default compactor (which holds an LLM provider for
 		// summarization) so compaction uses the newly selected provider.
 		w.compactor = NewDefaultCompactor(prov, w.keepTail)
 	}
+	w.resolveContextWindow()
 	return nil
+}
+
+// resolveContextWindow sets w.contextWindow to the effective context-window size
+// for the currently selected provider/model. An explicit params.context_window
+// (already loaded into w.contextWindow) always wins; otherwise the window is
+// discovered from the provider's merged model metadata (the API-reported window,
+// falling back to the provider's configured context_window). Called at init and
+// on every provider switch. Expects w.mu held.
+func (w *BaseReasonWorker) resolveContextWindow() {
+	if w.contextWindow > 0 {
+		return // explicit override wins
+	}
+	if w.providerSources == nil {
+		return
+	}
+	for _, info := range w.providerSources.List() {
+		if info.Name != w.providerName {
+			continue
+		}
+		model := w.providerModel
+		if model == "" {
+			model = info.Default
+		}
+		// Prefer the exact selected model.
+		for _, m := range info.ModelDetails {
+			if m.ID == model && m.ContextWindow > 0 {
+				w.contextWindow = m.ContextWindow
+				return
+			}
+		}
+		// Fall back to the first model of this provider that reports a window.
+		for _, m := range info.ModelDetails {
+			if m.ContextWindow > 0 {
+				w.contextWindow = m.ContextWindow
+				return
+			}
+		}
+	}
 }

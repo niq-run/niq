@@ -9,6 +9,7 @@ interface EventRowProps {
   onOpenWorker: (id: string) => void;
   deliveries: Record<string, string[]>;
   workerTypes: Record<string, string>;
+  isMobile: boolean;
 }
 
 export default function EventRow({
@@ -18,6 +19,7 @@ export default function EventRow({
   onOpenWorker,
   deliveries,
   workerTypes,
+  isMobile,
 }: EventRowProps) {
   const { colors } = useTheme()
   const time = formatTime(evt.timestamp)
@@ -32,9 +34,10 @@ export default function EventRow({
   const workerType = workerTypes[evt.worker_id] || ""
 
   // Table cells: nowrap + ellipsis. maxWidth:0 lets flexible columns truncate.
-  // Vertical padding matches the worker list for a looser, consistent feel.
+  // Vertical padding matches the worker list for a looser, consistent feel;
+  // mobile rows are taller so they are easy to tap.
   const cell: React.CSSProperties = {
-    padding: "10px 6px",
+    padding: isMobile ? "16px 6px" : "10px 6px",
     borderBottom: "1px solid " + colors.eventRowBorder,
     verticalAlign: "top",
     whiteSpace: "nowrap",

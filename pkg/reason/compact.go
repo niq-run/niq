@@ -41,7 +41,7 @@ func (w *BaseReasonWorker) handleBudget(ctx context.Context, msg llm.Message) {
 		log.Printf("[reason %s] context hard budget %.0f%% (%d/%d tokens) - compacting",
 			w.ID(), ratio*100, w.lastUsageTokens, w.contextWindow)
 		w.budgetReminded = false
-		w.emitMetaUpdateRequest(ctx, "compress", nil)
+		w.emitMetaUpdateRequest(ctx, "context.compress", nil)
 	case ratio >= w.budgetSoft && !w.budgetReminded:
 		// Guided exit: one reminder per crossing; the LLM decides.
 		w.budgetReminded = true

@@ -1,24 +1,11 @@
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { vscDarkPlus, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useTheme, fontSizes } from '../theme'
 import { type EventPayload } from '../types'
 import { getTypeColor, formatTime } from '../components/talk-utils'
-
-const mdComponents = {
-  code({ className, children, ...props }: any) {
-    const match = /language-(\w+)/.exec(className || '')
-    if (!match) {
-      return <code className={className} {...props}>{children}</code>
-    }
-    return (
-      <SyntaxHighlighter style={vscDarkPlus} language={match[1]} PreTag="div">
-        {String(children).replace(/\n$/, '')}
-      </SyntaxHighlighter>
-    )
-  },
-}
+import { makeMdComponents } from '../components/MarkdownComponents'
 
 interface EventDetailProps {
   evt: EventPayload;
@@ -27,7 +14,7 @@ interface EventDetailProps {
 }
 
 export default function EventDetail({ evt, deliveries, onClose }: EventDetailProps) {
-  const { colors } = useTheme()
+  const { dark, colors } = useTheme()
   const time = formatTime(evt.timestamp)
   const typeColor = getTypeColor(evt.type, colors)
   const isContentEvent =
@@ -113,7 +100,7 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
               ...inputBlockStyle,
             }}
           >
-            <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>{contentText}</Markdown>
+            <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>{contentText}</Markdown>
           </div>
         )}
 
@@ -131,7 +118,7 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
             </div>
             <SyntaxHighlighter
               language="json"
-              style={vscDarkPlus}
+              style={dark ? vscDarkPlus : oneLight}
               customStyle={{
                 margin: 0,
                 padding: 0,

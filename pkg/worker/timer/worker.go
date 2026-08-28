@@ -35,7 +35,7 @@ func New(cfg Config) *Worker {
 	}
 	return &Worker{
 		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern(event.TypeToolRequested),
+			event.NewPattern(event.TypeToolRequest),
 			event.NewPattern(event.TypeToolCancel),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),
@@ -93,7 +93,7 @@ func (w *Worker) process(evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
 		w.publishReady()
-	case event.TypeToolRequested:
+	case event.TypeToolRequest:
 		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
 			return
 		}

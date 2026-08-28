@@ -40,7 +40,7 @@ func TestPrepareReasoningBuildsRequest(t *testing.T) {
 }
 
 // TestHandleToolCallsDispatches verifies tool calls are grouped by target and a
-// tool.requested is sent to each provider with the mapped (original) tool name.
+// tool.request is sent to each provider with the mapped (original) tool name.
 func TestHandleToolCallsDispatches(t *testing.T) {
 	ch := newTestChannel()
 	w := newTestWorker(nil, ch)
@@ -54,13 +54,13 @@ func TestHandleToolCallsDispatches(t *testing.T) {
 	w.handleToolCalls(context.Background(), calls, "trace1")
 	// handleToolCalls unlocks internally.
 
-	// The tool.requested should be directed to workspace with the mapped name.
+	// The tool.request should be directed to workspace with the mapped name.
 	var name string
-	for _, e := range ch.eventsOf(event.TypeToolRequested) {
+	for _, e := range ch.eventsOf(event.TypeToolRequest) {
 		name, _ = e.Payload["name"].(string)
 	}
 	if name != "bash" {
-		t.Fatalf("expected tool.requested with mapped name %q, got %q", "bash", name)
+		t.Fatalf("expected tool.request with mapped name %q, got %q", "bash", name)
 	}
 }
 
@@ -81,8 +81,8 @@ func TestHandleToolCallsNoMappingFails(t *testing.T) {
 	w.handleToolCalls(context.Background(), calls, "trace1")
 
 	// Nothing dispatched.
-	if n := len(ch.eventsOf(event.TypeToolRequested)); n != 0 {
-		t.Fatalf("expected no tool.requested (mapping missing), got %d", n)
+	if n := len(ch.eventsOf(event.TypeToolRequest)); n != 0 {
+		t.Fatalf("expected no tool.request (mapping missing), got %d", n)
 	}
 
 	// The mismatch surfaces as a tool_unavailable notice broadcast.
@@ -121,7 +121,7 @@ func TestHandleToolCallsUnavailable(t *testing.T) {
 	w.mu.Lock()
 	w.handleToolCalls(context.Background(), calls, "trace1")
 
-	if len(ch.eventsOf(event.TypeToolRequested)) != 0 {
+	if len(ch.eventsOf(event.TypeToolRequest)) != 0 {
 		t.Fatal("unavailable tool must not be dispatched")
 	}
 	// The transcript should contain the unavailable-tool tool_result.
@@ -202,14 +202,13 @@ func TestFinalMessageReturns(t *testing.T) {
 	}
 }
 
-// TestHasMetaToolCallAndStripToolCalls verifies meta tool detection and that a
-// meta tool call (which never produces a tool result) is excluded from the
-// transcript: hasMetaToolCall flags the response, and stripToolCalls removes
-// all tool_calls while keeping thinking/text.
-func TestHasMetaToolCallAndStripToolCalls(t *testing.T) {
-	w := newTestWorker(nil, nil)
+// TestMetaCapabilityCallAndStripToolCalls verifies meta capability detection
+// and that a meta call (which never produces a tool result) is excluded from
+// the transcript: metaCapabilityCall flags the response by LLMName, and
+// stripToolCalls removes all tool_calls while keeping thinking/text.
+func TestMetaCapabilityCallAndStripToolCalls(t *testing.T) {
+	w := newTestWorker(nil, nil) // core capabilities registered at construction
 	w.mu.Lock()
-	w.tools["context.compress"] = worker.Tool{Name: "context.compress", IsMetaTool: true}
 	w.tools["ws-tmp-niq-test__ls"] = worker.Tool{Name: "ws-tmp-niq-test__ls", Provider: "ws-tmp-niq-test"}
 	w.mu.Unlock()
 
@@ -218,12 +217,12 @@ func TestHasMetaToolCallAndStripToolCalls(t *testing.T) {
 		StopReason: "tool_calls",
 		Content: []llm.ContentBlock{
 			{Type: llm.ContentThinking, Text: "need to compress"},
-			{Type: llm.ContentToolCall, ToolCallID: "m1", ToolName: "context.compress"},
+			{Type: llm.ContentToolCall, ToolCallID: "m1", ToolName: "context_compress"},
 			{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "ws-tmp-niq-test__ls"},
 		},
 	}
-	if !w.hasMetaToolCall(metaMsg) {
-		t.Fatal("hasMetaToolCall should detect context.compress")
+	if _, ok := w.metaCapabilityCall(metaMsg); !ok {
+		t.Fatal("metaCapabilityCall should detect context_compress")
 	}
 
 	stripped := stripToolCalls(metaMsg)
@@ -232,7 +231,7 @@ func TestHasMetaToolCallAndStripToolCalls(t *testing.T) {
 	}
 
 	plain := llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}}
-	if w.hasMetaToolCall(plain) {
-		t.Fatal("hasMetaToolCall must be false without a meta tool call")
+	if _, ok := w.metaCapabilityCall(plain); ok {
+		t.Fatal("metaCapabilityCall must be false without a meta capability call")
 	}
 }

@@ -84,7 +84,7 @@ Other events are dispatched by `process`:
 | timer.reminder | treat as input (schedule level) | yes |
 | worker.ready/gone | learn/forget the worker's tools | no |
 | tool.completed/failed/rejected | resolve or park-late + update transcript | when resolved |
-| tool.requested | route tool calls to the owning `ToolProvider` | no |
+| tool.request | route tool calls to the owning `ToolProvider` | no |
 | worker.update | run a meta operation (compress/rotate the transcript) asynchronously | when done |
 | worker.input | handle per the three input_mode levels | depends on level |
 
@@ -111,7 +111,7 @@ separator; worker IDs and tool names must not contain `__`.
 
 A meta tool (context.compress / context.rotate) is a direct edit of this
 worker's own state, so when the LLM calls one it is routed to a `worker.update`
-event sent to itself — not to a regular `tool.requested`/`ToolProvider` call.
+event sent to itself — not to a regular `tool.request`/`ToolProvider` call.
 This keeps the worker's self-editing operations on the same auditable bus path
 as every other update, and is how the compaction section below is driven.
 
@@ -120,12 +120,12 @@ Declaration and execution are layered:
 - **Declaration** — `worker.ready` carries the tools this worker serves, each
   flagged `is_meta_tool` if it edits this worker's own state. This decides
   *which* tools are meta, nothing more.
-- **Execution** — a meta tool never rides `tool.requested`; calling one is
+- **Execution** — a meta tool never rides `tool.request`; calling one is
   rerouted by `handleToolCalls` into a `worker.update` event sent to self
   (`worker.update{op:compress}` etc.). So every meta action — including the
   system-side compaction triggers (hard budget, `ErrorContextLength`) — funnels
   through the same auditable `worker.update` path.
-- **Guard** — a stray `tool.requested` for a meta tool is rejected by
+- **Guard** — a stray `tool.request` for a meta tool is rejected by
   `DefaultTools.HandleToolCall`, so compression cannot be dispatched as an
   ordinary tool call.
 

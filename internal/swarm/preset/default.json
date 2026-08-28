@@ -14,12 +14,12 @@
         "worker.abort",
         "timer.timeout",
         "timer.reminder",
-        "tool.requested",
+        "tool.request",
         "decision.made"
       ]
     },
     { "type": "timer", "id": "timer" },
     { "type": "host", "id": "host" },
-    { "type": "program", "id": "program", "subscriptions": ["tool.requested", "worker.discover"] }
+    { "type": "program", "id": "program", "subscriptions": ["tool.request", "worker.discover"] }
   ]
 }
