@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { usePolling } from '../hooks/usePolling'
-import { CONTROL, fetchProjects, fetchTemplates, createProject, startProject, stopProject } from '../services/api'
+import { CONTROL, fetchProjects, fetchTemplates, createProject, startProject, stopProject, restartProject } from '../services/api'
 import type { ProjectInfo } from '../types'
 
 // ProjectsView is the management surface shown in the control plane (and as a
@@ -13,7 +13,10 @@ export default function ProjectsView() {
   const [templates, setTemplates] = useState<string[]>([])
   const [newName, setNewName] = useState('')
   const [newTemplate, setNewTemplate] = useState('')
-  const [starting, setStarting] = useState<string | null>(null)
+  // The project currently being started or restarted, with which op — drives the
+  // loading spinner. It is cleared once the control plane reports the project
+  // ready (the backend blocks until the WebUI port is actually listening).
+  const [busy, setBusy] = useState<{ id: string; op: 'start' | 'restart' } | null>(null)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
 
@@ -46,7 +49,7 @@ export default function ProjectsView() {
   }
 
   const start = async (id: string) => {
-    setStarting(id)
+    setBusy({ id, op: 'start' })
     setError('')
     try {
       await startProject(id)
@@ -54,7 +57,19 @@ export default function ProjectsView() {
     } catch (e) {
       setError('failed to start project ' + id)
     }
-    setStarting(null)
+    setBusy(null)
+  }
+
+  const restart = async (id: string) => {
+    setBusy({ id, op: 'restart' })
+    setError('')
+    try {
+      await restartProject(id)
+      refresh()
+    } catch (e) {
+      setError('failed to restart project ' + id)
+    }
+    setBusy(null)
   }
 
   // Force an immediate project-list refresh (the 3s poll would otherwise leave a
@@ -162,7 +177,12 @@ export default function ProjectsView() {
                 {p.ports?.bus ? ` · bus :${p.ports.bus}` : ''}
               </div>
             </div>
-            {p.running ? (
+            {busy?.id === p.id ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, color: colors.textDim }}>
+                <span className="niq-spinner" style={{ width: 13, height: 13, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
+                {busy.op === 'restart' ? 'Restarting…' : 'Starting…'}
+              </span>
+            ) : p.running ? (
               <>
                 {p.ports?.webui && (
                   <a
@@ -174,6 +194,20 @@ export default function ProjectsView() {
                     Jump ↗
                   </a>
                 )}
+                <button
+                  onClick={() => restart(p.id)}
+                  style={{
+                    cursor: 'pointer',
+                    background: 'transparent',
+                    color: colors.accent,
+                    border: '1px solid ' + colors.border,
+                    borderRadius: 4,
+                    padding: '6px 10px',
+                    fontSize: fontSizes.sm,
+                  }}
+                >
+                  Restart
+                </button>
                 <button
                   onClick={() => stop(p.id)}
                   style={{
@@ -192,19 +226,17 @@ export default function ProjectsView() {
             ) : (
               <button
                 onClick={() => start(p.id)}
-                disabled={starting === p.id}
                 style={{
-                  cursor: starting === p.id ? 'default' : 'pointer',
+                  cursor: 'pointer',
                   background: colors.accent,
                   color: '#fff',
                   border: 'none',
                   borderRadius: 4,
                   padding: '6px 14px',
                   fontSize: fontSizes.sm,
-                  opacity: starting === p.id ? 0.6 : 1,
                 }}
               >
-                {starting === p.id ? 'Starting…' : 'Start'}
+                Start
               </button>
             )}
           </div>
