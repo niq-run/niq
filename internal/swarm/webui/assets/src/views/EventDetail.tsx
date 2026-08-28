@@ -6,6 +6,7 @@ import { useTheme, fontSizes } from '../theme'
 import { type EventPayload } from '../types'
 import { getTypeColor, formatTime } from '../components/talk-utils'
 import { makeMdComponents } from '../components/MarkdownComponents'
+import PayloadGate from '../components/PayloadGate'
 
 interface EventDetailProps {
   evt: EventPayload;
@@ -17,6 +18,9 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
   const { dark, colors } = useTheme()
   const time = formatTime(evt.timestamp)
   const typeColor = getTypeColor(evt.type, colors)
+  // Serialised once and handed to the size gate, which decides whether the
+  // (possibly very large) payload is rendered at all.
+  const payloadJSON = JSON.stringify(evt.payload, null, 2)
   const isContentEvent =
     evt.type === "reason.thinking" ||
     evt.type === "reason.response" ||
@@ -116,22 +120,24 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px", fontFamily: "monospace" }}>
               Payload
             </div>
-            <SyntaxHighlighter
-              language="json"
-              style={dark ? vscDarkPlus : oneLight}
-              customStyle={{
-                margin: 0,
-                padding: 0,
-                background: "transparent",
-                fontSize: fontSizes.base,
-                lineHeight: 1.5,
-                fontFamily: "monospace",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-              }}
-            >
-              {JSON.stringify(evt.payload, null, 2)}
-            </SyntaxHighlighter>
+            <PayloadGate json={payloadJSON}>
+              <SyntaxHighlighter
+                language="json"
+                style={dark ? vscDarkPlus : oneLight}
+                customStyle={{
+                  margin: 0,
+                  padding: 0,
+                  background: "transparent",
+                  fontSize: fontSizes.base,
+                  lineHeight: 1.5,
+                  fontFamily: "monospace",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                }}
+              >
+                {payloadJSON}
+              </SyntaxHighlighter>
+            </PayloadGate>
           </div>
         </div>
       </div>

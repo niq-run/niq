@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { formatTime } from './talk-utils'
+import PayloadGate from './PayloadGate'
 import type { EventPayload } from '../types'
 
 interface WorkerUpdateBlockProps {
@@ -69,22 +70,24 @@ export default function WorkerUpdateBlock({ evt, compact = false }: WorkerUpdate
       </div>
       {!collapsed && (
         <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + colors.borderLight }}>
-          <pre
-            style={{
-              margin: 0,
-              padding: '6px 8px',
-              background: colors.bgChip,
-              borderRadius: 4,
-              fontSize: fontSizes.sm,
-              lineHeight: 1.4,
-              overflowX: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              color: colors.text,
-            }}
-          >
-            {detail || '(no other fields)'}
-          </pre>
+          <PayloadGate json={detail}>
+            <pre
+              style={{
+                margin: 0,
+                padding: '6px 8px',
+                background: colors.bgChip,
+                borderRadius: 4,
+                fontSize: fontSizes.sm,
+                lineHeight: 1.4,
+                overflowX: 'auto',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                color: colors.text,
+              }}
+            >
+              {detail || '(no other fields)'}
+            </pre>
+          </PayloadGate>
         </div>
       )}
     </div>
