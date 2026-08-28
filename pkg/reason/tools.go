@@ -70,6 +70,48 @@ func cloneParams(p map[string]any) map[string]any {
 	return out
 }
 
+// ToolListBuilder produces the LLM tool list from the discovered capability
+// universe. Capabilities carry no exposure marks — the builder decides, by its
+// own policy, which capabilities the LLM sees and under what names. This is an
+// extension point: a reason-family worker replaces it to control exactly what
+// its LLM can call.
+type ToolListBuilder func(w *BaseReasonWorker, caps []DiscoveredCap) []llm.ToolDef
+
+// defaultToolListBuilder is the default policy producing the LLM tool list from
+// the discovered capability universe: own tool.request capabilities and own
+// meta capabilities outside the provider.* management domain are exposed (meta
+// capabilities under their capToolName); peer tool.request capabilities are
+// exposed under provider__name. Custom builders replace this.
+func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCap) []llm.ToolDef {
+	defs := make([]llm.ToolDef, 0, len(caps))
+	for _, cap := range caps {
+		var name string
+		switch {
+		case cap.Source == w.ID() && cap.Event == event.TypeToolRequest:
+			name = cap.Key
+		case cap.Source == w.ID() && !strings.HasPrefix(cap.Key, "provider."):
+			name = capToolName(Capability{Key: cap.Key})
+		case cap.Source != w.ID() && cap.Event == event.TypeToolRequest:
+			name = cap.Source + "__" + cap.Key
+		default:
+			continue
+		}
+		params := cap.Parameters
+		// Watch-derived entries fold the discriminator (op/subject) into the
+		// parameters; it must not leak into the LLM tool schema.
+		if cap.KeyField != "" {
+			params = cloneParams(params)
+			delete(params, cap.KeyField)
+		}
+		defs = append(defs, llm.ToolDef{
+			Name:        name,
+			Description: cap.Description,
+			Parameters:  params,
+		})
+	}
+	return defs
+}
+
 // handleWorkerReady learns a worker's capabilities and published events from
 // its worker.ready announcement, feeding the unified discovery universe
 // (discovered) and the tool table used for dispatch. The worker's own

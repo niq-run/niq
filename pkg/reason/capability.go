@@ -127,54 +127,12 @@ type DiscoveredCap struct {
 	Parameters  map[string]any
 }
 
-// ToolListBuilder produces the LLM tool list from the discovered capability
-// universe. Capabilities carry no exposure marks — the builder decides, by its
-// own policy, which capabilities the LLM sees and under what names. This is an
-// extension point: a reason-family worker replaces it to control exactly what
-// its LLM can call.
-type ToolListBuilder func(w *BaseReasonWorker, caps []DiscoveredCap) []llm.ToolDef
-
 // discoveredCapabilities returns the unified capability universe: every
-// capability this worker knows about, its own included, in one list. The list
-// is seeded with the worker's own capabilities at construction and refreshed
-// by every worker.ready announcement (the self-directed one included) — so the
+// capability this worker knows about, its own included, in one list. It is fed
+// by every worker.ready announcement — the self-directed one included — so the
 // builder sees one bus-derived view, no two-source assembly.
 func (w *BaseReasonWorker) discoveredCapabilities() []DiscoveredCap {
 	return w.discovered
-}
-
-// defaultToolListBuilder is the default policy: own tool.request capabilities
-// and own meta capabilities outside the provider.* management domain are
-// exposed (meta capabilities under their capToolName); peer tool.request
-// capabilities are exposed under provider__name. Custom builders replace this.
-func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCap) []llm.ToolDef {
-	defs := make([]llm.ToolDef, 0, len(caps))
-	for _, cap := range caps {
-		var name string
-		switch {
-		case cap.Source == w.ID() && cap.Event == event.TypeToolRequest:
-			name = cap.Key
-		case cap.Source == w.ID() && !strings.HasPrefix(cap.Key, "provider."):
-			name = capToolName(Capability{Key: cap.Key})
-		case cap.Source != w.ID() && cap.Event == event.TypeToolRequest:
-			name = cap.Source + "__" + cap.Key
-		default:
-			continue
-		}
-		params := cap.Parameters
-		// Watch-derived entries fold the discriminator (op/subject) into the
-		// parameters; it must not leak into the LLM tool schema.
-		if cap.KeyField != "" {
-			params = cloneParams(params)
-			delete(params, cap.KeyField)
-		}
-		defs = append(defs, llm.ToolDef{
-			Name:        name,
-			Description: cap.Description,
-			Parameters:  params,
-		})
-	}
-	return defs
 }
 
 // llmToolDefs builds the LLM tool list via the worker's tool-list builder
@@ -183,17 +141,3 @@ func (w *BaseReasonWorker) llmToolDefs() []llm.ToolDef {
 	return w.toolListBuilder(w, w.discoveredCapabilities())
 }
 
-// seedOwnCapabilities seeds the discovery universe with the worker's own
-// registered capabilities. Called at construction so the builder always sees
-// them without waiting for the self-directed announcement to round-trip; the
-// self-directed ready refreshes them via the bus afterwards.
-func (w *BaseReasonWorker) seedOwnCapabilities() {
-	caps := make([]DiscoveredCap, 0, len(w.capabilities))
-	for _, rc := range w.capabilities {
-		caps = append(caps, DiscoveredCap{
-			Source: w.ID(), Event: rc.cap.Event, KeyField: rc.cap.KeyField,
-			Key: rc.cap.Key, Description: rc.cap.Description, Parameters: rc.cap.Parameters,
-		})
-	}
-	w.discovered = append(w.discovered, caps...)
-}

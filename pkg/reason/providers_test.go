@@ -56,6 +56,66 @@ func newSwitchableWorker(ch *testChannel) (*BaseReasonWorker, *staticProvider, *
 	return w, pa, pb
 }
 
+// TestSnapshotRoundTripPreservesProvider verifies a runtime provider switch
+// survives a restart: the snapshot carries the selection and Restore rebinds
+// the worker to it, rather than silently reverting to the configured default.
+func TestSnapshotRoundTripPreservesProvider(t *testing.T) {
+	w, _, _ := newSwitchableWorker(newTestChannel())
+	w.transcript.Apply(InputPatch{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "hello"}}},
+	}})
+	w.mu.Lock()
+	err := w.setActiveProvider("b", "m4")
+	w.mu.Unlock()
+	if err != nil {
+		t.Fatalf("setActiveProvider: %v", err)
+	}
+
+	blob, err := w.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	// A fresh worker stands in for the process restart; it builds its own
+	// provider instances, so compare against its pb rather than the original's.
+	restored, _, pb2 := newSwitchableWorker(newTestChannel())
+	if err := restored.Restore(blob); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if restored.providerName != "b" || restored.providerModel != "m4" {
+		t.Fatalf("restored selection = %s/%s, want b/m4", restored.providerName, restored.providerModel)
+	}
+	if restored.llmProvider != pb2 {
+		t.Fatal("restored worker was not rebound to provider b")
+	}
+	msgs := restored.transcript.Render()
+	if len(msgs) != 1 || msgs[0].Content[0].Text != "hello" {
+		t.Fatalf("transcript not restored: %+v", msgs)
+	}
+}
+
+// TestRestoreStaleProviderKeepsDefault verifies a snapshot naming a provider
+// that is no longer configured does not take the worker down: Restore logs it
+// and keeps the provider resolved at construction.
+func TestRestoreStaleProviderKeepsDefault(t *testing.T) {
+	blob := []byte(`{"transcript":{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]},` +
+		`"provider":{"name":"gone","model":"m9"}}`)
+	w, pa, _ := newSwitchableWorker(newTestChannel())
+	if err := w.Restore(blob); err != nil {
+		t.Fatalf("Restore with a stale selection: %v", err)
+	}
+	if w.llmProvider != pa {
+		t.Fatal("stale selection should leave the constructed provider in place")
+	}
+	if w.providerName != "" || w.providerModel != "" {
+		t.Fatalf("selection = %s/%s, want the constructed default", w.providerName, w.providerModel)
+	}
+	msgs := w.transcript.Render()
+	if len(msgs) != 1 || msgs[0].Content[0].Text != "hi" {
+		t.Fatalf("transcript not restored alongside a stale selection: %+v", msgs)
+	}
+}
+
 // TestSetActiveProviderSwitches verifies setActiveProvider rebinds the active
 // provider and the default compactor, records the current name/model, and
 // rejects unknown providers/models.
@@ -209,7 +269,7 @@ func TestStatusQueryProviders(t *testing.T) {
 		t.Fatalf("status subject = %v, want provider.list", s.Payload["op"])
 	}
 	b, _ := json.Marshal(s.Payload["providers"])
-	if !strings.Contains(string(b), `"Name":"a"`) || !strings.Contains(string(b), `"Name":"b"`) {
+	if !strings.Contains(string(b), `"name":"a"`) || !strings.Contains(string(b), `"name":"b"`) {
 		t.Fatalf("status providers did not include both providers: %s", b)
 	}
 	current, _ := s.Payload["current"].(map[string]any)

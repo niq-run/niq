@@ -10,7 +10,6 @@ import (
 	"github.com/54c1/niq/core/event"
 	"github.com/54c1/niq/core/llm"
 	"github.com/54c1/niq/core/worker"
-	reasonBase "github.com/54c1/niq/pkg/reason"
 )
 
 // ── mock bus channel ────────────────────────────────────────────────────────
@@ -232,11 +231,15 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 		{Role: llm.RoleToolResult, ToolCallID: "call_1", ToolName: "workspace.bash", IsError: false,
 			Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}},
 	}
-	tp := reasonBase.NewAccumulateTranscript()
-	for _, m := range seed {
-		tp.Apply(reasonBase.AssistantOutputPatch{Message: m})
+	// Restore expects a worker snapshot, whose transcript is nested alongside
+	// the worker's provider selection — so seed a worker through its own
+	// construction path and snapshot that, rather than handing over a bare
+	// transcript blob.
+	seeded := NewWorker(Config{ID: "r1", Bus: newMockChannel(), SeedMessages: seed})
+	blob0, err := seeded.Snapshot()
+	if err != nil {
+		t.Fatalf("seed snapshot: %v", err)
 	}
-	blob0, _ := tp.State()
 	if err := w.Restore(blob0); err != nil {
 		t.Fatalf("seed restore: %v", err)
 	}

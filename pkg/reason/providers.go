@@ -10,11 +10,14 @@ import (
 // at runtime: its name, the default model, and the full model list. Models is
 // the list of model IDs (for display); ModelDetails carries the same models
 // with metadata such as ContextWindow when known.
+// The json tags are the wire format: these travel in the worker.status
+// snapshot (worker.query provider.list) and are read by the WebUI, so they use
+// the same snake_case naming as llm.ModelInfo rather than Go field names.
 type ProviderInfo struct {
-	Name         string
-	Default      string
-	Models       []string
-	ModelDetails []llm.ModelInfo
+	Name         string          `json:"name"`
+	Default      string          `json:"default"`
+	Models       []string        `json:"models"`
+	ModelDetails []llm.ModelInfo `json:"model_details,omitempty"`
 }
 
 // ProviderSources is the runtime selection point for a reason worker's LLM

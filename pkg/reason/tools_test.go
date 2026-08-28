@@ -98,6 +98,15 @@ func TestCoreCapabilitiesRegistered(t *testing.T) {
 func TestCoreCapabilitiesExposedToLLM(t *testing.T) {
 	w := newTestWorker(nil, newTestChannel())
 
+	// There is no seeding of the discovery universe at construction any more:
+	// the worker's own capabilities arrive via its self-directed worker.ready
+	// round-trip, exactly like any peer's. Simulate that before asking for the
+	// tool list.
+	w.handleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+		"worker_id": w.ID(),
+		"watch":     w.watchDeclarations(),
+	}))
+
 	defs := w.llmToolDefs()
 	got := make(map[string]bool)
 	for _, d := range defs {
