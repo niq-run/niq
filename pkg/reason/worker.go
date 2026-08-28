@@ -285,6 +285,11 @@ type BaseReasonWorker struct {
 	publishMap      map[string][]EventPublish // worker ID -> published events
 	toolNameMap     map[string]string         // encoded LLM-facing name -> original declared name
 	toolCallTracker *ToolCallTracker
+	// toolCallSeq mints globally-unique tool-call ids for calls whose model
+	// omitted one. It must be monotonic across rounds (not per-turn) because the
+	// tracker persists pending calls between rounds — a per-turn "call_0" would
+	// collide with a still-pending call_0 from a previous round and mispair.
+	toolCallSeq uint64
 
 	compactor       Compactor
 	eventConverters []EventConverter

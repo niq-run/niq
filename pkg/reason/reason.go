@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/54c1/niq/core/event"
@@ -333,6 +334,14 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	if _, isMeta := w.metaCapabilityCall(finalMsg); isMeta {
 		appliedMsg = stripToolCalls(finalMsg)
 	}
+	// Guarantee every tool call carries a stable id before it enters the
+	// transcript. Some models omit the tool_call id; an empty id makes the
+	// OpenAI-format pair (assistant tool_call + its tool_result) invalid, and
+	// because the transcript is persisted such a message is unrecoverable —
+	// every later LLM call 400s. Synthesizing here (not in the provider) keeps
+	// the guarantee provider-agnostic and ensures the matching tool_result
+	// reuses the same id via the tracker.
+	w.ensureToolCallIDs(finalMsg)
 	w.transcript.Apply(AssistantOutputPatch{Message: appliedMsg})
 
 	// Budget check: record the round's usage and act on thresholds
@@ -401,6 +410,21 @@ func stripToolCalls(msg llm.Message) llm.Message {
 	}
 	msg.Content = cleaned
 	return msg
+}
+
+// ensureToolCallIDs assigns a globally-unique id to every tool call in msg
+// that lacks one. It mutates the message in place: the same blocks are later
+// read by the transcript, the tracker and the tool-result patch, so a
+// synthesized id propagates to both the assistant entry and its tool_result.
+// Ids are monotonic across rounds because the tracker keeps pending calls
+// between rounds — a per-turn "call_0" would collide with a still-pending one
+// from an earlier round and mispair a result against the wrong call.
+func (w *BaseReasonWorker) ensureToolCallIDs(msg llm.Message) {
+	for i := range msg.Content {
+		if msg.Content[i].Type == llm.ContentToolCall && msg.Content[i].ToolCallID == "" {
+			msg.Content[i].ToolCallID = fmt.Sprintf("call_%d", atomic.AddUint64(&w.toolCallSeq, 1))
+		}
+	}
 }
 
 func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.ContentBlock, traceID string) {
