@@ -511,10 +511,14 @@ func (p *Provider) toCompletionResponse(cr *chatCompletionResponse) *llm.Complet
 		msg.Content = append(msg.Content, blocks...)
 
 		// Tool calls.
-		for _, tc := range c.Message.ToolCalls {
+		for i, tc := range c.Message.ToolCalls {
+			id := tc.ID
+			if id == "" {
+				id = fmt.Sprintf("call_%d", i)
+			}
 			msg.Content = append(msg.Content, llm.ContentBlock{
 				Type:          llm.ContentToolCall,
-				ToolCallID:    tc.ID,
+				ToolCallID:    id,
 				ToolName:      tc.Function.Name,
 				ToolArguments: tc.Function.Arguments,
 			})
@@ -770,9 +774,17 @@ func (p *Provider) readStream(body io.ReadCloser, es *llm.EventStream) {
 		if !ok {
 			break
 		}
+		id := pc.id
+		if id == "" {
+			// Some models (e.g. THUDM/GLM) omit the tool-call id. OpenAI-format
+			// APIs require it on both the call and its result, so synthesize a
+			// stable one keyed by the call index within this turn.
+			id = fmt.Sprintf("call_%d", idx)
+			pc.id = id
+		}
 		msg.Content = append(msg.Content, llm.ContentBlock{
 			Type:          llm.ContentToolCall,
-			ToolCallID:    pc.id,
+			ToolCallID:    id,
 			ToolName:      pc.name,
 			ToolArguments: pc.argsBuf.String(),
 		})
