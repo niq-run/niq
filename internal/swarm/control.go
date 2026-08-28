@@ -96,6 +96,7 @@ func (c *Control) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /api/projects", c.handleCreateProject)
 	mux.HandleFunc("POST /api/projects/{id}/start", c.handleStartProject)
 	mux.HandleFunc("POST /api/projects/{id}/stop", c.handleStopProject)
+	mux.HandleFunc("POST /api/projects/{id}/restart", c.handleRestartProject)
 
 	assets, err := webui.AssetsFS()
 	if err != nil {
@@ -234,6 +235,39 @@ func (c *Control) isRunning(id string) bool {
 	return true
 }
 
+// handleRestartProject gracefully stops a running project (if one is tracked)
+// and relaunches it on its reused ports. It waits for the old process to exit
+// before spawning the new one so the two never contend for the persisted
+// ports; launchProject then blocks until the new WebUI port is actually
+// listening, so the response reflects a ready project.
+func (c *Control) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	id := r.PathValue("id")
+	if _, err := LoadProject(id); err != nil {
+		stdhttp.Error(w, "project not found", 404)
+		return
+	}
+	c.mu.Lock()
+	proc, ok := c.procs[id]
+	if ok && proc != nil {
+		_ = proc.Signal(os.Interrupt) // graceful shutdown + snapshot
+		c.mu.Unlock()
+		exited := make(chan struct{})
+		go func() { _, _ = proc.Wait(); close(exited) }()
+		select {
+		case <-exited:
+		case <-time.After(8 * time.Second):
+		}
+		c.mu.Lock()
+		if cur, ok := c.procs[id]; ok && cur == proc {
+			delete(c.procs, id)
+		}
+		c.mu.Unlock()
+	} else {
+		c.mu.Unlock()
+	}
+	c.launchProject(w, id)
+}
+
 // handleStopProject terminates a running project's process and forgets it.
 func (c *Control) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
@@ -334,8 +368,10 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 		c.mu.Unlock()
 	}()
 
-	// Poll project.json for the dynamically-assigned ports.
-	webUI := resolvedWebUI(id)
+	// Wait until the new process is actually serving on its WebUI port, so the
+	// response (and the UI's loading state) reflects a ready project rather
+	// than one that merely assigned a port in project.json.
+	webUI := waitWebUIReady(id)
 	json.NewEncoder(w).Encode(map[string]any{
 		"project":    id,
 		"webui_url":  localhostURL(webUI),
@@ -359,15 +395,21 @@ func corsControl(next stdhttp.Handler) stdhttp.Handler {
 	})
 }
 
-// resolvedWebUI polls a project's persisted ports until the WebUI port is
-// assigned or the deadline passes.
-func resolvedWebUI(id string) string {
-	deadline := time.Now().Add(4 * time.Second)
+// waitWebUIReady blocks until the project's WebUI port is actually accepting
+// TCP connections (not merely assigned in project.json), or the deadline lapses.
+// It reuses the persisted port, so it is safe to call right after a relaunch on
+// the same address — it succeeds only once the new process is listening.
+func waitWebUIReady(id string) string {
+	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
 		if p, err := LoadProject(id); err == nil && p.Ports.WebUI != 0 {
-			return "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI)
+			addr := "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI)
+			if conn, derr := net.DialTimeout("tcp", addr, 300*time.Millisecond); derr == nil {
+				conn.Close()
+				return addr
+			}
 		}
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 	return ""
 }

@@ -99,6 +99,15 @@ export async function stopProject(id: string): Promise<void> {
   if (!res.ok) throw new Error('stop failed: ' + res.status)
 }
 
+// restartProject asks the control plane to gracefully stop and relaunch a
+// running project on its reused ports. It resolves only once the new instance
+// is actually serving, so the caller can treat it as a ready project.
+export async function restartProject(id: string): Promise<ProjectStartResult> {
+  const res = await fetch(CONTROL + `/api/projects/${encodeURIComponent(id)}/restart`, { method: 'POST' })
+  if (!res.ok) throw new Error('restart failed: ' + res.status)
+  return res.json()
+}
+
 export async function sendInput(text: string, target: string, inputMode: string): Promise<void> {
   await fetch(p('/api/input'), {
     method: 'POST',
