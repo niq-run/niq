@@ -1,4 +1,4 @@
-// Package providercfg loads LLM provider configuration from ~/.niq/provider.json.
+// Package provider loads LLM provider configuration from ~/.niq/provider.json.
 //
 // The file is optional. When present, the first provider is the default unless
 // the active field names a provider explicitly:
@@ -20,7 +20,7 @@
 // api_key and header values support ${VAR} / $VAR environment-variable
 // expansion; custom headers are applied after the built-in auth headers and
 // may therefore override them.
-package providercfg
+package provider
 
 import (
 	"encoding/json"
@@ -35,13 +35,13 @@ import (
 	"github.com/54c1/niq/pkg/llmprovider/openairesponses"
 )
 
-// Provider describes one named LLM provider.
+// Entry describes one named LLM provider.
 //
 // Model is the default model used when none is selected explicitly; Models is
 // the full list of models the provider offers, each with optional per-model
 // metadata such as ContextWindow. When Model is empty and Models is non-empty,
 // Model falls back to Models[0] (see ResolveDefaultModel).
-type Provider struct {
+type Entry struct {
 	Name    string            `json:"name"`
 	Type    string            `json:"type"`
 	APIKey  string            `json:"api_key,omitempty"`
@@ -119,7 +119,7 @@ func (m Models) MarshalJSON() ([]byte, error) {
 
 // ListModels returns the provider's full model list. When Models is empty it
 // transparently falls back to a single-element list [Model].
-func (p Provider) ListModels() []string {
+func (p Entry) ListModels() []string {
 	if len(p.Models) > 0 {
 		names := make([]string, 0, len(p.Models))
 		for _, m := range p.Models {
@@ -135,7 +135,7 @@ func (p Provider) ListModels() []string {
 
 // ResolveDefaultModel returns the effective default model for the provider,
 // falling back to the first entry of Models when Model is unset.
-func (p Provider) ResolveDefaultModel() string {
+func (p Entry) ResolveDefaultModel() string {
 	if p.Model != "" {
 		return p.Model
 	}
@@ -147,8 +147,8 @@ func (p Provider) ResolveDefaultModel() string {
 
 // Config is the top-level provider.json shape.
 type Config struct {
-	Active    string     `json:"active,omitempty"`
-	Providers []Provider `json:"providers"`
+	Active    string  `json:"active,omitempty"`
+	Providers []Entry `json:"providers"`
 }
 
 // Path returns the provider config path. NIQ_PROVIDER_CONFIG overrides the
@@ -170,12 +170,12 @@ func Load() (*Config, error) {
 		return &Config{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("providercfg: read %s: %w", path, err)
+		return nil, fmt.Errorf("provider: read %s: %w", path, err)
 	}
 
 	var cfg Config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("providercfg: parse %s: %w", path, err)
+		return nil, fmt.Errorf("provider: parse %s: %w", path, err)
 	}
 	return &cfg, nil
 }
@@ -206,10 +206,10 @@ func EnsureExample() error {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("providercfg: mkdir: %w", err)
+		return fmt.Errorf("provider: mkdir: %w", err)
 	}
 	if err := os.WriteFile(path, []byte(exampleJSON), 0644); err != nil {
-		return fmt.Errorf("providercfg: write example %s: %w", path, err)
+		return fmt.Errorf("provider: write example %s: %w", path, err)
 	}
 	return nil
 }
@@ -232,10 +232,10 @@ func Configured() bool {
 
 // Default returns the active provider, or the first configured provider when
 // active is empty or stale.
-func Default() (Provider, bool) {
+func Default() (Entry, bool) {
 	cfg, err := Load()
 	if err != nil || len(cfg.Providers) == 0 {
-		return Provider{}, false
+		return Entry{}, false
 	}
 	if cfg.Active != "" {
 		if p, ok := findByName(cfg, cfg.Active); ok {
@@ -246,63 +246,49 @@ func Default() (Provider, bool) {
 }
 
 // Find returns a provider by name.
-func Find(name string) (Provider, bool) {
+func Find(name string) (Entry, bool) {
 	cfg, err := Load()
 	if err != nil {
-		return Provider{}, false
+		return Entry{}, false
 	}
 	return findByName(cfg, name)
 }
 
 // FindByType returns the first provider with the given type.
-func FindByType(typ string) (Provider, bool) {
+func FindByType(typ string) (Entry, bool) {
 	cfg, err := Load()
 	if err != nil {
-		return Provider{}, false
+		return Entry{}, false
 	}
 	for _, p := range cfg.Providers {
 		if strings.EqualFold(p.Type, typ) {
 			return p, true
 		}
 	}
-	return Provider{}, false
-}
-
-// Switch updates the active provider. It is intended to back UI-driven
-// provider switching later.
-func Switch(name string) error {
-	cfg, err := Load()
-	if err != nil {
-		return err
-	}
-	if _, ok := findByName(cfg, name); !ok {
-		return fmt.Errorf("providercfg: provider %q not found", name)
-	}
-	cfg.Active = name
-	return Write(cfg)
+	return Entry{}, false
 }
 
 // Write persists a provider config.
 func Write(cfg *Config) error {
 	path := Path()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("providercfg: mkdir: %w", err)
+		return fmt.Errorf("provider: mkdir: %w", err)
 	}
 	raw, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("providercfg: marshal: %w", err)
+		return fmt.Errorf("provider: marshal: %w", err)
 	}
 	raw = append(raw, '\n')
 	if err := os.WriteFile(path, raw, 0644); err != nil {
-		return fmt.Errorf("providercfg: write %s: %w", path, err)
+		return fmt.Errorf("provider: write %s: %w", path, err)
 	}
 	return nil
 }
 
-// Build constructs an llm.LLMProvider from a Provider config. The model used is
-// the provider's default model (see ResolveDefaultModel); a caller that wants
+// Build constructs an llm.LLMProvider from a provider Entry. The model used is
+// the entry's default model (see ResolveDefaultModel); a caller that wants
 // another model from Models should pass it via BuildWithOverrides.
-func Build(p Provider) llm.LLMProvider {
+func Build(p Entry) llm.LLMProvider {
 	if resolved := p.ResolveDefaultModel(); resolved != "" {
 		p.Model = resolved
 	}
@@ -385,48 +371,9 @@ func Build(p Provider) llm.LLMProvider {
 	}
 }
 
-// SetModel updates a provider's default model. The model must appear in the
-// provider's Models list (or match its current single Model when no list is
-// configured). Persists the updated config.
-func SetModel(name, model string) error {
-	cfg, err := Load()
-	if err != nil {
-		return err
-	}
-	for i := range cfg.Providers {
-		p := &cfg.Providers[i]
-		if p.Name != name {
-			continue
-		}
-		if !contains(p.ListModels(), model) {
-			return fmt.Errorf("providercfg: model %q not available for provider %q", model, name)
-		}
-		p.Model = model
-		return Write(cfg)
-	}
-	return fmt.Errorf("providercfg: provider %q not found", name)
-}
-
-func contains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
-}
-
-// expandEnv substitutes ${VAR} and $VAR references with the named environment
-// variable's value. A missing variable expands to an empty string.
-func expandEnv(s string) string {
-	return os.Expand(s, func(key string) string {
-		return os.Getenv(key)
-	})
-}
-
 // BuildWithOverrides constructs a provider but lets caller-supplied values win
 // over values from provider.json.
-func BuildWithOverrides(p Provider, apiKey, baseURL, model string) llm.LLMProvider {
+func BuildWithOverrides(p Entry, apiKey, baseURL, model string) llm.LLMProvider {
 	if apiKey != "" {
 		p.APIKey = apiKey
 	}
@@ -439,11 +386,19 @@ func BuildWithOverrides(p Provider, apiKey, baseURL, model string) llm.LLMProvid
 	return Build(p)
 }
 
-func findByName(cfg *Config, name string) (Provider, bool) {
+func findByName(cfg *Config, name string) (Entry, bool) {
 	for _, p := range cfg.Providers {
 		if p.Name == name {
 			return p, true
 		}
 	}
-	return Provider{}, false
+	return Entry{}, false
+}
+
+// expandEnv substitutes ${VAR} and $VAR references with the named environment
+// variable's value. A missing variable expands to an empty string.
+func expandEnv(s string) string {
+	return os.Expand(s, func(key string) string {
+		return os.Getenv(key)
+	})
 }

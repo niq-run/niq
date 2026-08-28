@@ -1,24 +1,24 @@
-// Implementation of reason.ProviderSources backed by the providercfg package,
-// so a reason worker can be handed the full provider list from provider.json
-// and switch its active provider/model at runtime via worker.update.
-package swarm
+// Implementation of reason.ProviderSources backed by this package, so a reason
+// worker can be handed the full provider list from provider.json and switch its
+// active provider/model at runtime via worker.update.
+package provider
 
 import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	llm "github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/pkg/providercfg"
 	"github.com/54c1/niq/pkg/reason"
 	"github.com/54c1/niq/pkg/service/workerhost"
 )
 
-// ensureLLMConfigured gates swarm startup on an LLM provider being configured
+// EnsureLLMConfigured gates swarm startup on an LLM provider being configured
 // when the persisted worker set includes a reason worker. On a missing or
 // empty config it seeds the example provider.json and returns an actionable
 // error, so the swarm exits before any worker starts.
-func ensureLLMConfigured(svc *workerhost.WorkerService) error {
+func EnsureLLMConfigured(svc *workerhost.WorkerService) error {
 	recs, err := svc.LoadAllWorkers()
 	if err != nil {
 		return err
@@ -33,13 +33,13 @@ func ensureLLMConfigured(svc *workerhost.WorkerService) error {
 	if !needsLLM {
 		return nil
 	}
-	if providercfg.Configured() {
+	if Configured() {
 		return nil
 	}
-	if err := providercfg.EnsureExample(); err != nil {
-		return fmt.Errorf("swarm: seed provider example: %w", err)
+	if err := EnsureExample(); err != nil {
+		return fmt.Errorf("provider: seed provider example: %w", err)
 	}
-	return fmt.Errorf("no LLM provider configured: edit %s and re-run", providercfg.Path())
+	return fmt.Errorf("no LLM provider configured: edit %s and re-run", Path())
 }
 
 // swarmProviderSources exposes every provider configured in provider.json. The
@@ -59,7 +59,11 @@ type forcedProvider struct {
 	model    string
 }
 
-func newSwarmProviderSources(provider, apiKey, baseURL, model string) reason.ProviderSources {
+// NewSwarmProviderSources returns a reason.ProviderSources backed by
+// provider.json. An all-empty selection picks the config default; any non-empty
+// spawn-time argument (provider name/type, api_key, base_url, model) forces a
+// specific initial provider.
+func NewSwarmProviderSources(provider, apiKey, baseURL, model string) reason.ProviderSources {
 	f := &forcedProvider{provider: provider, apiKey: apiKey, baseURL: baseURL, model: model}
 	if provider == "" && apiKey == "" && baseURL == "" && model == "" {
 		return &swarmProviderSources{force: nil}
@@ -67,19 +71,19 @@ func newSwarmProviderSources(provider, apiKey, baseURL, model string) reason.Pro
 	return &swarmProviderSources{force: f}
 }
 
-// initialProviderInfo resolves the initially active provider's name and model,
-// mirroring newSwarmProviderSources' forced-vs-default selection, so the
+// InitialProviderInfo resolves the initially active provider's name and model,
+// mirroring NewSwarmProviderSources' forced-vs-default selection, so the
 // reason worker can report its current choice via worker.status.
-func initialProviderInfo(provider, apiKey, baseURL, model string) (string, string) {
+func InitialProviderInfo(provider, apiKey, baseURL, model string) (string, string) {
 	if provider != "" || apiKey != "" || baseURL != "" || model != "" {
 		if model == "" && provider != "" {
-			if p, ok := providercfg.Find(provider); ok {
+			if p, ok := Find(provider); ok {
 				model = p.ResolveDefaultModel()
 			}
 		}
 		return provider, model
 	}
-	if p, ok := providercfg.Default(); ok {
+	if p, ok := Default(); ok {
 		return p.Name, p.ResolveDefaultModel()
 	}
 	return "", ""
@@ -91,14 +95,14 @@ func (s *swarmProviderSources) Default() llm.LLMProvider {
 	if s.force != nil {
 		return providerFromArgs(s.force.provider, s.force.apiKey, s.force.baseURL, s.force.model)
 	}
-	p, ok := providercfg.Default()
+	p, ok := Default()
 	if !ok {
 		log.Printf("[swarm] provider sources: no default provider configured (provider.json missing or empty)")
 		return nil
 	}
 	log.Printf("[swarm] resolved default provider: name=%s type=%s model=%s base_url=%s",
 		p.Name, p.Type, p.ResolveDefaultModel(), p.BaseURL)
-	return providercfg.Build(p)
+	return Build(p)
 }
 
 // Build constructs a provider bound to name and an explicit model (empty uses
@@ -107,10 +111,10 @@ func (s *swarmProviderSources) Default() llm.LLMProvider {
 // rejected by the provider's API call itself, which lets models discovered only
 // via the provider API (see List) be selected at runtime.
 func (s *swarmProviderSources) Build(name, model string) (llm.LLMProvider, error) {
-	p, ok := providercfg.Find(name)
+	p, ok := Find(name)
 	if !ok {
 		log.Printf("[swarm] provider switch failed: unknown provider %q", name)
-		return nil, fmt.Errorf("swarm: unknown provider %q", name)
+		return nil, fmt.Errorf("provider: unknown provider %q", name)
 	}
 	effModel := model
 	if effModel == "" {
@@ -118,7 +122,7 @@ func (s *swarmProviderSources) Build(name, model string) (llm.LLMProvider, error
 	}
 	log.Printf("[swarm] building provider: name=%s type=%s model=%s base_url=%s",
 		name, p.Type, effModel, p.BaseURL)
-	return providercfg.BuildWithOverrides(p, "", "", model), nil
+	return BuildWithOverrides(p, "", "", model), nil
 }
 
 // List enumerates every configured provider and its models. The model list is
@@ -126,7 +130,7 @@ func (s *swarmProviderSources) Build(name, model string) (llm.LLMProvider, error
 // provider's API; an API failure falls back to the configured list alone.
 // ModelDetails carries per-model metadata (e.g. ContextWindow) when available.
 func (s *swarmProviderSources) List() []reason.ProviderInfo {
-	cfg, err := providercfg.Load()
+	cfg, err := Load()
 	if err != nil {
 		return nil
 	}
@@ -147,13 +151,18 @@ func (s *swarmProviderSources) List() []reason.ProviderInfo {
 	return out
 }
 
+// listModelsTimeout bounds a single provider's live model-list call. Several
+// providers are queried in sequence, so the whole provider.list round is
+// roughly this times the number of configured providers.
+const listModelsTimeout = 3 * time.Second
+
 // modelsFor returns the merged model set for a provider as []llm.ModelInfo:
 // configured models first, then any API-reported models not already present.
 // ContextWindow is taken from the API when reported, otherwise falls back to
 // the provider's configured context_window. If the provider API is
 // unreachable or errors, the configured models (with config context window) are
 // returned so the provider list query still works offline.
-func (s *swarmProviderSources) modelsFor(p providercfg.Provider) []llm.ModelInfo {
+func (s *swarmProviderSources) modelsFor(p Entry) []llm.ModelInfo {
 	configModels := p.Models
 	details := make([]llm.ModelInfo, 0, len(configModels))
 	seen := make(map[string]struct{}, len(configModels))
@@ -170,7 +179,13 @@ func (s *swarmProviderSources) modelsFor(p providercfg.Provider) []llm.ModelInfo
 			ContextWindow: cw,
 		})
 	}
-	apiModels, err := providercfg.Build(p).ListModels(context.Background())
+	// Bound the live model-list call: this runs on the reason worker's event
+	// loop while it holds its lock (worker.query provider.list), and provider
+	// clients are built without an HTTP timeout, so an unresponsive endpoint
+	// here would stall the whole worker indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), listModelsTimeout)
+	defer cancel()
+	apiModels, err := Build(p).ListModels(ctx)
 	if err != nil {
 		log.Printf("[swarm] provider %q: model list from API unavailable (%v), using configured list", p.Name, err)
 		return details
@@ -188,4 +203,34 @@ func (s *swarmProviderSources) modelsFor(p providercfg.Provider) []llm.ModelInfo
 		details = append(details, m)
 	}
 	return details
+}
+
+// providerFromArgs builds a provider from raw spawn-time args, without reading
+// provider.json: a name/type first resolves to a configured provider (by name,
+// then by type) whose values are overridden by any explicit args; otherwise the
+// args are treated as an ad-hoc provider definition.
+func providerFromArgs(provider, apiKey, baseURL, model string) llm.LLMProvider {
+	if provider != "" {
+		if p, ok := Find(provider); ok {
+			return BuildWithOverrides(p, apiKey, baseURL, model)
+		}
+		if p, ok := FindByType(provider); ok {
+			return BuildWithOverrides(p, apiKey, baseURL, model)
+		}
+		return Build(Entry{
+			Type:    provider,
+			APIKey:  apiKey,
+			BaseURL: baseURL,
+			Model:   model,
+		})
+	}
+	if p, ok := Default(); ok {
+		return BuildWithOverrides(p, apiKey, baseURL, model)
+	}
+	return Build(Entry{
+		Type:    "deepseek",
+		APIKey:  apiKey,
+		BaseURL: baseURL,
+		Model:   model,
+	})
 }

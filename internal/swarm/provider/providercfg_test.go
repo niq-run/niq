@@ -1,4 +1,4 @@
-package providercfg
+package provider
 
 import (
 	"os"
@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-func TestProviderConfigDefaultAndSwitch(t *testing.T) {
+func TestProviderConfigDefaultAndFind(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "provider.json")
 	t.Setenv("NIQ_PROVIDER_CONFIG", path)
 
 	cfg := &Config{
-		Providers: []Provider{
+		Providers: []Entry{
 			{Name: "deepseek-responses", Type: "openai-responses", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash"},
 			{Name: "deepseek-claude", Type: "claude", BaseURL: "https://api.deepseek.com/anthropic", Model: "deepseek-v4-flash"},
 		},
@@ -36,18 +36,6 @@ func TestProviderConfigDefaultAndSwitch(t *testing.T) {
 	if !ok || byType.Name != "deepseek-claude" {
 		t.Fatalf("FindByType = %+v, %v", byType, ok)
 	}
-
-	if err := Switch("deepseek-claude"); err != nil {
-		t.Fatalf("Switch: %v", err)
-	}
-	def, ok = Default()
-	if !ok || def.Name != "deepseek-claude" {
-		t.Fatalf("Default after switch = %+v, %v", def, ok)
-	}
-
-	if err := Switch("missing"); err == nil {
-		t.Fatal("Switch(missing) should fail")
-	}
 }
 
 func TestProviderConfigMissingFile(t *testing.T) {
@@ -64,7 +52,7 @@ func TestProviderConfigActiveFallsBackToFirst(t *testing.T) {
 
 	cfg := &Config{
 		Active: "stale",
-		Providers: []Provider{
+		Providers: []Entry{
 			{Name: "first", Type: "openai"},
 			{Name: "second", Type: "claude"},
 		},
@@ -119,7 +107,7 @@ func TestEnsureExampleAndConfigured(t *testing.T) {
 	}
 
 	// EnsureExample must not overwrite an existing config.
-	if err := Write(&Config{Providers: []Provider{{Name: "real", Type: "deepseek", APIKey: "sk-x"}}}); err != nil {
+	if err := Write(&Config{Providers: []Entry{{Name: "real", Type: "deepseek", APIKey: "sk-x"}}}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if err := EnsureExample(); err != nil {

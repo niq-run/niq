@@ -1,4 +1,4 @@
-package swarm
+package provider
 
 import (
 	"os"
@@ -7,23 +7,46 @@ import (
 	"testing"
 
 	"github.com/54c1/niq/core/worker"
-	"github.com/54c1/niq/pkg/providercfg"
 	"github.com/54c1/niq/pkg/service/workerhost"
 )
 
-// reasonStoreSvc returns a WorkerService over a store that has one persisted
-// reason worker.
-func reasonStoreSvc(t *testing.T) *workerhost.WorkerService {
+// memStore is an in-memory WorkerStore for tests. It avoids importing the
+// swarm package (which owns the file-backed store), since swarm imports this
+// package.
+type memStore struct {
+	cfgs map[string]worker.WorkerConfig
+}
+
+func newMemStore(cfgs ...worker.WorkerConfig) *memStore {
+	m := &memStore{cfgs: map[string]worker.WorkerConfig{}}
+	for _, c := range cfgs {
+		m.cfgs[c.ID] = c
+	}
+	return m
+}
+
+func (m *memStore) SaveConfig(cfg worker.WorkerConfig) error {
+	m.cfgs[cfg.ID] = cfg
+	return nil
+}
+
+func (m *memStore) SaveState(id string, state worker.WorkerState, snapshot []byte) error { return nil }
+func (m *memStore) Delete(id string) error                                               { return nil }
+
+func (m *memStore) LoadAll() ([]workerhost.WorkerRecord, error) {
+	out := make([]workerhost.WorkerRecord, 0, len(m.cfgs))
+	for _, c := range m.cfgs {
+		out = append(out, workerhost.WorkerRecord{ID: c.ID, Type: c.Type, Params: c.Params})
+	}
+	return out, nil
+}
+
+// serviceWithWorkers returns a WorkerService backed by an in-memory store
+// seeded with the given worker configs.
+func serviceWithWorkers(t *testing.T, cfgs ...worker.WorkerConfig) *workerhost.WorkerService {
 	t.Helper()
-	store, err := NewFileWorkerStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
-	if err := store.SaveConfig(worker.WorkerConfig{ID: "niq", Type: "reason"}); err != nil {
-		t.Fatalf("save config: %v", err)
-	}
 	svc := workerhost.New()
-	svc.SetStore(store)
+	svc.SetStore(newMemStore(cfgs...))
 	return svc
 }
 
@@ -32,34 +55,32 @@ func TestEnsureLLMConfigured(t *testing.T) {
 	t.Setenv("NIQ_PROVIDER_CONFIG", cfgPath)
 
 	// No persisted workers → passes without any provider.
-	emptyStore, err := NewFileWorkerStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	emptySvc := workerhost.New()
-	emptySvc.SetStore(emptyStore)
-	if err := ensureLLMConfigured(emptySvc); err != nil {
+	if err := EnsureLLMConfigured(serviceWithWorkers(t)); err != nil {
 		t.Fatalf("empty store should pass: %v", err)
 	}
 
+	reasonSvc := func() *workerhost.WorkerService {
+		return serviceWithWorkers(t, worker.WorkerConfig{ID: "niq", Type: "reason"})
+	}
+
 	// Reason worker persisted, no provider → error + example seeded.
-	if err := ensureLLMConfigured(reasonStoreSvc(t)); err == nil {
+	if err := EnsureLLMConfigured(reasonSvc()); err == nil {
 		t.Fatal("expected error when reason worker exists without a provider")
 	}
 	if _, err := os.Stat(cfgPath); err != nil {
 		t.Fatalf("example provider.json not seeded: %v", err)
 	}
-	if !strings.Contains(mustErrString(ensureLLMConfigured(reasonStoreSvc(t))), cfgPath) {
+	if !strings.Contains(mustErrString(EnsureLLMConfigured(reasonSvc())), cfgPath) {
 		t.Fatalf("error should mention the provider config path")
 	}
 
 	// Provider configured → passes.
-	if err := providercfg.Write(&providercfg.Config{Providers: []providercfg.Provider{
+	if err := Write(&Config{Providers: []Entry{
 		{Name: "deepseek", Type: "deepseek", APIKey: "sk-x"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureLLMConfigured(reasonStoreSvc(t)); err != nil {
+	if err := EnsureLLMConfigured(reasonSvc()); err != nil {
 		t.Fatalf("configured should pass: %v", err)
 	}
 }
