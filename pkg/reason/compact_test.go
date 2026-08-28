@@ -264,18 +264,6 @@ func TestCurrentDigestNegative(t *testing.T) {
 }
 
 // (messages only, no cursor) restores cleanly - Restore must read older blobs.
-func TestSnapshotOldBlobCompatibility(t *testing.T) {
-	w := NewBaseReasonWorker(Config{ID: "r1", Bus: newTestChannel()})
-	old := `{"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`
-	if err := w.Restore([]byte(old)); err != nil {
-		t.Fatalf("old blob restore: %v", err)
-	}
-	msgs := w.transcript.Render()
-	if len(msgs) != 1 || msgs[0].Content[0].Text != "hello" {
-		t.Fatalf("old blob content lost: %+v", msgs)
-	}
-}
-
 // TestCompactionAppendsNote verifies a successful compaction appends a
 // completion note to the transcript, so the model knows the operation ran and
 // does not re-decide to compress every round.

@@ -41,10 +41,6 @@ type Config struct {
 	// (see reasonBase.Config). 0 uses the default.
 	MaxPayloadBytes int
 
-	// Compactor is how this worker compresses its transcript under window
-	// pressure. nil uses the default LLM-summary compactor.
-	Compactor reasonBase.Compactor
-
 	// SeedMessages are applied to the transcript at construction: the
 	// spawner's handover brief (goal goes to Programs instead). nil for a
 	// fresh worker.
@@ -110,7 +106,6 @@ func NewWorker(cfg Config) *Worker {
 		KeepTail:         cfg.KeepTail,
 		CompactDirective: cfg.CompactDirective,
 		MaxPayloadBytes:  cfg.MaxPayloadBytes,
-		Compactor:        cfg.Compactor,
 		SeedMessages:     cfg.SeedMessages,
 	})
 

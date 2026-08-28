@@ -20,7 +20,9 @@ package reason
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 
 	corebus "github.com/54c1/niq/core/bus"
@@ -69,11 +71,6 @@ type Config struct {
 	ProviderName    string
 	ProviderModel   string
 	ReasoningEffort *string
-
-	// Compactor is how this worker compresses its transcript under window
-	// pressure. nil uses the default LLM-summary compactor. It may also carry
-	// extra operations (e.g. Rotate) reached by the tools that declare them.
-	Compactor Compactor
 
 	ContextWindow    int
 	BudgetSoft       float64
@@ -146,20 +143,12 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		w.transcript.Apply(InputPatch{Messages: cfg.SeedMessages})
 	}
 
-	// Compactor: default LLM-summary compactor unless supplied. It needs the
-	// provider for summarization and the tail policy.
-	if cfg.Compactor == nil {
-		w.compactor = NewDefaultCompactor(initialProvider, cfg.KeepTail)
-	} else {
-		w.compactor = cfg.Compactor
-	}
-
 	// Register the core capabilities (tools + context meta ops + provider
 	// switch/status). The capability registry is the extension point;
 	// reason-family workers call Register to add or replace capabilities.
+	// The default compress/rotate implementation (and its compactor) is created
+	// there too, so replacing those capabilities swaps compression wholesale.
 	w.registerCoreCapabilities()
-	// Seed the discovery universe with the worker's own capabilities.
-	w.seedOwnCapabilities()
 
 	// Resolve the context window for the selected provider/model so the budget
 	// thresholds use the real size (API-reported or configured) instead of the
@@ -240,20 +229,68 @@ func (w *BaseReasonWorker) Stop() error {
 	return nil
 }
 
-// Snapshot captures the worker's durable execution state (the transcript).
+// reasonState is the persisted runtime state of a reason worker.
+//
+// The transcript is carried as a raw blob because its shape belongs to the
+// transcript, not to us. Provider is the provider/model the worker is currently
+// using, so a worker switched at runtime (worker.update provider.switch)
+// resumes on that choice instead of silently falling back to the configured
+// default — without it, a switch would be lost on every restart.
+type reasonState struct {
+	Transcript json.RawMessage     `json:"transcript"`
+	Provider   *providerSelection  `json:"provider,omitempty"`
+}
+
+type providerSelection struct {
+	Name  string `json:"name"`
+	Model string `json:"model"`
+}
+
+// Snapshot captures the worker's durable execution state: the transcript plus
+// its current provider/model selection.
 func (w *BaseReasonWorker) Snapshot() ([]byte, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.transcript.State()
+	transcript, err := w.transcript.State()
+	if err != nil {
+		return nil, err
+	}
+	state := reasonState{Transcript: transcript}
+	// Only persist a selection the worker actually made; a worker left on its
+	// configured default stays on it (and picks up config changes to it).
+	if w.providerName != "" && w.providerModel != "" {
+		state.Provider = &providerSelection{Name: w.providerName, Model: w.providerModel}
+	}
+	return json.Marshal(state)
 }
 
-// Restore rehydrates the worker from a Snapshot blob, restoring the reasoning
+// Restore rehydrates the worker from a Snapshot blob, restoring the transcript
+// and re-applying the persisted provider/model selection.
 //
 //	Called after construction and before Start.
 func (w *BaseReasonWorker) Restore(state []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.transcript.Restore(state)
+	var s reasonState
+	if err := json.Unmarshal(state, &s); err != nil {
+		return fmt.Errorf("reason restore: %w", err)
+	}
+	if err := w.transcript.Restore(s.Transcript); err != nil {
+		return err
+	}
+	// Re-applying the selection rebuilds the provider, so the worker really
+	// uses it rather than only reporting it. A stale selection (the provider or
+	// model is no longer configured) is not fatal: note it and stay on the
+	// provider resolved at construction, which is always usable.
+	if s.Provider != nil && s.Provider.Name != "" && s.Provider.Model != "" {
+		if err := w.setActiveProvider(s.Provider.Name, s.Provider.Model); err != nil {
+			log.Printf("[reason %s] restore: persisted provider %s model %s unavailable (%v); keeping %s model %s",
+				w.ID(), s.Provider.Name, s.Provider.Model, err, w.providerName, w.providerModel)
+			return nil
+		}
+		log.Printf("[reason %s] restore: resumed provider %s model %s", w.ID(), s.Provider.Name, s.Provider.Model)
+	}
+	return nil
 }
 
 // Messages returns the current working transcript for reading (e.g. the
@@ -278,7 +315,7 @@ type BaseReasonWorker struct {
 	providerModel   string // active provider model (status reporting)
 	transcript      Transcript
 	tools           map[string]worker.Tool          // tools from the bus + built-ins; read by dispatch
-	discovered      []DiscoveredCap                 // unified capability universe (own seeded + bus announcements)
+	discovered      []DiscoveredCap                 // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
 	capabilities    map[string]registeredCapability // capability registry (the extension point)
 	toolListBuilder ToolListBuilder                 // LLM tool list policy (extension point)
 	programs        []program.Program

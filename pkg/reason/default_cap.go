@@ -55,6 +55,13 @@ func (w *BaseReasonWorker) registerCoreCapabilities() {
 		w.handleSetLLMProvider(evt)
 	})
 
+	// The default compress/rotate implementation, created here rather than at
+	// construction: it belongs to these two capabilities, and a reason worker
+	// that registers its own context.compress/context.rotate handlers replaces
+	// the default compression entirely. The field is still rebound on provider
+	// switch (setActiveProvider) so summarization follows the active model.
+	w.compactor = NewDefaultCompactor(w.llmProvider, w.keepTail)
+
 	w.Register(Capability{
 		Event: event.TypeWorkerUpdate, KeyField: "op", Key: "context.compress",
 		Description: "Compact your own context history: older messages are replaced by a summary, the most recent messages are kept.",
@@ -246,8 +253,12 @@ func (w *BaseReasonWorker) handleSetLLMProvider(evt event.Event) {
 		payload["done"] = false
 		payload["error"] = err.Error()
 	} else {
+		// No needReason here: the rebinding above already applies to every
+		// later round, and scheduling one would make the worker answer
+		// immediately with the new model — a side effect of what is meant to be
+		// a configuration change. The new provider/model is picked up by the
+		// next round the conversation itself asks for.
 		payload["done"] = true
-		w.needReason = true
 	}
 	log.Printf("[reason %s] set provider=%s model=%s done=%t err=%v", w.ID(), name, model, payload["done"], err)
 	w.emitWorkerUpdated(evt, payload)
