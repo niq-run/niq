@@ -21,8 +21,42 @@ export interface WorkerInfo {
   publish_allow?: string[]
   subscribe_allow?: EventPattern[]
   online?: boolean
+  // managed = an in-process worker the host supervises ("协程托管").
+  // unmanaged = an OS process the swarm launched and supervises ("子进程").
+  // Neither = a third-party worker that connected on its own ("三方 worker").
   managed?: boolean
   state?: string // "running" | "suspended" (managed only)
+  unmanaged?: boolean
+  unmanaged_state?: string // "running" | "stopped" (unmanaged only)
+}
+
+// ProviderOption is one selectable LLM provider of a reason worker, as
+// reported by the worker itself via worker.query provider.list.
+export interface ProviderOption {
+  name: string
+  default: string
+  models: string[]
+}
+
+// ProviderSelection is a provider/model pair — both the worker's current
+// choice and the target of a switch.
+export interface ProviderSelection {
+  provider: string
+  model: string
+}
+
+// ProviderListResult is what GET /api/workers/{id}/providers returns.
+export interface ProviderListResult {
+  providers: ProviderOption[]
+  current: ProviderSelection
+}
+
+// ProviderSwitchResult is what POST /api/workers/{id}/provider returns.
+export interface ProviderSwitchResult {
+  done: boolean
+  provider: string
+  model: string
+  error?: string
 }
 
 export type ViewMode = 'talk' | 'events' | 'workers'
