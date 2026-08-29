@@ -1,5 +1,12 @@
 // API service — all backend HTTP calls
-import type { ContextInfo, ProjectInfo, ProjectStartResult, WorkerInfo } from '../types'
+import type {
+  ContextInfo,
+  ProjectInfo,
+  ProjectStartResult,
+  ProviderListResult,
+  ProviderSwitchResult,
+  WorkerInfo,
+} from '../types'
 
 // Control-plane base: project management always talks to the control plane on
 // 9527 (dev server reaches it via the vite proxy when no base is set, or
@@ -135,6 +142,28 @@ export async function suspendWorker(id: string): Promise<void> {
 
 export async function resumeWorker(id: string): Promise<void> {
   await fetch(p(`/api/workers/${encodeURIComponent(id)}/resume`), { method: 'POST' })
+}
+
+// fetchWorkerProviders asks a reason worker for its selectable providers and
+// its current choice. It is answered by the worker over the bus, so it can take
+// several seconds when a provider's model-list endpoint is slow.
+export async function fetchWorkerProviders(id: string, signal?: AbortSignal): Promise<ProviderListResult> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/providers`), { signal })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'providers failed: ' + res.status)
+  return res.json()
+}
+
+// switchWorkerProvider asks a reason worker to change its active provider and
+// model. Both are required — the worker rejects an empty model rather than
+// silently falling back to a default.
+export async function switchWorkerProvider(id: string, provider: string, model: string): Promise<ProviderSwitchResult> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/provider`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, model }),
+  })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'provider switch failed: ' + res.status)
+  return res.json()
 }
 
 export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = ''): Promise<any[]> {

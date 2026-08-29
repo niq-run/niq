@@ -358,7 +358,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           project is attached, so talk/events/workers are unavailable) */}
       {mode === 'project' && (<>
       <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '8px ' + hrX + 'px 16px' }} />
-      <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>View</strong>
+      <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>Views</strong>
       {(Object.keys(VIEW_LABELS) as ViewMode[]).map((v) => (
         <div
           key={v}

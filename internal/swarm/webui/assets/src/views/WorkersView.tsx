@@ -28,15 +28,18 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
   }
 
   // Tag badge, matching the events table's type tag but in a neutral tone.
+  // Colours come from full-hex theme tokens: appending an alpha pair to a
+  // 3-digit colour (textDimmed is #666) produces a 7-char value the browser
+  // silently drops, leaving the badge with no background or border.
   const tag: React.CSSProperties = {
     display: 'inline-block',
     padding: '0 6px',
     borderRadius: 4,
     fontSize: fontSizes.sm,
     lineHeight: '18px',
-    color: colors.textDimmed,
-    background: colors.textDimmed + '1f',
-    border: '1px solid ' + colors.textDimmed + '55',
+    color: colors.textDim,
+    background: colors.bgLight,
+    border: '1px solid ' + colors.detailBorder,
     whiteSpace: 'nowrap',
   }
 
@@ -53,13 +56,14 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
 
       {/* min-width lets the fixed columns scroll horizontally on narrow
           (phone) viewports instead of collapsing. */}
-      <table style={{ width: '100%', minWidth: 540, borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
+      <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
         <thead>
           <tr style={{ textAlign: 'left', color: colors.textDimmed, fontSize: fontSizes.xs }}>
-            <th style={{ padding: '6px 6px', width: 190, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>Worker ID</th>
+            <th style={{ padding: '6px 6px', width: 170, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>Worker ID</th>
             <th style={{ padding: '6px 6px', width: 110, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>Type</th>
             <th style={{ padding: '6px 6px', width: 90, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="bus connection status (online/offline)">Connection</th>
             <th style={{ padding: '6px 6px', width: 120, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="host-managed lifecycle state (running/suspended)">Lifecycle</th>
+            <th style={{ padding: '6px 6px', width: 120, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="how this worker is hosted: managed (in-process), subprocess (launched by the swarm), external (connects on its own)">Managed</th>
           </tr>
         </thead>
         <tbody>
@@ -110,6 +114,17 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                     </span>
                   ) : (
                     <span style={{ color: colors.textDimmed }}>{'\u2014'}</span>
+                  )}
+                </td>
+                {/* How the worker is hosted. The two flags are set
+                    independently, so managed wins when both are present. */}
+                <td style={cell}>
+                  {w.managed ? (
+                    <span style={tag} title="host-managed: an in-process worker the host supervises">managed</span>
+                  ) : w.unmanaged ? (
+                    <span style={tag} title="subprocess: an OS process the swarm launched and supervises">subprocess</span>
+                  ) : (
+                    <span style={tag} title="external: a third-party worker that connected on its own">external</span>
                   )}
                 </td>
               </tr>
