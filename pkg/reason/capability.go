@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
 )
 
 // Capability describes an event a reason worker responds to.
@@ -133,11 +132,5 @@ type DiscoveredCap struct {
 // builder sees one bus-derived view, no two-source assembly.
 func (w *BaseReasonWorker) discoveredCapabilities() []DiscoveredCap {
 	return w.discovered
-}
-
-// llmToolDefs builds the LLM tool list via the worker's tool-list builder
-// over the discovered capability universe.
-func (w *BaseReasonWorker) llmToolDefs() []llm.ToolDef {
-	return w.toolListBuilder(w, w.discoveredCapabilities())
 }
 

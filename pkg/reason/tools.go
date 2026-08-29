@@ -112,11 +112,18 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCap) []llm.Too
 	return defs
 }
 
+// llmToolDefs builds the LLM tool list via the worker's tool-list builder
+// over the discovered capability universe. Called at the start of every
+// reasoning round.
+func (w *BaseReasonWorker) llmToolDefs() []llm.ToolDef {
+	return w.toolListBuilder(w, w.discoveredCapabilities())
+}
+
 // handleWorkerReady learns a worker's capabilities and published events from
 // its worker.ready announcement, feeding the unified discovery universe
 // (discovered) and the tool table used for dispatch. The worker's own
 // self-directed announcement is processed the same way as any peer's (it
-// refreshes the own capabilities seeded at construction).
+// refreshes the own capabilities the same way).
 func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 	workerID, _ := evt.Payload["worker_id"].(string)
 	if workerID == "" {
