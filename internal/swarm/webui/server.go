@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	corebus "github.com/54c1/niq/core/bus"
 	"github.com/54c1/niq/core/event"
 	"github.com/54c1/niq/pkg/service/eventbus"
@@ -108,6 +110,12 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// Suspend / resume a host-managed worker (via the host worker's tools).
 	mux.HandleFunc("POST /api/workers/{id}/suspend", s.handleSuspend)
 	mux.HandleFunc("POST /api/workers/{id}/resume", s.handleResume)
+
+	// Model provider: read and switch a reason worker's active LLM provider.
+	// These go over the bus as worker.query / worker.update and wait for the
+	// worker's worker.status / worker.updated reply.
+	mux.HandleFunc("GET /api/workers/{id}/providers", s.handleWorkerProviders)
+	mux.HandleFunc("POST /api/workers/{id}/provider", s.handleWorkerSetProvider)
 
 	// Start / stop / restart an external (unmanaged) worker.
 	mux.HandleFunc("POST /api/workers/{id}/start", s.handleUnmanagedStart)
@@ -413,6 +421,210 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	})
 	_ = s.hiw.Channel.Send(r.Context(), evt, "host")
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// askTimeout bounds how long we wait for a worker to answer a meta query. The
+// provider.list round is the slow one: it queries every configured provider's
+// model-list endpoint, so it needs several seconds rather than a few hundred
+// milliseconds.
+const askTimeout = 20 * time.Second
+
+// ask publishes evt to one worker and waits for its reply, correlating the two
+// by trace id. The subscription is registered BEFORE publishing so a fast reply
+// cannot be missed; the worker copies the request's trace id onto its reply,
+// which is what makes the match unambiguous.
+//
+// Send never reports delivery failure — it only enqueues, and the engine drops
+// events addressed to a worker that is not connected — so callers must
+// pre-check that the worker is online (see workerOnline) or they would sit here
+// until the timeout for a worker that will never answer.
+func (s *Server) ask(ctx context.Context, target string, evt event.Event, want event.EventType) (event.Event, error) {
+	traceID, _ := uuid.NewV7() // only fails if crypto/rand fails
+	tid := traceID.String()
+	evt.TraceID = tid // event.New leaves TraceID empty; we own correlation here
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch, err := s.eventLog.Subscribe(subCtx, eventbusapi.Filter{TraceID: tid})
+	if err != nil {
+		return event.Event{}, fmt.Errorf("subscribe for reply: %w", err)
+	}
+
+	if err := s.hiw.Channel.Send(ctx, evt, target); err != nil {
+		return event.Event{}, fmt.Errorf("send %s to %s: %w", evt.Type, target, err)
+	}
+
+	timer := time.NewTimer(askTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case got, open := <-ch:
+			// Subscribe closes the channel when its context is done; without
+			// this check a closed channel would yield zero-valued events
+			// forever and spin until the timeout.
+			if !open {
+				return event.Event{}, fmt.Errorf("event stream closed waiting for %s from %s", want, target)
+			}
+			if got.Type == want {
+				return got, nil
+			}
+		case <-timer.C:
+			return event.Event{}, fmt.Errorf("timed out after %s waiting for %s from %s", askTimeout, want, target)
+		case <-ctx.Done():
+			return event.Event{}, ctx.Err()
+		}
+	}
+}
+
+// workerOnline reports whether a worker currently holds a bus channel, and
+// whether it is a reason worker — the only family wired with ProviderSources,
+// so it is the only one that can answer a provider query.
+func (s *Server) workerOnline(id string) (online bool, isReason bool) {
+	if s.engine.Channel(id) == nil {
+		return false, false
+	}
+	if idt, ok := s.registry.Lookup(id); ok {
+		return true, idt.Type == "reason"
+	}
+	return true, false
+}
+
+// providerListResult is the worker.query provider.list answer, reshaped for the
+// UI: the selectable providers and the worker's current choice.
+type providerListResult struct {
+	Providers []providerOption  `json:"providers"`
+	Current   providerSelection `json:"current"`
+}
+
+type providerOption struct {
+	Name    string   `json:"name"`
+	Default string   `json:"default"`
+	Models  []string `json:"models"`
+}
+
+type providerSelection struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// handleWorkerProviders answers with a reason worker's selectable providers and
+// its current provider/model, by asking the worker itself over the bus.
+func (s *Server) handleWorkerProviders(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	online, isReason := s.workerOnline(id)
+	if !online {
+		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
+		return
+	}
+	if !isReason {
+		http.Error(w, "worker "+id+" has no switchable providers (only reason workers do)", http.StatusNotFound)
+		return
+	}
+
+	reply, err := s.ask(r.Context(), id,
+		event.New(event.TypeWorkerQuery, "webui-hiw", map[string]any{"subject": "provider.list"}),
+		event.TypeWorkerStatus)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	// A worker.status is also emitted for unrecognised subjects, carrying
+	// done:false and an error — matching the type alone would read as success.
+	if msg, _ := reply.Payload["error"].(string); msg != "" {
+		http.Error(w, msg, http.StatusBadGateway)
+		return
+	}
+
+	// The payload is built by the worker, so read it defensively rather than
+	// unmarshalling into a struct: a shape change there must not 500 the UI.
+	out := providerListResult{}
+	current := providerSelection{}
+	if cur, ok := reply.Payload["current"].(map[string]any); ok {
+		current.Provider, _ = cur["provider"].(string)
+		current.Model, _ = cur["model"].(string)
+	}
+	out.Providers = providersFromPayload(reply.Payload["providers"])
+	out.Current = current
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// handleWorkerSetProvider asks a reason worker to switch its active
+// provider/model. Both are required — the worker rejects an empty model rather
+// than silently falling back to a default.
+func (s *Server) handleWorkerSetProvider(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Provider == "" || body.Model == "" {
+		http.Error(w, "provider and model are required", http.StatusBadRequest)
+		return
+	}
+
+	online, isReason := s.workerOnline(id)
+	if !online {
+		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
+		return
+	}
+	if !isReason {
+		http.Error(w, "worker "+id+" has no switchable providers (only reason workers do)", http.StatusNotFound)
+		return
+	}
+
+	reply, err := s.ask(r.Context(), id,
+		event.New(event.TypeWorkerUpdate, "webui-hiw", map[string]any{
+			"op":       "provider.switch",
+			"provider": body.Provider,
+			"model":    body.Model,
+		}),
+		event.TypeWorkerUpdated)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+
+	out := map[string]any{"done": true, "provider": body.Provider, "model": body.Model}
+	if done, ok := reply.Payload["done"].(bool); ok {
+		out["done"] = done
+	}
+	if msg, _ := reply.Payload["error"].(string); msg != "" && msg != "<nil>" {
+		out["error"] = msg
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// providersFromPayload reads the providers list out of a worker.status payload.
+//
+// The value is re-encoded through JSON rather than type-asserted: a managed
+// worker runs in this same process, so the event never crosses a serialization
+// boundary and the payload still holds the worker's own Go type
+// ([]reason.ProviderInfo), not the []any of maps a JSON decode would produce.
+// Going through JSON accepts either shape — and any future one — as long as the
+// field names match the tags on providerOption.
+func providersFromPayload(v any) []providerOption {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []providerOption{}
+	}
+	var out []providerOption
+	// A null/missing value unmarshals to a nil slice; the UI only shows its
+	// empty state for a zero-length list, so normalise it.
+	if err := json.Unmarshal(b, &out); err != nil || out == nil {
+		return []providerOption{}
+	}
+	for i := range out {
+		if out[i].Models == nil {
+			out[i].Models = []string{}
+		}
+	}
+	return out
 }
 
 // handleUnmanagedStart/Stop/Restart control external (unmanaged) workers via
