@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/pkg/service/eventbus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/pkg/service/eventbus"
 )
 
 // Server serves the bus event API over HTTP.
@@ -83,18 +83,23 @@ func (s *Server) handleStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		TraceID:   r.URL.Query().Get("trace"),
 		Type:      event.EventType(r.URL.Query().Get("type")),
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch, err := s.log.Follow(r.Context(), filter, limit)
+	// Stream only events newer than the subscription watermark; history is paged
+	// in separately via /api/events/before/{id}. Advertise the watermark as a
+	// control event so a client can start its backwards pagination.
+	ch, watermark, err := s.log.FollowLive(r.Context(), filter)
 	if err != nil {
 		log.Printf("[eventbus api] follow error: %v", err)
 		stdhttp.Error(w, err.Error(), 500)
 		return
 	}
+
+	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermark)
+	flusher.Flush()
 
 	for evt := range ch {
 		data, _ := json.Marshal(evt)

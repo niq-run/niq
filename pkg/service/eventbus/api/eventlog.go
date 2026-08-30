@@ -11,9 +11,9 @@ import (
 	"log"
 	"sync"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/store"
-	"github.com/54c1/niq/pkg/service/eventbus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/store"
+	"github.com/niq-run/niq/pkg/service/eventbus"
 )
 
 // Filter controls which events a subscriber receives.
@@ -134,56 +134,53 @@ func (l *EventLog) Hook() func(event.Event) {
 // Follow returns a channel of events matching the filter.
 // It first replays history from the store, then seamlessly switches to
 // real-time delivery via the subscriber mechanism.
-func (l *EventLog) Follow(ctx context.Context, filter Filter, limit int) (<-chan event.Event, error) {
-	if limit <= 0 {
-		limit = 100
+// FollowLive returns a channel of real-time events only — no history replay.
+// It also returns a watermark: the ID of the newest event persisted in the
+// store at the moment of subscription. The caller is expected to page backwards
+// from that watermark (via LoadBefore) to fetch history.
+//
+// Forwarded live events are filtered to those strictly newer than the watermark,
+// so the history window and the live stream never overlap. The client can then
+// merge them by timestamp without dedupe races or ordering gaps — switching
+// views (which tears down and re-opens the stream) no longer scrambles the
+// timeline, because the watermark cleanly partitions "already persisted" from
+// "still live".
+func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.Event, string, error) {
+	// Subscription boundary: the newest event ID currently in the store.
+	// Event IDs are time-ordered UUIDv7, so this is a safe monotonic watermark
+	// even across filter boundaries.
+	watermark := ""
+	if latest, err := l.store.List(ctx, "*", store.QueryOpts{Limit: 1, Desc: true}); err == nil && len(latest) > 0 {
+		watermark = latest[0].ID
 	}
 
-	ch := make(chan event.Event, 256)
-
-	// Load history from store.
-	history, err := l.store.List(ctx, "*", store.QueryOpts{
-		Limit:     limit,
-		Desc:      true,
-		WorkerIDs: filter.WorkerIDs,
-		TraceID:   filter.TraceID,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// Subscribe to real-time events.
 	liveCh, err := l.Subscribe(ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
+	out := make(chan event.Event, 256)
 	go func() {
-		defer close(ch)
-
-		// Send history in chronological order (oldest first).
-		for i := len(history) - 1; i >= 0; i-- {
-			if !matchesFilter(history[i], filter) {
+		defer close(out)
+		for evt := range liveCh {
+			if !matchesFilter(evt, filter) {
+				continue
+			}
+			// Only forward events strictly newer than the watermark. Events
+			// already in the store at subscribe time (including any delivered
+			// late) stay in history and are paged in separately, so they are
+			// never duplicated here.
+			if watermark != "" && evt.ID <= watermark {
 				continue
 			}
 			select {
-			case ch <- history[i]:
-			case <-ctx.Done():
-				return
-			}
-		}
-
-		// Forward real-time events.
-		for evt := range liveCh {
-			select {
-			case ch <- evt:
+			case out <- evt:
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
-
-	return ch, nil
+	return out, watermark, nil
 }
 
 // LoadBefore returns events older than the given anchor event ID.
