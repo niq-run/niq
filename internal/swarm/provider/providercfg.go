@@ -29,10 +29,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/pkg/llmprovider/anthropic"
-	"github.com/54c1/niq/pkg/llmprovider/openai"
-	"github.com/54c1/niq/pkg/llmprovider/openairesponses"
+	"github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/pkg/llmprovider/anthropic"
+	"github.com/niq-run/niq/pkg/llmprovider/openai"
+	"github.com/niq-run/niq/pkg/llmprovider/openairesponses"
 )
 
 // Entry describes one named LLM provider.

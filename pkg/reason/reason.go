@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/54c1/niq/core/event"
-	llm "github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/event"
+	llm "github.com/niq-run/niq/core/llm"
 )
 
 func (w *BaseReasonWorker) reason(ctx context.Context) {

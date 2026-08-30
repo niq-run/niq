@@ -9,9 +9,9 @@ import (
 	"log"
 	"time"
 
-	llm "github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/pkg/reason"
-	"github.com/54c1/niq/pkg/service/workerhost"
+	llm "github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/pkg/reason"
+	"github.com/niq-run/niq/pkg/service/workerhost"
 )
 
 // EnsureLLMConfigured gates swarm startup on an LLM provider being configured

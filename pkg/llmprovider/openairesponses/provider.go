@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/llm"
 )
 
 // Config holds the configuration for the Responses API provider.

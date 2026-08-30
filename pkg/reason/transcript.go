@@ -4,7 +4,7 @@
 // into it, and the tool-pairing invariant that constrains them.
 package reason
 
-import "github.com/54c1/niq/core/llm"
+import "github.com/niq-run/niq/core/llm"
 
 // Transcript is the working "notes" of a reasoning worker: a self-synchronized
 // data structure that folds lifecycle facts (TranscriptPatch) into a working

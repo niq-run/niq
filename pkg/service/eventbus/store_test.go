@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/store"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/store"
 )
 
 // fakeEvents returns events sharing the same second timestamp (and even the same

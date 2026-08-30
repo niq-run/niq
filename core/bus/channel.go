@@ -3,7 +3,7 @@ package bus
 import (
 	"context"
 
-	"github.com/54c1/niq/core/event"
+	"github.com/niq-run/niq/core/event"
 )
 
 // BusSideChannel is the bus's view of a connection to a worker.

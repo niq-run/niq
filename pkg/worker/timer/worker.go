@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"sync"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/worker"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // Worker is the TimerWorker — a bus-connected timer service.

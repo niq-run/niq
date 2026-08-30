@@ -6,9 +6,9 @@ import (
 	"log"
 	"sync"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/store"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/store"
 )
 
 // Engine is the core event routing engine — the "ball".
@@ -133,6 +133,9 @@ func (e *Engine) handleBroadcast(ctx context.Context, req corebus.Request, from 
 		// Find all targets: online workers whose SubscribeAllow matches.
 		var targets []string
 		for workerID, ch := range e.channels {
+			if evt.ExcludeWorkerID == workerID {
+				continue
+			}
 			identity, ok := e.registry.Lookup(workerID)
 			if !ok {
 				continue

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/54c1/niq/pkg/service/eventbus"
+	"github.com/niq-run/niq/pkg/service/eventbus"
 )
 
 func boolPtr(b bool) *bool { return &b }

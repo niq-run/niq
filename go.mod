@@ -1,4 +1,4 @@
-module github.com/54c1/niq
+module github.com/niq-run/niq
 
 go 1.25.0
 

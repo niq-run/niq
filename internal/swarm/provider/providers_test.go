@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/54c1/niq/core/worker"
-	"github.com/54c1/niq/pkg/service/workerhost"
+	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/service/workerhost"
 )
 
 // memStore is an in-memory WorkerStore for tests. It avoids importing the

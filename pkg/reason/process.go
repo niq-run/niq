@@ -21,9 +21,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/core/worker"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // process routes an event through one of the dispatch paths:
@@ -78,15 +78,14 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 	}
 }
 
-// emitMetaUpdateRequest sends a worker.update event to this worker,
-// requesting a meta operation (compress/rotate/...) through the bus for audit —
-// the single path every meta trigger converges on. Lock need not be held
+// emitContextCompress sends a worker.update event to this worker, requesting
+// the context.compress convention operation through the bus for audit — the
+// single path every compress trigger converges on. The mechanism only ever
+// auto-emits this one convention event; the concrete worker implements the
+// shrink strategy and does its own bookkeeping. Lock need not be held
 // specially; the event is queued to self and handled asynchronously by process.
-func (w *BaseReasonWorker) emitMetaUpdateRequest(ctx context.Context, op string, args map[string]any) {
-	if args == nil {
-		args = map[string]any{}
-	}
-	args["op"] = op
+func (w *BaseReasonWorker) emitContextCompress(ctx context.Context) {
+	args := map[string]any{"op": ContextCompressOp}
 	evt := event.New(event.TypeWorkerUpdate, w.ID(), args)
 	evt.TraceID = w.currentTraceID
 	_ = w.Channel.Send(ctx, evt, w.ID())

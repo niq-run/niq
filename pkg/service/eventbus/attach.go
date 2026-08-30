@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	corebus "github.com/54c1/niq/core/bus"
+	corebus "github.com/niq-run/niq/core/bus"
 )
 
 // Attach connects a BusSideChannel to the Engine and starts watching it.

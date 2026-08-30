@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/llm"
 )
 
 func textMsg(role llm.Role, text string) llm.Message {

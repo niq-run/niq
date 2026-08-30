@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/54c1/niq/internal/swarm/webui"
+	"github.com/niq-run/niq/internal/swarm/webui"
 )
 
 // ControlOptions configures the control-plane service.

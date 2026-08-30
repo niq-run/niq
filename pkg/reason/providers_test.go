@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/54c1/niq/core/event"
-	llm "github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/event"
+	llm "github.com/niq-run/niq/core/llm"
 )
 
 // fakeSources is a canned ProviderSources used to exercise switching.
@@ -116,9 +116,9 @@ func TestRestoreStaleProviderKeepsDefault(t *testing.T) {
 	}
 }
 
-// TestSetActiveProviderSwitches verifies setActiveProvider rebinds the active
-// provider and the default compactor, records the current name/model, and
-// rejects unknown providers/models.
+// TestSetActiveProviderSwitches verifies setActiveProvider switches the active
+// provider (which the compactor reads lazily, so no rebinding is needed),
+// records the current name/model, and rejects unknown providers/models.
 func TestSetActiveProviderSwitches(t *testing.T) {
 	ch := newTestChannel()
 	w, pa, pb := newSwitchableWorker(ch)
@@ -136,9 +136,8 @@ func TestSetActiveProviderSwitches(t *testing.T) {
 	if w.providerName != "b" || w.providerModel != "m3" {
 		t.Fatalf("current provider = %s/%s, want b/m3", w.providerName, w.providerModel)
 	}
-	if dc, ok := w.compactor.(*DefaultCompactor); !ok || dc.llm != pb {
-		t.Fatal("default compactor should be rebound to the new provider")
-	}
+	// The compactor is wired once (by NewWorker) and reads the active provider
+	// via LLMProvider() on every call, so a switch needs no rebinding here.
 
 	if err := w.setActiveProvider("nope", ""); err == nil {
 		t.Fatal("expected error for unknown provider")

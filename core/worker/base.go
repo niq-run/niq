@@ -3,9 +3,9 @@ package worker
 import (
 	"context"
 
-	corebus "github.com/54c1/niq/core/bus"
+	corebus "github.com/niq-run/niq/core/bus"
 
-	"github.com/54c1/niq/core/event"
+	"github.com/niq-run/niq/core/event"
 )
 
 // BaseWorker provides a partial [Worker] implementation that other workers

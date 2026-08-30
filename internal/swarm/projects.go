@@ -13,7 +13,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/54c1/niq/core/worker"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // ProjectPorts records the ports assigned to a project instance: its event-bus

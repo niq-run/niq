@@ -9,9 +9,9 @@ import (
 	stdhttp "net/http"
 	"sync"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/pkg/service/eventbus"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/pkg/service/eventbus"
 )
 
 // Server is the HTTP transport server — the "守塔人" for remote workers.

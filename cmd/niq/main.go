@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/54c1/niq/internal/swarm"
+	"github.com/niq-run/niq/internal/swarm"
 )
 
 // version is injected at build time via -ldflags:

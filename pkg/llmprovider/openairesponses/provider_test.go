@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/llm"
 )
 
 func TestProviderCompleteFunctionCall(t *testing.T) {

@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/54c1/niq.git"
+    "url": "git+https://github.com/niq-run/niq.git"
   },
   "bin": {
     "niq": "./bin/niq.js"

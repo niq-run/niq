@@ -16,7 +16,7 @@ package reason
 import (
 	"strings"
 
-	"github.com/54c1/niq/core/event"
+	"github.com/niq-run/niq/core/event"
 )
 
 // Capability describes an event a reason worker responds to.
@@ -31,6 +31,12 @@ type Capability struct {
 	KeyField string
 	// Key is the value KeyField must equal. Empty when KeyField is empty.
 	Key string
+	// SelfOnly marks a capability that only the declaring worker itself serves
+	// (e.g. send_message, list_workers — operations on that worker's own view
+	// of the bus). Such capabilities are left out of the peer-facing
+	// worker.ready, so peers never see them as callable tools; the worker
+	// discovers them from its own registry instead.
+	SelfOnly bool
 
 	Description string
 	Parameters  map[string]any
@@ -113,24 +119,10 @@ func (w *BaseReasonWorker) capabilityByToolName(name string) (Capability, bool) 
 	return Capability{}, false
 }
 
-// DiscoveredCap is a capability as seen on the bus: which worker declared it
-// and the event it responds to. It is the unified unit the tool-list builder
-// operates on — the worker's own registered capabilities and the capabilities
-// discovered from peers are presented uniformly, distinguished only by Source.
-type DiscoveredCap struct {
-	Source      string          // declaring worker ID (own ID for self)
-	Event       event.EventType // tool.request / worker.update / worker.query / custom
-	KeyField    string
-	Key         string
-	Description string
-	Parameters  map[string]any
-}
-
-// discoveredCapabilities returns the unified capability universe: every
-// capability this worker knows about, its own included, in one list. It is fed
-// by every worker.ready announcement — the self-directed one included — so the
-// builder sees one bus-derived view, no two-source assembly.
-func (w *BaseReasonWorker) discoveredCapabilities() []DiscoveredCap {
-	return w.discovered
-}
-
+// DiscoveredCap is the bus-observed capability universe. It is defined in
+// tools.go alongside the discovery machinery (handleWorkerReady /
+// handleWorkerGone) that populates it, and deliberately kept out of this file:
+// this file is the worker's OWN declared/announced registry (Capability /
+// Register), whereas DiscoveredCap is what the worker learns by watching the
+// bus — peers' capabilities plus its own self-directed contract — not what it
+// declares itself.
