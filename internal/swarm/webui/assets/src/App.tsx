@@ -34,6 +34,22 @@ function MobileDetailPanel({ children }: { children: ReactNode }) {
   )
 }
 
+// Merge incoming events into an existing list: dedupe by id and sort by
+// timestamp (with an id tiebreak). Used for both live appends and history
+// prepends so the timeline is independent of delivery order.
+function mergeEvents(existing: EventPayload[], incoming: EventPayload[]): EventPayload[] {
+  const seen = new Set(existing.map((e) => e.id))
+  const out = existing.slice()
+  for (const e of incoming) {
+    if (!seen.has(e.id)) {
+      seen.add(e.id)
+      out.push(e)
+    }
+  }
+  out.sort((a, b) => a.timestamp - b.timestamp || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return out
+}
+
 export default function App() {
   const { dark, colors } = useTheme()
   const isMobile = useIsMobile()
@@ -49,6 +65,8 @@ export default function App() {
 
   // ── State ──
   const [events, setEvents] = useState<EventPayload[]>([])
+  // True while (re)subscribing and loading history after a disconnect/reconnect.
+  const [reloading, setReloading] = useState(false)
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>('talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
@@ -141,31 +159,36 @@ export default function App() {
     setSidebarOpen(false)
   }
 
-  // ── SSE: subscribe to the selected workers (backend filters) ──
-  const sseKey = view === 'talk' ? 'talk-all'
-    : view === 'events' ? 'events-' + [...filterWorkers].sort().join(',')
-    : 'workers-none'
+  // ── SSE stream key ──
+  // The SSE is a *project-level* subscription to the event stream — it is not
+  // owned by any view. It only reconnects when the stream's filter actually
+  // changes, which happens solely for the events view (worker/trace filter).
+  // talk/workers (and any other non-events view) all use the same default
+  // stream, so switching between them never tears the connection down — the
+  // previous view's SSE simply stays alive. `view` is intentionally excluded
+  // from the effect deps for this reason.
+  const streamKey = view === 'events'
+    ? 'events-' + [...filterWorkers].sort().join(',') + '-' + traceFilter
+    : 'all'
 
   useEffect(() => {
     // No project → no event stream.
     if (mode !== 'project') return
     // A management panel is showing, not this project's events.
     if (panel) return
-    // The workers view is driven by polling; it has no event stream.
-    if (view === 'workers') return
+    // The SSE is not tied to the view: talk, workers, and any other non-events
+    // view all keep the same project-level connection alive (see streamKey
+    // above). We never tear it down on a view switch, so the event log stays
+    // warm. `view` is deliberately absent from the effect deps.
     const params = new URLSearchParams()
     if (view === 'events') {
       for (const id of filterWorkers) params.append('worker', id)
       if (traceFilter) params.set('trace', traceFilter)
-      // Initial history replay: 20 is enough to see recent activity without a
-      // long scroll; older events load on demand when scrolling up.
-      params.set('limit', '20')
     }
     const url = projectBase + `/api/stream?${params}`
-    // Reset only when the stream scope actually changes (the events view's
-    // worker/trace filter). Switching to talk keeps the existing events — resetting
-    // there caused an empty render followed by replay (the visible "flash").
-    // Duplicates across reconnects are dropped by seenRef.
+
+    // The events view clears its timeline immediately on entry (worker/trace
+    // filter changes the scope) so no stale rows flash before history arrives.
     if (view === 'events') {
       setEvents([])
       eventsRef.current = []
@@ -175,7 +198,37 @@ export default function App() {
       eventsMountedAt.current = Date.now()
     }
     setSelectedEventId(null)
+
+    // Page backwards from the watermark to fill history. Issued once the stream
+    // advertises its watermark. This is treated as a fresh (re)subscription: we
+    // discard any cached timeline and rebuild from the watermark, so a reconnect
+    // (network drop, or entering the filtered events view) always produces a
+    // clean, correctly-ordered timeline — no merge-across-caches gymnastics.
+    const loadInitialHistory = async (watermark: string) => {
+      if (!watermark) return
+      const limit = view === 'events' ? 20 : 100
+      const workers = view === 'events' ? [...filterWorkers] : []
+      const trace = view === 'events' ? traceFilter : ''
+      setReloading(true)
+      try {
+        eventsRef.current = []
+        seenRef.current.clear()
+        deliveriesRef.current = {}
+        setDeliveries({})
+        const older = (await loadEventsBefore(watermark, limit, workers, trace)) as EventPayload[]
+        const filtered = older.filter((e) => e.type !== 'event.delivered')
+        const merged = mergeEvents(eventsRef.current, filtered)
+        eventsRef.current = merged
+        setEvents(merged)
+      } catch {}
+      setReloading(false)
+    }
+
     const es = new EventSource(url)
+    // The server advertises the subscription watermark as a control event before
+    // any data; we use it to kick off backwards pagination for history.
+    const onWatermark = (e: MessageEvent) => loadInitialHistory(e.data as string)
+    es.addEventListener('watermark', onWatermark)
     es.onmessage = (msg) => {
       const evt = JSON.parse(msg.data) as EventPayload
       if (evt.type === 'event.delivered') {
@@ -189,11 +242,16 @@ export default function App() {
       }
       if (seenRef.current.has(evt.id)) return
       seenRef.current.add(evt.id)
-      eventsRef.current = [...eventsRef.current.slice(-200), evt]
-      setEvents(eventsRef.current)
+      // Sort by timestamp (id tiebreak) rather than arrival order, so any
+      // out-of-order delivery from the live stream can't scramble the tail.
+      const next = mergeEvents(eventsRef.current, [evt])
+      eventsRef.current = next
+      setEvents(next)
     }
     return () => es.close()
-  }, [sseKey, traceFilter, view, mode, projectBase, panel])
+    // `view` intentionally excluded: talk↔workers must keep the same connection.
+    // `streamKey` already encodes the events-view filter, so traceFilter is redundant here.
+  }, [streamKey, mode, projectBase, panel])
 
   // ── Polling (only meaningful when a project is attached). The URL is
   // prefixed with projectBase so in dev (?project=&port=) it hits the project's
@@ -321,13 +379,13 @@ export default function App() {
     const workers = view === 'events' ? [...filterWorkers] : []
     const trace = view === 'events' ? traceFilter : ''
     try {
-      const older = await loadEventsBefore(oldestId, 20, workers, trace)
+      const older = (await loadEventsBefore(oldestId, 20, workers, trace)) as EventPayload[]
       if (older.length === 0) return
-      const filtered = older.filter((e: any) => e.type !== 'event.delivered')
+      const filtered = older.filter((e) => e.type !== 'event.delivered')
       if (filtered.length === 0) return
-      const prepend = filtered.reverse()
-      eventsRef.current = [...prepend, ...eventsRef.current]
-      setEvents(eventsRef.current)
+      const merged = mergeEvents(eventsRef.current, filtered)
+      eventsRef.current = merged
+      setEvents(merged)
     } catch {}
   }, [events, view, filterWorkers, traceFilter])
 
@@ -432,6 +490,13 @@ export default function App() {
                 : view === 'events' ? 'Events'
                 : 'Workers'}
             </strong>
+          </div>
+        )}
+        {reloading && (
+          <div style={{ position: 'fixed', top: 60, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 50 }}>
+            <div style={{ background: colors.accentDim, color: colors.text, fontSize: fontSizes.sm, padding: '4px 14px', borderRadius: 4, opacity: 0.95, boxShadow: '0 2px 8px rgba(0,0,0,0.25)' }}>
+              加载中…
+            </div>
           </div>
         )}
         {mode !== 'project' ? (
