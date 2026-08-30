@@ -266,8 +266,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       )}
       <div style={rootStyle}>
       {/* Desktop only: drag handle on the right edge to resize the sidebar.
-          Same geometry as the detail-panel handle: a 12px strip, the divider
-          line flush with the right edge, and the grip centered on it. */}
+          A 12px strip whose grip sits centered on the divider (the root's
+          borderRight). The divider line itself is drawn by the root, so it
+          stays a single 1px line that matches the other dividers. */}
       {!isMobile && (
         <div
           onMouseDown={handleResizeStart}
@@ -277,14 +278,18 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           title="drag to resize, double-click to reset"
           style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: 12, cursor: 'col-resize', zIndex: 5, userSelect: 'none' }}
         >
-          {/* Thin full-height line, flush with the sidebar's right edge (the divider) */}
-          <div style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: 1, background: colors.border }} />
-          {/* Grip centered on the line, painted above it */}
-          <div style={{ position: 'absolute', top: '50%', right: -2, width: 5, height: 30, marginTop: -15, borderRadius: 3, background: resizeHover ? colors.textDim : colors.textDimmed, zIndex: 1, transition: 'background 0.15s' }} />
+          {/* Grip centered on the divider (drawn by the root's borderRight),
+              painted above it. right:-3 lands its center on the 1px border
+              edge (the handle's containing block is the root's padding box,
+              one pixel inside the border). */}
+          <div style={{ position: 'absolute', top: '50%', right: -3, width: 5, height: 30, marginTop: -15, borderRadius: 3, background: resizeHover ? colors.textDim : colors.textDimmed, zIndex: 1, transition: 'background 0.15s' }} />
         </div>
       )}
-      {/* Fixed header (close + logo + project) — never scrolls */}
-      <div style={{ flexShrink: 0 }}>
+      {/* Fixed header (close + logo + project) — never scrolls.
+          Bleeds to the sidebar's edges (negating the root padding) so its
+          overflow clips the logo exactly at the right divider instead of
+          letting it paint over the main content area. */}
+      <div style={{ flexShrink: 0, overflow: 'hidden', margin: `0 -${contentPadX}px`, padding: `0 ${contentPadX}px` }}>
       {/* Mobile only: collapse button for the drawer */}
       {isMobile && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
