@@ -120,6 +120,12 @@ type Event struct {
 	Timestamp      int64          `json:"timestamp"`
 	Recipients     []string       `json:"recipients,omitempty"` // populated by engine during routing
 
+	// ExcludeWorkerID names a worker the sender does not want to receive this
+	// event even if it matches the broadcast subscription. The engine skips it
+	// when routing a broadcast; ignored for directed sends. Set by the source,
+	// e.g. a worker excluding itself from its own presence announcement.
+	ExcludeWorkerID string `json:"exclude_worker_id,omitempty"`
+
 	// Transient marks events that are live-streaming UI transients (streaming
 	// deltas, partial tool output) rather than durable history. The source sets
 	// it; the bus delivers them live to observers but skips them on persistence.

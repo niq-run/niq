@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/54c1/niq/internal/swarm/webui"
+	"github.com/niq-run/niq/internal/swarm/webui"
 )
 
 func doGet(t *testing.T, url string) (int, string) {

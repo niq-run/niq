@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/54c1/niq/core/program"
+	"github.com/niq-run/niq/core/program"
 	"gopkg.in/yaml.v3"
 )
 

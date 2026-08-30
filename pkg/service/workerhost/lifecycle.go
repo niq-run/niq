@@ -14,8 +14,8 @@ import (
 	"slices"
 	"sync"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/worker"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // Builder constructs a SpawnSpec from a serializable WorkerConfig. Builders

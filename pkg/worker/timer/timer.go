@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
 )
 
 // Entry is the opaque handle returned by afterFunc.

@@ -1,11 +1,11 @@
 package reason
 
 import (
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/core/program"
-	reasonBase "github.com/54c1/niq/pkg/reason"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/core/program"
+	reasonBase "github.com/niq-run/niq/pkg/reason"
 )
 
 // Config holds the configuration for a generic "reason" worker.
@@ -104,10 +104,18 @@ func NewWorker(cfg Config) *Worker {
 		BudgetSoft:       cfg.BudgetSoft,
 		BudgetHard:       cfg.BudgetHard,
 		KeepTail:         cfg.KeepTail,
-		CompactDirective: cfg.CompactDirective,
 		MaxPayloadBytes:  cfg.MaxPayloadBytes,
 		SeedMessages:     cfg.SeedMessages,
 	})
+
+	// The default worker layers its own toolkit on top of the base
+	// capabilities: send_message / list_workers / context.compress /
+	// context.rotate. The context ops are this worker's own strategy — it
+	// responds to the context.compress convention event by editing its
+	// transcript directly (see compact.go), not by installing a compactor
+	// object into the mechanism. The compaction directive override is this
+	// worker's own config, not the mechanism's.
+	registerDefaultCapabilities(base, cfg.CompactDirective)
 
 	return &Worker{BaseReasonWorker: base}
 }

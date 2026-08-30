@@ -13,10 +13,10 @@ import (
 	"log"
 	"sync"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/worker"
-	"github.com/54c1/niq/pkg/service/workerhost"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/service/workerhost"
 )
 
 // Config holds the configuration for a HostWorker.

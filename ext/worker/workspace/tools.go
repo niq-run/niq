@@ -6,9 +6,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/worker"
-	backend "github.com/54c1/niq/ext/service/wsbackend"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/worker"
+	backend "github.com/niq-run/niq/ext/service/wsbackend"
 )
 
 // buildHandlers probes the backend's low-level interfaces and assembles

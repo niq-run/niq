@@ -10,7 +10,7 @@ package inprocess
 import (
 	"context"
 
-	corebus "github.com/54c1/niq/core/bus"
+	corebus "github.com/niq-run/niq/core/bus"
 )
 
 // InProcListener is an in-process Listener — the "守塔人".

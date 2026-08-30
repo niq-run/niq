@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/worker"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/worker"
 )
 
 func (w *HostWorker) handleToolCall(evt event.Event) {

@@ -21,12 +21,12 @@ import (
 
 	"github.com/google/uuid"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/pkg/service/eventbus"
-	eventbusapi "github.com/54c1/niq/pkg/service/eventbus/api"
-	"github.com/54c1/niq/pkg/service/workerhost"
-	"github.com/54c1/niq/pkg/worker/hiw"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/pkg/service/eventbus"
+	eventbusapi "github.com/niq-run/niq/pkg/service/eventbus/api"
+	"github.com/niq-run/niq/pkg/service/workerhost"
+	"github.com/niq-run/niq/pkg/worker/hiw"
 )
 
 //go:embed assets/dist/*
@@ -291,17 +291,22 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 		TraceID:   r.URL.Query().Get("trace"),
 		Type:      event.EventType(r.URL.Query().Get("type")),
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch, err := s.eventLog.Follow(r.Context(), filter, limit)
+	// The stream now carries only events newer than `watermark`; history is
+	// paged in separately by the client. Advertise the watermark up front as a
+	// control event so the client can start its backwards pagination.
+	ch, watermark, err := s.eventLog.FollowLive(r.Context(), filter)
 	if err != nil {
 		log.Printf("[webui] follow error: %v", err)
 		return
 	}
+
+	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermark)
+	flusher.Flush()
 
 	for evt := range ch {
 		data, _ := json.Marshal(evt)

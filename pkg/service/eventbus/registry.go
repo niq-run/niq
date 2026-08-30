@@ -14,8 +14,8 @@ import (
 	"sort"
 	"sync"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
 )
 
 // FileIdentityRegistry implements corebus.IdentityRegistry backed by a JSON file.

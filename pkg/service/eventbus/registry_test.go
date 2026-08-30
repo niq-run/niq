@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/54c1/niq/core/bus"
+	"github.com/niq-run/niq/core/bus"
 )
 
 func TestFileIdentityRegistryListSorted(t *testing.T) {

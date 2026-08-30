@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/54c1/niq/core/program"
+	"github.com/niq-run/niq/core/program"
 )
 
 // TestBuildInstructionEmpty verifies a worker with no programs still gets a

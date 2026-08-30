@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/llm"
 )
 
 // TestInputDefaultTriggersReasoning verifies a default-mode input produces a

@@ -3,7 +3,7 @@ package reason
 import (
 	"errors"
 
-	llm "github.com/54c1/niq/core/llm"
+	llm "github.com/niq-run/niq/core/llm"
 )
 
 // ProviderInfo describes one selectable provider a reason worker can switch to
@@ -39,9 +39,10 @@ type ProviderSources interface {
 }
 
 // setActiveProvider switches this worker's active LLM provider. It must be
-// called with w.mu held. The provider is built from the configured sources;
-// the default LLM-summary compactor is rebound to the new provider so
-// compaction follows the switch.
+// called with w.mu held. The provider is built from the configured sources.
+// The default LLM-summary compactor reads the active provider lazily (via
+// LLMProvider on every call), so no rebinding is needed here when the provider
+// is switched.
 func (w *BaseReasonWorker) setActiveProvider(name, model string) error {
 	if w.providerSources == nil {
 		return errors.New("no provider sources configured on this worker")
@@ -53,11 +54,6 @@ func (w *BaseReasonWorker) setActiveProvider(name, model string) error {
 	w.llmProvider = prov
 	w.providerName = name
 	w.providerModel = model
-	if _, ok := w.compactor.(*DefaultCompactor); ok {
-		// Rebind the default compactor (which holds an LLM provider for
-		// summarization) so compaction uses the newly selected provider.
-		w.compactor = NewDefaultCompactor(prov, w.keepTail)
-	}
 	w.resolveContextWindow()
 	return nil
 }

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/store"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/store"
 
 	_ "modernc.org/sqlite"
 )

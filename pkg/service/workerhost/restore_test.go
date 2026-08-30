@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/worker"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // fakeChannel is a minimal WorkerSideChannel stub; the worker under test never

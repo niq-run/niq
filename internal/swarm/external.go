@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"time"
 
-	corebus "github.com/54c1/niq/core/bus"
+	corebus "github.com/niq-run/niq/core/bus"
 )
 
 // Environment variables passed to unmanaged workers so they can connect to the

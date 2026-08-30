@@ -19,8 +19,8 @@ package reason
 import (
 	"sync"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/llm"
 )
 
 // ToolReqStatus tracks the lifecycle stage of a tool call while it is tracked.

@@ -1,7 +1,7 @@
 package workerhost
 
 import (
-	"github.com/54c1/niq/core/worker"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // WorkerRecord is the persisted representation of a managed worker: its

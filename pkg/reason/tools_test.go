@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/54c1/niq/core/event"
-	llm "github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/core/worker"
+	"github.com/niq-run/niq/core/event"
+	llm "github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // TestEncodeToolNameBuiltin verifies a tool whose provider is this worker (or
@@ -76,62 +76,11 @@ func keys(m map[string]worker.Tool) []string {
 	return ks
 }
 
-// TestCoreCapabilitiesRegistered verifies the core capabilities are registered
-// on the capability registry at construction: the two tools (send_message /
-// list_workers) as tool.request loop-backs, and the context meta ops
-// (context.compress / context.rotate) as worker.update meta capabilities
-// exposed to the LLM by their LLMName.
-func TestCoreCapabilitiesRegistered(t *testing.T) {
-	w := newTestWorker(nil, newTestChannel())
-
-	if cap, ok := w.capabilityByToolName("send_message"); !ok || cap.Event != event.TypeToolRequest {
-		t.Fatalf("send_message not registered as tool.request capability: %+v ok=%v", cap, ok)
-	}
-	if cap, ok := w.capabilityByToolName("context_compress"); !ok || cap.Event != event.TypeWorkerUpdate {
-		t.Fatalf("context_compress not registered as worker.update capability: %+v ok=%v", cap, ok)
-	}
-}
-
-// TestCoreCapabilitiesExposedToLLM verifies the LLM tool list is the union of
-// the worker's exposed capabilities (LLMName set) and nothing else — provider
-// switch/status are not exposed, and the context meta ops are.
-func TestCoreCapabilitiesExposedToLLM(t *testing.T) {
-	w := newTestWorker(nil, newTestChannel())
-
-	// There is no seeding of the discovery universe at construction any more:
-	// the worker's own capabilities arrive via its self-directed worker.ready
-	// round-trip, exactly like any peer's. Simulate that before asking for the
-	// tool list.
-	w.handleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"watch":     w.watchDeclarations(),
-	}))
-
-	defs := w.llmToolDefs()
-	got := make(map[string]bool)
-	for _, d := range defs {
-		got[d.Name] = true
-	}
-	for _, want := range []string{"send_message", "list_workers", "context_compress", "context_rotate"} {
-		if !got[want] {
-			t.Fatalf("expected %q in LLM tool list, got %v", want, keysOf(got))
-		}
-	}
-	for _, banned := range []string{"provider.switch", "provider.list", "provider.current"} {
-		if got[banned] {
-			t.Fatalf("provider capability %q must not be exposed to the LLM", banned)
-		}
-	}
-}
-
-func keysOf(m map[string]bool) []string {
-	var ks []string
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
-}
-
+// TestCoreCapabilitiesRegistered / TestCoreCapabilitiesExposedToLLM /
+// TestBroadcastReadyExcludesSelfOnly moved to pkg/worker/reason: the
+// send_message / list_workers / context.compress / context.rotate toolkit (and
+// its SelfOnly announcement behavior) lives in the default worker now, not in
+// the shared reason mechanism.
 // TestToolNameMapRestoresDottedNames verifies that when a worker declares a
 // dotted tool name (e.g. program.search), the encoded LLM-facing name is
 // recorded in toolNameMap and dispatch hands the worker back its original
@@ -169,5 +118,61 @@ func TestToolNameMapRestoresDottedNames(t *testing.T) {
 	}
 	if gotName != "program.search" {
 		t.Fatalf("dispatched tool name = %q, want %q", gotName, "program.search")
+	}
+}
+
+// TestPeerWatchToolDispatchable verifies a peer's tool.request capability
+// announced via the watch (the reason-worker discovery channel) is not just
+// exposed to the LLM but also dispatchable: the encoded source__name lives in
+// the dispatch table, and a tool call routes back to the declaring worker with
+// its original name. Regression for "tool call unavailable: source__tool".
+func TestPeerWatchToolDispatchable(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+
+	// A peer reason worker announces a custom tool as a tool.request capability.
+	ready := event.New(event.TypeWorkerReady, "cute-assistant", map[string]any{
+		"worker_id": "cute-assistant",
+		"watch": []map[string]any{
+			{"event": "tool.request", "name": "remember", "desc": "Remember a fact",
+				"parameters": map[string]any{"type": "object", "properties": map[string]any{}}},
+		},
+	})
+	w.handleWorkerReady(ready)
+
+	// The encoded name is in the dispatch table, mapped back to the original.
+	if got := w.toolNameMap["cute-assistant__remember"]; got != "remember" {
+		t.Fatalf("toolNameMap = %q, want remember", got)
+	}
+	tool, ok := w.tools["cute-assistant__remember"]
+	if !ok || tool.Provider != "cute-assistant" {
+		t.Fatalf("dispatch table missing peer tool: %+v", tool)
+	}
+
+	// The LLM-facing name is exactly the dispatch key.
+	found := false
+	for _, d := range w.llmToolDefs() {
+		if d.Name == "cute-assistant__remember" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("peer tool not exposed to the LLM under the dispatch name")
+	}
+
+	// A tool call routes back to the declaring worker with the original name.
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "cute-assistant__remember"},
+	}, "trace1")
+
+	var gotName string
+	for _, e := range ch.eventsOf(event.TypeToolRequest) {
+		if n, _ := e.Payload["name"].(string); n != "" {
+			gotName = n
+		}
+	}
+	if gotName != "remember" {
+		t.Fatalf("dispatched tool name = %q, want remember", gotName)
 	}
 }

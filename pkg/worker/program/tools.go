@@ -7,9 +7,9 @@ import (
 	"log"
 	"strings"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/program"
-	"github.com/54c1/niq/core/worker"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/program"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // handleToolCall dispatches tool.request events to the appropriate handler.

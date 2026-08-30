@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/llm"
 )
 
 // Tests for process.go's event-to-input translation: DefaultConverter,

@@ -17,9 +17,9 @@ import (
 	"log"
 	"strings"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/core/worker"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/core/worker"
 )
 
 func (w *BaseReasonWorker) allTools() []worker.Tool {
@@ -30,36 +30,85 @@ func (w *BaseReasonWorker) allTools() []worker.Tool {
 	return tools
 }
 
-// watchDeclarations renders this worker's capability contract as the
-// worker.ready "watch" payload: the events this worker responds to, derived
-// from the capability registry. tool.request entries carry the tool name
-// top-level; worker.update / worker.query entries fold the discriminator (op /
-// subject) into parameters. The declaration is consumer-agnostic — whether a
-// capability is exposed to an LLM is a policy concern, not this declaration's.
-func (w *BaseReasonWorker) watchDeclarations() []map[string]any {
-	out := make([]map[string]any, 0, len(w.capabilities))
-	for _, rc := range w.capabilities {
-		cap := rc.cap
-		entry := map[string]any{
-			"event": string(cap.Event),
-			"desc":  cap.Description,
+// DiscoveredWorker is one worker in the directory served by list_workers: the
+// tools and published events this worker has learned about it from the bus.
+// It is NOT a snapshot of this worker's own state — that is the separate
+// Snapshot/Restore lifecycle.
+type DiscoveredWorker struct {
+	WorkerID  string         `json:"worker_id"`
+	Tools     []worker.Tool  `json:"tools,omitempty"`
+	Publishes []EventPublish `json:"publishes,omitempty"`
+}
+
+// DiscoveredWorkers aggregates this worker's known tools and published events by
+// provider — the payload behind list_workers. It is a read-only view of the
+// mechanism's bus-discovered state (w.tools / w.publishMap), not a worker
+// strategy and not this worker's own state Snapshot: the list_workers
+// capability (pkg/worker/reason) calls it and sends the result. Kept here, next
+// to the discovery data it reads.
+func (w *BaseReasonWorker) DiscoveredWorkers() []DiscoveredWorker {
+	providers := make(map[string]*DiscoveredWorker)
+	for _, tool := range w.tools {
+		info, ok := providers[tool.Provider]
+		if !ok {
+			info = &DiscoveredWorker{WorkerID: tool.Provider, Publishes: w.publishMap[tool.Provider]}
+			providers[tool.Provider] = info
 		}
-		if cap.Event == event.TypeToolRequest {
-			entry["name"] = cap.Key
-		} else if cap.KeyField != "" {
-			params := cap.Parameters
-			if params == nil {
-				params = map[string]any{}
-			}
-			params = cloneParams(params)
-			params[cap.KeyField] = cap.Key
-			entry["parameters"] = params
-		} else if len(cap.Parameters) > 0 {
-			entry["parameters"] = cap.Parameters
+		info.Tools = append(info.Tools, tool)
+	}
+	for provider, events := range w.publishMap {
+		if _, ok := providers[provider]; !ok {
+			providers[provider] = &DiscoveredWorker{WorkerID: provider, Publishes: events}
 		}
-		out = append(out, entry)
+	}
+	out := make([]DiscoveredWorker, 0, len(providers))
+	for _, info := range providers {
+		out = append(out, *info)
 	}
 	return out
+}
+
+// watchEntries renders every registered capability into the worker.ready
+// "watch" wire format — the full contract, SelfOnly included. It is the
+// self-directed announcement, from which the worker learns its complete own
+// view. The peer-facing broadcast is built by broadcastReady, which filters
+// SelfOnly capabilities out before rendering; the renderer itself carries no
+// policy.
+func (w *BaseReasonWorker) watchEntries() []map[string]any {
+	out := make([]map[string]any, 0, len(w.capabilities))
+	for _, rc := range w.capabilities {
+		out = append(out, w.watchEntry(rc.cap))
+	}
+	return out
+}
+
+// watchEntry renders one capability into a worker.ready "watch" entry.
+// tool.request entries carry the tool name top-level; worker.update /
+// worker.query entries fold the discriminator (op / subject) into parameters.
+func (w *BaseReasonWorker) watchEntry(cap Capability) map[string]any {
+	entry := map[string]any{
+		"event": string(cap.Event),
+		"desc":  cap.Description,
+	}
+	if cap.Event == event.TypeToolRequest {
+		entry["name"] = cap.Key
+		// Carry the schema too, so a peer tool's parameters reach both the
+		// LLM tool list and the dispatch table.
+		if len(cap.Parameters) > 0 {
+			entry["parameters"] = cap.Parameters
+		}
+	} else if cap.KeyField != "" {
+		params := cap.Parameters
+		if params == nil {
+			params = map[string]any{}
+		}
+		params = cloneParams(params)
+		params[cap.KeyField] = cap.Key
+		entry["parameters"] = params
+	} else if len(cap.Parameters) > 0 {
+		entry["parameters"] = cap.Parameters
+	}
+	return entry
 }
 
 func cloneParams(p map[string]any) map[string]any {
@@ -92,7 +141,10 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCap) []llm.Too
 		case cap.Source == w.ID() && !strings.HasPrefix(cap.Key, "provider."):
 			name = capToolName(Capability{Key: cap.Key})
 		case cap.Source != w.ID() && cap.Event == event.TypeToolRequest:
-			name = cap.Source + "__" + cap.Key
+			// Same encoding as the dispatch table, so the name the LLM sees is
+			// exactly the name dispatch looks up (dots -> underscores, and the
+			// source prefix).
+			name = encodeToolName(w, worker.Tool{Name: cap.Key, Provider: cap.Source})
 		default:
 			continue
 		}
@@ -119,11 +171,40 @@ func (w *BaseReasonWorker) llmToolDefs() []llm.ToolDef {
 	return w.toolListBuilder(w, w.discoveredCapabilities())
 }
 
+// DiscoveredCap is a capability as seen on the bus: which worker declared it
+// and the event it responds to. It is the unified unit the tool-list builder
+// operates on — this worker's own contract (learned from its self-directed
+// worker.ready) and every peer's presence broadcast are presented uniformly,
+// distinguished only by Source. This is the bus-discovered universe, NOT the
+// worker's own declared registry: BaseReasonWorker learns it by observing
+// worker.ready / worker.gone, so it describes what the worker can SEE, not what
+// it announces. The self-registry (Capability / Register) lives in
+// capability.go; this type belongs with the discovery machinery below.
+type DiscoveredCap struct {
+	Source      string          // declaring worker ID (own ID for self)
+	Event       event.EventType // tool.request / worker.update / worker.query / custom
+	KeyField    string
+	Key         string
+	Description string
+	Parameters  map[string]any
+}
+
+// discoveredCapabilities returns the unified capability universe: every
+// capability this worker knows about, its own included, in one list. It is fed
+// by every worker.ready announcement — the worker's own directed full contract
+// and every peer's presence broadcast — so the builder sees one bus-derived
+// view, no two-source assembly.
+func (w *BaseReasonWorker) discoveredCapabilities() []DiscoveredCap {
+	return w.discovered
+}
+
 // handleWorkerReady learns a worker's capabilities and published events from
 // its worker.ready announcement, feeding the unified discovery universe
-// (discovered) and the tool table used for dispatch. The worker's own
-// self-directed announcement is processed the same way as any peer's (it
-// refreshes the own capabilities the same way).
+// (discovered) and the tool table used for dispatch. Each ready event carries
+// that worker's complete contract (the worker excludes itself from its own
+// presence broadcast and sends its full contract to itself), so the source's
+// previous view is replaced wholesale — which is also what lets a
+// re-announcement update a worker's capabilities.
 func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 	workerID, _ := evt.Payload["worker_id"].(string)
 	if workerID == "" {
@@ -132,12 +213,6 @@ func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 
 	// Re-announcement is idempotent: drop this worker's previous view.
 	w.discovered = removeDiscoveredCaps(w.discovered, workerID)
-	for name, tool := range w.tools {
-		if tool.Provider == workerID {
-			delete(w.tools, name)
-			delete(w.toolNameMap, name)
-		}
-	}
 
 	// Parse the capability contract (watch) into the discovery universe.
 	if raw, ok := evt.Payload["watch"]; ok {
@@ -156,10 +231,8 @@ func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 		}
 	}
 
-	// Parse tools (legacy announcements) into both the discovery universe and
-	// the tool table used for dispatch.
-	b, err := json.Marshal(evt.Payload["tools"])
-	if err == nil {
+	// Parse tools (legacy announcements) into the discovery universe.
+	if b, err := json.Marshal(evt.Payload["tools"]); err == nil {
 		var toolsRaw []map[string]any
 		if err := json.Unmarshal(b, &toolsRaw); err == nil {
 			for _, m := range toolsRaw {
@@ -173,18 +246,6 @@ func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 					Source: workerID, Event: event.TypeToolRequest, KeyField: "name",
 					Key: name, Description: desc, Parameters: params,
 				})
-				t := worker.Tool{
-					Name:        name,
-					Description: desc,
-					Parameters:  params,
-					Provider:    workerID,
-				}
-				t.Name = encodeToolName(w, t)
-				// Save the reverse mapping (encoded name -> original declared
-				// name) so dispatch can hand a worker back its exact dotted
-				// tool name, e.g. provider__program.search -> program.search.
-				w.toolNameMap[t.Name] = name
-				w.tools[t.Name] = t
 			}
 			if len(toolsRaw) > 0 {
 				log.Printf("[reason %s] received %d tool(s) from %s", w.ID(), len(toolsRaw), workerID)
@@ -193,14 +254,17 @@ func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 	}
 
 	// Parse publishes.
-	b, err = json.Marshal(evt.Payload["publishes"])
-	if err == nil {
+	if b, err := json.Marshal(evt.Payload["publishes"]); err == nil {
 		var eventsRaw []EventPublish
 		if err := json.Unmarshal(b, &eventsRaw); err == nil && len(eventsRaw) > 0 {
 			w.publishMap[workerID] = eventsRaw
 			log.Printf("[reason %s] received %d event(s) from %s", w.ID(), len(eventsRaw), workerID)
 		}
 	}
+
+	// The dispatch table is a derived index over the discovery universe; keep
+	// it in step with what was just learned/removed.
+	w.rebuildDispatchTable()
 }
 
 // discoveredFromWatch parses a worker.ready "watch" entry into a DiscoveredCap.
@@ -246,14 +310,37 @@ func (w *BaseReasonWorker) handleWorkerGone(evt event.Event) {
 	workerID, _ := evt.Payload["worker_id"].(string)
 
 	w.discovered = removeDiscoveredCaps(w.discovered, workerID)
-	for name, tool := range w.tools {
-		if tool.Provider == workerID {
-			delete(w.tools, name)
-			delete(w.toolNameMap, name)
-		}
-	}
 	delete(w.publishMap, workerID)
+	// The dispatch table is a derived index; drop the departed worker's tools
+	// the same way as everything else — by rebuilding from discovered.
+	w.rebuildDispatchTable()
 	log.Printf("[reason %s] removed tools and events from %s", w.ID(), workerID)
+}
+
+// rebuildDispatchTable derives the dispatch table (w.tools + toolNameMap) from
+// the discovery universe, so the two stay in step and the discovery universe is
+// the single source of truth. Only peer tool.request capabilities become
+// callable tools: own capabilities dispatch through the registry instead, so
+// they are intentionally not indexed here. Called whenever discovered changes
+// (handleWorkerReady / handleWorkerGone).
+func (w *BaseReasonWorker) rebuildDispatchTable() {
+	for name := range w.tools {
+		delete(w.tools, name)
+		delete(w.toolNameMap, name)
+	}
+	for _, cap := range w.discovered {
+		if cap.Event != event.TypeToolRequest || cap.Source == w.ID() || cap.Key == "" {
+			continue
+		}
+		t := worker.Tool{Name: cap.Key, Description: cap.Description,
+			Parameters: cap.Parameters, Provider: cap.Source}
+		t.Name = encodeToolName(w, t)
+		// Reverse mapping (encoded name -> original declared name) so dispatch
+		// can hand a worker back its exact dotted name, e.g.
+		// provider__program.search -> program.search.
+		w.toolNameMap[t.Name] = cap.Key
+		w.tools[t.Name] = t
+	}
 }
 
 // setToolTimeoutTool is the bare-name contract for the tool built-in timeout:

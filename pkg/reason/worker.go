@@ -25,11 +25,11 @@ import (
 	"log"
 	"sync"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/core/program"
-	"github.com/54c1/niq/core/worker"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/core/program"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // EventConverter pairs an event pattern with a conversion function that
@@ -76,7 +76,6 @@ type Config struct {
 	BudgetSoft       float64
 	BudgetHard       float64
 	KeepTail         int
-	CompactDirective string
 
 	// MaxPayloadBytes caps a single text payload (tool result, external input
 	// message) folded into the transcript; oversized payloads are truncated to
@@ -136,19 +135,17 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		budgetSoft:               cfg.BudgetSoft,
 		budgetHard:               cfg.BudgetHard,
 		keepTail:                 cfg.KeepTail,
-		compactDirectiveOverride: cfg.CompactDirective,
 		reasoningEffort:          cfg.ReasoningEffort,
 	}
 	if len(cfg.SeedMessages) > 0 {
 		w.transcript.Apply(InputPatch{Messages: cfg.SeedMessages})
 	}
 
-	// Register the core capabilities (tools + context meta ops + provider
-	// switch/status). The capability registry is the extension point;
-	// reason-family workers call Register to add or replace capabilities.
-	// The default compress/rotate implementation (and its compactor) is created
-	// there too, so replacing those capabilities swaps compression wholesale.
-	w.registerCoreCapabilities()
+	// Register the base capabilities (provider switch/status). The capability
+	// registry is the extension point; reason-family workers call Register to
+	// add or replace capabilities, and the default worker (pkg/worker/reason)
+	// adds its own toolkit on top.
+	w.registerBaseCapabilities()
 
 	// Resolve the context window for the selected provider/model so the budget
 	// thresholds use the real size (API-reported or configured) instead of the
@@ -157,6 +154,91 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 
 	return w
 }
+
+// ── Mechanism accessors for embedding workers ───────────────────────────────
+//
+// These expose the mechanism's operations to reason-family workers so their
+// capability handlers can be implemented outside pkg/reason without reaching
+// into unexported state. The default worker's toolkit (send_message,
+// list_workers, context.compress/rotate) lives in pkg/worker/reason and is
+// built on exactly these.
+
+// LLMProvider returns the currently active LLM provider. A worker's context
+// strategy reads it lazily each call (e.g. for summarization) so it follows
+// provider switches without rebinding.
+func (w *BaseReasonWorker) LLMProvider() llm.LLMProvider { return w.llmProvider }
+
+// CurrentTraceID returns the trace id of the event currently being processed.
+func (w *BaseReasonWorker) CurrentTraceID() string { return w.currentTraceID }
+
+// Transcript returns the worker's transcript for in-place editing. The context
+// strategy (e.g. the default worker's context.compress handler) rewrites it to
+// shrink the context; the caller already holds w.mu or edits inside a
+// BeginEdit..CommitEdit window.
+func (w *BaseReasonWorker) Transcript() Transcript { return w.transcript }
+
+// KeepTail returns how many recent messages the default context strategy keeps
+// when compressing (the worker's own policy; the mechanism does not use it).
+func (w *BaseReasonWorker) KeepTail() int { return w.keepTail }
+
+// TryReason asks the mechanism to schedule the next reasoning round after the
+// worker has finished a context edit. The worker drives this (it knows when
+// its async edit completed); the mechanism only owns the scheduling.
+func (w *BaseReasonWorker) TryReason(ctx context.Context) {
+	w.mu.Lock()
+	w.needReason = true
+	w.mu.Unlock()
+	w.tryReason(ctx)
+}
+
+// ReplyTool answers a tool.request with a completed or failed result.
+func (w *BaseReasonWorker) ReplyTool(callID, name, callerID, result string, isErr bool) {
+	typ := event.TypeToolCompleted
+	payload := map[string]any{"call_id": callID, "name": name, "result": result}
+	if isErr {
+		typ = event.TypeToolFailed
+		payload = map[string]any{"call_id": callID, "name": name, "error": result}
+	}
+	evt := event.New(typ, w.ID(), payload)
+	evt.TraceID = w.currentTraceID
+	_ = w.Channel.Send(context.Background(), evt, callerID)
+}
+
+// WatchEntries returns the full watch announcement (every capability, SelfOnly
+// included) for this worker — the directed self-contract handed to
+// handleWorkerReady. Exported so embedding workers can build their own
+// announcement; the test package uses it to assert the LLM-facing contract.
+func (w *BaseReasonWorker) WatchEntries() []map[string]any { return w.watchEntries() }
+
+// LLMToolDefs returns the tool definitions exposed to the LLM (this worker's
+// own capabilities, learned from its directed full-contract announcement).
+func (w *BaseReasonWorker) LLMToolDefs() []llm.ToolDef { return w.llmToolDefs() }
+
+// CapabilityByToolName looks up a registered capability by its LLM-facing tool
+// name. Exported for inspection by embedding workers and tests.
+func (w *BaseReasonWorker) CapabilityByToolName(name string) (Capability, bool) {
+	return w.capabilityByToolName(name)
+}
+
+// MetaCapabilityCall reports whether msg contains a call to a meta capability
+// (a registered capability whose event is not tool.request) and returns that
+// block. Exported for embedding workers and tests.
+func (w *BaseReasonWorker) MetaCapabilityCall(msg llm.Message) (llm.ContentBlock, bool) {
+	return w.metaCapabilityCall(msg)
+}
+
+// StripToolCalls returns a copy of msg with all tool-call blocks removed,
+// keeping thinking/text. Exported for embedding workers and tests.
+func StripToolCalls(msg llm.Message) llm.Message { return stripToolCalls(msg) }
+
+// HandleWorkerReady applies a peer (or self) worker.ready announcement,
+// replacing that worker's whole contract. Exported for embedding workers and
+// tests.
+func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) { w.handleWorkerReady(evt) }
+
+// BroadcastReady re-announces this worker's presence (two-batch: peers then
+// self). Exported for embedding workers and tests.
+func (w *BaseReasonWorker) BroadcastReady() { w.broadcastReady() }
 
 // Start begins the event watch. It returns an error if the worker is already
 // started. Provided by the base so embedding reason-family workers inherit
@@ -186,31 +268,36 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 
 // broadcastReady re-announces this worker's presence on the bus in response
 // to a worker.discover. A worker-level identity action.
-// broadcastReady announces this worker's presence on the bus, then publishes a
-// second worker.ready directed to itself carrying this worker's own tool and
-// meta-tool declarations. Reason discovers its own tools from that directed
-// announcement (via handleWorkerReady), the same way it discovers any other
-// worker's - so its built-in tools are not a special hardcoded set but a
-// self-published declaration.
+// broadcastReady announces this worker's presence in two ready events:
+//
+//   - a broadcast to every peer except this worker (ExcludeWorkerID) carrying
+//     the externally callable contract, SelfOnly capabilities left out, and
+//   - a directed announcement to this worker carrying the full contract.
+//
+// Because the worker is excluded from its own broadcast, it receives exactly
+// one self-sourced ready event, which is its complete view — so
+// handleWorkerReady can treat each ready event as that worker's whole contract
+// and replace it wholesale on re-announcement (no merge, no local seeding).
 func (w *BaseReasonWorker) broadcastReady() {
-	// Batch 1: broadcast - announce presence and the worker's capability
-	// contract (watch: events it responds to). Peers / hiw discover the
-	// meta capabilities (worker.update / worker.query) from
-	// this declaration.
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+	peerWatch := make([]map[string]any, 0, len(w.capabilities))
+	for _, rc := range w.capabilities {
+		if rc.cap.SelfOnly {
+			continue
+		}
+		peerWatch = append(peerWatch, w.watchEntry(rc.cap))
+	}
+	presence := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 		"type":      "reason",
-		"watch":     w.watchDeclarations(),
-	}))
+		"watch":     peerWatch,
+	})
+	presence.ExcludeWorkerID = w.ID()
+	_ = w.Channel.Broadcast(context.Background(), presence)
 
-	// Batch 2: directed to self - declare this worker's own capability
-	// contract (watch). Reason discovers its own capabilities from that
-	// directed announcement (via handleWorkerReady), the same way it discovers
-	// any other worker's.
 	_ = w.Channel.Send(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 		"type":      "reason",
-		"watch":     w.watchDeclarations(),
+		"watch":     w.watchEntries(),
 	}), w.ID())
 }
 
@@ -237,8 +324,8 @@ func (w *BaseReasonWorker) Stop() error {
 // resumes on that choice instead of silently falling back to the configured
 // default — without it, a switch would be lost on every restart.
 type reasonState struct {
-	Transcript json.RawMessage     `json:"transcript"`
-	Provider   *providerSelection  `json:"provider,omitempty"`
+	Transcript json.RawMessage    `json:"transcript"`
+	Provider   *providerSelection `json:"provider,omitempty"`
 }
 
 type providerSelection struct {
@@ -328,7 +415,6 @@ type BaseReasonWorker struct {
 	// collide with a still-pending call_0 from a previous round and mispair.
 	toolCallSeq uint64
 
-	compactor       Compactor
 	eventConverters []EventConverter
 
 	reasoningEffort *string
@@ -353,7 +439,6 @@ type BaseReasonWorker struct {
 	budgetSoft               float64
 	budgetHard               float64
 	keepTail                 int
-	compactDirectiveOverride string
 	lastUsageTokens          int
 	budgetReminded           bool
 }

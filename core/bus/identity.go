@@ -11,7 +11,7 @@
 package bus
 
 import (
-	"github.com/54c1/niq/core/event"
+	"github.com/niq-run/niq/core/event"
 )
 
 // Identity represents a worker's registered identity on the bus.

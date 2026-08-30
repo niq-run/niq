@@ -12,7 +12,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/llm"
 )
 
 // DefaultMaxPayloadBytes caps a single text payload folded into the transcript

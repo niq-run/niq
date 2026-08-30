@@ -16,10 +16,10 @@ import (
 	"strings"
 	"sync"
 
-	corebus "github.com/54c1/niq/core/bus"
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/program"
-	"github.com/54c1/niq/core/worker"
+	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/program"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // Config holds the configuration for a Program Worker.

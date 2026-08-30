@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/store"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/store"
 )
 
 // MemoryEventStore implements both store.AppendStore and store.EventStore

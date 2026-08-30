@@ -20,8 +20,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/llm"
 )
 
 // decideLLMError classifies a failed LLM call and returns whether to retry it
@@ -37,12 +37,12 @@ func (w *BaseReasonWorker) decideLLMError(reasonCtx context.Context, traceID str
 
 	switch llmErr.Type {
 	case llm.ErrorContextLength:
-		// Context is over the hard limit: retrying cannot help. Ask to
-		// compress via a meta update request (single auditable path), and
-		// return a non-retriable error so this round ends; the compaction
-		// completes asynchronously and schedules the next round on the
-		// shrunk context.
-		w.emitMetaUpdateRequest(reasonCtx, "context.compress", nil)
+		// Context is over the hard limit: retrying cannot help. Ask the
+		// worker to compress via the convention event (single auditable
+		// path), and return a non-retriable error so this round ends; the
+		// worker responds by shrinking its transcript and scheduling the next
+		// round itself.
+		w.emitContextCompress(reasonCtx)
 		return false, callErr
 	case llm.ErrorRateLimit:
 		// Decide here, at 429 detection time, whether more retries remain: if

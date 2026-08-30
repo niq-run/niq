@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/54c1/niq/core/event"
-	"github.com/54c1/niq/core/llm"
-	"github.com/54c1/niq/core/worker"
+	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // TestPrepareReasoningBuildsRequest verifies prepareReasoning parks leftover
@@ -202,36 +202,6 @@ func TestFinalMessageReturns(t *testing.T) {
 	}
 }
 
-// TestMetaCapabilityCallAndStripToolCalls verifies meta capability detection
-// and that a meta call (which never produces a tool result) is excluded from
-// the transcript: metaCapabilityCall flags the response by LLMName, and
-// stripToolCalls removes all tool_calls while keeping thinking/text.
-func TestMetaCapabilityCallAndStripToolCalls(t *testing.T) {
-	w := newTestWorker(nil, nil) // core capabilities registered at construction
-	w.mu.Lock()
-	w.tools["ws-tmp-niq-test__ls"] = worker.Tool{Name: "ws-tmp-niq-test__ls", Provider: "ws-tmp-niq-test"}
-	w.mu.Unlock()
-
-	metaMsg := llm.Message{
-		Role:       llm.RoleAssistant,
-		StopReason: "tool_calls",
-		Content: []llm.ContentBlock{
-			{Type: llm.ContentThinking, Text: "need to compress"},
-			{Type: llm.ContentToolCall, ToolCallID: "m1", ToolName: "context_compress"},
-			{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "ws-tmp-niq-test__ls"},
-		},
-	}
-	if _, ok := w.metaCapabilityCall(metaMsg); !ok {
-		t.Fatal("metaCapabilityCall should detect context_compress")
-	}
-
-	stripped := stripToolCalls(metaMsg)
-	if len(stripped.Content) != 1 || stripped.Content[0].Type != llm.ContentThinking {
-		t.Fatalf("stripToolCalls should keep only thinking, got %+v", stripped.Content)
-	}
-
-	plain := llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}}
-	if _, ok := w.metaCapabilityCall(plain); ok {
-		t.Fatal("metaCapabilityCall must be false without a meta capability call")
-	}
-}
+// TestMetaCapabilityCallAndStripToolCalls moved to pkg/worker/reason:
+// context.compress / context.rotate are now the default worker's toolkit, not
+// the shared mechanism's.

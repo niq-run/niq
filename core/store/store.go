@@ -5,7 +5,7 @@ package store
 import (
 	"context"
 
-	"github.com/54c1/niq/core/event"
+	"github.com/niq-run/niq/core/event"
 )
 
 // EventStore is the read-side interface for querying persisted events.

@@ -7,7 +7,7 @@ package reason
 import (
 	"context"
 
-	"github.com/54c1/niq/core/event"
+	"github.com/niq-run/niq/core/event"
 )
 
 // watch is the single event loop goroutine. It blocks on busCh waiting
