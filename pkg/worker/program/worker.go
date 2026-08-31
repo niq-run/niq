@@ -19,7 +19,7 @@ import (
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/program"
-	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
 )
 
 // Config holds the configuration for a Program Worker.
@@ -37,7 +37,7 @@ type Config struct {
 // programs map. The map is the single source of truth for registered programs;
 // the Backend is the persistent storage for their content files.
 type Worker struct {
-	worker.BaseWorker
+	baseworker.BaseWorker
 	backend  program.Backend
 	programs map[string]*program.Program
 
@@ -55,7 +55,7 @@ func New(cfg Config) *Worker {
 		id = "program"
 	}
 	return &Worker{
-		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
+		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
 			event.NewPattern(event.TypeToolRequest),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),

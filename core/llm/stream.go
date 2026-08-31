@@ -31,39 +31,51 @@ type StreamEvent interface {
 // Concrete stream event types.
 
 type EventStart struct{}
+
 func (EventStart) EventType() StreamEventType { return StreamStart }
 
 type EventTextStart struct{}
+
 func (EventTextStart) EventType() StreamEventType { return StreamTextStart }
 
 type EventTextDelta struct{ Delta string }
+
 func (EventTextDelta) EventType() StreamEventType { return StreamTextDelta }
 
 type EventTextEnd struct{}
+
 func (EventTextEnd) EventType() StreamEventType { return StreamTextEnd }
 
 type EventThinkingStart struct{ Signature string }
+
 func (EventThinkingStart) EventType() StreamEventType { return StreamThinkingStart }
 
 type EventThinkingDelta struct{ Delta string }
+
 func (EventThinkingDelta) EventType() StreamEventType { return StreamThinkingDelta }
 
 type EventThinkingEnd struct{ Redacted bool }
+
 func (EventThinkingEnd) EventType() StreamEventType { return StreamThinkingEnd }
 
 type EventToolCallStart struct{ ToolName string }
+
 func (EventToolCallStart) EventType() StreamEventType { return StreamToolCallStart }
 
 type EventToolCallDelta struct{ Delta string }
+
 func (EventToolCallDelta) EventType() StreamEventType { return StreamToolCallDelta }
 
 type EventToolCallEnd struct{ Arguments string }
+
 func (EventToolCallEnd) EventType() StreamEventType { return StreamToolCallEnd }
 
 type EventDone struct{ Message Message }
+
 func (EventDone) EventType() StreamEventType { return StreamDone }
 
 type EventError struct{ Err error }
+
 func (EventError) EventType() StreamEventType { return StreamError }
 
 // EventStream is a push-pull event stream.

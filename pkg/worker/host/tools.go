@@ -6,10 +6,11 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
 )
 
 func (w *HostWorker) handleToolCall(evt event.Event) {
-	tc := worker.ParseToolCall(evt)
+	tc := baseworker.ParseToolCall(evt)
 
 	var result string
 	var err error
@@ -35,12 +36,12 @@ func (w *HostWorker) handleToolCall(evt event.Event) {
 
 // handleSpawn forwards the spawn request to the WorkerService, which
 // dispatches to the registered builder for the requested type.
-func (w *HostWorker) handleSpawn(tc worker.ToolCall) (string, error) {
-	typ := worker.ArgString(tc.Args, "type")
+func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (string, error) {
+	typ := baseworker.ArgString(tc.Args, "type")
 	if typ == "" {
 		return "", fmt.Errorf("type is required")
 	}
-	id := worker.ArgString(tc.Args, "id")
+	id := baseworker.ArgString(tc.Args, "id")
 	cfg := worker.WorkerConfig{ID: id, Type: typ, Params: tc.Args}
 	if err := w.engine.CreateWorker(context.Background(), cfg); err != nil {
 		return "", err
@@ -50,8 +51,8 @@ func (w *HostWorker) handleSpawn(tc worker.ToolCall) (string, error) {
 	return fmt.Sprintf(`{"worker_id":%q,"status":"created","type":%q}`, id, info), nil
 }
 
-func (w *HostWorker) handleSuspend(tc worker.ToolCall) (string, error) {
-	id := worker.ArgString(tc.Args, "worker_id")
+func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (string, error) {
+	id := baseworker.ArgString(tc.Args, "worker_id")
 	if id == "" {
 		return "", fmt.Errorf("worker_id is required")
 	}
@@ -61,8 +62,8 @@ func (w *HostWorker) handleSuspend(tc worker.ToolCall) (string, error) {
 	return fmt.Sprintf(`{"worker_id":%q,"status":"suspended"}`, id), nil
 }
 
-func (w *HostWorker) handleResume(tc worker.ToolCall) (string, error) {
-	id := worker.ArgString(tc.Args, "worker_id")
+func (w *HostWorker) handleResume(tc baseworker.ToolCall) (string, error) {
+	id := baseworker.ArgString(tc.Args, "worker_id")
 	if id == "" {
 		return "", fmt.Errorf("worker_id is required")
 	}

@@ -1,4 +1,12 @@
-package worker
+// Package baseworker provides the shared base implementation every built-in
+// Go worker embeds: identity, subscriptions, the worker-side bus channel,
+// tool-request reply plumbing, and the extension registry — the uniform way
+// for a worker to declare what it responds to and how.
+//
+// It is deliberately an implementation package. The contracts it partially
+// implements (Worker / ManagedWorker) stay in core/worker, as do the shared
+// data vocabulary types (Tool, ToolFunc).
+package baseworker
 
 import (
 	"context"
@@ -8,29 +16,37 @@ import (
 	"github.com/niq-run/niq/core/event"
 )
 
-// BaseWorker provides a partial [Worker] implementation that other workers
-// embed. It stores an id and subscription list; [Start] is a
-// intentional no-ops that callers are expected to override.
+// BaseWorker provides a partial implementation of the worker contract
+// (core/worker.Worker) that other workers embed. It stores an id, a
+// subscription list and the extension registry; Start is an intentional
+// no-op that callers are expected to override.
 type BaseWorker struct {
 	id      string
 	subs    []event.EventPattern
 	Channel corebus.WorkerSideChannel
+
+	// extensions is the registry filled by Register. Held behind a pointer
+	// (see extensionRegistry): the lock lives in the registry, not here, so
+	// BaseWorker stays copyable by value. Registration is safe at any time,
+	// including at runtime from within a handler.
+	extensions *extensionRegistry
 }
 
 // NewBaseWorker creates a BaseWorker with the given id, subscriptions and
 // worker-side channel to the event bus.
 func NewBaseWorker(id string, subs []event.EventPattern, ch corebus.WorkerSideChannel) BaseWorker {
 	return BaseWorker{
-		id:      id,
-		subs:    subs,
-		Channel: ch,
+		id:         id,
+		subs:       subs,
+		Channel:    ch,
+		extensions: &extensionRegistry{regs: make(map[string]registeredExtension)},
 	}
 }
 
 func (w *BaseWorker) ID() string { return w.id }
 
 // Subscriptions returns the event patterns this worker is interested in.
-// Implements [Worker].
+// Implements the Worker contract.
 func (w *BaseWorker) Subscriptions() []event.EventPattern {
 	return w.subs
 }

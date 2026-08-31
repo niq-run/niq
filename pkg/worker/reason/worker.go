@@ -6,6 +6,7 @@ import (
 	"github.com/niq-run/niq/core/llm"
 	"github.com/niq-run/niq/core/program"
 	reasonBase "github.com/niq-run/niq/pkg/reason"
+	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
 // Config holds the configuration for a generic "reason" worker.
@@ -25,12 +26,14 @@ type Config struct {
 
 	// Transcript is the worker's context construction core. nil uses the
 	// default accumulate implementation.
-	Transcript reasonBase.Transcript
+	Transcript transcript.Transcript
 
-	// Context budget (see pkg/reason/compact.go). ContextWindow is the model's
-	// window in tokens; 0 disables budget handling. BudgetSoft/BudgetHard are
-	// occupancy ratios; KeepTail is how many recent messages compaction
-	// preserves; CompactDirective overrides the fallback summarizer prompt.
+	// Context budget (see handleContextBudget in pkg/reason/reason.go).
+	// ContextWindow is the model's window in tokens; 0 disables budget
+	// handling. BudgetSoft/BudgetHard are occupancy ratios; KeepTail is how
+	// many recent messages compaction preserves; CompactDirective overrides
+	// the worker's own fallback summarizer prompt (the mechanism never sees
+	// it).
 	ContextWindow    int
 	BudgetSoft       float64
 	BudgetHard       float64
@@ -89,33 +92,33 @@ func NewWorker(cfg Config) *Worker {
 	)
 
 	base := reasonBase.NewBaseReasonWorker(reasonBase.Config{
-		ID:               cfg.ID,
-		Bus:              cfg.Bus,
-		Subscriptions:    subs,
-		Provider:         cfg.Provider,
-		ProviderSources:  cfg.ProviderSources,
-		ProviderName:     cfg.ProviderName,
-		ProviderModel:    cfg.ProviderModel,
-		Programs:         cfg.Programs,
-		EventConverters:  cfg.EventConverters,
-		Transcript:       cfg.Transcript,
-		ReasoningEffort:  cfg.ReasoningEffort,
-		ContextWindow:    cfg.ContextWindow,
-		BudgetSoft:       cfg.BudgetSoft,
-		BudgetHard:       cfg.BudgetHard,
-		KeepTail:         cfg.KeepTail,
-		MaxPayloadBytes:  cfg.MaxPayloadBytes,
-		SeedMessages:     cfg.SeedMessages,
+		ID:              cfg.ID,
+		Bus:             cfg.Bus,
+		Subscriptions:   subs,
+		Provider:        cfg.Provider,
+		ProviderSources: cfg.ProviderSources,
+		ProviderName:    cfg.ProviderName,
+		ProviderModel:   cfg.ProviderModel,
+		Programs:        cfg.Programs,
+		EventConverters: cfg.EventConverters,
+		Transcript:      cfg.Transcript,
+		ReasoningEffort: cfg.ReasoningEffort,
+		ContextWindow:   cfg.ContextWindow,
+		BudgetSoft:      cfg.BudgetSoft,
+		BudgetHard:      cfg.BudgetHard,
+		KeepTail:        cfg.KeepTail,
+		MaxPayloadBytes: cfg.MaxPayloadBytes,
+		SeedMessages:    cfg.SeedMessages,
 	})
 
 	// The default worker layers its own toolkit on top of the base
-	// capabilities: send_message / list_workers / context.compress /
+	// extensions: send_message / list_workers / context.compress /
 	// context.rotate. The context ops are this worker's own strategy — it
 	// responds to the context.compress convention event by editing its
 	// transcript directly (see compact.go), not by installing a compactor
 	// object into the mechanism. The compaction directive override is this
 	// worker's own config, not the mechanism's.
-	registerDefaultCapabilities(base, cfg.CompactDirective)
+	registerDefaultExtensions(base, cfg.CompactDirective)
 
 	return &Worker{BaseReasonWorker: base}
 }

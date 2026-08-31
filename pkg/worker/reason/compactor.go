@@ -16,6 +16,7 @@ import (
 
 	llm "github.com/niq-run/niq/core/llm"
 	"github.com/niq-run/niq/pkg/reason"
+	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
 // FallbackCompactDirective is the built-in summarizer system prompt used when
@@ -67,7 +68,7 @@ func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, rotate b
 	if rotate {
 		label = "rotate"
 	}
-	t.Apply(reason.InputPatch{Messages: []llm.Message{{
+	t.Apply(transcript.InputPatch{Messages: []llm.Message{{
 		Role:    llm.RoleUser,
 		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: compactionNote(label)}},
 	}}})

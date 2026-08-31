@@ -2,11 +2,14 @@ package reason
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/llm"
 	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
 // TestPrepareReasoningBuildsRequest verifies prepareReasoning parks leftover
@@ -17,10 +20,10 @@ func TestPrepareReasoningBuildsRequest(t *testing.T) {
 	// Seed a trace and a pending tool call that should be parked at reasoning start.
 	w.mu.Lock()
 	w.currentTraceID = "trace1"
-	w.toolCallTracker.Add("workspace", []llm.ContentBlock{
+	w.requestTracker.Add("workspace", []llm.ContentBlock{
 		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"},
 	})
-	w.transcript.Apply(InputPatch{Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "hi"}}}}})
+	w.transcript.Apply(transcript.InputPatch{Messages: []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "hi"}}}}})
 	w.mu.Unlock()
 
 	traceID, req := w.prepareReasoning()
@@ -34,7 +37,7 @@ func TestPrepareReasoningBuildsRequest(t *testing.T) {
 		t.Fatalf("expected 1 message in request, got %d", len(req.Context.Messages))
 	}
 	// Leftover tool should now be parked (not pending).
-	if !w.toolCallTracker.Resolved() {
+	if !w.requestTracker.Resolved() {
 		t.Fatal("pending tool should be parked by prepareReasoning")
 	}
 }
@@ -202,6 +205,149 @@ func TestFinalMessageReturns(t *testing.T) {
 	}
 }
 
-// TestMetaCapabilityCallAndStripToolCalls moved to pkg/worker/reason:
+// TestMetaExtensionCallAndStripToolCalls moved to pkg/worker/reason:
 // context.compress / context.rotate are now the default worker's toolkit, not
 // the shared mechanism's.
+
+// summarizeProvider routes Complete (summarizer) and CompleteStream (reasoning)
+// to different fixed messages, recording the summarizer's system prompt.
+type summarizeProvider struct {
+	mu          sync.Mutex
+	seenPrompt  string
+	summarized  string
+	chatMessage llm.Message
+}
+
+func (p *summarizeProvider) Complete(_ context.Context, req *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.seenPrompt = req.Context.SystemPrompt
+	return &llm.CompletionResponse{Message: llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "DIGEST(" + p.summarized + ")"}},
+	}}, nil
+}
+
+func (p *summarizeProvider) CompleteStream(_ context.Context, _ *llm.CompletionRequest) (*llm.EventStream, error) {
+	es := llm.NewEventStream()
+	es.Push(llm.EventTextStart{})
+	es.Push(llm.EventTextEnd{})
+	es.End(p.chatMessage)
+	return es, nil
+}
+
+func (p *summarizeProvider) ListModels(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
+
+func (p *summarizeProvider) prompt() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.seenPrompt
+}
+
+// TestSoftBudgetInjectsReminder verifies crossing the soft threshold appends
+// exactly one system reminder per crossing, and no compaction runs.
+func TestSoftBudgetInjectsReminder(t *testing.T) {
+	prov := &summarizeProvider{summarized: "unused",
+		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop",
+			Usage:   &llm.Usage{InputTokens: 900, OutputTokens: 10},
+			Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}}}
+	w := NewBaseReasonWorker(Config{ID: "r1", Provider: prov, Bus: newTestChannel(),
+		ContextWindow: 1000, BudgetSoft: 0.85, BudgetHard: 0.97})
+
+	w.handleContextBudget(context.Background(), llm.Message{Usage: &llm.Usage{InputTokens: 900, OutputTokens: 10}})
+
+	msgs := w.transcript.Render()
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Content[0].Text, "91%") {
+		t.Fatalf("expected one budget reminder, got %+v", msgs)
+	}
+
+	// Same side of the threshold: no duplicate reminder.
+	w.handleContextBudget(context.Background(), llm.Message{Usage: &llm.Usage{InputTokens: 950, OutputTokens: 5}})
+	if got := len(w.transcript.Render()); got != 1 {
+		t.Fatalf("reminder should fire once per crossing, got %d messages", got)
+	}
+}
+
+// TestHardBudgetEmitsMetaRequest verifies crossing the hard threshold routes
+// compaction through a worker.update meta request to itself (single audit
+// path), not a direct compactor call.
+func TestHardBudgetEmitsMetaRequest(t *testing.T) {
+	prov := &summarizeProvider{summarized: "hard-budget",
+		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
+	ch := newTestChannel()
+	w := NewBaseReasonWorker(Config{ID: "r1", Provider: prov, Bus: ch,
+		ContextWindow: 1000, BudgetSoft: 0.85, BudgetHard: 0.97, KeepTail: 2})
+
+	seed := func(n int) {
+		for i := 0; i < n; i++ {
+			w.transcript.Apply(transcript.InputPatch{Messages: []llm.Message{
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: string(rune('a' + i))}}},
+			}})
+		}
+	}
+	seed(6)
+
+	w.handleContextBudget(context.Background(), llm.Message{Usage: &llm.Usage{InputTokens: 990, OutputTokens: 5}})
+
+	var found bool
+	for _, e := range ch.eventsOf(event.TypeWorkerUpdate) {
+		if op, _ := e.Payload["op"].(string); op == "context.compress" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("hard budget should emit a worker.update compress request, got %+v", ch.eventsOf(event.TypeWorkerUpdate))
+	}
+}
+
+// TestEnsureToolCallIDsSynthesizesMissing verifies the transcript invariant:
+// every tool call entering the transcript carries a non-empty id, even when the
+// model omitted it — otherwise the OpenAI-format pair (assistant tool_call +
+// tool_result) is invalid and, because the transcript is persisted,
+// unrecoverable.
+func TestEnsureToolCallIDsSynthesizesMissing(t *testing.T) {
+	w := newTestWorker(nil, nil)
+	msg := llm.Message{
+		Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{
+			{Type: llm.ContentToolCall, ToolName: "bash", ToolArguments: "{}"},
+			{Type: llm.ContentToolCall, ToolCallID: "model-id", ToolName: "ls", ToolArguments: "{}"},
+			{Type: llm.ContentToolCall, ToolName: "read", ToolArguments: "{}"},
+		},
+	}
+	w.ensureToolCallIDs(msg)
+
+	// The model-supplied id is preserved.
+	if msg.Content[1].ToolCallID != "model-id" {
+		t.Fatalf("expected model id preserved, got %q", msg.Content[1].ToolCallID)
+	}
+	if msg.Content[0].ToolCallID == "" || msg.Content[2].ToolCallID == "" {
+		t.Fatalf("expected synthesized ids, got %q and %q", msg.Content[0].ToolCallID, msg.Content[2].ToolCallID)
+	}
+	if msg.Content[0].ToolCallID == msg.Content[2].ToolCallID {
+		t.Fatalf("expected distinct ids, both %q", msg.Content[0].ToolCallID)
+	}
+}
+
+// TestEnsureToolCallIDsUniqueAcrossRounds verifies ids do not repeat between
+// calls: the tracker keeps pending calls across rounds, so a repeated id would
+// mispair a result against the wrong call.
+func TestEnsureToolCallIDsUniqueAcrossRounds(t *testing.T) {
+	w := newTestWorker(nil, nil)
+	var ids []string
+	for i := 0; i < 3; i++ {
+		msg := llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolName: "bash"}},
+		}
+		w.ensureToolCallIDs(msg)
+		ids = append(ids, msg.Content[0].ToolCallID)
+	}
+	for i := range ids {
+		for j := i + 1; j < len(ids); j++ {
+			if ids[i] == ids[j] {
+				t.Fatalf("id %q repeated across rounds %d and %d", ids[i], i, j)
+			}
+		}
+	}
+}

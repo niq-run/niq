@@ -23,9 +23,9 @@ watch() — the event-fetch goroutine
                     └─ tryReason() — pick up overlapping events
 ```
 
-Division between watch and process:
+Division between the loop and dispatch:
 
-- **watch.go** — the event loop goroutine + the `tryReason` decision gate.
+- **worker.go** — the event loop goroutine (`watch`) + the `tryReason` decision gate, next to the `Start`/`Stop` lifecycle that runs them.
 - **process.go** — `process` dispatch + its handlers + event→transcript-input
   translation.
 
@@ -33,16 +33,47 @@ Division between watch and process:
 
 | File | Responsibility |
 |---|---|
-| `worker.go` | `BaseReasonWorker` — the generic reasoning body (embeds `worker.BaseWorker`) + `Config` + `NewBaseReasonWorker` + lifecycle (`Start`/`Stop`/`Snapshot`/`Restore`/`Messages`) + `broadcastReady` |
-| `reason.go` | the reasoning round: prepareReasoning / consumeStream / finishReasoning + lifecycle broadcasts (reason.start/end/response/thinking) + tool dispatch handleToolCalls + meta-tool routing + ErrorContextLength handling (meta update request) |
-| `watch.go` | the event loop `watch` + the `tryReason` decision gate |
-| `process.go` | event dispatch `process` + handlers (abort/timeout/reminder/tool-result/input) + event→transcript-input translation |
-| `tools.go` | tools: the `ToolProvider` interface + default `BuiltinTools` + tool-name encoding + worker.ready tool discovery |
-| `compact.go` | context budget + transcript compaction: token ledger (Usage snapshot), soft/hard thresholds (remind/direct compact), compaction orchestration (BeginEdit→summarize→CommitEdit), incremental merge, projection (strips image/thinking, truncates) |
+| `worker.go` | `BaseReasonWorker` — the generic reasoning body (embeds `baseworker.BaseWorker`) + `Config` + `NewBaseReasonWorker` + lifecycle (`Start`/`Stop`/`Snapshot`/`Restore`/`Messages`) + the event loop (`watch`) + the `tryReason` decision gate + the exported accessors the concrete worker builds on (`Transcript`, `TryReason`, `LLMToolDefs`, ...) |
+| `reason.go` | the reasoning round: prepareReasoning / consumeStream / finishReasoning + lifecycle broadcasts (reason.start/end/response/thinking) + tool dispatch handleToolCalls + meta-tool routing + `handleContextBudget` (context-window pressure) + tool-call id synthesis |
+| `process.go` | event dispatch `process` + handlers (abort/timeout/reminder/tool-result/input) + `emitContextCompress` and the `ContextCompressOpEvent` convention it fires |
+| `discovery.go` | **inbound** presence: `worker.ready`/`worker.gone` handling, the `DiscoveredCapability` universe, `DiscoveredWorkers` (payload behind `list_workers`), the dispatch table derived from it, tool-name encoding |
+| `announce.go` | **outbound** presence: `broadcastReady` (two-batch: peers then self) + rendering the `worker.ready` contract entries (`extensionEntries` / `extensionEntry`) |
+| `tools.go` | the LLM-facing tool surface: `ToolListBuilder` policy (what the model sees, own + peer tool naming) + `extensionToolName` / `extensionByToolName` (own extension ⇄ LLM tool name bridge) + `sendToolRequests` (putting the model's calls on the bus) |
+| `provider.go` | provider management, exposed through the extension mechanism: `ProviderSources` / `ProviderInfo` + `registerBaseExtensions` (provider.switch/list/current) + `setActiveProvider` / `resolveContextWindow` |
+| `llmerror.go` | LLM error policy: context overflow → compression request, rate limit → backoff reminder, 4xx → fail, else retry |
 | `systemprompt.go` | renders the system prompt from programs |
-| `tooltracker.go` | `ToolCallTracker` state machine (tracks Pending/Parked), map only |
-| `transcript.go` | the `Transcript` interface + sealed `TranscriptPatch` variants (the context-construction algebra) + the tool-pairing invariant base |
-| `transcript_accumulate.go` | `AccumulateTranscript`, the default accumulate implementation — self-synchronized, with meta-edit buffering |
+
+Self-contained sub-domains extracted as subpackages:
+
+| Package | Responsibility |
+|---|---|
+| `pkg/reason/transcript` | the `Transcript` interface + sealed `TranscriptPatch` variants (the context-construction algebra) + `AccumulateTranscript`, the default accumulate implementation — self-synchronized, with meta-edit buffering |
+| `pkg/reason/requesttracker` | `RequestTracker` — lifecycle of the `tool.request` events this worker issued (Pending/Parked, late results) + `PreemptCause` (why a wait/round was preempted) |
+
+Note on vocabulary: a tool call has two names. On the **LLM side** the
+transcript holds tool calls (`ToolPlaceholdersPatch`, `ToolResultPatch`, ...).
+On the **bus side** this worker sends `tool.request` events, tracked by
+`RequestTracker`. Discovery is likewise split by direction: `discovery.go`
+learns others' contracts, `announce.go` declares this worker's own.
+
+The shared base every built-in worker embeds — `BaseWorker` (identity,
+subscriptions, tool-request replies, arg helpers) plus the generic `Extension`
+registry (`Register` / `DispatchExtension` / `Extensions`) — lives in
+**`pkg/baseworker`**, not here. `core/worker` remains contracts only
+(`Worker` / `ManagedWorker` + the `Tool` / `ToolFunc` data types).
+
+Vocabulary split by perspective: **`Extension`** (pkg/baseworker) is the
+declaration side — how a worker extends itself, "what it responds to and how".
+**`DiscoveredCapability`** (this package, discovery.go) is the observation
+side — what other workers offer on the bus, as learned from worker.ready.
+The same fact, two names: extension is the mechanism, capability is the
+interface. The wire format bridges them and is unchanged.
+
+The generic tools (`send_message`, `list_workers`) and the context meta ops
+(`context.compress`, `context.rotate`) are **not** here — they are the default
+reason worker's own toolkit (`pkg/worker/reason`). The mechanism only declares
+the `context.compress` convention and fires it under window pressure; shrinking
+the transcript is the worker's strategy.
 
 ## Core ideas
 

@@ -40,7 +40,7 @@ const (
 // Meta identifies a Program and describes what it does.
 // It is used for search, filtering, and display.
 //
-// Locked programs cannot be modified or deleted via meta-capabilities
+// Locked programs cannot be modified or deleted via meta-extensions
 // (e.g. the register, edit, delete tools). They are
 // defined by the system operator and form the immutable core of the
 // Worker's identity and behaviour.

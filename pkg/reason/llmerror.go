@@ -22,6 +22,7 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
 // decideLLMError classifies a failed LLM call and returns whether to retry it
@@ -95,7 +96,7 @@ func (w *BaseReasonWorker) scheduleRateLimitBackoff(traceID string, callErr erro
 	if exhausted {
 		note = fmt.Sprintf("[system] API rate limit (HTTP 429) hit; retries exhausted after %d attempts, giving up", attempt)
 	}
-	w.transcript.Apply(InputPatch{Messages: []llm.Message{{
+	w.transcript.Apply(transcript.InputPatch{Messages: []llm.Message{{
 		Role:    llm.RoleUser,
 		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: note}},
 	}}})

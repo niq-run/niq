@@ -30,6 +30,9 @@ import (
 	"github.com/niq-run/niq/core/llm"
 	"github.com/niq-run/niq/core/program"
 	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
+	"github.com/niq-run/niq/pkg/reason/requesttracker"
+	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
 // EventConverter pairs an event pattern with a conversion function that
@@ -61,7 +64,7 @@ type Config struct {
 	Subscriptions   []event.EventPattern
 	Programs        []program.Program
 	EventConverters []EventConverter
-	Transcript      Transcript
+	Transcript      transcript.Transcript
 
 	Provider        llm.LLMProvider
 	ProviderSources ProviderSources
@@ -72,10 +75,10 @@ type Config struct {
 	ProviderModel   string
 	ReasoningEffort *string
 
-	ContextWindow    int
-	BudgetSoft       float64
-	BudgetHard       float64
-	KeepTail         int
+	ContextWindow int
+	BudgetSoft    float64
+	BudgetHard    float64
+	KeepTail      int
 
 	// MaxPayloadBytes caps a single text payload (tool result, external input
 	// message) folded into the transcript; oversized payloads are truncated to
@@ -91,7 +94,7 @@ type Config struct {
 // tracker, and seeds the transcript with any handover brief.
 func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	if cfg.Transcript == nil {
-		cfg.Transcript = NewAccumulateTranscript(WithMaxPayloadBytes(cfg.MaxPayloadBytes))
+		cfg.Transcript = transcript.NewAccumulateTranscript(transcript.WithMaxPayloadBytes(cfg.MaxPayloadBytes))
 	}
 	if cfg.BudgetSoft <= 0 {
 		cfg.BudgetSoft = DefaultBudgetSoft
@@ -117,35 +120,34 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	}
 
 	w := &BaseReasonWorker{
-		BaseWorker:               worker.NewBaseWorker(cfg.ID, cfg.Subscriptions, cfg.Bus),
-		llmProvider:              initialProvider,
-		providerSources:          cfg.ProviderSources,
-		providerName:             cfg.ProviderName,
-		providerModel:            cfg.ProviderModel,
-		transcript:               cfg.Transcript,
-		tools:                    make(map[string]worker.Tool),
-		publishMap:               make(map[string][]EventPublish),
-		capabilities:             make(map[string]registeredCapability),
-		toolListBuilder:          defaultToolListBuilder,
-		toolNameMap:              make(map[string]string),
-		eventConverters:          cfg.EventConverters,
-		programs:                 cfg.Programs,
-		toolCallTracker:          NewToolCallTracker(),
-		contextWindow:            cfg.ContextWindow,
-		budgetSoft:               cfg.BudgetSoft,
-		budgetHard:               cfg.BudgetHard,
-		keepTail:                 cfg.KeepTail,
-		reasoningEffort:          cfg.ReasoningEffort,
+		BaseWorker:      baseworker.NewBaseWorker(cfg.ID, cfg.Subscriptions, cfg.Bus),
+		llmProvider:     initialProvider,
+		providerSources: cfg.ProviderSources,
+		providerName:    cfg.ProviderName,
+		providerModel:   cfg.ProviderModel,
+		transcript:      cfg.Transcript,
+		tools:           make(map[string]worker.Tool),
+		publishMap:      make(map[string][]EventPublish),
+		toolListBuilder: defaultToolListBuilder,
+		toolNameMap:     make(map[string]string),
+		eventConverters: cfg.EventConverters,
+		programs:        cfg.Programs,
+		requestTracker:  requesttracker.NewRequestTracker(),
+		contextWindow:   cfg.ContextWindow,
+		budgetSoft:      cfg.BudgetSoft,
+		budgetHard:      cfg.BudgetHard,
+		keepTail:        cfg.KeepTail,
+		reasoningEffort: cfg.ReasoningEffort,
 	}
 	if len(cfg.SeedMessages) > 0 {
-		w.transcript.Apply(InputPatch{Messages: cfg.SeedMessages})
+		w.transcript.Apply(transcript.InputPatch{Messages: cfg.SeedMessages})
 	}
 
-	// Register the base capabilities (provider switch/status). The capability
+	// Register the base extensions (provider switch/status). The extension
 	// registry is the extension point; reason-family workers call Register to
-	// add or replace capabilities, and the default worker (pkg/worker/reason)
+	// add or replace extensions, and the default worker (pkg/worker/reason)
 	// adds its own toolkit on top.
-	w.registerBaseCapabilities()
+	w.registerBaseExtensions()
 
 	// Resolve the context window for the selected provider/model so the budget
 	// thresholds use the real size (API-reported or configured) instead of the
@@ -158,7 +160,7 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 // ── Mechanism accessors for embedding workers ───────────────────────────────
 //
 // These expose the mechanism's operations to reason-family workers so their
-// capability handlers can be implemented outside pkg/reason without reaching
+// extension handlers can be implemented outside pkg/reason without reaching
 // into unexported state. The default worker's toolkit (send_message,
 // list_workers, context.compress/rotate) lives in pkg/worker/reason and is
 // built on exactly these.
@@ -175,7 +177,7 @@ func (w *BaseReasonWorker) CurrentTraceID() string { return w.currentTraceID }
 // strategy (e.g. the default worker's context.compress handler) rewrites it to
 // shrink the context; the caller already holds w.mu or edits inside a
 // BeginEdit..CommitEdit window.
-func (w *BaseReasonWorker) Transcript() Transcript { return w.transcript }
+func (w *BaseReasonWorker) Transcript() transcript.Transcript { return w.transcript }
 
 // KeepTail returns how many recent messages the default context strategy keeps
 // when compressing (the worker's own policy; the mechanism does not use it).
@@ -191,40 +193,27 @@ func (w *BaseReasonWorker) TryReason(ctx context.Context) {
 	w.tryReason(ctx)
 }
 
-// ReplyTool answers a tool.request with a completed or failed result.
-func (w *BaseReasonWorker) ReplyTool(callID, name, callerID, result string, isErr bool) {
-	typ := event.TypeToolCompleted
-	payload := map[string]any{"call_id": callID, "name": name, "result": result}
-	if isErr {
-		typ = event.TypeToolFailed
-		payload = map[string]any{"call_id": callID, "name": name, "error": result}
-	}
-	evt := event.New(typ, w.ID(), payload)
-	evt.TraceID = w.currentTraceID
-	_ = w.Channel.Send(context.Background(), evt, callerID)
-}
-
-// WatchEntries returns the full watch announcement (every capability, SelfOnly
+// ExtensionEntries returns the full watch announcement (every extension, SelfOnly
 // included) for this worker — the directed self-contract handed to
 // handleWorkerReady. Exported so embedding workers can build their own
 // announcement; the test package uses it to assert the LLM-facing contract.
-func (w *BaseReasonWorker) WatchEntries() []map[string]any { return w.watchEntries() }
+func (w *BaseReasonWorker) ExtensionEntries() []map[string]any { return w.extensionEntries() }
 
 // LLMToolDefs returns the tool definitions exposed to the LLM (this worker's
-// own capabilities, learned from its directed full-contract announcement).
+// own extensions, learned from its directed full-contract announcement).
 func (w *BaseReasonWorker) LLMToolDefs() []llm.ToolDef { return w.llmToolDefs() }
 
-// CapabilityByToolName looks up a registered capability by its LLM-facing tool
+// ExtensionByToolName looks up a registered extension by its LLM-facing tool
 // name. Exported for inspection by embedding workers and tests.
-func (w *BaseReasonWorker) CapabilityByToolName(name string) (Capability, bool) {
-	return w.capabilityByToolName(name)
+func (w *BaseReasonWorker) ExtensionByToolName(name string) (baseworker.Extension, bool) {
+	return w.extensionByToolName(name)
 }
 
-// MetaCapabilityCall reports whether msg contains a call to a meta capability
-// (a registered capability whose event is not tool.request) and returns that
+// MetaExtensionCall reports whether msg contains a call to a meta extension
+// (a registered extension whose event is not tool.request) and returns that
 // block. Exported for embedding workers and tests.
-func (w *BaseReasonWorker) MetaCapabilityCall(msg llm.Message) (llm.ContentBlock, bool) {
-	return w.metaCapabilityCall(msg)
+func (w *BaseReasonWorker) MetaExtensionCall(msg llm.Message) (llm.ContentBlock, bool) {
+	return w.metaExtensionCall(msg)
 }
 
 // StripToolCalls returns a copy of msg with all tool-call blocks removed,
@@ -235,10 +224,6 @@ func StripToolCalls(msg llm.Message) llm.Message { return stripToolCalls(msg) }
 // replacing that worker's whole contract. Exported for embedding workers and
 // tests.
 func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) { w.handleWorkerReady(evt) }
-
-// BroadcastReady re-announces this worker's presence (two-batch: peers then
-// self). Exported for embedding workers and tests.
-func (w *BaseReasonWorker) BroadcastReady() { w.broadcastReady() }
 
 // Start begins the event watch. It returns an error if the worker is already
 // started. Provided by the base so embedding reason-family workers inherit
@@ -266,39 +251,37 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 	return nil
 }
 
-// broadcastReady re-announces this worker's presence on the bus in response
-// to a worker.discover. A worker-level identity action.
-// broadcastReady announces this worker's presence in two ready events:
-//
-//   - a broadcast to every peer except this worker (ExcludeWorkerID) carrying
-//     the externally callable contract, SelfOnly capabilities left out, and
-//   - a directed announcement to this worker carrying the full contract.
-//
-// Because the worker is excluded from its own broadcast, it receives exactly
-// one self-sourced ready event, which is its complete view — so
-// handleWorkerReady can treat each ready event as that worker's whole contract
-// and replace it wholesale on re-announcement (no merge, no local seeding).
-func (w *BaseReasonWorker) broadcastReady() {
-	peerWatch := make([]map[string]any, 0, len(w.capabilities))
-	for _, rc := range w.capabilities {
-		if rc.cap.SelfOnly {
-			continue
+// watch is the single event loop goroutine. It blocks on busCh waiting
+// for events, calls process() to handle them, and then calls tryReason()
+// which starts reasoning when needReason is set and no reasoning is running.
+func (w *BaseReasonWorker) watch(ctx context.Context, busCh <-chan event.Event) {
+	for {
+		select {
+		case evt := <-busCh:
+			w.process(ctx, evt)
+		case <-ctx.Done():
+			return
 		}
-		peerWatch = append(peerWatch, w.watchEntry(rc.cap))
+		w.tryReason(ctx)
 	}
-	presence := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "reason",
-		"watch":     peerWatch,
-	})
-	presence.ExcludeWorkerID = w.ID()
-	_ = w.Channel.Broadcast(context.Background(), presence)
+}
 
-	_ = w.Channel.Send(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "reason",
-		"watch":     w.watchEntries(),
-	}), w.ID())
+// tryReason is the decision gate. It is called after every process() in the
+// watch loop, and at the end of every reason(). If needReason is set and no
+// reasoning is running, it spawns a reasoning round on its own goroutine so
+// the watch event loop stays responsive while the LLM call is in flight.
+func (w *BaseReasonWorker) tryReason(ctx context.Context) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if !w.needReason || w.isReasoning {
+		return
+	}
+
+	w.isReasoning = true
+	w.needReason = false
+
+	go w.reason(ctx)
 }
 
 // Stop cancels the worker's event watch.
@@ -389,26 +372,25 @@ func (w *BaseReasonWorker) Messages() []llm.Message {
 }
 
 // BaseReasonWorker is the reasoning mechanism shared by all reason-family
-// workers: it embeds worker.BaseWorker (id/subs/channel) and owns the working
+// workers: it embeds baseworker.BaseWorker (id/subs/channel) and owns the working
 // notes, the LLM call, budget, tool table and the run flags of one reasoning
 // round. It knows how to reason, not what to attend to.
 type BaseReasonWorker struct {
-	worker.BaseWorker
+	baseworker.BaseWorker
 	mu sync.Mutex
 
 	llmProvider     llm.LLMProvider
 	providerSources ProviderSources
 	providerName    string // active provider name (status reporting)
 	providerModel   string // active provider model (status reporting)
-	transcript      Transcript
-	tools           map[string]worker.Tool          // tools from the bus + built-ins; read by dispatch
-	discovered      []DiscoveredCap                 // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
-	capabilities    map[string]registeredCapability // capability registry (the extension point)
-	toolListBuilder ToolListBuilder                 // LLM tool list policy (extension point)
+	transcript      transcript.Transcript
+	tools           map[string]worker.Tool // tools from the bus + built-ins; read by dispatch
+	discovered      []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
+	toolListBuilder ToolListBuilder        // LLM tool list policy (extension point)
 	programs        []program.Program
 	publishMap      map[string][]EventPublish // worker ID -> published events
 	toolNameMap     map[string]string         // encoded LLM-facing name -> original declared name
-	toolCallTracker *ToolCallTracker
+	requestTracker  *requesttracker.RequestTracker
 	// toolCallSeq mints globally-unique tool-call ids for calls whose model
 	// omitted one. It must be monotonic across rounds (not per-turn) because the
 	// tracker persists pending calls between rounds — a per-turn "call_0" would
@@ -422,10 +404,10 @@ type BaseReasonWorker struct {
 	started                 bool
 	needReason              bool
 	isReasoning             bool
-	activeTimeout           string       // current round's set_tool_timeout call_id, "" if none
-	activeTimeoutProvider   string       // worker that set the active timeout (set time), "" if none
-	interruptReason         PreemptCause // why the current reasoning round was interrupted
-	immediateReasoningCause PreemptCause // why the next reasoning round was triggered
+	activeTimeout           string                      // current round's set_tool_timeout call_id, "" if none
+	activeTimeoutProvider   string                      // worker that set the active timeout (set time), "" if none
+	interruptReason         requesttracker.PreemptCause // why the current reasoning round was interrupted
+	immediateReasoningCause requesttracker.PreemptCause // why the next reasoning round was triggered
 	currentTraceID          string
 
 	// Rate-limit backoff state (429 handling); guarded by w.mu
@@ -435,10 +417,10 @@ type BaseReasonWorker struct {
 	cancelRun    context.CancelFunc
 
 	// Context budget state; guarded by w.mu
-	contextWindow            int
-	budgetSoft               float64
-	budgetHard               float64
-	keepTail                 int
-	lastUsageTokens          int
-	budgetReminded           bool
+	contextWindow   int
+	budgetSoft      float64
+	budgetHard      float64
+	keepTail        int
+	lastUsageTokens int
+	budgetReminded  bool
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	llm "github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
 // fakeSources is a canned ProviderSources used to exercise switching.
@@ -61,7 +62,7 @@ func newSwitchableWorker(ch *testChannel) (*BaseReasonWorker, *staticProvider, *
 // the worker to it, rather than silently reverting to the configured default.
 func TestSnapshotRoundTripPreservesProvider(t *testing.T) {
 	w, _, _ := newSwitchableWorker(newTestChannel())
-	w.transcript.Apply(InputPatch{Messages: []llm.Message{
+	w.transcript.Apply(transcript.InputPatch{Messages: []llm.Message{
 		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "hello"}}},
 	}})
 	w.mu.Lock()
