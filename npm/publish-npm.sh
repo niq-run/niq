@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generate and publish npm packages from a goreleaser dist/ directory.
 #
-# Usage: ./scripts/publish-npm.sh <version> <dist-dir> [--dry-run]
+# Usage: ./npm/publish-npm.sh <version> <dist-dir> [--dry-run]
 #
 # Layout produced:
 #   <dist>/npm/@54c1/niq-<os>-<arch>/   platform subpackages (binary only)
@@ -79,10 +79,10 @@ done
 mkdir -p "${OUT}/niq"
 mkdir -p "${OUT}/niq/bin"
 cp "${ROOT}/npm/bin/niq.js" "${OUT}/niq/bin/"
-node - "${VERSION}" "${OUT}" <<'EOF'
-const [version, out] = process.argv.slice(2);
+node - "${VERSION}" "${OUT}" "${ROOT}" <<'EOF'
+const [version, out, root] = process.argv.slice(2);
 const fs = require('fs');
-const pkg = JSON.parse(fs.readFileSync('npm/package.json', 'utf8'));
+const pkg = JSON.parse(fs.readFileSync(`${root}/npm/package.json`, 'utf8'));
 pkg.version = version;
 for (const dep of Object.keys(pkg.optionalDependencies || {})) {
   pkg.optionalDependencies[dep] = version;
