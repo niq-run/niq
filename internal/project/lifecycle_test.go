@@ -1,4 +1,4 @@
-package swarm
+package project
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 )
 
 // newTestEngine wires up a registry, engine and in-process listener exactly as
-// RunSwarm does, returning the build context, worker service and the store dir.
+// runAssembly does, returning the build context, worker service and the store dir.
 func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService, string) {
 	t.Helper()
 	dir := t.TempDir()

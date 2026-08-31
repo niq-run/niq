@@ -1,9 +1,9 @@
-// Control-layer HTTP service: the fixed-port (default :9527) control plane a
+// Control-plane HTTP service: the fixed-port (default :9527) control plane a
 // user opens when no project is attached. It serves the same SPA in "control"
 // mode — project management only — and can start a project, which runs as its
 // own process on its own dynamically-assigned bus/WebUI ports; the user is then
 // redirected to the project's WebUI.
-package swarm
+package control
 
 import (
 	"context"
@@ -20,7 +20,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/niq-run/niq/internal/swarm/webui"
+	"github.com/niq-run/niq/internal/project"
+	"github.com/niq-run/niq/internal/webui"
 )
 
 // ControlOptions configures the control-plane service.
@@ -34,7 +35,7 @@ func RunControl(opts ControlOptions) error {
 	defer cancel()
 	// Make sure the built-in project templates are on disk so the new-project
 	// dropdown has something to offer on first run.
-	if err := SeedTemplates(TemplatesDir()); err != nil {
+	if err := project.SeedTemplates(project.TemplatesDir()); err != nil {
 		log.Printf("[control] seed templates: %v", err)
 	}
 	return NewControl(opts.Addr).Start(ctx)
@@ -112,7 +113,7 @@ func (c *Control) Start(ctx context.Context) error {
 		c.server.Shutdown(shutdownCtx)
 	}()
 	log.Printf("[control] listening on %s", c.bound)
-	fmt.Printf("niq control listening at %s\n", localhostURL(c.bound))
+	fmt.Printf("niq control listening at %s\n", project.LocalhostURL(c.bound))
 	if err := c.server.Serve(c.listener); err != nil && err != stdhttp.ErrServerClosed {
 		return fmt.Errorf("control: %w", err)
 	}
@@ -122,7 +123,7 @@ func (c *Control) Start(ctx context.Context) error {
 // handleListTemplates returns the available project template names for the
 // new-project dropdown.
 func (c *Control) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-	names, err := ListTemplates()
+	names, err := project.ListTemplates()
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 500)
 		return
@@ -132,14 +133,14 @@ func (c *Control) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Reque
 
 // projectView augments a project definition with its live run state.
 type projectView struct {
-	Project
+	project.Project
 	Running bool `json:"running"`
 }
 
 // handleTemplateDetail returns a template's JSON content (its workers etc.).
 func (c *Control) handleTemplateDetail(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	name := r.PathValue("name")
-	raw, err := ReadTemplateRaw(TemplatesDir(), name)
+	raw, err := project.ReadTemplateRaw(project.TemplatesDir(), name)
 	if err != nil {
 		stdhttp.Error(w, "template not found", 404)
 		return
@@ -158,17 +159,17 @@ func (c *Control) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 		stdhttp.Error(w, "id and copy_from are required", 400)
 		return
 	}
-	src, err := ReadTemplateRaw(TemplatesDir(), body.CopyFrom)
+	src, err := project.ReadTemplateRaw(project.TemplatesDir(), body.CopyFrom)
 	if err != nil {
 		stdhttp.Error(w, "unknown template: "+body.CopyFrom, 400)
 		return
 	}
-	dest := TemplatePath(TemplatesDir(), body.ID)
+	dest := project.TemplatePath(project.TemplatesDir(), body.ID)
 	if _, err := os.Stat(dest); err == nil {
 		stdhttp.Error(w, "template already exists", 409)
 		return
 	}
-	if err := os.MkdirAll(TemplatesDir(), 0755); err != nil {
+	if err := os.MkdirAll(project.TemplatesDir(), 0755); err != nil {
 		stdhttp.Error(w, err.Error(), 500)
 		return
 	}
@@ -182,7 +183,7 @@ func (c *Control) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 // handleDeleteTemplate removes an on-disk template file.
 func (c *Control) handleDeleteTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	name := r.PathValue("name")
-	if err := os.Remove(TemplatePath(TemplatesDir(), name)); err != nil {
+	if err := os.Remove(project.TemplatePath(project.TemplatesDir(), name)); err != nil {
 		stdhttp.Error(w, "template not found", 404)
 		return
 	}
@@ -191,7 +192,7 @@ func (c *Control) handleDeleteTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 
 // handleListProjects returns the project definitions plus live run state.
 func (c *Control) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-	projects, err := ListProjects()
+	projects, err := project.ListProjects()
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 500)
 		return
@@ -223,7 +224,7 @@ func (c *Control) isRunning(id string) bool {
 	c.mu.Unlock()
 
 	// 2) Fall back to probing the persisted WebUI port (catches manual starts).
-	p, err := LoadProject(id)
+	p, err := project.LoadProject(id)
 	if err != nil || p.Ports.WebUI == 0 {
 		return false
 	}
@@ -242,7 +243,7 @@ func (c *Control) isRunning(id string) bool {
 // listening, so the response reflects a ready project.
 func (c *Control) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
-	if _, err := LoadProject(id); err != nil {
+	if _, err := project.LoadProject(id); err != nil {
 		stdhttp.Error(w, "project not found", 404)
 		return
 	}
@@ -299,12 +300,12 @@ func (c *Control) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Reque
 	if body.Template == "" {
 		body.Template = "default"
 	}
-	tmpl, err := LoadTemplate(TemplatesDir(), body.Template)
+	tmpl, err := project.LoadTemplate(project.TemplatesDir(), body.Template)
 	if err != nil {
 		stdhttp.Error(w, "unknown template: "+body.Template, 400)
 		return
 	}
-	if _, err := CreateProject(body.ID, tmpl); err != nil {
+	if _, err := project.CreateProject(body.ID, tmpl); err != nil {
 		stdhttp.Error(w, err.Error(), 409)
 		return
 	}
@@ -315,7 +316,7 @@ func (c *Control) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Reque
 // returns the resolved WebUI URL for the user to be redirected to.
 func (c *Control) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
-	if _, err := LoadProject(id); err != nil {
+	if _, err := project.LoadProject(id); err != nil {
 		stdhttp.Error(w, "project not found", 404)
 		return
 	}
@@ -328,7 +329,7 @@ func (c *Control) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Reques
 // force the fallback to a fresh random port each start (the visible "jumping").
 func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 	if c.isRunning(id) {
-		p, err := LoadProject(id)
+		p, err := project.LoadProject(id)
 		var webui string
 		if err == nil && p.Ports.WebUI != 0 {
 			webui = fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
@@ -336,8 +337,8 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"project":    id,
 			"already":    true,
-			"webui_url":  localhostURL(webui),
-			"webui_port": portOf(webui),
+			"webui_url":  project.LocalhostURL(webui),
+			"webui_port": project.PortOf(webui),
 		})
 		return
 	}
@@ -374,8 +375,8 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 	webUI := waitWebUIReady(id)
 	json.NewEncoder(w).Encode(map[string]any{
 		"project":    id,
-		"webui_url":  localhostURL(webUI),
-		"webui_port": portOf(webUI),
+		"webui_url":  project.LocalhostURL(webUI),
+		"webui_port": project.PortOf(webUI),
 		"bus_port":   resolvedBus(id),
 	})
 }
@@ -402,7 +403,7 @@ func corsControl(next stdhttp.Handler) stdhttp.Handler {
 func waitWebUIReady(id string) string {
 	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
-		if p, err := LoadProject(id); err == nil && p.Ports.WebUI != 0 {
+		if p, err := project.LoadProject(id); err == nil && p.Ports.WebUI != 0 {
 			addr := "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI)
 			if conn, derr := net.DialTimeout("tcp", addr, 300*time.Millisecond); derr == nil {
 				conn.Close()
@@ -415,7 +416,7 @@ func waitWebUIReady(id string) string {
 }
 
 func resolvedBus(id string) int {
-	if p, err := LoadProject(id); err == nil {
+	if p, err := project.LoadProject(id); err == nil {
 		return p.Ports.Bus
 	}
 	return 0

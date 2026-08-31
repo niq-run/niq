@@ -28,7 +28,7 @@ type Identity struct {
 	WorkerID string
 
 	// Type is the worker type label (e.g. "reason", "workspace", "hiw", "timer").
-	// Populated at registration time by the swarm assembly.
+	// Populated at registration time by the project assembly.
 	Type string
 
 	// Credential is used to authenticate the worker at connect time.

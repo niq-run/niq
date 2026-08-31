@@ -14,10 +14,10 @@ import (
 	"github.com/niq-run/niq/pkg/service/workerhost"
 )
 
-// EnsureLLMConfigured gates swarm startup on an LLM provider being configured
+// EnsureLLMConfigured gates project startup on an LLM provider being configured
 // when the persisted worker set includes a reason worker. On a missing or
 // empty config it seeds the example provider.json and returns an actionable
-// error, so the swarm exits before any worker starts.
+// error, so the project exits before any worker starts.
 func EnsureLLMConfigured(svc *workerhost.WorkerService) error {
 	recs, err := svc.LoadAllWorkers()
 	if err != nil {
@@ -42,11 +42,11 @@ func EnsureLLMConfigured(svc *workerhost.WorkerService) error {
 	return fmt.Errorf("no LLM provider configured: edit %s and re-run", Path())
 }
 
-// swarmProviderSources exposes every provider configured in provider.json. The
+// providerSources exposes every provider configured in provider.json. The
 // initial provider honors any explicit spawn-time selection (the legacy
 // provider/api_key/base_url/model params) and otherwise falls back to the
 // config's active/first provider.
-type swarmProviderSources struct {
+type providerSources struct {
 	// force is the explicit spawn-time selection, if any. nil selects the
 	// config default.
 	force *forcedProvider
@@ -59,20 +59,20 @@ type forcedProvider struct {
 	model    string
 }
 
-// NewSwarmProviderSources returns a reason.ProviderSources backed by
+// NewProviderSources returns a reason.ProviderSources backed by
 // provider.json. An all-empty selection picks the config default; any non-empty
 // spawn-time argument (provider name/type, api_key, base_url, model) forces a
 // specific initial provider.
-func NewSwarmProviderSources(provider, apiKey, baseURL, model string) reason.ProviderSources {
+func NewProviderSources(provider, apiKey, baseURL, model string) reason.ProviderSources {
 	f := &forcedProvider{provider: provider, apiKey: apiKey, baseURL: baseURL, model: model}
 	if provider == "" && apiKey == "" && baseURL == "" && model == "" {
-		return &swarmProviderSources{force: nil}
+		return &providerSources{force: nil}
 	}
-	return &swarmProviderSources{force: f}
+	return &providerSources{force: f}
 }
 
 // InitialProviderInfo resolves the initially active provider's name and model,
-// mirroring NewSwarmProviderSources' forced-vs-default selection, so the
+// mirroring NewProviderSources' forced-vs-default selection, so the
 // reason worker can report its current choice via worker.status.
 func InitialProviderInfo(provider, apiKey, baseURL, model string) (string, string) {
 	if provider != "" || apiKey != "" || baseURL != "" || model != "" {
@@ -91,16 +91,16 @@ func InitialProviderInfo(provider, apiKey, baseURL, model string) (string, strin
 
 // Default returns the initially active provider: the explicit spawn-time
 // selection when given, otherwise the config's active (or first) provider.
-func (s *swarmProviderSources) Default() llm.LLMProvider {
+func (s *providerSources) Default() llm.LLMProvider {
 	if s.force != nil {
 		return providerFromArgs(s.force.provider, s.force.apiKey, s.force.baseURL, s.force.model)
 	}
 	p, ok := Default()
 	if !ok {
-		log.Printf("[swarm] provider sources: no default provider configured (provider.json missing or empty)")
+		log.Printf("[project] provider sources: no default provider configured (provider.json missing or empty)")
 		return nil
 	}
-	log.Printf("[swarm] resolved default provider: name=%s type=%s model=%s base_url=%s",
+	log.Printf("[project] resolved default provider: name=%s type=%s model=%s base_url=%s",
 		p.Name, p.Type, p.ResolveDefaultModel(), p.BaseURL)
 	return Build(p)
 }
@@ -110,17 +110,17 @@ func (s *swarmProviderSources) Default() llm.LLMProvider {
 // model is not pre-validated against the model list — an unknown model is
 // rejected by the provider's API call itself, which lets models discovered only
 // via the provider API (see List) be selected at runtime.
-func (s *swarmProviderSources) Build(name, model string) (llm.LLMProvider, error) {
+func (s *providerSources) Build(name, model string) (llm.LLMProvider, error) {
 	p, ok := Find(name)
 	if !ok {
-		log.Printf("[swarm] provider switch failed: unknown provider %q", name)
+		log.Printf("[project] provider switch failed: unknown provider %q", name)
 		return nil, fmt.Errorf("provider: unknown provider %q", name)
 	}
 	effModel := model
 	if effModel == "" {
 		effModel = p.ResolveDefaultModel()
 	}
-	log.Printf("[swarm] building provider: name=%s type=%s model=%s base_url=%s",
+	log.Printf("[project] building provider: name=%s type=%s model=%s base_url=%s",
 		name, p.Type, effModel, p.BaseURL)
 	return BuildWithOverrides(p, "", "", model), nil
 }
@@ -129,7 +129,7 @@ func (s *swarmProviderSources) Build(name, model string) (llm.LLMProvider, error
 // the configured models merged (best-effort) with the models reported by the
 // provider's API; an API failure falls back to the configured list alone.
 // ModelDetails carries per-model metadata (e.g. ContextWindow) when available.
-func (s *swarmProviderSources) List() []reason.ProviderInfo {
+func (s *providerSources) List() []reason.ProviderInfo {
 	cfg, err := Load()
 	if err != nil {
 		return nil
@@ -162,7 +162,7 @@ const listModelsTimeout = 3 * time.Second
 // the provider's configured context_window. If the provider API is
 // unreachable or errors, the configured models (with config context window) are
 // returned so the provider list query still works offline.
-func (s *swarmProviderSources) modelsFor(p Entry) []llm.ModelInfo {
+func (s *providerSources) modelsFor(p Entry) []llm.ModelInfo {
 	configModels := p.Models
 	details := make([]llm.ModelInfo, 0, len(configModels))
 	seen := make(map[string]struct{}, len(configModels))
@@ -187,7 +187,7 @@ func (s *swarmProviderSources) modelsFor(p Entry) []llm.ModelInfo {
 	defer cancel()
 	apiModels, err := Build(p).ListModels(ctx)
 	if err != nil {
-		log.Printf("[swarm] provider %q: model list from API unavailable (%v), using configured list", p.Name, err)
+		log.Printf("[project] provider %q: model list from API unavailable (%v), using configured list", p.Name, err)
 		return details
 	}
 	for _, m := range apiModels {

@@ -11,7 +11,7 @@ import (
 )
 
 // memStore is an in-memory WorkerStore for tests. It avoids importing the
-// swarm package (which owns the file-backed store), since swarm imports this
+// project package (which owns the file-backed store), since project imports this
 // package.
 type memStore struct {
 	cfgs map[string]worker.WorkerConfig

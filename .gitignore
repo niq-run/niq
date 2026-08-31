@@ -7,4 +7,4 @@ bin/
 dist/
 
 # frontend dependencies / build caches
-internal/swarm/webui/assets/node_modules/
+internal/webui/assets/node_modules/

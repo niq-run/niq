@@ -1,4 +1,4 @@
-package swarm
+package project
 
 import (
 	"os"
@@ -15,9 +15,9 @@ func setupProjectsRoot(t *testing.T) string {
 	return filepath.Join(home, ".niq", "projects")
 }
 
-// fakeTemplate returns a small SwarmConfig usable as a project template.
-func fakeTemplate() *SwarmConfig {
-	return &SwarmConfig{Workers: []WorkerConfig{
+// fakeTemplate returns a small TemplateConfig usable as a project template.
+func fakeTemplate() *TemplateConfig {
+	return &TemplateConfig{Workers: []WorkerConfig{
 		{Type: "hiw", ID: "default-hiw"},
 		{Type: "reason", ID: "niq", Provider: "volcan-ark", Model: "deepseek-v4-flash"},
 	}}
@@ -102,7 +102,7 @@ func TestSaveProjectMutatesArchived(t *testing.T) {
 
 func TestCreateProjectUnmanagedWorker(t *testing.T) {
 	setupProjectsRoot(t)
-	tmpl := &SwarmConfig{Workers: []WorkerConfig{
+	tmpl := &TemplateConfig{Workers: []WorkerConfig{
 		{Type: "reason", ID: "niq"},
 		{Type: "mcp", ID: "mcp-fs", Managed: boolPtr(false),
 			Command: []string{"npx", "mcp-fs"}, Env: map[string]string{"K": "V"}, Cwd: "/tmp"},

@@ -16,7 +16,7 @@ type WorkerRecord struct {
 
 // WorkerStore is the persistence backend for managed workers. WorkerService
 // calls Save* on every lifecycle transition and LoadAll on recovery. The
-// concrete implementation lives in the assembly layer (swarm), which owns the
+// concrete implementation lives in the assembly layer (project), which owns the
 // storage layout — workerhost only depends on this contract.
 type WorkerStore interface {
 	// SaveConfig writes the worker's serializable definition.

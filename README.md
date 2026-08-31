@@ -19,7 +19,7 @@ Core insight: **collaboration is extension.** niq grows not by adding new abstra
 ```
 core/         interfaces & types (contracts, not implementations)
 pkg/          implementations (workers, services, bus, transports)
-internal/     swarm assembly, WebUI
+internal/     control plane, project runtime, WebUI
 cmd/          CLI entry point
 doc/          design docs & dev notes
 ```
@@ -38,18 +38,16 @@ doc/          design docs & dev notes
 ### Run
 
 ```sh
-# Start with the built-in "dev" preset (WebUI listens on :19763 by default)
+# Start the control plane (listens on :9527 by default)
 cd niq && go run ./cmd/niq/
 
 # Or build first
 make build
 ./bin/niq
 
-# Start from a custom YAML config
-./bin/niq swarm --config path/to/config.yaml
-
-# Override the WebUI address
-./bin/niq swarm --webui :19763
+# Then create and run a project from the WebUI, or from the CLI:
+./bin/niq project create my-project
+./bin/niq project run my-project
 ```
 
 Once started, open <http://localhost:19763> for the WebUI — chat, inspect events, and view workers.
