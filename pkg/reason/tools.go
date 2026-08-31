@@ -129,7 +129,7 @@ func (w *BaseReasonWorker) sendToolRequests(target, callerID string, calls []llm
 	}
 }
 
-// replyUnknownTool replies to a tool call no capability handled.
+// replyUnknownTool replies to a tool call no registered extension handled.
 func (w *BaseReasonWorker) replyUnknownTool(tc baseworker.ToolCall) {
 	w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "Unknown tool: "+tc.Name, tc.TraceID)
 }

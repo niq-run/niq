@@ -1,7 +1,8 @@
-// Transcript and the sealed TranscriptPatch algebra: the context-construction
-// contract a reasoning worker folds into. The godoc for the package lives in
-// worker.go; this file is the transcript's interface plus the inputs that fold
-// into it, and the tool-pairing invariant that constrains them.
+// Package transcript is the context-construction core of a reasoning worker:
+// the Transcript interface and the sealed TranscriptPatch algebra (the inputs
+// that fold into it), plus the default AccumulateTranscript implementation in
+// transcript_accumulate.go. This file is the interface plus the patch variants
+// and the tool-pairing invariant that constrains them.
 package transcript
 
 import "github.com/niq-run/niq/core/llm"

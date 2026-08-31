@@ -2,7 +2,7 @@
 //
 // process routes a single event to one handler; each handler
 // converts the event into a transcript input. This is the "what to
-// do with an event" half of the watch loop (the loop itself lives in watch.go).
+// do with an event" half of the event loop (the loop itself lives in worker.go).
 //
 // Input modes form a spectrum of increasing intrusion:
 //

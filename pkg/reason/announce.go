@@ -4,8 +4,8 @@
 // contracts.
 //
 // Note on naming: the announcement payload's field is literally "watch", so
-// the rendering helpers below keep that word. They are unrelated to watch.go,
-// which is the inbound event loop that consumes events.
+// the rendering helpers below keep that word. They are unrelated to the
+// inbound event loop (worker.go) that consumes events.
 package reason
 
 import (
