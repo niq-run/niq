@@ -22,17 +22,6 @@ import (
 	"github.com/niq-run/niq/pkg/baseworker"
 )
 
-// cloneParams returns a shallow copy of a parameter map, so a caller can add
-// or delete a key (e.g. folding in / stripping out a discriminator) without
-// mutating the original schema it clones.
-func cloneParams(p map[string]any) map[string]any {
-	out := make(map[string]any, len(p))
-	for k, v := range p {
-		out[k] = v
-	}
-	return out
-}
-
 // ToolListBuilder produces the LLM tool list from the discovered capability
 // universe. Extensions carry no exposure marks — the builder decides, by its
 // own policy, which capabilities the LLM sees and under what names. This is an
@@ -132,4 +121,15 @@ func (w *BaseReasonWorker) sendToolRequests(target, callerID string, calls []llm
 // replyUnknownTool replies to a tool call no registered extension handled.
 func (w *BaseReasonWorker) replyUnknownTool(tc baseworker.ToolCall) {
 	w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "Unknown tool: "+tc.Name, tc.TraceID)
+}
+
+// cloneParams returns a shallow copy of a parameter map, so a caller can add
+// or delete a key (e.g. folding in / stripping out a discriminator) without
+// mutating the original schema it clones.
+func cloneParams(p map[string]any) map[string]any {
+	out := make(map[string]any, len(p))
+	for k, v := range p {
+		out[k] = v
+	}
+	return out
 }
