@@ -62,7 +62,7 @@ type DiscoveredWorker struct {
 // DiscoveredWorkers aggregates the discovered tools and published events by
 // provider — the payload behind list_workers. It is a read-only view of the
 // bus-discovered state, not a worker strategy and not this worker's own state
-// Snapshot: the list_workers capability (pkg/worker/reason) calls it and sends
+// Snapshot: the list_workers extension (pkg/worker/reason) calls it and sends
 // the result.
 func (w *BaseReasonWorker) DiscoveredWorkers() []DiscoveredWorker {
 	providers := make(map[string]*DiscoveredWorker)

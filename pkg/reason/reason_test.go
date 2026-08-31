@@ -245,7 +245,7 @@ func (p *summarizeProvider) prompt() string {
 }
 
 // TestSoftBudgetInjectsReminder verifies crossing the soft threshold appends
-// exactly one system reminder per crossing, and no compaction runs.
+// exactly one system reminder per crossing, and no compression event is emitted.
 func TestSoftBudgetInjectsReminder(t *testing.T) {
 	prov := &summarizeProvider{summarized: "unused",
 		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop",
@@ -269,8 +269,8 @@ func TestSoftBudgetInjectsReminder(t *testing.T) {
 }
 
 // TestHardBudgetEmitsMetaRequest verifies crossing the hard threshold routes
-// compaction through a worker.update meta request to itself (single audit
-// path), not a direct compactor call.
+// a compression request through a worker.update meta request to itself (single audit
+// path), not a direct mechanism edit — the worker shrinks its own transcript.
 func TestHardBudgetEmitsMetaRequest(t *testing.T) {
 	prov := &summarizeProvider{summarized: "hard-budget",
 		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}

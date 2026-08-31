@@ -1,18 +1,25 @@
 // Package reason provides the reasoning mechanism shared by reason-family
-// workers. It is the machinery a reasoning node needs in one piece: the
-// reasoning round (an LLM call + lifecycle broadcasts), the transcript, budget
-// and compaction, tool-call tracking and dispatch, and system-prompt
-// construction.
+// workers: the reasoning round (an LLM call + lifecycle broadcasts), event
+// dispatch, the context-window pressure that fires the context.compress
+// convention, capability discovery and announcement over the bus, provider
+// management, and system-prompt construction.
+//
+// Two self-contained sub-domains live in subpackages: the transcript
+// construction core (pkg/reason/transcript) and the outgoing tool.request
+// tracker (pkg/reason/requesttracker). The generic worker base and its
+// extension registry live in pkg/baseworker.
 //
 // This package deliberately contains no notion of *what* the worker is
 // attending to. The split is:
 //   - mechanism (here): how a reasoning node reasons — invokes the LLM, manages
-//     its working notes, shrinks them against the finite window, dispatches
+//     its working notes, watches the context window (emitting the
+//     context.compress convention under pressure), discovers and dispatches
 //     tools, renders its system prompt. Any reasoning node needs these, no
 //     matter what it is pointed at.
 //   - attention (the embedding worker): what the node subscribes to, what its
-//     built-in tools are, what its event converters produce, what its programs
-//     tell it to preserve when compacting. These reflect a specific goal.
+//     extensions are, what its event converters produce, what its programs
+//     tell it to preserve when it shrinks its transcript. These reflect a
+//     specific goal.
 //
 // An embedding worker composes one goal-specific attention onto this shared
 // mechanism.
