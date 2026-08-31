@@ -290,13 +290,13 @@ func TestHardBudgetEmitsMetaRequest(t *testing.T) {
 	w.handleContextBudget(context.Background(), llm.Message{Usage: &llm.Usage{InputTokens: 990, OutputTokens: 5}})
 
 	var found bool
-	for _, e := range ch.eventsOf(event.TypeWorkerUpdate) {
-		if op, _ := e.Payload["op"].(string); op == "context.compress" {
+	for _, e := range ch.eventsOf(TypeContextCompress) {
+		if e.Type == TypeContextCompress {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("hard budget should emit a worker.update compress request, got %+v", ch.eventsOf(event.TypeWorkerUpdate))
+		t.Fatalf("hard budget should emit a context.compress event, got %+v", ch.eventsOf(TypeContextCompress))
 	}
 }
 

@@ -177,7 +177,7 @@ func TestNewWorkerDefaults(t *testing.T) {
 	for _, s := range subs {
 		got[string(s.Type)] = true
 	}
-	for _, want := range []string{"tool.completed", "tool.failed", "tool.rejected", "tool.request",
+	for _, want := range []string{"request.completed", "request.failed", "request.rejected", "tool.request",
 		"worker.ready", "worker.gone", "worker.discover", "worker.input", "worker.abort",
 		"timer.timeout", "timer.reminder"} {
 		if !got[want] {

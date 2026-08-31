@@ -56,6 +56,15 @@ type ProviderSources interface {
 	List() []ProviderInfo
 }
 
+// The provider management extensions use their own event types rather than
+// multiplexing inside worker.update/worker.query — these are reason-worker
+// specific, so they live here, not in core/event.
+const (
+	TypeProviderSwitch  event.EventType = "provider.switch"
+	TypeProviderList    event.EventType = "provider.list"
+	TypeProviderCurrent event.EventType = "provider.current"
+)
+
 // registerBaseExtensions registers the provider management extensions every
 // reason worker has (provider.switch / provider.list / provider.current).
 // Reason-family workers extend or replace these via Register; the default
@@ -67,7 +76,7 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 	}
 
 	w.Register(baseworker.Extension{
-		Event: event.TypeWorkerUpdate, KeyField: "op", Key: "provider.switch",
+		Event:       TypeProviderSwitch,
 		Description: "Switch active LLM provider/model.",
 		Parameters: obj(map[string]any{
 			"provider": map[string]any{"type": "string", "description": "Provider name"},
@@ -78,14 +87,14 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 	})
 
 	w.Register(baseworker.Extension{
-		Event: event.TypeWorkerQuery, KeyField: "subject", Key: "provider.list",
+		Event:       TypeProviderList,
 		Description: "List available providers and the current selection.",
 	}, func(evt event.Event) {
 		w.handleStatusQuery(evt)
 	})
 
 	w.Register(baseworker.Extension{
-		Event: event.TypeWorkerQuery, KeyField: "subject", Key: "provider.current",
+		Event:       TypeProviderCurrent,
 		Description: "Current provider/model.",
 	}, func(evt event.Event) {
 		w.handleStatusQuery(evt)
@@ -146,18 +155,17 @@ func (w *BaseReasonWorker) resolveContextWindow() {
 	}
 }
 
-// handleSetLLMProvider applies a worker.update op=provider.switch: it builds
-// the named provider with an explicit model from the configured sources and
-// atomically rebinds this worker's active provider under the lock. Both
-// provider and model are required — an empty model is rejected rather than
-// silently defaulting. The switch takes effect from the next reasoning round.
-// Emits a worker.updated completion so the requester can observe success/failure.
+// handleSetLLMProvider applies a provider.switch request: it builds the named
+// provider with an explicit model from the configured sources and atomically
+// rebinds this worker's active provider under the lock. Both provider and
+// model are required — an empty model is rejected rather than silently
+// defaulting. The switch takes effect from the next reasoning round. Answers
+// with request.completed / request.failed echoing the request's id.
 func (w *BaseReasonWorker) handleSetLLMProvider(evt event.Event) {
 	name, _ := evt.Payload["provider"].(string)
 	model, _ := evt.Payload["model"].(string)
 
-	payload := map[string]any{"op": "provider.switch", "provider": name, "model": model}
-
+	payload := map[string]any{"provider": name, "model": model}
 	var err error
 	switch {
 	case name == "":
@@ -167,59 +175,49 @@ func (w *BaseReasonWorker) handleSetLLMProvider(evt event.Event) {
 	default:
 		err = w.setActiveProvider(name, model)
 	}
-
-	if err != nil {
-		payload["done"] = false
-		payload["error"] = err.Error()
-	} else {
-		// No needReason here: the rebinding above already applies to every
-		// later round, and scheduling one would make the worker answer
-		// immediately with the new model — a side effect of what is meant to be
-		// a configuration change. The new provider/model is picked up by the
-		// next round the conversation itself asks for.
-		payload["done"] = true
-	}
-	log.Printf("[reason %s] set provider=%s model=%s done=%t err=%v", w.ID(), name, model, payload["done"], err)
-	w.emitWorkerUpdated(evt, payload)
+	log.Printf("[reason %s] set provider=%s model=%s err=%v", w.ID(), name, model, err)
+	w.replyMeta(evt, payload, err)
 }
 
-// emitWorkerUpdated broadcasts a worker.updated completion for a meta op,
-// carrying the caller's trace id.
-func (w *BaseReasonWorker) emitWorkerUpdated(evt event.Event, payload map[string]any) {
-	payload["op"] = payload["op"].(string)
-	done := event.New(event.TypeWorkerUpdated, w.ID(), payload)
+// replyMeta answers a meta invocation with request.completed (nil err) or
+// request.failed (err), echoing the request's id and trace. Broadcast like the
+// worker.updated / worker.status completions it replaces, so bus subscribers
+// (e.g. the webui) still observe them.
+func (w *BaseReasonWorker) replyMeta(evt event.Event, payload map[string]any, err error) {
+	typ := event.TypeRequestCompleted
+	if err != nil {
+		typ = event.TypeRequestFailed
+		payload["error"] = err.Error()
+	}
+	done := event.New(typ, w.ID(), payload)
+	done.RequestId = evt.RequestId
 	done.TraceID = evt.TraceID
 	_ = w.Channel.Broadcast(context.Background(), done)
 }
 
-// handleStatusQuery serves a worker.query request: subject=provider.list
-// returns the configured providers (and their models) plus the worker's
-// current provider/model; subject=provider.current returns just the current
-// choice. Both reply with a worker.status snapshot carrying the same subject.
-// Async — the requester observes the reply on the bus.
+// handleStatusQuery serves a provider.list / provider.current request: the
+// former returns the configured providers (and their models) plus the current
+// choice, the latter just the current choice. Both reply with
+// request.completed echoing the request's id. Async — the requester observes
+// the reply on the bus.
 func (w *BaseReasonWorker) handleStatusQuery(evt event.Event) {
-	subject, _ := evt.Payload["subject"].(string)
-
-	payload := map[string]any{"subject": subject}
-	switch subject {
-	case "provider.list":
+	payload := map[string]any{}
+	switch evt.Type {
+	case TypeProviderList:
 		payload["providers"] = w.availableProviders()
 		payload["current"] = map[string]any{
 			"provider": w.providerName,
 			"model":    w.providerModel,
 		}
-	case "provider.current":
+	case TypeProviderCurrent:
 		payload["provider"] = w.providerName
 		payload["model"] = w.providerModel
 	default:
-		payload["done"] = false
-		payload["error"] = fmt.Sprintf("unknown worker.query subject: %q", subject)
+		w.replyMeta(evt, payload, fmt.Errorf("unknown provider query event: %q", evt.Type))
+		return
 	}
-
-	done := event.New(event.TypeWorkerStatus, w.ID(), payload)
-	done.TraceID = evt.TraceID
-	_ = w.Channel.Broadcast(context.Background(), done)
-	log.Printf("[reason %s] status_query subject=%s", w.ID(), subject)
+	w.replyMeta(evt, payload, nil)
+	log.Printf("[reason %s] provider query %s", w.ID(), evt.Type)
 }
 
 // availableProviders returns the configured LLM providers and their models

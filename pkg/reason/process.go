@@ -44,16 +44,6 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 		}
 	case evt.Type == event.TypeWorkerAbort:
 		w.handleAbort(evt)
-	case evt.Type == event.TypeWorkerUpdate:
-		// Extension channel: route to the registered handler by op.
-		if !w.DispatchExtension(evt) {
-			log.Printf("[reason %s] no extension for worker.update op=%v", w.ID(), evt.Payload["op"])
-		}
-	case evt.Type == event.TypeWorkerQuery:
-		// Extension channel: route to the registered handler by subject.
-		if !w.DispatchExtension(evt) {
-			log.Printf("[reason %s] no extension for worker.query subject=%v", w.ID(), evt.Payload["subject"])
-		}
 	case evt.Type == "timer.timeout":
 		w.handleTimeout(evt)
 	case evt.Type == "timer.reminder":
@@ -73,30 +63,35 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 		}
 	case evt.Type == event.TypeWorkerInput:
 		w.handleInput(evt)
+	default:
+		// Extension channel for any other event type: worker.update /
+		// worker.query and the meta event types (context.compress, provider.*)
+		// all route here to the registered extension by event type (and
+		// discriminator, if the extension uses one).
+		if !w.DispatchExtension(evt) {
+			log.Printf("[reason %s] no extension for event %s", w.ID(), evt.Type)
+		}
 	}
 }
 
-// ContextCompressOpEvent is the convention every reason worker honors: under
-// window pressure the mechanism emits a worker.update with this op, and the
-// worker responds by shrinking its own transcript. The mechanism fires the
-// event; it never performs or books the edit itself — that is the worker's
-// strategy, reached by handling this event. Rotate and any other context op
-// are the worker's own extras; the mechanism does not emit them.
-//
-// The concrete worker registers its compress extension under this same key
-// (rather than hardcoding the literal), so the convention has a single source
-// of truth and renaming it cannot desynchronize the two sides.
-const ContextCompressOpEvent = "context.compress"
+// TypeContextCompress is the convention every reason worker honors: under
+// window pressure the mechanism emits this event, and the worker responds by
+// shrinking its own transcript. The mechanism fires the event; it never
+// performs or books the edit itself — that is the worker's strategy, reached
+// by handling this event. Rotate and any other context op are the worker's own
+// extras (pkg/worker/reason), not emitted by the mechanism. This is a
+// reason-worker-specific event type, so it lives here rather than in
+// core/event.
+const TypeContextCompress event.EventType = "context.compress"
 
-// emitContextCompress sends a worker.update event to this worker, requesting
-// the context.compress convention operation through the bus for audit — the
-// single path every compress trigger converges on. The mechanism only ever
-// auto-emits this one convention event; the concrete worker implements the
-// shrink strategy and does its own bookkeeping. Lock need not be held
-// specially; the event is queued to self and handled asynchronously by process.
+// emitContextCompress sends the context.compress convention event to this
+// worker through the bus for audit — the single path every compress trigger
+// converges on. The mechanism only ever auto-emits this one convention event;
+// the concrete worker implements the shrink strategy and does its own
+// bookkeeping. Lock need not be held specially; the event is queued to self
+// and handled asynchronously by process.
 func (w *BaseReasonWorker) emitContextCompress(ctx context.Context) {
-	args := map[string]any{"op": ContextCompressOpEvent}
-	evt := event.New(event.TypeWorkerUpdate, w.ID(), args)
+	evt := event.New(TypeContextCompress, w.ID(), nil)
 	evt.TraceID = w.currentTraceID
 	_ = w.Channel.Send(ctx, evt, w.ID())
 }
@@ -173,7 +168,7 @@ func (w *BaseReasonWorker) handleReminder(evt event.Event) {
 func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	// Normal resolution of a Pending call.
 	if w.requestTracker.HandleResponse(evt) {
-		callID, _ := evt.Payload["call_id"].(string)
+		callID := evt.RequestId
 		if callID != "" {
 			name, _ := evt.Payload["name"].(string)
 			text, isErr := resultOutcome(evt)
@@ -189,7 +184,7 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 
 	// Late result for a Parked call.
 	if parked := w.requestTracker.ResolveLate(evt); parked != nil {
-		callID, _ := evt.Payload["call_id"].(string)
+		callID := evt.RequestId
 		name, _ := evt.Payload["name"].(string)
 		if callID != "" && name != "" {
 			if text, _ := resultOutcome(evt); text != "" {
@@ -241,9 +236,8 @@ func (w *BaseReasonWorker) recallToolCalls(tcs []*requesttracker.TrackedRequest)
 
 	for target, callIDs := range byTarget {
 		for _, callID := range callIDs {
-			evt := event.New(event.TypeToolCancel, w.ID(), map[string]any{
-				"call_id": callID,
-			})
+			evt := event.New(event.TypeRequestCancel, w.ID(), nil)
+			evt.RequestId = callID
 			evt.TraceID = w.currentTraceID
 			_ = w.Channel.Send(context.Background(), evt, target)
 		}
@@ -324,10 +318,10 @@ func (w *BaseReasonWorker) cancelTimeout() {
 		return
 	}
 	timerID := w.activeTimeout
-	evt := event.New(event.TypeToolCancel, w.ID(), map[string]any{
-		"call_id":  timerID + "-cancel",
+	evt := event.New(event.TypeRequestCancel, w.ID(), map[string]any{
 		"timer_id": timerID,
 	})
+	evt.RequestId = timerID + "-cancel"
 	_ = w.Channel.Send(context.Background(), evt, w.activeTimeoutProvider)
 
 	w.activeTimeout = ""
@@ -339,7 +333,7 @@ func (w *BaseReasonWorker) cancelTimeout() {
 // isToolResultEvent reports whether the given event type is a tool
 // lifecycle event consumed by the LLM worker.
 func isToolResultEvent(typ event.EventType) bool {
-	return typ == event.TypeToolCompleted || typ == event.TypeToolFailed || typ == event.TypeToolRejected
+	return typ == event.TypeRequestCompleted || typ == event.TypeRequestFailed || typ == event.TypeRequestRejected
 }
 
 // convertEvent routes an event through the registered EventConverters.
@@ -390,15 +384,15 @@ func DefaultConverter(evt event.Event) []llm.Message {
 // tool result event. Used by both the normal-resolution and late-result paths.
 func resultOutcome(evt event.Event) (string, bool) {
 	switch evt.Type {
-	case event.TypeToolCompleted:
+	case event.TypeRequestCompleted:
 		if r, ok := evt.Payload["result"]; ok {
 			return fmt.Sprintf("%v", r), false
 		}
-	case event.TypeToolFailed:
+	case event.TypeRequestFailed:
 		if e, ok := evt.Payload["error"]; ok {
 			return "Tool call failed: " + fmt.Sprintf("%v", e), true
 		}
-	case event.TypeToolRejected:
+	case event.TypeRequestRejected:
 		if r, ok := evt.Payload["reason"]; ok {
 			return "Tool call rejected: " + fmt.Sprintf("%v", r), true
 		}

@@ -229,7 +229,7 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 	}
 	connect := specConnect(ctx, id, "host", []string{"*"}, []event.EventPattern{
 		event.NewPattern(event.TypeToolRequest),
-		event.NewPattern(event.TypeToolCancel),
+		event.NewPattern(event.TypeRequestCancel),
 		event.NewPattern(event.TypeWorkerDiscover),
 	})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {

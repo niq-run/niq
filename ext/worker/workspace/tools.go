@@ -157,7 +157,7 @@ func (w *WorkspaceWorker) buildHandlers() {
 // ── Tool dispatch ──
 
 func (w *WorkspaceWorker) handleToolCall(ctx context.Context, evt event.Event) {
-	callID, _ := evt.Payload["call_id"].(string)
+	callID := evt.RequestId
 	name, _ := evt.Payload["name"].(string)
 	callerID := evt.WorkerId
 	traceID := evt.TraceID
@@ -173,12 +173,12 @@ func (w *WorkspaceWorker) handleToolCall(ctx context.Context, evt event.Event) {
 	}
 
 	ctx = backend.WithOnUpdate(ctx, func(partial string) {
-		evt := event.New(event.TypeToolPartial, w.ID(), map[string]any{
+		evt := event.New(event.TypeRequestProgressed, w.ID(), map[string]any{
 			"worker_id": callerID,
-			"call_id":   callID,
 			"name":      name,
 			"partial":   partial,
 		})
+		evt.RequestId = callID
 		evt.Transient = true // live-streaming only, not durable history
 		_ = w.Channel.Send(context.Background(), evt, callerID)
 	})
@@ -196,24 +196,24 @@ func (w *WorkspaceWorker) handleToolCall(ctx context.Context, evt event.Event) {
 // ── Bus publishing ──
 
 func (w *WorkspaceWorker) publishCompleted(callerID, callID, toolName, result, traceID string) {
-	evt := event.New(event.TypeToolCompleted, w.ID(), map[string]any{
+	evt := event.New(event.TypeRequestCompleted, w.ID(), map[string]any{
 		"worker_id": callerID,
-		"call_id":   callID,
 		"name":      toolName,
 		"result":    result,
 	})
+	evt.RequestId = callID
 	evt.TraceID = traceID
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 	log.Printf("[workspace %s] completed %s", w.ID(), callID)
 }
 
 func (w *WorkspaceWorker) publishFailed(callerID, callID, toolName string, err error, traceID string) {
-	evt := event.New(event.TypeToolFailed, w.ID(), map[string]any{
+	evt := event.New(event.TypeRequestFailed, w.ID(), map[string]any{
 		"worker_id": callerID,
-		"call_id":   callID,
 		"name":      toolName,
 		"error":     err.Error(),
 	})
+	evt.RequestId = callID
 	evt.TraceID = traceID
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }

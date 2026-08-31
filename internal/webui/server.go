@@ -24,6 +24,7 @@ import (
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
+	reasonBase "github.com/niq-run/niq/pkg/reason"
 	"github.com/niq-run/niq/pkg/service/eventbus"
 	eventbusapi "github.com/niq-run/niq/pkg/service/eventbus/api"
 	"github.com/niq-run/niq/pkg/service/workerhost"
@@ -444,7 +445,7 @@ const askTimeout = 20 * time.Second
 // events addressed to a worker that is not connected — so callers must
 // pre-check that the worker is online (see workerOnline) or they would sit here
 // until the timeout for a worker that will never answer.
-func (s *Server) ask(ctx context.Context, target string, evt event.Event, want event.EventType) (event.Event, error) {
+func (s *Server) ask(ctx context.Context, target string, evt event.Event, want ...event.EventType) (event.Event, error) {
 	traceID, _ := uuid.NewV7() // only fails if crypto/rand fails
 	tid := traceID.String()
 	evt.TraceID = tid // event.New leaves TraceID empty; we own correlation here
@@ -469,13 +470,15 @@ func (s *Server) ask(ctx context.Context, target string, evt event.Event, want e
 			// this check a closed channel would yield zero-valued events
 			// forever and spin until the timeout.
 			if !open {
-				return event.Event{}, fmt.Errorf("event stream closed waiting for %s from %s", want, target)
+				return event.Event{}, fmt.Errorf("event stream closed waiting for %v from %s", want, target)
 			}
-			if got.Type == want {
-				return got, nil
+			for _, w := range want {
+				if got.Type == w {
+					return got, nil
+				}
 			}
 		case <-timer.C:
-			return event.Event{}, fmt.Errorf("timed out after %s waiting for %s from %s", askTimeout, want, target)
+			return event.Event{}, fmt.Errorf("timed out after %s waiting for %v from %s", askTimeout, want, target)
 		case <-ctx.Done():
 			return event.Event{}, ctx.Err()
 		}
@@ -528,16 +531,14 @@ func (s *Server) handleWorkerProviders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reply, err := s.ask(r.Context(), id,
-		event.New(event.TypeWorkerQuery, "webui-hiw", map[string]any{"subject": "provider.list"}),
-		event.TypeWorkerStatus)
+		event.New(reasonBase.TypeProviderList, "webui-hiw", nil),
+		event.TypeRequestCompleted, event.TypeRequestFailed)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
-	// A worker.status is also emitted for unrecognised subjects, carrying
-	// done:false and an error — matching the type alone would read as success.
-	if msg, _ := reply.Payload["error"].(string); msg != "" {
-		http.Error(w, msg, http.StatusBadGateway)
+	if reply.Type == event.TypeRequestFailed {
+		http.Error(w, "provider.list rejected", http.StatusBadGateway)
 		return
 	}
 
@@ -584,21 +585,17 @@ func (s *Server) handleWorkerSetProvider(w http.ResponseWriter, r *http.Request)
 	}
 
 	reply, err := s.ask(r.Context(), id,
-		event.New(event.TypeWorkerUpdate, "webui-hiw", map[string]any{
-			"op":       "provider.switch",
+		event.New(reasonBase.TypeProviderSwitch, "webui-hiw", map[string]any{
 			"provider": body.Provider,
 			"model":    body.Model,
 		}),
-		event.TypeWorkerUpdated)
+		event.TypeRequestCompleted, event.TypeRequestFailed)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
 
-	out := map[string]any{"done": true, "provider": body.Provider, "model": body.Model}
-	if done, ok := reply.Payload["done"].(bool); ok {
-		out["done"] = done
-	}
+	out := map[string]any{"done": reply.Type == event.TypeRequestCompleted, "provider": body.Provider, "model": body.Model}
 	if msg, _ := reply.Payload["error"].(string); msg != "" && msg != "<nil>" {
 		out["error"] = msg
 	}
@@ -606,7 +603,7 @@ func (s *Server) handleWorkerSetProvider(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(out)
 }
 
-// providersFromPayload reads the providers list out of a worker.status payload.
+// providersFromPayload reads the providers list out of a request.completed payload.
 //
 // The value is re-encoded through JSON rather than type-asserted: a managed
 // worker runs in this same process, so the event never crosses a serialization

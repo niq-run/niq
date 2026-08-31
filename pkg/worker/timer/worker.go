@@ -36,7 +36,7 @@ func New(cfg Config) *Worker {
 	return &Worker{
 		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
 			event.NewPattern(event.TypeToolRequest),
-			event.NewPattern(event.TypeToolCancel),
+			event.NewPattern(event.TypeRequestCancel),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),
 		timers: make(map[string]*Entry),
@@ -98,7 +98,7 @@ func (w *Worker) process(evt event.Event) {
 			return
 		}
 		w.handleToolCall(evt)
-	case event.TypeToolCancel:
+	case event.TypeRequestCancel:
 		w.handleCancelEvent(evt)
 	}
 }

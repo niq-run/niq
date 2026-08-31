@@ -156,8 +156,8 @@ func TestUpdateRequestedSetProviderEvent(t *testing.T) {
 	ch := newTestChannel()
 	w, _, pb := newSwitchableWorker(ch)
 
-	evt := event.New(event.TypeWorkerUpdate, w.ID(), map[string]any{
-		"op": "provider.switch", "provider": "b", "model": "m3",
+	evt := event.New(TypeProviderSwitch, w.ID(), map[string]any{
+		"provider": "b", "model": "m3",
 	})
 	evt.TraceID = "trace-switch"
 	w.process(context.Background(), evt)
@@ -165,19 +165,16 @@ func TestUpdateRequestedSetProviderEvent(t *testing.T) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.llmProvider != pb {
-		t.Fatal("provider not switched after worker.update")
+		t.Fatal("provider not switched after provider.switch")
 	}
 
-	updates := ch.eventsOf(event.TypeWorkerUpdated)
+	updates := ch.eventsOf(event.TypeRequestCompleted)
 	if len(updates) == 0 {
-		t.Fatal("expected a worker.updated completion")
+		t.Fatal("expected a request.completed reply")
 	}
 	u := updates[len(updates)-1]
 	if u.TraceID != "trace-switch" {
 		t.Fatalf("completion trace = %q, want trace-switch", u.TraceID)
-	}
-	if done, _ := u.Payload["done"].(bool); !done {
-		t.Fatalf("provider switch not reported done: %v", u.Payload)
 	}
 	if p := u.Payload["provider"]; p != "b" {
 		t.Fatalf("completion provider = %v, want b", p)
@@ -193,8 +190,8 @@ func TestUpdateRequestedSetProviderRequiresModel(t *testing.T) {
 	ch := newTestChannel()
 	w, pa, _ := newSwitchableWorker(ch)
 
-	evt := event.New(event.TypeWorkerUpdate, w.ID(), map[string]any{
-		"op": "provider.switch", "provider": "b",
+	evt := event.New(TypeProviderSwitch, w.ID(), map[string]any{
+		"provider": "b",
 	})
 	w.process(context.Background(), evt)
 
@@ -203,27 +200,24 @@ func TestUpdateRequestedSetProviderRequiresModel(t *testing.T) {
 	if w.llmProvider != pa {
 		t.Fatal("provider should be unchanged when model is empty")
 	}
-	updates := ch.eventsOf(event.TypeWorkerUpdated)
+	updates := ch.eventsOf(event.TypeRequestFailed)
 	if len(updates) == 0 {
-		t.Fatal("expected a worker.updated completion")
+		t.Fatal("expected a request.failed reply")
 	}
 	u := updates[len(updates)-1]
-	if done, _ := u.Payload["done"].(bool); done {
-		t.Fatalf("empty model reported done=true: %v", u.Payload)
-	}
 	if u.Payload["error"] == "" {
 		t.Fatal("expected an error payload for missing model")
 	}
 }
 
 // TestUpdateRequestedSetProviderRejectsUnknown asserts a failed switch reports
-// done=false with an error and leaves the active provider unchanged.
+// an error and leaves the active provider unchanged.
 func TestUpdateRequestedSetProviderRejectsUnknown(t *testing.T) {
 	ch := newTestChannel()
 	w, pa, _ := newSwitchableWorker(ch)
 
-	evt := event.New(event.TypeWorkerUpdate, w.ID(), map[string]any{
-		"op": "provider.switch", "provider": "does-not-exist", "model": "m9",
+	evt := event.New(TypeProviderSwitch, w.ID(), map[string]any{
+		"provider": "does-not-exist", "model": "m9",
 	})
 	w.process(context.Background(), evt)
 
@@ -232,41 +226,33 @@ func TestUpdateRequestedSetProviderRejectsUnknown(t *testing.T) {
 	if w.llmProvider != pa {
 		t.Fatal("provider should be unchanged after a failed switch")
 	}
-	updates := ch.eventsOf(event.TypeWorkerUpdated)
+	updates := ch.eventsOf(event.TypeRequestFailed)
 	if len(updates) == 0 {
-		t.Fatal("expected a worker.updated completion")
+		t.Fatal("expected a request.failed reply")
 	}
 	u := updates[len(updates)-1]
-	if done, _ := u.Payload["done"].(bool); done {
-		t.Fatalf("failed switch reported done=true: %v", u.Payload)
-	}
 	if u.Payload["error"] == "" {
 		t.Fatal("expected an error payload")
 	}
 }
 
-// TestStatusQueryProviders asserts worker.query op=provider.list returns a
-// worker.status snapshot carrying the provider table and the current choice.
+// TestStatusQueryProviders asserts a provider.list request returns a
+// request.completed snapshot carrying the provider table and the current choice.
 func TestStatusQueryProviders(t *testing.T) {
 	ch := newTestChannel()
 	w, _, _ := newSwitchableWorker(ch)
 
-	evt := event.New(event.TypeWorkerQuery, w.ID(), map[string]any{
-		"subject": "provider.list",
-	})
+	evt := event.New(TypeProviderList, w.ID(), nil)
 	evt.TraceID = "trace-status"
 	w.process(context.Background(), evt)
 
-	statuses := ch.eventsOf(event.TypeWorkerStatus)
+	statuses := ch.eventsOf(event.TypeRequestCompleted)
 	if len(statuses) == 0 {
-		t.Fatal("expected a worker.status snapshot")
+		t.Fatal("expected a request.completed snapshot")
 	}
 	s := statuses[len(statuses)-1]
 	if s.TraceID != "trace-status" {
 		t.Fatalf("status trace = %q, want trace-status", s.TraceID)
-	}
-	if s.Payload["subject"] != "provider.list" {
-		t.Fatalf("status subject = %v, want provider.list", s.Payload["op"])
 	}
 	b, _ := json.Marshal(s.Payload["providers"])
 	if !strings.Contains(string(b), `"name":"a"`) || !strings.Contains(string(b), `"name":"b"`) {
@@ -278,8 +264,8 @@ func TestStatusQueryProviders(t *testing.T) {
 	}
 }
 
-// TestStatusQueryCurrent asserts worker.query op=provider.current returns just
-// the current provider/model, reflecting a prior provider.switch.
+// TestStatusQueryCurrent asserts a provider.current request returns just the
+// current provider/model, reflecting a prior provider.switch.
 func TestStatusQueryCurrent(t *testing.T) {
 	ch := newTestChannel()
 	w, _, _ := newSwitchableWorker(ch)
@@ -288,19 +274,14 @@ func TestStatusQueryCurrent(t *testing.T) {
 	_ = w.setActiveProvider("b", "m3")
 	w.mu.Unlock()
 
-	evt := event.New(event.TypeWorkerQuery, w.ID(), map[string]any{
-		"subject": "provider.current",
-	})
+	evt := event.New(TypeProviderCurrent, w.ID(), nil)
 	w.process(context.Background(), evt)
 
-	statuses := ch.eventsOf(event.TypeWorkerStatus)
+	statuses := ch.eventsOf(event.TypeRequestCompleted)
 	if len(statuses) == 0 {
-		t.Fatal("expected a worker.status snapshot")
+		t.Fatal("expected a request.completed snapshot")
 	}
 	s := statuses[len(statuses)-1]
-	if s.Payload["subject"] != "provider.current" {
-		t.Fatalf("status subject = %v, want provider.current", s.Payload["op"])
-	}
 	if s.Payload["provider"] != "b" || s.Payload["model"] != "m3" {
 		t.Fatalf("current = %v/%v, want b/m3", s.Payload["provider"], s.Payload["model"])
 	}

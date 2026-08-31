@@ -12,7 +12,9 @@ func tcBlock(id, name string) llm.ContentBlock {
 }
 
 func resultEvent(typ event.EventType, callID string) event.Event {
-	return event.New(typ, "workspace", map[string]any{"call_id": callID})
+	evt := event.New(typ, "workspace", nil)
+	evt.RequestId = callID
+	return evt
 }
 
 // TestRequestTrackerAddPending verifies Add records calls as Pending and
@@ -31,13 +33,13 @@ func TestRequestTrackerHandleResponse(t *testing.T) {
 	m := NewRequestTracker()
 	m.Add("workspace", []llm.ContentBlock{tcBlock("a", "bash"), tcBlock("b", "read")})
 
-	if !m.HandleResponse(resultEvent(event.TypeToolCompleted, "a")) {
+	if !m.HandleResponse(resultEvent(event.TypeRequestCompleted, "a")) {
 		t.Fatal("handleResponse should match call a")
 	}
 	if m.Resolved() {
 		t.Fatal("still pending call b")
 	}
-	if !m.HandleResponse(resultEvent(event.TypeToolFailed, "b")) {
+	if !m.HandleResponse(resultEvent(event.TypeRequestFailed, "b")) {
 		t.Fatal("handleResponse should match call b")
 	}
 	if !m.Resolved() {
@@ -50,7 +52,7 @@ func TestRequestTrackerHandleResponse(t *testing.T) {
 func TestRequestTrackerHandleResponseUnknown(t *testing.T) {
 	m := NewRequestTracker()
 	m.Add("workspace", []llm.ContentBlock{tcBlock("a", "bash")})
-	if m.HandleResponse(resultEvent(event.TypeToolCompleted, "nope")) {
+	if m.HandleResponse(resultEvent(event.TypeRequestCompleted, "nope")) {
 		t.Fatal("unknown call_id must not match")
 	}
 	if m.Resolved() {
@@ -63,7 +65,7 @@ func TestRequestTrackerHandleResponseUnknown(t *testing.T) {
 func TestRequestTrackerParkAll(t *testing.T) {
 	m := NewRequestTracker()
 	m.Add("workspace", []llm.ContentBlock{tcBlock("a", "bash"), tcBlock("b", "read")})
-	m.HandleResponse(resultEvent(event.TypeToolCompleted, "a")) // a resolved
+	m.HandleResponse(resultEvent(event.TypeRequestCompleted, "a")) // a resolved
 
 	parked := m.ParkAll(PreemptCauseTimeout)
 	if len(parked) != 1 || parked[0].CallID != "b" {
@@ -84,10 +86,10 @@ func TestRequestTrackerResolveLate(t *testing.T) {
 	m.Add("workspace", []llm.ContentBlock{tcBlock("a", "bash")})
 	m.ParkAll(PreemptCauseTimeout)
 
-	if got := m.ResolveLate(resultEvent(event.TypeToolCompleted, "a")); got == nil {
+	if got := m.ResolveLate(resultEvent(event.TypeRequestCompleted, "a")); got == nil {
 		t.Fatal("late result should match parked call a")
 	}
-	if m.ResolveLate(resultEvent(event.TypeToolCompleted, "z")) != nil {
+	if m.ResolveLate(resultEvent(event.TypeRequestCompleted, "z")) != nil {
 		t.Fatal("late result for untracked call should be ignored")
 	}
 }

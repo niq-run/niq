@@ -10,7 +10,7 @@ import (
 
 // TestCoreExtensionsRegistered verifies the default worker registers its
 // toolkit on the extension registry: send_message / list_workers as
-// tool.request loop-backs and context.compress / context.rotate as worker.update
+// tool.request loop-backs and context.compress / context.rotate as their own event types
 // meta extensions.
 func TestCoreExtensionsRegistered(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
@@ -18,8 +18,8 @@ func TestCoreExtensionsRegistered(t *testing.T) {
 	if cap, ok := w.ExtensionByToolName("send_message"); !ok || cap.Event != event.TypeToolRequest {
 		t.Fatalf("send_message not registered as tool.request extension: %+v ok=%v", cap, ok)
 	}
-	if cap, ok := w.ExtensionByToolName("context_compress"); !ok || cap.Event != event.TypeWorkerUpdate {
-		t.Fatalf("context_compress not registered as worker.update extension: %+v ok=%v", cap, ok)
+	if cap, ok := w.ExtensionByToolName("context_compress"); !ok || cap.Event != reasonBase.TypeContextCompress {
+		t.Fatalf("context_compress not registered as context.compress extension: %+v ok=%v", cap, ok)
 	}
 }
 
@@ -85,13 +85,13 @@ func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
 		}
 		return false
 	}
-	watchHasOp := func(evt event.Event, op string) bool {
+	watchHasEvent := func(evt event.Event, typ string) bool {
 		watch, ok := evt.Payload["watch"].([]map[string]any)
 		if !ok {
 			return false
 		}
 		for _, e := range watch {
-			if p, _ := e["parameters"].(map[string]any); p["op"] == op {
+			if e["event"] == typ {
 				return true
 			}
 		}
@@ -118,7 +118,7 @@ func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
 	if watchHasName(*presence, "send_message") || watchHasName(*presence, "list_workers") {
 		t.Fatal("presence broadcast must not carry the SelfOnly core tools")
 	}
-	if !watchHasOp(*presence, "provider.switch") {
+	if !watchHasEvent(*presence, "provider.switch") {
 		t.Fatal("presence broadcast must keep non-SelfOnly extensions")
 	}
 	if !watchHasName(*directed, "send_message") || !watchHasName(*directed, "list_workers") {

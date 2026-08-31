@@ -121,7 +121,6 @@ func (w *BaseReasonWorker) dispatchElapseReminder(traceID string, attempt int) {
 	callID := fmt.Sprintf("niq_rl_%d_%d", time.Now().UnixNano(), attempt)
 	evt := event.New(event.TypeToolRequest, w.ID(), map[string]any{
 		"worker_id": w.ID(),
-		"call_id":   callID,
 		"name":      "elapse",
 		"arguments": map[string]any{
 			"duration_ms": rateLimitBackoffDuration.Milliseconds(),
@@ -129,6 +128,7 @@ func (w *BaseReasonWorker) dispatchElapseReminder(traceID string, attempt int) {
 				rateLimitBackoffDuration, attempt, maxRateLimitRetries),
 		},
 	})
+	evt.RequestId = callID
 	evt.TraceID = traceID
 	if err := w.Channel.Send(context.Background(), evt, "timer"); err != nil {
 		log.Printf("[reason %s] failed to schedule rate-limit retry reminder: %v", w.ID(), err)

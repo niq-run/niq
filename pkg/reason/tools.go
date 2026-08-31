@@ -40,9 +40,13 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 		var name string
 		switch {
 		case cap.Source == w.ID() && cap.Event == event.TypeToolRequest:
+			// Own tool (tool.request + name): expose under its bare tool name.
 			name = cap.Key
-		case cap.Source == w.ID() && !strings.HasPrefix(cap.Key, "provider."):
-			name = extensionToolName(baseworker.Extension{Key: cap.Key})
+		case cap.Source == w.ID() && !strings.HasPrefix(string(cap.Event), "provider."):
+			// Own meta capability: expose under its event-type name
+			// (context.compress → context_compress). The provider.* management
+			// domain is excluded — it is not LLM-callable.
+			name = extensionToolName(baseworker.Extension{Event: cap.Event, KeyField: cap.KeyField, Key: cap.Key})
 		case cap.Source != w.ID() && cap.Event == event.TypeToolRequest:
 			// Same encoding as the dispatch table, so the name the LLM sees is
 			// exactly the name dispatch looks up (dots -> underscores, and the
@@ -75,13 +79,20 @@ func (w *BaseReasonWorker) llmToolDefs() []llm.ToolDef {
 }
 
 // extensionToolName is the default LLM-facing name for an own extension: its
-// discriminator with dots → underscores (context.compress → context_compress).
-// The default tool-list builder names exposed extensions with it, and the
-// reason worker reverse-maps LLM tool calls back to meta extensions with the
-// same convention, so a custom builder that exposes a meta extension must keep
-// this name for the meta routing to recognize it.
+// identifier with dots → underscores (context.compress → context_compress).
+// The identifier is the discriminator Key when the extension is multiplexed on
+// a shared event (tool.request + name), or the event type itself when the
+// extension is identified by its own event (context.compress). The default
+// tool-list builder names exposed extensions with it, and the reason worker
+// reverse-maps LLM tool calls back to meta extensions with the same
+// convention, so a custom builder that exposes a meta extension must keep this
+// name for the meta routing to recognize it.
 func extensionToolName(ext baseworker.Extension) string {
-	return strings.ReplaceAll(ext.Key, ".", "_")
+	id := ext.Key
+	if ext.KeyField == "" {
+		id = string(ext.Event)
+	}
+	return strings.ReplaceAll(id, ".", "_")
 }
 
 // extensionByToolName finds a registered extension by its default LLM-facing
@@ -109,10 +120,10 @@ func (w *BaseReasonWorker) sendToolRequests(target, callerID string, calls []llm
 		}
 		evt := event.New(event.TypeToolRequest, callerID, map[string]any{
 			"worker_id": callerID,
-			"call_id":   tc.ToolCallID,
 			"name":      tc.ToolName,
 			"arguments": argsMap,
 		})
+		evt.RequestId = tc.ToolCallID
 		evt.TraceID = traceID
 		_ = w.Channel.Send(context.Background(), evt, target)
 	}

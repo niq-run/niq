@@ -53,7 +53,7 @@ func New(cfg Config) *Worker {
 	return &Worker{
 		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
 			event.NewPattern(event.TypeToolRequest),
-			event.NewPattern(event.TypeToolCancel),
+			event.NewPattern(event.TypeRequestCancel),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),
 		client:    c,
@@ -111,8 +111,8 @@ func (w *Worker) process(evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
 		w.publishReady()
-	case event.TypeToolCancel:
-		callID, _ := evt.Payload["call_id"].(string)
+	case event.TypeRequestCancel:
+		callID := evt.RequestId
 		log.Printf("[http worker %s] cancel requested for %s (best-effort)", w.ID(), callID)
 	case event.TypeToolRequest:
 		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
@@ -123,7 +123,7 @@ func (w *Worker) process(evt event.Event) {
 }
 
 func (w *Worker) handleToolCall(evt event.Event) {
-	callID, _ := evt.Payload["call_id"].(string)
+	callID := evt.RequestId
 	name, _ := evt.Payload["name"].(string)
 	callerID := evt.WorkerId
 	args, _ := evt.Payload["arguments"].(map[string]any)
@@ -181,19 +181,19 @@ func (w *Worker) publishReady() {
 }
 
 func (w *Worker) publishCompleted(callerID, callID, toolName, result string) {
-	evt := event.New(event.TypeToolCompleted, w.ID(), map[string]any{
-		"call_id": callID,
-		"name":    toolName,
-		"result":  result,
+	evt := event.New(event.TypeRequestCompleted, w.ID(), map[string]any{
+		"name":   toolName,
+		"result": result,
 	})
+	evt.RequestId = callID
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
 func (w *Worker) publishFailed(callerID, callID, toolName string, err error) {
-	evt := event.New(event.TypeToolFailed, w.ID(), map[string]any{
-		"call_id": callID,
-		"name":    toolName,
-		"error":   err.Error(),
+	evt := event.New(event.TypeRequestFailed, w.ID(), map[string]any{
+		"name":  toolName,
+		"error": err.Error(),
 	})
+	evt.RequestId = callID
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }

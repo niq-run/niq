@@ -76,9 +76,9 @@ func NewWorker(cfg Config) *Worker {
 		subs = append(subs, h.Pattern)
 	}
 	subs = append(subs,
-		event.NewPattern(event.TypeToolCompleted),
-		event.NewPattern(event.TypeToolFailed),
-		event.NewPattern(event.TypeToolRejected),
+		event.NewPattern(event.TypeRequestCompleted),
+		event.NewPattern(event.TypeRequestFailed),
+		event.NewPattern(event.TypeRequestRejected),
 		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeWorkerReady),
 		event.NewPattern(event.TypeWorkerGone),

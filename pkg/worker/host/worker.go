@@ -47,7 +47,7 @@ func New(cfg Config) *HostWorker {
 	return &HostWorker{
 		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
 			event.NewPattern(event.TypeToolRequest),
-			event.NewPattern(event.TypeToolCancel),
+			event.NewPattern(event.TypeRequestCancel),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),
 		engine: cfg.Engine,
@@ -115,8 +115,8 @@ func (w *HostWorker) process(evt event.Event) {
 		if evt.WorkerId != w.ID() {
 			w.publishReady()
 		}
-	case event.TypeToolCancel:
-		callID, _ := evt.Payload["call_id"].(string)
+	case event.TypeRequestCancel:
+		callID := evt.RequestId
 		log.Printf("[host %s] cancel requested for %s (best-effort)", w.ID(), callID)
 	case event.TypeToolRequest:
 		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
