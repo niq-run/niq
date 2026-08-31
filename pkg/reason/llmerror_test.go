@@ -90,12 +90,12 @@ func TestDecideLLMError(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			before := len(ch.eventsOf(event.TypeWorkerUpdate))
+			before := len(ch.eventsOf(TypeContextCompress))
 			retry, _ := w.decideLLMError(ctx, "tr", tc.err)
 			if retry != tc.wantRetry {
 				t.Fatalf("retry=%v, want %v", retry, tc.wantRetry)
 			}
-			gotCompress := len(ch.eventsOf(event.TypeWorkerUpdate)) > before
+			gotCompress := len(ch.eventsOf(TypeContextCompress)) > before
 			if gotCompress != tc.wantCompress {
 				t.Fatalf("compress=%v, want %v", gotCompress, tc.wantCompress)
 			}

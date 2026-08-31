@@ -106,7 +106,7 @@ func (m *RequestTracker) Add(targetID string, toolCalls []llm.ContentBlock) {
 // the outcome (result / fail / reject reason) is read by the caller when
 // building the message.
 func (m *RequestTracker) HandleResponse(evt event.Event) bool {
-	callID, _ := evt.Payload["call_id"].(string)
+	callID := evt.RequestId
 	if callID == "" {
 		return false
 	}
@@ -146,7 +146,7 @@ func (m *RequestTracker) ParkAll(cause PreemptCause) []*TrackedRequest {
 // can build a contextualized late-result message. Returns nil if no Parked
 // request matches.
 func (m *RequestTracker) ResolveLate(evt event.Event) *TrackedRequest {
-	callID, _ := evt.Payload["call_id"].(string)
+	callID := evt.RequestId
 	if callID == "" {
 		return nil
 	}

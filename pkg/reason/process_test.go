@@ -57,10 +57,10 @@ func TestResultOutcome(t *testing.T) {
 		want    string
 		isError bool
 	}{
-		{"completed", event.TypeToolCompleted, map[string]any{"result": "ok"}, "ok", false},
-		{"failed", event.TypeToolFailed, map[string]any{"error": "boom"}, "Tool call failed: boom", true},
-		{"rejected", event.TypeToolRejected, map[string]any{"reason": "no"}, "Tool call rejected: no", true},
-		{"missing", event.TypeToolCompleted, map[string]any{}, "", false},
+		{"completed", event.TypeRequestCompleted, map[string]any{"result": "ok"}, "ok", false},
+		{"failed", event.TypeRequestFailed, map[string]any{"error": "boom"}, "Tool call failed: boom", true},
+		{"rejected", event.TypeRequestRejected, map[string]any{"reason": "no"}, "Tool call rejected: no", true},
+		{"missing", event.TypeRequestCompleted, map[string]any{}, "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -133,9 +133,10 @@ func TestLateToolResult(t *testing.T) {
 	w.requestTracker.ParkAll(requesttracker.PreemptCauseTimeout)
 	w.mu.Unlock()
 
-	late := event.New(event.TypeToolCompleted, "workspace", map[string]any{
-		"call_id": "c1", "name": "bash", "result": "late-out",
+	late := event.New(event.TypeRequestCompleted, "workspace", map[string]any{
+		"name": "bash", "result": "late-out",
 	})
+	late.RequestId = "c1"
 	before := len(w.transcript.Render())
 	w.handleToolResult(late)
 

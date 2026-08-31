@@ -23,22 +23,28 @@ const (
 	TypeWorkerInput    EventType = "worker.input"
 	TypeWorkerAbort    EventType = "worker.abort"
 
-	// Worker meta extensions: update / updated are the update-command →
-	// completion-event pair; query / status are the query-command → snapshot
-	// pair. The specific operation lives in the payload's "op" field (parallel
-	// to tool.request's "name").
-	TypeWorkerUpdate  EventType = "worker.update"
-	TypeWorkerUpdated EventType = "worker.updated"
-	TypeWorkerQuery   EventType = "worker.query"
-	TypeWorkerStatus  EventType = "worker.status"
+	// Worker meta invocation channels: worker.update / worker.query remain as
+	// the event types some extensions register (their op/subject payloads still
+	// discriminate), but reason's own meta capabilities now use dedicated event
+	// types (see pkg/reason), so these are no longer the only meta channel.
+	TypeWorkerUpdate EventType = "worker.update"
+	TypeWorkerQuery  EventType = "worker.query"
 
-	// Tool invocation lifecycle.
-	TypeToolRequest   EventType = "tool.request"
-	TypeToolCancel    EventType = "tool.cancel"
-	TypeToolCompleted EventType = "tool.completed"
-	TypeToolFailed    EventType = "tool.failed"
-	TypeToolRejected  EventType = "tool.rejected"
-	TypeToolPartial   EventType = "tool.partial"
+	// Tool invocation: tool.request remains the conventional invocation event
+	// for LLM-facing tools. The responses to ANY invocation (tool or not) use
+	// the request.* convention below — the one request-response pairing.
+	TypeToolRequest EventType = "tool.request"
+
+	// The request-response pairing convention: any invocation of a capability
+	// is answered with one of these, echoing the Event.RequestId of the
+	// request. request.completed carries the result; request.failed /
+	// request.rejected carry the error; request.progressed streams partial
+	// results; request.cancel is sent by the caller to cancel a pending one.
+	TypeRequestCompleted EventType = "request.completed"
+	TypeRequestFailed    EventType = "request.failed"
+	TypeRequestRejected  EventType = "request.rejected"
+	TypeRequestProgressed EventType = "request.progressed"
+	TypeRequestCancel    EventType = "request.cancel"
 )
 
 // EventStatus represents an event's lifecycle stage.
@@ -114,7 +120,12 @@ type Event struct {
 	Payload        map[string]any `json:"payload"`
 	WorkerId       string         `json:"worker_id"`
 	TargetWorkerID string         `json:"target_worker_id,omitempty"`
-	TraceID        string         `json:"trace_id,omitempty"`
+	// RequestId pairs a request with its response: a request carries it, and
+	// the response echoes it back (JSON-RPC id semantics). Empty means the
+	// event is a notification — no response is expected. Distinct from ID
+	// (this event's own identity) and TraceID (the reasoning trace).
+	RequestId string `json:"request_id,omitempty"`
+	TraceID   string `json:"trace_id,omitempty"`
 	SpecVersion    string         `json:"specversion,omitempty"`
 	DataSchema     string         `json:"dataschema,omitempty"`
 	Timestamp      int64          `json:"timestamp"`

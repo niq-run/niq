@@ -79,7 +79,7 @@ func ParseToolCall(evt event.Event) ToolCall {
 		args = map[string]any{}
 	}
 	return ToolCall{
-		CallID:   ArgString(evt.Payload, "call_id"),
+		CallID:   evt.RequestId,
 		Name:     ArgString(evt.Payload, "name"),
 		CallerID: evt.WorkerId,
 		Args:     args,
@@ -87,40 +87,40 @@ func ParseToolCall(evt event.Event) ToolCall {
 	}
 }
 
-// ReplyCompleted replies to a tool.request caller with a tool.completed
-// result, propagating the trace ID.
+// ReplyCompleted answers a request caller with a request.completed result,
+// echoing the request's id and propagating the trace ID.
 func (w *BaseWorker) ReplyCompleted(callerID, callID, name, result, traceID string) {
-	evt := event.New(event.TypeToolCompleted, w.ID(), map[string]any{
-		"call_id": callID,
-		"name":    name,
-		"result":  result,
+	evt := event.New(event.TypeRequestCompleted, w.ID(), map[string]any{
+		"name":   name,
+		"result": result,
 	})
+	evt.RequestId = callID
 	evt.TraceID = traceID
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
-// ReplyFailed replies to a tool.request caller with a tool.failed error
-// message, propagating the trace ID.
+// ReplyFailed answers a request caller with a request.failed error message,
+// echoing the request's id and propagating the trace ID.
 func (w *BaseWorker) ReplyFailed(callerID, callID, name, errMsg, traceID string) {
-	evt := event.New(event.TypeToolFailed, w.ID(), map[string]any{
-		"call_id": callID,
-		"name":    name,
-		"error":   errMsg,
+	evt := event.New(event.TypeRequestFailed, w.ID(), map[string]any{
+		"name":  name,
+		"error": errMsg,
 	})
+	evt.RequestId = callID
 	evt.TraceID = traceID
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
-// ReplyRejected replies to a tool.request caller with a tool.rejected
-// event, carrying the reason. It is used when a worker declines a call based
-// on its own rules (e.g. a safety guard) or after a human-in-the-loop approval
-// is denied. Propagates the trace ID.
+// ReplyRejected answers a request caller with a request.rejected event,
+// carrying the reason. It is used when a worker declines a call based on its
+// own rules (e.g. a safety guard) or after a human-in-the-loop approval is
+// denied. Echoes the request's id and propagates the trace ID.
 func (w *BaseWorker) ReplyRejected(callerID, callID, name, reason, traceID string) {
-	evt := event.New(event.TypeToolRejected, w.ID(), map[string]any{
-		"call_id": callID,
-		"name":    name,
-		"reason":  reason,
+	evt := event.New(event.TypeRequestRejected, w.ID(), map[string]any{
+		"name":   name,
+		"reason": reason,
 	})
+	evt.RequestId = callID
 	evt.TraceID = traceID
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
