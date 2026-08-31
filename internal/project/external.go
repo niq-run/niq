@@ -1,12 +1,12 @@
-// Unmanaged worker support: external processes that swarm launches after the
-// bus is up, passing the bus endpoint + identity via environment variables so
-// they can connect on their own (e.g. MCP-style stdio servers, custom agents).
+// Unmanaged worker support: external processes that the project launches after
+// the bus is up, passing the bus endpoint + identity via environment variables
+// so they can connect on their own (e.g. MCP-style stdio servers, custom agents).
 //
 // Responsibility split:
 //   - provisionUnmanaged: credential provisioning + bus identity registration.
 //   - UnmanagedSupervisor: pure process supervision — launch, crash-restart
 //     with backoff, manual stop/restart, reap on shutdown.
-package swarm
+package project
 
 import (
 	"context"
@@ -166,7 +166,7 @@ func (s *UnmanagedSupervisor) List() []UnmanagedStatus {
 }
 
 // Shutdown stops every supervised worker and waits for the supervision loops
-// to exit. Called on swarm shutdown.
+// to exit. Called on project shutdown.
 func (s *UnmanagedSupervisor) Shutdown() {
 	s.mu.Lock()
 	ids := make([]string, 0, len(s.procs))

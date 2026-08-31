@@ -1,4 +1,4 @@
-package swarm
+package project
 
 import (
 	"os"
@@ -129,7 +129,7 @@ func findStatus(sts []UnmanagedStatus, id string) *UnmanagedStatus {
 // declared allow lists.
 func TestProvisionUnmanaged(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	p, err := CreateProject("proj", &SwarmConfig{Workers: []WorkerConfig{
+	p, err := CreateProject("proj", &TemplateConfig{Workers: []WorkerConfig{
 		{Type: "mcp", ID: "ext", Managed: boolPtr(false), Command: []string{"npx", "x"}, Subscriptions: []string{"tool.request"}},
 	}})
 	if err != nil {

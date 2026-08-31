@@ -1,9 +1,11 @@
-// Package swarm provides the config-driven assembly for niq swarm.
+// Package project provides the storage and runtime for niq projects.
 //
-// It reads a JSON config, instantiates workers, registers them with
-// WorkerService, and manages the lifecycle. This is the only place where
-// config files are parsed into worker instances — no new abstractions.
-package swarm
+// A project lives under ~/.niq/projects/<id>/ and owns its own event bus,
+// WebUI, worker set and state directories. This package reads project
+// templates (JSON), instantiates workers, registers them with WorkerService,
+// and manages the project instance lifecycle. This is the only place where
+// template files are parsed into worker instances — no new abstractions.
+package project
 
 import (
 	"embed"
@@ -19,8 +21,9 @@ import (
 //go:embed preset/*.json
 var presetFS embed.FS
 
-// SwarmConfig is the top-level structure of a swarm config file.
-type SwarmConfig struct {
+// TemplateConfig is the top-level structure of a project template file: the
+// set of workers a new project is seeded with.
+type TemplateConfig struct {
 	Workers []WorkerConfig `json:"workers"`
 }
 
@@ -39,7 +42,7 @@ type WorkerConfig struct {
 	Archived      bool     `json:"archived,omitempty"`
 	// Managed marks the worker as host-managed (in-process, worker dir is the
 	// config authority). nil or true = managed; false = an external process
-	// launched by swarm via Command/Env/Cwd.
+	// launched by the project via Command/Env/Cwd.
 	Managed    *bool             `json:"managed,omitempty"`
 	Credential string            `json:"credential,omitempty"`
 	Command    []string          `json:"command,omitempty"`
@@ -47,29 +50,20 @@ type WorkerConfig struct {
 	Cwd        string            `json:"cwd,omitempty"`
 }
 
-// ParseConfig reads and parses a swarm JSON config file.
-func ParseConfig(path string) (*SwarmConfig, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("swarm: read config: %w", err)
-	}
-	return parseConfig(raw)
-}
-
-// LoadPreset loads a built-in preset by name (without the .json suffix).
-func LoadPreset(name string) (*SwarmConfig, error) {
+// LoadPreset loads a built-in template by name (without the .json suffix).
+func LoadPreset(name string) (*TemplateConfig, error) {
 	raw, err := presetFS.ReadFile("preset/" + name + ".json")
 	if err != nil {
-		return nil, fmt.Errorf("swarm: preset %q not found", name)
+		return nil, fmt.Errorf("project: preset %q not found", name)
 	}
 	return parseConfig(raw)
 }
 
 // parseConfig parses a JSON config/template.
-func parseConfig(raw []byte) (*SwarmConfig, error) {
-	var cfg SwarmConfig
+func parseConfig(raw []byte) (*TemplateConfig, error) {
+	var cfg TemplateConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("swarm: parse config: %w", err)
+		return nil, fmt.Errorf("project: parse config: %w", err)
 	}
 	return validateWorkers(&cfg)
 }
@@ -94,10 +88,10 @@ func SeedTemplates(dir string) error {
 	}
 	entries, err := presetFS.ReadDir("preset")
 	if err != nil {
-		return fmt.Errorf("swarm: read builtin templates: %w", err)
+		return fmt.Errorf("project: read builtin templates: %w", err)
 	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("swarm: mkdir templates %s: %w", dir, err)
+		return fmt.Errorf("project: mkdir templates %s: %w", dir, err)
 	}
 	for _, e := range entries {
 		name := e.Name()
@@ -106,7 +100,7 @@ func SeedTemplates(dir string) error {
 			continue
 		}
 		if err := os.WriteFile(filepath.Join(dir, name), raw, 0644); err != nil {
-			log.Printf("[swarm] seed template %s: %v", name, err)
+			log.Printf("[project] seed template %s: %v", name, err)
 		}
 	}
 	return nil
@@ -142,7 +136,7 @@ func ListTemplates() ([]string, error) {
 	}
 	entries, err := presetFS.ReadDir("preset")
 	if err != nil {
-		return nil, fmt.Errorf("swarm: read embedded templates: %w", err)
+		return nil, fmt.Errorf("project: read embedded templates: %w", err)
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -155,26 +149,65 @@ func ListTemplates() ([]string, error) {
 // LoadTemplate loads a project template from the on-disk templates dir,
 // preferring the disk copy over the embedded built-in. The disk copy is what a
 // user edits; the embedded one is the fallback before seeding.
-func LoadTemplate(dir, name string) (*SwarmConfig, error) {
+func LoadTemplate(dir, name string) (*TemplateConfig, error) {
 	if dir != "" {
 		raw, err := os.ReadFile(TemplatePath(dir, name))
 		if err == nil {
 			return parseConfig(raw)
 		}
 		if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("swarm: read template %s: %w", name, err)
+			return nil, fmt.Errorf("project: read template %s: %w", name, err)
 		}
 	}
 	return LoadPreset(name)
 }
 
-func validateWorkers(cfg *SwarmConfig) (*SwarmConfig, error) {
+// workerConfigParams converts a WorkerConfig into the Params map consumed by
+// the builders.
+func workerConfigParams(wc WorkerConfig) map[string]any {
+	p := map[string]any{}
+	if wc.Instruction != "" {
+		p["instruction"] = wc.Instruction
+	}
+	if wc.Provider != "" {
+		p["provider"] = wc.Provider
+	}
+	if wc.APIKey != "" {
+		p["api_key"] = wc.APIKey
+	}
+	if wc.BaseURL != "" {
+		p["base_url"] = wc.BaseURL
+	}
+	if wc.Model != "" {
+		p["model"] = wc.Model
+	}
+	if len(wc.Subscriptions) > 0 {
+		arr := make([]any, len(wc.Subscriptions))
+		for i, s := range wc.Subscriptions {
+			arr[i] = s
+		}
+		p["subscriptions"] = arr
+	}
+	if len(wc.Publish) > 0 {
+		arr := make([]any, len(wc.Publish))
+		for i, s := range wc.Publish {
+			arr[i] = s
+		}
+		p["publish"] = arr
+	}
+	if wc.RootDir != "" {
+		p["root_dir"] = wc.RootDir
+	}
+	return p
+}
+
+func validateWorkers(cfg *TemplateConfig) (*TemplateConfig, error) {
 	for i, w := range cfg.Workers {
 		if w.Type == "" {
-			return nil, fmt.Errorf("swarm: worker %d: type is required", i)
+			return nil, fmt.Errorf("project: worker %d: type is required", i)
 		}
 		if w.ID == "" {
-			return nil, fmt.Errorf("swarm: worker %d: id is required", i)
+			return nil, fmt.Errorf("project: worker %d: id is required", i)
 		}
 	}
 	return cfg, nil

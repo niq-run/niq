@@ -1,15 +1,18 @@
-package swarm
+package control
 
 import (
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/niq-run/niq/internal/swarm/webui"
+	"github.com/niq-run/niq/internal/project"
+	"github.com/niq-run/niq/internal/webui"
 )
 
 func doGet(t *testing.T, url string) (int, string) {
@@ -24,11 +27,25 @@ func doGet(t *testing.T, url string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
+func setupProjectsRoot(t *testing.T) {
+	// Isolate the projects root under a temp ~/.niq by pointing HOME there,
+	// so tests never touch a real ~/.niq/projects.
+	t.Setenv("HOME", t.TempDir())
+}
+
+// fakeTemplate returns a small TemplateConfig usable as a project template.
+func fakeTemplate() *project.TemplateConfig {
+	return &project.TemplateConfig{Workers: []project.WorkerConfig{
+		{Type: "hiw", ID: "default-hiw"},
+		{Type: "reason", ID: "niq", Provider: "volcan-ark", Model: "deepseek-v4-flash"},
+	}}
+}
+
 // TestControlContextAndList verifies the control-plane exposes the SPA mode
 // context and lists projects, isolated under a temp HOME.
 func TestControlContextAndList(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := CreateProject("alpha", fakeTemplate()); err != nil {
+	if _, err := project.CreateProject("alpha", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,7 +102,7 @@ func TestControlTemplates(t *testing.T) {
 	base := newControl(t)
 	code, body := doGet(t, base+"/api/templates")
 	if code != 200 {
-		t.Fatalf("templates status=%d: %s", code, body)
+		t.Fatalf("templates status=%d", code)
 	}
 	if !strings.Contains(body, "default") {
 		t.Fatalf("templates missing default: %s", body)
@@ -96,7 +113,7 @@ func TestControlTemplates(t *testing.T) {
 // returns 409 before any subprocess is launched.
 func TestControlCreateRejectsDuplicate(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := CreateProject("taken", fakeTemplate()); err != nil {
+	if _, err := project.CreateProject("taken", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	base := newControl(t)
@@ -125,7 +142,7 @@ func TestControlCreateRejectsUnknownTemplate(t *testing.T) {
 	if resp.StatusCode != 400 {
 		t.Fatalf("unknown template status=%d, want 400", resp.StatusCode)
 	}
-	if _, err := LoadProject("x"); err == nil {
+	if _, err := project.LoadProject("x"); err == nil {
 		t.Fatal("project should not have been created")
 	}
 }
@@ -164,6 +181,7 @@ func TestControlTemplateCloneDelete(t *testing.T) {
 	if strings.Contains(body, "t1") {
 		t.Fatalf("templates still has t1: %s", body)
 	}
+	_ = os.RemoveAll(filepath.Join(project.TemplatesDir(), "t1.json"))
 }
 
 // TestControlStopNotRunning asserts stopping a project with no live process
@@ -186,20 +204,9 @@ func TestControlStopNotRunning(t *testing.T) {
 // before any subprocess is attempted.
 func TestControlStartProjectNotFound(t *testing.T) {
 	setupProjectsRoot(t)
-	c := NewControl("127.0.0.1:0")
-	addr, err := c.Bind()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = c.Start(ctx) }()
+	base := newControl(t)
 
-	code, _ := doGet(t, "http://"+addr+"/api/projects/nope/start")
-	_ = code
-	// Start uses POST; a GET on the route returns 405 from the mux. We instead
-	// assert via the project-not-found path with the real method.
-	req, _ := http.NewRequest("POST", "http://"+addr+"/api/projects/nope/start", nil)
+	req, _ := http.NewRequest("POST", base+"/api/projects/nope/start", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST: %v", err)

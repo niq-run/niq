@@ -1,7 +1,7 @@
 // Worker persistence for the assembly layer: the concrete WorkerStore
-// implementation, owned by swarm (the layer that decides the storage layout).
+// implementation, owned by project (the layer that decides the storage layout).
 // workerhost only depends on the WorkerStore interface.
-package swarm
+package project
 
 import (
 	"encoding/json"

@@ -1,8 +1,9 @@
 // Package webui provides a web-based human interface for niq.
 //
 // It serves a React SPA that communicates with the backend via HTTP and SSE.
-// It is owned by the swarm binary, not by the HIW worker — the HTTP server
-// directly references HIW (for sending input) and EventLog (for streaming).
+// It is owned by the project/control binaries, not by the HIW worker — the
+// HTTP server directly references HIW (for sending input) and EventLog (for
+// streaming).
 package webui
 
 import (
@@ -58,7 +59,7 @@ type UnmanagedStatus struct {
 }
 
 // UnmanagedController controls external (unmanaged) workers. Implemented by
-// the swarm assembly layer; nil disables the endpoints.
+// the project assembly layer; nil disables the endpoints.
 type UnmanagedController interface {
 	Start(id string) error
 	Stop(id string) error
@@ -208,7 +209,7 @@ func (s *Server) SetUnmanagedController(c UnmanagedController) {
 }
 
 // SetContext records the mode context the single SPA should render in. Safe to
-// call from the swarm assembly after construction and before Start.
+// call from the project assembly after construction and before Start.
 func (s *Server) SetContext(ctx ContextInfo) {
 	s.ctxMu.Lock()
 	defer s.ctxMu.Unlock()

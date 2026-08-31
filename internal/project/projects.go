@@ -3,7 +3,7 @@
 // definitions and lifecycle state live in the workers/ directory
 // (workers/<id>/config.json + state.json) — that directory is the source of
 // truth for which workers exist.
-package swarm
+package project
 
 import (
 	"encoding/json"
@@ -25,7 +25,7 @@ type ProjectPorts struct {
 
 // ProjectWorker is a project worker declaration. Managed workers keep their
 // authoritative config in the worker directory; the entry here is a light
-// reference (id + type). Unmanaged workers are external processes swarm
+// reference (id + type). Unmanaged workers are external processes the project
 // launches after the bus is up, using Command/Env/Cwd; their bus credential is
 // generated on first launch and persisted here.
 type ProjectWorker struct {
@@ -69,7 +69,7 @@ func ProjectPath(id string) string { return filepath.Join(ProjectDir(id), "proje
 // workers/ (and a light entry in project.json); unmanaged workers are declared
 // in project.json with their full launch spec. It fails if a project with the
 // same id already exists.
-func CreateProject(id string, template *SwarmConfig) (*Project, error) {
+func CreateProject(id string, template *TemplateConfig) (*Project, error) {
 	if id == "" {
 		return nil, fmt.Errorf("project: id is required")
 	}

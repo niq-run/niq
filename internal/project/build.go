@@ -1,4 +1,4 @@
-package swarm
+package project
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"github.com/niq-run/niq/ext/service/pgbackend"
 	"github.com/niq-run/niq/ext/service/wsbackend"
 	"github.com/niq-run/niq/ext/worker/workspace"
-	providerpkg "github.com/niq-run/niq/internal/swarm/provider"
+	providerpkg "github.com/niq-run/niq/internal/project/provider"
 	"github.com/niq-run/niq/pkg/service/eventbus"
 	eventbusapi "github.com/niq-run/niq/pkg/service/eventbus/api"
 	"github.com/niq-run/niq/pkg/service/eventbus/transport/inprocess"
@@ -143,7 +143,7 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	compactDirective, _ := p["compact_directive"].(string)
 
 	connect := specConnect(ctx, id, "reason", pubAllow, subAllow)
-	providerSources := providerpkg.NewSwarmProviderSources(provider, apiKey, baseURL, model)
+	providerSources := providerpkg.NewProviderSources(provider, apiKey, baseURL, model)
 	pname, pmodel := providerpkg.InitialProviderInfo(provider, apiKey, baseURL, model)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		w := reason.NewWorker(reason.Config{

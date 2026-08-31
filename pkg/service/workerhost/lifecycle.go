@@ -19,7 +19,7 @@ import (
 )
 
 // Builder constructs a SpawnSpec from a serializable WorkerConfig. Builders
-// are provided by the assembly layer (swarm), which knows the concrete worker
+// are provided by the assembly layer (project), which knows the concrete worker
 // types and the bus transport.
 type Builder func(cfg worker.WorkerConfig) (worker.SpawnSpec, error)
 

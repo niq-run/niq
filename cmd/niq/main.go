@@ -2,9 +2,10 @@
 //
 // Usage:
 //
-//	niq                       — start with the default "default" preset
-//	niq swarm --config <file> — start from a YAML config file
-//	niq swarm --preset <name> — start from a built-in preset
+//	niq                     — start the control plane (default :9527)
+//	niq project list        — list projects and their ports
+//	niq project create <id> — create a project from a template
+//	niq project run <id>    — run a project instance in this process
 package main
 
 import (
@@ -16,7 +17,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/niq-run/niq/internal/swarm"
+	"github.com/niq-run/niq/internal/control"
+	"github.com/niq-run/niq/internal/project"
 )
 
 // version is injected at build time via -ldflags:
@@ -37,15 +39,6 @@ func main() {
 		}
 	}
 
-	// Detect subcommand: "niq control ..." (control-plane, default port 9527)
-	if len(os.Args) > 1 && os.Args[1] == "control" {
-		if err := runControl(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
 	// Detect subcommand: "niq project ..."
 	if len(os.Args) > 1 && os.Args[1] == "project" {
 		if err := runProject(os.Args[2:]); err != nil {
@@ -55,37 +48,29 @@ func main() {
 		return
 	}
 
-	// Detect subcommand: "niq swarm ..."
-	if len(os.Args) > 1 && os.Args[1] == "swarm" {
-		if err := runSwarm(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Default: no args, start with the dev preset.
-	// Also support -config / -preset as top-level flags for convenience.
-	if err := runSwarm(os.Args[1:]); err != nil {
+	// "niq control ..." — explicit control-plane start; bare "niq" is the
+	// shorthand for the same thing.
+	if err := runControl(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func runControl(args []string) error {
-	fs := flag.NewFlagSet("niq control", flag.ContinueOnError)
+	fs := flag.NewFlagSet("niq", flag.ContinueOnError)
 	addr := fs.String("addr", ":9527", "Control-plane listen address")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return swarm.RunControl(swarm.ControlOptions{Addr: *addr})
+	setupLogging()
+	return control.RunControl(control.ControlOptions{Addr: *addr})
 }
 
 func runProject(args []string) error {
 	fs := flag.NewFlagSet("niq project", flag.ContinueOnError)
 	switch {
 	case len(args) >= 1 && args[0] == "list":
-		projects, err := swarm.ListProjects()
+		projects, err := project.ListProjects()
 		if err != nil {
 			return err
 		}
@@ -104,22 +89,22 @@ func runProject(args []string) error {
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
-		path := swarm.ProjectPath(id)
-		if _, err := swarm.LoadProject(id); err == nil {
+		path := project.ProjectPath(id)
+		if _, err := project.LoadProject(id); err == nil {
 			return fmt.Errorf("project %q already exists at %s", id, path)
 		}
-		tmpl, err := swarm.LoadTemplate(swarm.TemplatesDir(), *templateName)
+		tmpl, err := project.LoadTemplate(project.TemplatesDir(), *templateName)
 		if err != nil {
 			return err
 		}
-		p, err := swarm.CreateProject(id, tmpl)
+		p, err := project.CreateProject(id, tmpl)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("created project %q -> %s\n", p.ID, path)
 		return nil
 
-	case len(args) >= 1 && args[0] == "run":
+	case len(args) >= 2 && args[0] == "run":
 		id := args[1]
 		busAddr := fs.String("bus", "", "httptrans bus listen address (empty reuses the project's persisted port)")
 		webUIAddr := fs.String("webui", "", "WebUI listen address (empty reuses the project's persisted port)")
@@ -127,7 +112,7 @@ func runProject(args []string) error {
 			return err
 		}
 		setupProjectLogging(id)
-		return swarm.RunProject(swarm.ProjectRunOptions{
+		return project.RunProject(project.ProjectRunOptions{
 			ProjectID: id,
 			BusAddr:   *busAddr,
 			WebUIAddr: *webUIAddr,
@@ -138,11 +123,25 @@ func runProject(args []string) error {
 	}
 }
 
+// setupLogging sends control-plane logs to ~/.niq/niq.log.
+func setupLogging() {
+	home, _ := os.UserHomeDir()
+	logDir := filepath.Join(home, ".niq")
+	os.MkdirAll(logDir, 0755)
+	f, err := os.OpenFile(filepath.Join(logDir, "niq.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err == nil {
+		log.SetOutput(f)
+	} else {
+		log.SetOutput(io.Discard)
+	}
+	log.SetPrefix("[niq] ")
+}
+
 // setupProjectLogging sends this project process's logs to
 // ~/.niq/projects/<id>/logs/niq-YYYY-MM-DD.log. The date in the filename gives
 // free daily rotation: a new day starts a new file, same-day restarts append.
 func setupProjectLogging(id string) {
-	logDir := filepath.Join(swarm.ProjectDir(id), "logs")
+	logDir := filepath.Join(project.ProjectDir(id), "logs")
 	_ = os.MkdirAll(logDir, 0755)
 	daily := "niq-" + time.Now().Format("2006-01-02") + ".log"
 	f, err := os.OpenFile(filepath.Join(logDir, daily), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -158,40 +157,13 @@ func printUsage() {
 	fmt.Print(`niq - neural interface quantum
 
 Usage:
-  niq                       start with the default "default" preset
-  niq swarm --config <file> start from a YAML config file
-  niq swarm --preset <name> start from a built-in preset
+  niq                       start the control plane (default :9527)
+  niq control --addr :9527  start the control plane explicitly
+  niq project list          list projects and their ports
+  niq project create <id> [--template <name>]
+                            create a project from a template
+  niq project run <id> [--bus :0] [--webui :0]
+                            run a project instance in this process
   niq --version             print version
 `)
-}
-
-func runSwarm(args []string) error {
-	// Set up logging to ~/.niq/niq.log.
-	home, _ := os.UserHomeDir()
-	logDir := filepath.Join(home, ".niq")
-	os.MkdirAll(logDir, 0755)
-	f, err := os.OpenFile(filepath.Join(logDir, "niq.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err == nil {
-		log.SetOutput(f)
-		defer f.Close()
-	} else {
-		log.SetOutput(io.Discard)
-	}
-	log.SetPrefix("[niq] ")
-
-	fs := flag.NewFlagSet("niq", flag.ContinueOnError)
-	configPath := fs.String("config", "", "Path to swarm YAML config")
-	preset := fs.String("preset", "", "Built-in preset name (default, etc.)")
-	webUIAddr := fs.String("webui", ":19763", "WebUI listen address (e.g. :19763)")
-	programsRoot := fs.String("programs-root", "", "Program storage root directory (default: ~/.niq/programs)")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	return swarm.RunSwarm(swarm.RunOptions{
-		ConfigPath:   *configPath,
-		Preset:       *preset,
-		WebUIAddr:    *webUIAddr,
-		ProgramsRoot: *programsRoot,
-	})
 }

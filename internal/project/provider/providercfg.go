@@ -42,12 +42,12 @@ import (
 // metadata such as ContextWindow. When Model is empty and Models is non-empty,
 // Model falls back to Models[0] (see ResolveDefaultModel).
 type Entry struct {
-	Name    string            `json:"name"`
-	Type    string            `json:"type"`
-	APIKey  string            `json:"api_key,omitempty"`
-	BaseURL string            `json:"base_url,omitempty"`
-	Model   string            `json:"model,omitempty"`
-	Models  Models            `json:"models,omitempty"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	APIKey  string `json:"api_key,omitempty"`
+	BaseURL string `json:"base_url,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Models  Models `json:"models,omitempty"`
 	// ContextWindow is the default context-window size (in tokens) applied to
 	// models that do not declare their own (see ModelSpec.ContextWindow) and
 	// when the model API does not report one. It backs the reason worker's
@@ -181,7 +181,7 @@ func Load() (*Config, error) {
 }
 
 // exampleJSON is the skeleton provider config written by EnsureExample. The
-// api_key is intentionally empty: the user fills it in before the swarm starts.
+// api_key is intentionally empty: the user fills it in before the project starts.
 const exampleJSON = `{
   "active": "deepseek",
   "providers": [
