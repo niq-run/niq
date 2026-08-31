@@ -14,7 +14,7 @@ import (
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
-	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
 )
 
 // Config holds configuration for an HTTP worker.
@@ -30,7 +30,7 @@ type Config struct {
 
 // Worker is a bus-connected HTTP tool gateway.
 type Worker struct {
-	worker.BaseWorker
+	baseworker.BaseWorker
 	client    *http.Client
 	started   bool
 	cancelRun context.CancelFunc
@@ -51,7 +51,7 @@ func New(cfg Config) *Worker {
 		c = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &Worker{
-		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
+		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
 			event.NewPattern(event.TypeToolRequest),
 			event.NewPattern(event.TypeToolCancel),
 			event.NewPattern(event.TypeWorkerDiscover),

@@ -9,6 +9,7 @@ import (
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
 )
 
 // Mode controls which tools the WorkspaceWorker registers.
@@ -32,7 +33,7 @@ type Config struct {
 // and directory operations. It delegates I/O to a shared Backend and
 // controls tool availability through its Mode.
 type WorkspaceWorker struct {
-	worker.BaseWorker
+	baseworker.BaseWorker
 	backend   any
 	mode      Mode
 	handlers  map[string]worker.ToolFunc
@@ -48,7 +49,7 @@ func New(cfg Config) *WorkspaceWorker {
 		event.NewPattern(event.TypeWorkerDiscover),
 	}
 	return &WorkspaceWorker{
-		BaseWorker: worker.NewBaseWorker(cfg.ID, subs, cfg.Bus),
+		BaseWorker: baseworker.NewBaseWorker(cfg.ID, subs, cfg.Bus),
 		backend:    cfg.Backend,
 		mode:       cfg.Mode,
 	}

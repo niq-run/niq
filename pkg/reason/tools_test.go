@@ -76,7 +76,7 @@ func keys(m map[string]worker.Tool) []string {
 	return ks
 }
 
-// TestCoreCapabilitiesRegistered / TestCoreCapabilitiesExposedToLLM /
+// TestCoreExtensionsRegistered / TestCoreExtensionsExposedToLLM /
 // TestBroadcastReadyExcludesSelfOnly moved to pkg/worker/reason: the
 // send_message / list_workers / context.compress / context.rotate toolkit (and
 // its SelfOnly announcement behavior) lives in the default worker now, not in

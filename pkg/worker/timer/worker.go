@@ -8,13 +8,13 @@ import (
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
-	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
 )
 
 // Worker is the TimerWorker — a bus-connected timer service.
 // tickafter returns immediately; the actual timer fires a timer.elapsed trigger event later.
 type Worker struct {
-	worker.BaseWorker
+	baseworker.BaseWorker
 	timers    map[string]*Entry
 	started   bool
 	cancelRun context.CancelFunc
@@ -34,7 +34,7 @@ func New(cfg Config) *Worker {
 		id = "timer"
 	}
 	return &Worker{
-		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
+		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
 			event.NewPattern(event.TypeToolRequest),
 			event.NewPattern(event.TypeToolCancel),
 			event.NewPattern(event.TypeWorkerDiscover),
@@ -121,7 +121,7 @@ func (w *Worker) handleCancelEvent(evt event.Event) {
 }
 
 func (w *Worker) handleToolCall(evt event.Event) {
-	tc := worker.ParseToolCall(evt)
+	tc := baseworker.ParseToolCall(evt)
 	args := tc.Args
 
 	switch tc.Name {
@@ -141,9 +141,9 @@ func (w *Worker) handleToolCall(evt event.Event) {
 }
 
 func (w *Worker) handleTickAfter(callID, toolName, callerID string, args map[string]any, traceID string) {
-	durationMS := worker.ArgInt(args, "duration_ms", 0)
-	purpose := worker.ArgString(args, "purpose")
-	tickType := worker.ArgString(args, "tick_type")
+	durationMS := baseworker.ArgInt(args, "duration_ms", 0)
+	purpose := baseworker.ArgString(args, "purpose")
+	tickType := baseworker.ArgString(args, "tick_type")
 
 	w.mu.Lock()
 	w.timers[callID] = afterFunc(w.ID(), w.Channel, callID, callerID,
@@ -159,7 +159,7 @@ func (w *Worker) handleTickAfter(callID, toolName, callerID string, args map[str
 }
 
 func (w *Worker) handleCancel(callID, toolName, callerID string, args map[string]any, traceID string) {
-	timerID := worker.ArgString(args, "timer_id")
+	timerID := baseworker.ArgString(args, "timer_id")
 
 	w.mu.Lock()
 	e, ok := w.timers[timerID]

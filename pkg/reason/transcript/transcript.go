@@ -2,7 +2,7 @@
 // contract a reasoning worker folds into. The godoc for the package lives in
 // worker.go; this file is the transcript's interface plus the inputs that fold
 // into it, and the tool-pairing invariant that constrains them.
-package reason
+package transcript
 
 import "github.com/niq-run/niq/core/llm"
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/pkg/reason/requesttracker"
 )
 
 // Tests for process.go's event-to-input translation: DefaultConverter,
@@ -109,13 +110,13 @@ func TestAbortParksTools(t *testing.T) {
 	w, _, _ := startWorker(t, &staticProvider{})
 	// Simulate a pending tool call.
 	w.mu.Lock()
-	w.toolCallTracker.Add("workspace", []llm.ContentBlock{
+	w.requestTracker.Add("workspace", []llm.ContentBlock{
 		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"},
 	})
 	w.mu.Unlock()
 
 	w.handleAbort(event.New(event.TypeWorkerAbort, "swarm", map[string]any{}))
-	if !w.toolCallTracker.Resolved() {
+	if !w.requestTracker.Resolved() {
 		t.Fatal("abort should park all pending tools")
 	}
 }
@@ -126,10 +127,10 @@ func TestLateToolResult(t *testing.T) {
 	w, _, _ := startWorker(t, &staticProvider{})
 	w.mu.Lock()
 	w.needReason = false
-	w.toolCallTracker.Add("workspace", []llm.ContentBlock{
+	w.requestTracker.Add("workspace", []llm.ContentBlock{
 		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"},
 	})
-	w.toolCallTracker.ParkAll(PreemptCauseTimeout)
+	w.requestTracker.ParkAll(requesttracker.PreemptCauseTimeout)
 	w.mu.Unlock()
 
 	late := event.New(event.TypeToolCompleted, "workspace", map[string]any{
@@ -180,12 +181,12 @@ func TestInputScheduleIsGentle(t *testing.T) {
 	waitCond(t, testTimeout, func() bool {
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		return w.immediateReasoningCause == PreemptCauseInput
+		return w.immediateReasoningCause == requesttracker.PreemptCauseInput
 	}, "schedule input to record cause")
 	w.mu.Lock()
 	cause := w.immediateReasoningCause
 	w.mu.Unlock()
-	if cause != PreemptCauseInput {
+	if cause != requesttracker.PreemptCauseInput {
 		t.Fatalf("schedule input should set immediateReasoningCause, got %q", cause)
 	}
 

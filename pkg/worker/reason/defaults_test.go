@@ -8,33 +8,33 @@ import (
 	reasonBase "github.com/niq-run/niq/pkg/reason"
 )
 
-// TestCoreCapabilitiesRegistered verifies the default worker registers its
-// toolkit on the capability registry: send_message / list_workers as
+// TestCoreExtensionsRegistered verifies the default worker registers its
+// toolkit on the extension registry: send_message / list_workers as
 // tool.request loop-backs and context.compress / context.rotate as worker.update
-// meta capabilities.
-func TestCoreCapabilitiesRegistered(t *testing.T) {
+// meta extensions.
+func TestCoreExtensionsRegistered(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 
-	if cap, ok := w.CapabilityByToolName("send_message"); !ok || cap.Event != event.TypeToolRequest {
-		t.Fatalf("send_message not registered as tool.request capability: %+v ok=%v", cap, ok)
+	if cap, ok := w.ExtensionByToolName("send_message"); !ok || cap.Event != event.TypeToolRequest {
+		t.Fatalf("send_message not registered as tool.request extension: %+v ok=%v", cap, ok)
 	}
-	if cap, ok := w.CapabilityByToolName("context_compress"); !ok || cap.Event != event.TypeWorkerUpdate {
-		t.Fatalf("context_compress not registered as worker.update capability: %+v ok=%v", cap, ok)
+	if cap, ok := w.ExtensionByToolName("context_compress"); !ok || cap.Event != event.TypeWorkerUpdate {
+		t.Fatalf("context_compress not registered as worker.update extension: %+v ok=%v", cap, ok)
 	}
 }
 
-// TestCoreCapabilitiesExposedToLLM verifies the LLM tool list is the union of
+// TestCoreExtensionsExposedToLLM verifies the LLM tool list is the union of
 // the worker's own exposed capabilities and nothing else — provider
 // switch/status are not exposed, and the context meta ops are. The worker
 // learns its own capabilities from its directed full-contract announcement,
 // processed by handleWorkerReady like any other worker's.
-func TestCoreCapabilitiesExposedToLLM(t *testing.T) {
+func TestCoreExtensionsExposedToLLM(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 
 	// The self-directed ready carries the full contract (SelfOnly included).
 	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
-		"watch":     w.WatchEntries(),
+		"watch":     w.ExtensionEntries(),
 	}))
 
 	defs := w.LLMToolDefs()
@@ -63,7 +63,7 @@ func keysOf(m map[string]bool) []string {
 }
 
 // TestBroadcastReadyExcludesSelfOnly verifies the two-part announcement: the
-// presence broadcast excludes this worker and omits SelfOnly capabilities,
+// presence broadcast excludes this worker and omits SelfOnly extensions,
 // while the directed announcement to itself carries the full contract. The
 // worker therefore receives exactly one self-sourced ready (its complete view),
 // which keeps handleWorkerReady's whole-source replacement semantics valid.
@@ -119,19 +119,19 @@ func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
 		t.Fatal("presence broadcast must not carry the SelfOnly core tools")
 	}
 	if !watchHasOp(*presence, "provider.switch") {
-		t.Fatal("presence broadcast must keep non-SelfOnly capabilities")
+		t.Fatal("presence broadcast must keep non-SelfOnly extensions")
 	}
 	if !watchHasName(*directed, "send_message") || !watchHasName(*directed, "list_workers") {
 		t.Fatal("directed announcement must carry the full contract, SelfOnly included")
 	}
 }
 
-// TestMetaCapabilityCallAndStripToolCalls verifies meta capability detection
+// TestMetaExtensionCallAndStripToolCalls verifies meta extension detection
 // and that a meta call (which never produces a tool result) is excluded from
-// the transcript: MetaCapabilityCall flags the response by LLMName, and
+// the transcript: MetaExtensionCall flags the response by LLMName, and
 // StripToolCalls removes all tool_calls while keeping thinking/text. The
 // context.compress / context.rotate meta ops are the default worker's toolkit.
-func TestMetaCapabilityCallAndStripToolCalls(t *testing.T) {
+func TestMetaExtensionCallAndStripToolCalls(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()}) // default toolkit registered at construction
 
 	metaMsg := llm.Message{
@@ -143,8 +143,8 @@ func TestMetaCapabilityCallAndStripToolCalls(t *testing.T) {
 			{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "ws-tmp-niq-test__ls"},
 		},
 	}
-	if _, ok := w.MetaCapabilityCall(metaMsg); !ok {
-		t.Fatal("MetaCapabilityCall should detect context_compress")
+	if _, ok := w.MetaExtensionCall(metaMsg); !ok {
+		t.Fatal("MetaExtensionCall should detect context_compress")
 	}
 
 	stripped := reasonBase.StripToolCalls(metaMsg)
@@ -153,7 +153,7 @@ func TestMetaCapabilityCallAndStripToolCalls(t *testing.T) {
 	}
 
 	plain := llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}}
-	if _, ok := w.MetaCapabilityCall(plain); ok {
-		t.Fatal("MetaCapabilityCall must be false without a meta capability call")
+	if _, ok := w.MetaExtensionCall(plain); ok {
+		t.Fatal("MetaExtensionCall must be false without a meta extension call")
 	}
 }

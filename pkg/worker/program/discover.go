@@ -109,7 +109,7 @@ func (w *Worker) tryLoadProgram(ctx context.Context, dir string) (*program.Progr
 // parseFrontmatter extracts YAML frontmatter and body from markdown content.
 // Frontmatter is delimited by --- lines at the top of the file.
 // The frontmatter is unmarshalled into a program.Meta struct, which includes
-// the Locked field that controls whether meta-capabilities can modify the program.
+// the Locked field that controls whether meta-extensions can modify the program.
 func parseFrontmatter(raw string) (program.Meta, string, error) {
 	var meta program.Meta
 

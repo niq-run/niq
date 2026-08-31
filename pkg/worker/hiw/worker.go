@@ -12,13 +12,13 @@ import (
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
-	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
 )
 
 // Worker is the Human Interface Worker.
 // It publishes worker.input events on behalf of the human user.
 type Worker struct {
-	worker.BaseWorker
+	baseworker.BaseWorker
 	started  bool
 	cancelCh chan struct{}
 	mu       sync.Mutex
@@ -37,7 +37,7 @@ func New(cfg Config) *Worker {
 		id = "webui-hiw"
 	}
 	return &Worker{
-		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
+		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
 			event.NewPattern("*"),
 		}, cfg.Bus),
 		cancelCh: make(chan struct{}),

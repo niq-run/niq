@@ -3,7 +3,7 @@
 // CommitEdit. Concurrency-safe on its own: each method locks internally, and
 // edits (BeginEdit..CommitEdit) run their computation without holding the lock
 // while buffering concurrent external inputs.
-package reason
+package transcript
 
 import (
 	"encoding/json"

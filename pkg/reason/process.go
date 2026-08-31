@@ -23,16 +23,14 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/llm"
-	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
+	"github.com/niq-run/niq/pkg/reason/requesttracker"
+	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
-// process routes an event through one of the dispatch paths:
-//   - abort: park pending tools + recall, clear needReason
-//   - timer.timeout: record system message + schedule (level 2)
-//   - timer.reminder: convert to messages + schedule (level 2)
-//   - worker.ready/gone: learn/forget a worker's tools & events
-//   - tool result: resolve / park-late / update placeholder
-//   - input: convert to messages + schedule (level 1/2/3 via input_mode)
+// - worker.ready/gone: learn/forget a worker's tools & events
+// - tool result: resolve / park-late / update placeholder
+// - input: convert to messages + schedule (level 1/2/3 via input_mode)
 func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -47,14 +45,14 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 	case evt.Type == event.TypeWorkerAbort:
 		w.handleAbort(evt)
 	case evt.Type == event.TypeWorkerUpdate:
-		// Capability channel: route to the registered handler by op.
-		if !w.dispatchCapability(evt) {
-			log.Printf("[reason %s] no capability for worker.update op=%v", w.ID(), evt.Payload["op"])
+		// Extension channel: route to the registered handler by op.
+		if !w.DispatchExtension(evt) {
+			log.Printf("[reason %s] no extension for worker.update op=%v", w.ID(), evt.Payload["op"])
 		}
 	case evt.Type == event.TypeWorkerQuery:
-		// Capability channel: route to the registered handler by subject.
-		if !w.dispatchCapability(evt) {
-			log.Printf("[reason %s] no capability for worker.query subject=%v", w.ID(), evt.Payload["subject"])
+		// Extension channel: route to the registered handler by subject.
+		if !w.DispatchExtension(evt) {
+			log.Printf("[reason %s] no extension for worker.query subject=%v", w.ID(), evt.Payload["subject"])
 		}
 	case evt.Type == "timer.timeout":
 		w.handleTimeout(evt)
@@ -67,16 +65,28 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 	case isToolResultEvent(evt.Type):
 		w.handleToolResult(evt)
 	case evt.Type == event.TypeToolRequest:
-		// Capability channel: a tool.request targeting this worker. The
+		// Extension channel: a tool.request targeting this worker. The
 		// registered tool handler serves it; an unknown tool is rejected.
-		tc := worker.ParseToolCall(evt)
-		if !w.dispatchCapability(evt) {
+		tc := baseworker.ParseToolCall(evt)
+		if !w.DispatchExtension(evt) {
 			w.replyUnknownTool(tc)
 		}
 	case evt.Type == event.TypeWorkerInput:
 		w.handleInput(evt)
 	}
 }
+
+// ContextCompressOpEvent is the convention every reason worker honors: under
+// window pressure the mechanism emits a worker.update with this op, and the
+// worker responds by shrinking its own transcript. The mechanism fires the
+// event; it never performs or books the edit itself — that is the worker's
+// strategy, reached by handling this event. Rotate and any other context op
+// are the worker's own extras; the mechanism does not emit them.
+//
+// The concrete worker registers its compress extension under this same key
+// (rather than hardcoding the literal), so the convention has a single source
+// of truth and renaming it cannot desynchronize the two sides.
+const ContextCompressOpEvent = "context.compress"
 
 // emitContextCompress sends a worker.update event to this worker, requesting
 // the context.compress convention operation through the bus for audit — the
@@ -85,7 +95,7 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 // shrink strategy and does its own bookkeeping. Lock need not be held
 // specially; the event is queued to self and handled asynchronously by process.
 func (w *BaseReasonWorker) emitContextCompress(ctx context.Context) {
-	args := map[string]any{"op": ContextCompressOp}
+	args := map[string]any{"op": ContextCompressOpEvent}
 	evt := event.New(event.TypeWorkerUpdate, w.ID(), args)
 	evt.TraceID = w.currentTraceID
 	_ = w.Channel.Send(ctx, evt, w.ID())
@@ -96,7 +106,7 @@ func (w *BaseReasonWorker) emitContextCompress(ctx context.Context) {
 // the abort in the  needReason is cleared so no new
 // reasoning round starts until the next worker.input.
 func (w *BaseReasonWorker) handleAbort(_ event.Event) {
-	w.interruptReason = PreemptCauseAbort
+	w.interruptReason = requesttracker.PreemptCauseAbort
 
 	// Broadcast reason end
 	hadReasoning := w.cancelReason != nil
@@ -112,12 +122,12 @@ func (w *BaseReasonWorker) handleAbort(_ event.Event) {
 	}
 
 	// Park and recall tool calls
-	tcs := w.parkPending(PreemptCauseAbort)
+	tcs := w.parkPending(requesttracker.PreemptCauseAbort)
 	w.recallToolCalls(tcs)
 
 	// Record the abort in the working transcript so the LLM
 	// knows what happened when the next round starts.
-	w.transcript.Apply(InputPatch{Messages: []llm.Message{{
+	w.transcript.Apply(transcript.InputPatch{Messages: []llm.Message{{
 		Role: llm.RoleUser,
 		Content: []llm.ContentBlock{{Type: llm.ContentText,
 			Text: fmt.Sprintf("[system] reasoning was aborted. %d tool call(s) parked.", len(tcs))}},
@@ -140,7 +150,7 @@ func (w *BaseReasonWorker) handleTimeout(evt event.Event) {
 			Role:    llm.RoleUser,
 			Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "[system] tool call timeout"}},
 		}
-		w.scheduleInput([]llm.Message{msg}, PreemptCauseTimeout)
+		w.scheduleInput([]llm.Message{msg}, requesttracker.PreemptCauseTimeout)
 	}
 }
 
@@ -151,7 +161,7 @@ func (w *BaseReasonWorker) handleTimeout(evt event.Event) {
 func (w *BaseReasonWorker) handleReminder(evt event.Event) {
 	w.captureTraceID(evt)
 	msgs := w.convertEvent(evt)
-	w.scheduleInput(msgs, PreemptCauseReminder)
+	w.scheduleInput(msgs, requesttracker.PreemptCauseReminder)
 }
 
 // handleToolResult processes a tool.completed/failed/rejected event.
@@ -162,15 +172,15 @@ func (w *BaseReasonWorker) handleReminder(evt event.Event) {
 // ignored.
 func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	// Normal resolution of a Pending call.
-	if w.toolCallTracker.HandleResponse(evt) {
+	if w.requestTracker.HandleResponse(evt) {
 		callID, _ := evt.Payload["call_id"].(string)
 		if callID != "" {
 			name, _ := evt.Payload["name"].(string)
 			text, isErr := resultOutcome(evt)
-			w.transcript.Apply(ToolResultPatch{CallID: callID, Name: name, Text: text, IsErr: isErr})
+			w.transcript.Apply(transcript.ToolResultPatch{CallID: callID, Name: name, Text: text, IsErr: isErr})
 		}
 		// All tool calls resolved
-		if w.toolCallTracker.Resolved() {
+		if w.requestTracker.Resolved() {
 			w.cancelTimeout()
 			w.needReason = true
 		}
@@ -178,12 +188,12 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	}
 
 	// Late result for a Parked call.
-	if parked := w.toolCallTracker.ResolveLate(evt); parked != nil {
+	if parked := w.requestTracker.ResolveLate(evt); parked != nil {
 		callID, _ := evt.Payload["call_id"].(string)
 		name, _ := evt.Payload["name"].(string)
 		if callID != "" && name != "" {
 			if text, _ := resultOutcome(evt); text != "" {
-				w.transcript.Apply(LateResultPatch{
+				w.transcript.Apply(transcript.LateResultPatch{
 					CallID: callID, Name: name, Text: text, Cause: string(parked.ParkCause),
 				})
 			}
@@ -213,15 +223,15 @@ func (w *BaseReasonWorker) handleInput(evt event.Event) {
 	case "append":
 		w.appendInput(msgs)
 	case "schedule":
-		w.scheduleInput(msgs, PreemptCauseInput)
+		w.scheduleInput(msgs, requesttracker.PreemptCauseInput)
 	default:
-		w.interruptInput(msgs, PreemptCauseInput)
+		w.interruptInput(msgs, requesttracker.PreemptCauseInput)
 	}
 }
 
 // recallToolCalls best-effort cancels in-flight tool calls by sending a
 // tool.cancel event to each call's target worker.
-func (w *BaseReasonWorker) recallToolCalls(tcs []*ToolCall) {
+func (w *BaseReasonWorker) recallToolCalls(tcs []*requesttracker.TrackedRequest) {
 	byTarget := make(map[string][]string)
 	for _, rc := range tcs {
 		if rc.TargetID != "" {
@@ -244,9 +254,9 @@ func (w *BaseReasonWorker) recallToolCalls(tcs []*ToolCall) {
 // is idle - no in-flight reasoning and no pending tool calls. Does not
 // interrupt or park anything. This is the least intrusive input mode (level 1).
 func (w *BaseReasonWorker) appendInput(msgs []llm.Message) {
-	w.transcript.Apply(InputPatch{Messages: msgs})
+	w.transcript.Apply(transcript.InputPatch{Messages: msgs})
 
-	if !w.isReasoning && w.toolCallTracker.Resolved() {
+	if !w.isReasoning && w.requestTracker.Resolved() {
 		w.needReason = true
 	}
 }
@@ -255,8 +265,8 @@ func (w *BaseReasonWorker) appendInput(msgs []llm.Message) {
 // reasoning round. The pending tools are parked when reason() starts, not
 // here. This is the moderate input mode (level 2) — it does not interrupt
 // an in-flight reasoning call, but ensures the next round responds promptly.
-func (w *BaseReasonWorker) scheduleInput(msgs []llm.Message, cause PreemptCause) {
-	w.transcript.Apply(InputPatch{Messages: msgs})
+func (w *BaseReasonWorker) scheduleInput(msgs []llm.Message, cause requesttracker.PreemptCause) {
+	w.transcript.Apply(transcript.InputPatch{Messages: msgs})
 	w.immediateReasoningCause = cause
 	w.needReason = true
 }
@@ -265,8 +275,8 @@ func (w *BaseReasonWorker) scheduleInput(msgs []llm.Message, cause PreemptCause)
 // and schedules a fresh round. The pending tools are parked when reason()
 // starts. This is the strongest input mode (level 3) — it interrupts the
 // current LLM call so the new input is handled immediately.
-func (w *BaseReasonWorker) interruptInput(msgs []llm.Message, cause PreemptCause) {
-	w.transcript.Apply(InputPatch{Messages: msgs})
+func (w *BaseReasonWorker) interruptInput(msgs []llm.Message, cause requesttracker.PreemptCause) {
+	w.transcript.Apply(transcript.InputPatch{Messages: msgs})
 	w.interruptReason = cause
 	if w.cancelReason != nil {
 		w.cancelReason()
@@ -288,10 +298,10 @@ func (w *BaseReasonWorker) captureTraceID(evt event.Event) {
 // parkPending parks all pending tool calls with the given cause and cancels the
 // current round's timeout timer. Returns the parked calls for callers that need
 // to recall them (e.g., handleAbort).
-func (w *BaseReasonWorker) parkPending(cause PreemptCause) []*ToolCall {
-	tcs := w.toolCallTracker.ParkAll(cause)
+func (w *BaseReasonWorker) parkPending(cause requesttracker.PreemptCause) []*requesttracker.TrackedRequest {
+	tcs := w.requestTracker.ParkAll(cause)
 	for _, rc := range tcs {
-		w.transcript.Apply(ToolParkedPatch{
+		w.transcript.Apply(transcript.ToolParkedPatch{
 			CallID: rc.CallID,
 			Name:   rc.Name,
 			Cause:  string(cause),

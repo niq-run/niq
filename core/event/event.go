@@ -23,18 +23,18 @@ const (
 	TypeWorkerInput    EventType = "worker.input"
 	TypeWorkerAbort    EventType = "worker.abort"
 
-	// Worker meta capabilities: update / updated are the update-command →
+	// Worker meta extensions: update / updated are the update-command →
 	// completion-event pair; query / status are the query-command → snapshot
 	// pair. The specific operation lives in the payload's "op" field (parallel
 	// to tool.request's "name").
-	TypeWorkerUpdate EventType = "worker.update"
+	TypeWorkerUpdate  EventType = "worker.update"
 	TypeWorkerUpdated EventType = "worker.updated"
 	TypeWorkerQuery   EventType = "worker.query"
 	TypeWorkerStatus  EventType = "worker.status"
 
 	// Tool invocation lifecycle.
-	TypeToolRequest  EventType = "tool.request"
-	TypeToolCancel   EventType = "tool.cancel"
+	TypeToolRequest   EventType = "tool.request"
+	TypeToolCancel    EventType = "tool.cancel"
 	TypeToolCompleted EventType = "tool.completed"
 	TypeToolFailed    EventType = "tool.failed"
 	TypeToolRejected  EventType = "tool.rejected"

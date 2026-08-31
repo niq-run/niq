@@ -15,7 +15,7 @@ import (
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
-	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
 	"github.com/niq-run/niq/pkg/service/workerhost"
 )
 
@@ -31,7 +31,7 @@ type Config struct {
 // spawn/suspend/resume tools on the bus. Actual lifecycle operations are
 // delegated to workerhost.WorkerService.
 type HostWorker struct {
-	worker.BaseWorker
+	baseworker.BaseWorker
 	engine  *workerhost.WorkerService
 	started bool
 	cancel  context.CancelFunc
@@ -45,7 +45,7 @@ func New(cfg Config) *HostWorker {
 		id = "host"
 	}
 	return &HostWorker{
-		BaseWorker: worker.NewBaseWorker(id, []event.EventPattern{
+		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
 			event.NewPattern(event.TypeToolRequest),
 			event.NewPattern(event.TypeToolCancel),
 			event.NewPattern(event.TypeWorkerDiscover),

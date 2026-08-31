@@ -9,12 +9,12 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/program"
-	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/pkg/baseworker"
 )
 
 // handleToolCall dispatches tool.request events to the appropriate handler.
 func (w *Worker) handleToolCall(ctx context.Context, evt event.Event) {
-	tc := worker.ParseToolCall(evt)
+	tc := baseworker.ParseToolCall(evt)
 
 	switch tc.Name {
 	case "search":
@@ -33,7 +33,7 @@ func (w *Worker) handleToolCall(ctx context.Context, evt event.Event) {
 }
 
 // handleSearch handles the search tool call.
-func (w *Worker) handleSearch(ctx context.Context, tc worker.ToolCall) {
+func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 	query, _ := tc.Args["query"].(string)
 	ctStr, _ := tc.Args["content_type"].(string)
 
@@ -81,7 +81,7 @@ func (w *Worker) handleSearch(ctx context.Context, tc worker.ToolCall) {
 }
 
 // handleLoad handles the load tool call.
-func (w *Worker) handleLoad(ctx context.Context, tc worker.ToolCall) {
+func (w *Worker) handleLoad(ctx context.Context, tc baseworker.ToolCall) {
 	progName, _ := tc.Args["program"].(string)
 	contentPath, _ := tc.Args["path"].(string)
 
@@ -110,7 +110,7 @@ func (w *Worker) handleLoad(ctx context.Context, tc worker.ToolCall) {
 
 // handleEdit handles the edit tool call.
 // Locked programs cannot be edited via this tool.
-func (w *Worker) handleEdit(ctx context.Context, tc worker.ToolCall) {
+func (w *Worker) handleEdit(ctx context.Context, tc baseworker.ToolCall) {
 	progName, _ := tc.Args["program"].(string)
 	contentPath, _ := tc.Args["path"].(string)
 	oldText, _ := tc.Args["old_text"].(string)
@@ -121,7 +121,7 @@ func (w *Worker) handleEdit(ctx context.Context, tc worker.ToolCall) {
 		return
 	}
 
-	// Locked programs cannot be modified via meta-capabilities.
+	// Locked programs cannot be modified via meta-extensions.
 	if existing, err := w.get(progName); err == nil && existing.Locked {
 		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name,
 			fmt.Sprintf("cannot edit locked program: %q", progName), tc.TraceID)
@@ -142,8 +142,8 @@ func (w *Worker) handleEdit(ctx context.Context, tc worker.ToolCall) {
 // handleRegister handles the register tool call.
 // Programs registered via this tool are always created as unlocked.
 // The Locked flag can only be set through the backend (writing to disk directly)
-// — meta-capabilities cannot create locked programs.
-func (w *Worker) handleRegister(ctx context.Context, tc worker.ToolCall) {
+// — meta-extensions cannot create locked programs.
+func (w *Worker) handleRegister(ctx context.Context, tc baseworker.ToolCall) {
 	name, _ := tc.Args["name"].(string)
 	ctStr, _ := tc.Args["content_type"].(string)
 	desc, _ := tc.Args["description"].(string)
@@ -214,7 +214,7 @@ func (w *Worker) handleRegister(ctx context.Context, tc worker.ToolCall) {
 
 // handleDelete handles the delete tool call.
 // Locked programs cannot be deleted via this tool.
-func (w *Worker) handleDelete(ctx context.Context, tc worker.ToolCall) {
+func (w *Worker) handleDelete(ctx context.Context, tc baseworker.ToolCall) {
 	name, _ := tc.Args["name"].(string)
 
 	if name == "" {

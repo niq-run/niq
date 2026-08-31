@@ -15,6 +15,9 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	llm "github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/pkg/baseworker"
+	"github.com/niq-run/niq/pkg/reason/requesttracker"
+	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
 func (w *BaseReasonWorker) reason(ctx context.Context) {
@@ -73,7 +76,7 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	// from immediateReasoningCause if set, otherwise falls back to Input.
 	cause := w.immediateReasoningCause
 	if cause == "" {
-		cause = PreemptCauseInput
+		cause = requesttracker.PreemptCauseInput
 	}
 	w.immediateReasoningCause = ""
 	w.parkPending(cause)
@@ -205,7 +208,7 @@ func (w *BaseReasonWorker) consumeStream(reasonCtx context.Context, stream *llm.
 					blocks = append(blocks, llm.ContentBlock{Type: llm.ContentText, Text: partialText})
 				}
 				w.mu.Lock()
-				w.transcript.Apply(PartialOutputPatch{Message: llm.Message{
+				w.transcript.Apply(transcript.PartialOutputPatch{Message: llm.Message{
 					Role:       llm.RoleAssistant,
 					Content:    blocks,
 					StopReason: "interrupted",
@@ -331,7 +334,7 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// The applied assistant message carries only thinking/text; handleToolCalls
 	// still sees the calls and emits worker.update.
 	appliedMsg := finalMsg
-	if _, isMeta := w.metaCapabilityCall(finalMsg); isMeta {
+	if _, isMeta := w.metaExtensionCall(finalMsg); isMeta {
 		appliedMsg = stripToolCalls(finalMsg)
 	}
 	// Guarantee every tool call carries a stable id before it enters the
@@ -342,11 +345,12 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// the guarantee provider-agnostic and ensures the matching tool_result
 	// reuses the same id via the tracker.
 	w.ensureToolCallIDs(finalMsg)
-	w.transcript.Apply(AssistantOutputPatch{Message: appliedMsg})
+	w.transcript.Apply(transcript.AssistantOutputPatch{Message: appliedMsg})
 
 	// Budget check: record the round's usage and act on thresholds
-	// (soft: remind, hard: schedule compaction). Expects w.mu held.
-	w.handleBudget(ctx, finalMsg)
+	// (soft: remind, hard: emit the context.compress convention event).
+	// Expects w.mu held.
+	w.handleContextBudget(ctx, finalMsg)
 
 	// Collect tool calls and thinking blocks from the response.
 	var toolCalls []llm.ContentBlock
@@ -382,14 +386,65 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	w.tryReason(ctx)
 }
 
-// metaCapabilityCall reports whether any tool call in msg targets a registered
-// meta capability (one whose event is worker.update / worker.query, exposed to
+// handleContextBudget updates the token ledger from a completed round's final
+// message and acts on the context-window budget thresholds: reminder (soft) or
+// the context.compress convention event (hard). It runs at the end of every
+// reasoning round, so it lives next to its only caller, finishReasoning.
+// Expects w.mu held.
+//
+// The mechanism only FIRES the convention event under hard pressure — it never
+// edits the transcript and does no bookkeeping (it cannot observe the async
+// handler); shrinking is the worker's own strategy. A token ledger records the
+// latest round-trip usage (InputTokens + OutputTokens snapshot, never
+// accumulated) from the response's Usage; against the model's ContextWindow it
+// yields an occupancy ratio with two exits:
+//
+//	>= budget_soft -> guided: inject a reminder, the LLM decides to call
+//	   the context_compress tool
+//	>= budget_hard -> direct: emit the context.compress event and return;
+//	   the worker shrinks the transcript asynchronously.
+func (w *BaseReasonWorker) handleContextBudget(ctx context.Context, msg llm.Message) {
+	if msg.Usage == nil || w.contextWindow <= 0 {
+		return
+	}
+	w.lastUsageTokens = msg.Usage.InputTokens + msg.Usage.OutputTokens
+
+	ratio := float64(w.lastUsageTokens) / float64(w.contextWindow)
+	switch {
+	case ratio >= w.budgetHard:
+		// Direct exit: the mechanism emits the context.compress convention
+		// event and returns. The worker responds by shrinking its transcript;
+		// the mechanism performs no edit and does no bookkeeping here (it
+		// cannot observe the async handler). Single audit path via the bus.
+		log.Printf("[reason %s] context hard budget %.0f%% (%d/%d tokens) - requesting compress",
+			w.ID(), ratio*100, w.lastUsageTokens, w.contextWindow)
+		w.budgetReminded = false
+		w.emitContextCompress(ctx)
+	case ratio >= w.budgetSoft && !w.budgetReminded:
+		// Guided exit: one reminder per crossing; the LLM decides.
+		w.budgetReminded = true
+		log.Printf("[reason %s] context soft budget %.0f%% (%d/%d tokens) - reminding",
+			w.ID(), ratio*100, w.lastUsageTokens, w.contextWindow)
+		w.transcript.Apply(transcript.InputPatch{Messages: []llm.Message{{
+			Role: llm.RoleUser,
+			Content: []llm.ContentBlock{{Type: llm.ContentText,
+				Text: fmt.Sprintf("[system] Context usage is at %d%% of the model window (%d/%d tokens). "+
+					"Consider calling the context_compress tool to summarize older history before continuing.",
+					int(ratio*100), w.lastUsageTokens, w.contextWindow)}},
+		}}})
+	case ratio < w.budgetSoft:
+		w.budgetReminded = false
+	}
+}
+
+// metaExtensionCall reports whether any tool call in msg targets a registered
+// meta extension (one whose event is worker.update / worker.query, exposed to
 // the LLM by its default tool name). When present, the round's tool calls are excluded
 // from the transcript and the meta operation runs via its own event.
-func (w *BaseReasonWorker) metaCapabilityCall(msg llm.Message) (llm.ContentBlock, bool) {
+func (w *BaseReasonWorker) metaExtensionCall(msg llm.Message) (llm.ContentBlock, bool) {
 	for _, b := range msg.Content {
 		if b.Type == llm.ContentToolCall {
-			if cap, ok := w.capabilityByToolName(b.ToolName); ok && cap.Event != event.TypeToolRequest {
+			if cap, ok := w.extensionByToolName(b.ToolName); ok && cap.Event != event.TypeToolRequest {
 				return b, true
 			}
 		}
@@ -430,16 +485,16 @@ func (w *BaseReasonWorker) ensureToolCallIDs(msg llm.Message) {
 func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.ContentBlock, traceID string) {
 	busCalls := toolCalls
 
-	// Meta capabilities (event != tool.request) directly edit this worker's
+	// Meta extensions (event != tool.request) directly edit this worker's
 	// own state and bypass the tool lifecycle: no placeholder, no tracker, no
-	// dispatch. If any call in this batch targets a meta capability, the batch
+	// dispatch. If any call in this batch targets a meta extension, the batch
 	// is handled by the meta path: the meta call is converted back into its
 	// worker.update / worker.query event and sent to self, which reason
 	// processes asynchronously.
 	var metaCall *llm.ContentBlock
-	var metaCap Capability
+	var metaCap baseworker.Extension
 	for i := range busCalls {
-		if cap, ok := w.capabilityByToolName(busCalls[i].ToolName); ok && cap.Event != event.TypeToolRequest {
+		if cap, ok := w.extensionByToolName(busCalls[i].ToolName); ok && cap.Event != event.TypeToolRequest {
 			metaCall = &busCalls[i]
 			metaCap = cap
 			break
@@ -447,19 +502,19 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	}
 	if metaCall != nil {
 		// All tool calls were already excluded from the transcript in
-		// finishReasoning once a meta capability was present, so nothing here
+		// finishReasoning once a meta extension was present, so nothing here
 		// needs pairing. If a newer input already requested reasoning, the
 		// meta operation yields (dropped — nothing is dispatched or applied);
 		// the next round re-decides.
 		if w.needReason {
-			log.Printf("[reason %s] meta capability %s yielded to pending input", w.ID(), metaCall.ToolName)
+			log.Printf("[reason %s] meta extension %s yielded to pending input", w.ID(), metaCall.ToolName)
 			w.isReasoning = false
 			w.mu.Unlock()
 			w.tryReason(ctx)
 			return
 		}
 
-		// Convert the tool call back into the capability's event (e.g.
+		// Convert the tool call back into the extension's event (e.g.
 		// context_compress → worker.update op=context.compress) and send it to
 		// self, routed via the bus for audit; the meta operation completes
 		// asynchronously and schedules the next round.
@@ -493,7 +548,7 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 		}
 	}
 
-	w.transcript.Apply(ToolPlaceholdersPatch{Calls: busCalls})
+	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: busCalls})
 
 	// Group tool calls by target worker, then publish tool.request
 	// for each group. The bus routes each batch to the correct worker.
@@ -509,9 +564,9 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	var unavailable []string
 	for _, tc := range busCalls {
 		var failReason string
-		// Own tool capabilities (default tool name = tool name) loop back to
+		// Own tool extensions (default tool name = tool name) loop back to
 		// this worker; they are served by the registered tool handler.
-		if cap, ok := w.capabilityByToolName(tc.ToolName); ok && cap.Event == event.TypeToolRequest {
+		if cap, ok := w.extensionByToolName(tc.ToolName); ok && cap.Event == event.TypeToolRequest {
 			callsByTarget[w.ID()] = append(callsByTarget[w.ID()], tc)
 			continue
 		}
@@ -537,7 +592,7 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 		// into the transcript, and do not dispatch.
 		log.Printf("[reason %s] unavailable tool %s (%s) - not dispatched", w.ID(), tc.ToolName, failReason)
 		unavailable = append(unavailable, tc.ToolName)
-		w.transcript.Apply(ToolResultPatch{
+		w.transcript.Apply(transcript.ToolResultPatch{
 			CallID: tc.ToolCallID,
 			Name:   tc.ToolName,
 			Text:   "Unknown tool '" + tc.ToolName + "': " + failReason + " - not dispatched.",
@@ -545,7 +600,7 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 		})
 	}
 	for target, calls := range callsByTarget {
-		w.toolCallTracker.Add(target, calls)
+		w.requestTracker.Add(target, calls)
 		w.sendToolRequests(target, w.ID(), calls, traceID)
 	}
 	if len(unavailable) > 0 {

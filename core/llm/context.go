@@ -1,17 +1,16 @@
 package llm
 
-
 // Context describes the full input for an LLM call: system prompt, message
 // history, tools, and generation parameters.
 type Context struct {
-	SystemPrompt    string
-	Messages        []Message
-	Tools           []ToolDef
-	Model           string
-	Temperature     *float32
-	MaxTokens       *int
-	TopP            *float32
-	Stop            []string
+	SystemPrompt string
+	Messages     []Message
+	Tools        []ToolDef
+	Model        string
+	Temperature  *float32
+	MaxTokens    *int
+	TopP         *float32
+	Stop         []string
 
 	// ReasoningEffort controls reasoning depth for o-series models: "low", "medium", "high".
 	ReasoningEffort *string
