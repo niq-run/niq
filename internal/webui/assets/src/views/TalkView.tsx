@@ -643,6 +643,14 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         ? content + '\n\n—— result ——\n\n' + mergedResult
         : toolContent(evt, false)).length
       const summary = toolSummary(evt)
+      // Code-block styling for the tool bodies. react-syntax-highlighter puts
+      // its own white-space on the <code> element, so the wrap toggle must be
+      // applied there too, not just on the <pre> via customStyle.
+      const hlStyle = dark ? vscDarkPlus : oneLight
+      const codeWrapStyle: React.CSSProperties = {
+        whiteSpace: wrapCode ? 'pre-wrap' : 'pre',
+        wordBreak: wrapCode ? 'break-word' : 'normal',
+      }
       // Status colour: an answered invocation takes the outcome colour
       // (completed/failed/rejected); an in-flight one stays toolRequested.
       const statusColor = isInvocation
@@ -754,7 +762,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     </div>
                     <SyntaxHighlighter
                       language="json"
-                      style={dark ? vscDarkPlus : oneLight}
+                      style={hlStyle}
+                      codeTagProps={{ style: codeWrapStyle }}
                       PreTag="div"
                       customStyle={{
                         margin: 0,
@@ -777,7 +786,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     </div>
                     <SyntaxHighlighter
                       language="json"
-                      style={dark ? vscDarkPlus : oneLight}
+                      style={hlStyle}
+                      codeTagProps={{ style: codeWrapStyle }}
                       PreTag="div"
                       customStyle={{
                         margin: 0,
@@ -798,7 +808,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                 ) : (
                   <SyntaxHighlighter
                     language="json"
-                    style={dark ? vscDarkPlus : oneLight}
+                    style={hlStyle}
+                    codeTagProps={{ style: codeWrapStyle }}
                     PreTag="div"
                     customStyle={{
                       margin: 0,
@@ -822,7 +833,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
                 <SyntaxHighlighter
                   language="json"
-                  style={dark ? vscDarkPlus : oneLight}
+                  style={hlStyle}
+                  codeTagProps={{ style: codeWrapStyle }}
                   PreTag="div"
                   customStyle={{
                     margin: 0,
