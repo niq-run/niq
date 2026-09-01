@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { type WorkerInfo, type ProviderOption, type ProviderSelection } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
-import { suspendWorker, resumeWorker, fetchWorkerProviders, switchWorkerProvider } from '../services/api'
+import { suspendWorker, resumeWorker, fetchWorkerProviders, switchWorkerProvider, updateWorkerAllow } from '../services/api'
 
 interface WorkerDetailProps {
   worker: WorkerInfo
@@ -18,6 +18,8 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
   const connection = worker.online === false ? 'offline' : 'online'
   const lifecycle = worker.managed ? (suspended ? 'suspended' : 'running') : '\u2014'
   const typeColor = worker.type ? getWorkerTypeColor(worker.type, colors) : colors.textDimmed
+  const [editingSub, setEditingSub] = useState(false)
+  const [subNote, setSubNote] = useState('')
 
   const handleAction = async () => {
     if (suspended) await resumeWorker(worker.id)
@@ -93,14 +95,28 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
             <AllowTags items={(worker.publish_allow || []).map((t) => ({ label: t, title: t }))} colors={colors} />
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, margin: '16px 0 8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
               Subscribe Allow
+              <span
+                onClick={() => { setEditingSub((v) => !v); setSubNote('') }}
+                className="btn-hover"
+                style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, textTransform: 'none', letterSpacing: 0, marginLeft: 10, userSelect: 'none' }}
+              >
+                {editingSub ? 'close' : 'edit'}
+              </span>
             </div>
-            <AllowTags
-              items={(worker.subscribe_allow || []).map((p) => ({
-                label: p.source_id ? `${p.type}@${p.source_id}` : p.type,
-                title: p.source_id ? `${p.type} from ${p.source_id}` : p.type,
-              }))}
-              colors={colors}
-            />
+            {!editingSub ? (
+              <AllowTags
+                items={(worker.subscribe_allow || []).map((p) => ({
+                  label: p.source_id ? `${p.type}@${p.source_id}` : p.type,
+                  title: p.source_id ? `${p.type} from ${p.source_id}` : p.type,
+                }))}
+                colors={colors}
+              />
+            ) : (
+              <SubscribeAllowEditor worker={worker} onDone={(note) => { setEditingSub(false); setSubNote(note) }} />
+            )}
+            {subNote && (
+              <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{subNote}</div>
+            )}
           </div>
 
           {/* Action area, separated by a horizontal line */}
@@ -332,6 +348,105 @@ function ProviderSection({ workerId }: { workerId: string }) {
               </div>
             </>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// SubscribeAllowEditor edits a worker's SubscribeAllow list against the bus
+// registry. Each row is a type (supports "*", "Prefix.*", exact) plus an
+// optional source restricting delivery to events published by that worker.
+// Saving replaces the whole list; the worker list polls every few seconds and
+// refreshes the read-only chips after the round trip.
+function SubscribeAllowEditor({ worker, onDone }: { worker: WorkerInfo; onDone: (note: string) => void }) {
+  const { colors } = useTheme()
+  const [rows, setRows] = useState<{ type: string; source: string }[]>(() =>
+    (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source_id || '' })),
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const inputStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    padding: '5px 8px',
+    fontSize: fontSizes.sm,
+    fontFamily: 'monospace',
+    background: colors.bgLight,
+    color: colors.text,
+    border: '1px solid ' + colors.border,
+    borderRadius: 4,
+  }
+
+  const save = async () => {
+    const valid = rows.filter((r) => r.type.trim() !== '')
+    if (valid.length === 0 && rows.length > 0) {
+      setError('each row needs an event type')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await updateWorkerAllow(worker.id, {
+        subscribe_allow: valid.map((r) =>
+          r.source.trim() ? { type: r.type.trim(), source_id: r.source.trim() } : { type: r.type.trim() },
+        ),
+      })
+      onDone('saved — takes effect immediately')
+    } catch (e) {
+      setError((e as Error)?.message || 'save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+          <input
+            value={r.type}
+            placeholder="event type (worker.ready, request.*, …)"
+            onChange={(e) => { const n = [...rows]; n[i] = { ...n[i], type: e.target.value }; setRows(n) }}
+            style={inputStyle}
+          />
+          <input
+            value={r.source}
+            placeholder="source (optional)"
+            onChange={(e) => { const n = [...rows]; n[i] = { ...n[i], source: e.target.value }; setRows(n) }}
+            style={{ ...inputStyle, flex: '0 1 150px' }}
+          />
+          <span
+            onClick={() => setRows(rows.filter((_, j) => j !== i))}
+            className="btn-hover"
+            title="remove"
+            style={{ cursor: 'pointer', color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none', padding: '0 4px' }}
+          >
+            {'\u2715'}
+          </span>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+        <span
+          onClick={() => setRows([...rows, { type: '', source: '' }])}
+          className="btn-hover"
+          style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+        >
+          + add
+        </span>
+        <span
+          onClick={save}
+          className="btn-hover"
+          style={{ cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+        >
+          {saving ? 'Saving…' : 'save'}
+        </span>
+        {error && <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</span>}
+      </div>
+      {rows.length === 0 && (
+        <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 8, lineHeight: 1.5 }}>
+          no subscriptions — the worker receives no broadcasts (directed calls and their results still reach it)
         </div>
       )}
     </div>

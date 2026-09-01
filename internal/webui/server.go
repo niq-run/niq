@@ -109,6 +109,11 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// host-managed lifecycle state.
 	mux.HandleFunc("GET /api/workers", s.handleWorkers)
 
+	// Allow lists: edit a worker's publish/subscribe allow on the bus registry.
+	// Both lists are replaced wholesale when present; a missing field keeps the
+	// current value. Changes take effect immediately for broadcast routing.
+	mux.HandleFunc("PUT /api/workers/{id}/allow", s.handleUpdateAllow)
+
 	// Suspend / resume a host-managed worker (via the host worker's tools).
 	mux.HandleFunc("POST /api/workers/{id}/suspend", s.handleSuspend)
 	mux.HandleFunc("POST /api/workers/{id}/resume", s.handleResume)
@@ -403,6 +408,44 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
 
 	json.NewEncoder(w).Encode(views)
+}
+
+// handleUpdateAllow edits a worker's allow lists on the bus registry. The
+// request may carry either or both lists; a missing one keeps the current
+// value, so callers can edit just subscribe_allow (or just publish_allow)
+// without echoing the other back. SubscribeAllow patterns support the
+// optional source restriction ({"type","source_id"}).
+func (s *Server) handleUpdateAllow(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	idt, ok := s.registry.Lookup(id)
+	if !ok {
+		http.Error(w, "worker not found", http.StatusNotFound)
+		return
+	}
+	var req struct {
+		PublishAllow   []string             `json:"publish_allow"`
+		SubscribeAllow []event.EventPattern `json:"subscribe_allow"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	pubAllow := idt.PublishAllow
+	if req.PublishAllow != nil {
+		pubAllow = req.PublishAllow
+	}
+	subAllow := idt.SubscribeAllow
+	if req.SubscribeAllow != nil {
+		subAllow = req.SubscribeAllow
+	}
+	if err := s.registry.Update(id, pubAllow, subAllow); err != nil {
+		http.Error(w, "update allow: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[webui] updated allow lists for %s", id)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // handleSuspend suspends a host-managed worker by sending the host worker's

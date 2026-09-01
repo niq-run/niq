@@ -1,6 +1,7 @@
 // API service — all backend HTTP calls
 import type {
   ContextInfo,
+  EventPattern,
   ProjectInfo,
   ProjectStartResult,
   ProviderListResult,
@@ -142,6 +143,21 @@ export async function suspendWorker(id: string): Promise<void> {
 
 export async function resumeWorker(id: string): Promise<void> {
   await fetch(p(`/api/workers/${encodeURIComponent(id)}/resume`), { method: 'POST' })
+}
+
+// updateWorkerAllow edits a worker's allow lists on the bus registry. Either
+// list may be omitted to keep its current value. SubscribeAllow patterns may
+// carry the optional source restriction ({type, source_id}).
+export async function updateWorkerAllow(
+  id: string,
+  allow: { publish_allow?: string[]; subscribe_allow?: EventPattern[] },
+): Promise<void> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/allow`), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(allow),
+  })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'update allow failed: ' + res.status)
 }
 
 // fetchWorkerProviders asks a reason worker for its selectable providers and
