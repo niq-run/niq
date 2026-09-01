@@ -36,8 +36,8 @@ type ProjectWorker struct {
 	Command       []string          `json:"command,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
 	Cwd           string            `json:"cwd,omitempty"`
-	Subscriptions []string          `json:"subscriptions,omitempty"`
-	Publish       []string          `json:"publish,omitempty"`
+	Subscriptions []SubscriptionSpec `json:"subscriptions,omitempty"`
+	Publish       []string           `json:"publish,omitempty"`
 }
 
 // Project is the on-disk definition for one project: its ports, archived
