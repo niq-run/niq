@@ -7,7 +7,6 @@ import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useTheme, fontSizes } from '../theme'
 import { makeMdComponents } from '../components/MarkdownComponents'
 import ThinkingBlock from '../components/ThinkingBlock'
-import WorkerUpdateBlock from '../components/WorkerUpdateBlock'
 import ResponseBlock from '../components/ResponseBlock'
 import TimerElapsedBlock from '../components/TimerElapsedBlock'
 import {
@@ -107,11 +106,15 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // Filter events by selected workers. When no workers selected, show all.
   const relevantEvents = useMemo(() => {
     return events.filter(evt => {
-      if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort' && evt.type !== 'worker.update' && evt.type !== 'worker.updated') return false
+      if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort') return false
+      // Internal meta plumbing (context.compress / provider.*) is never a
+      // talk row — the LLM-facing tool card (tool.request + request.*) is its
+      // user-facing representation.
+      if (evt.type === 'context.compress' || evt.type === 'context.rotate' || evt.type.startsWith('provider.')) return false
       // Delta / partial events are never rendered as standalone rows. When
       // streaming mode is on they're consumed to build the streaming UI;
       // when off they're dropped entirely.
-      if (evt.type === 'reason.thinking_delta' || evt.type === 'reason.text_delta' || evt.type === 'tool.partial') return false
+      if (evt.type === 'reason.thinking_delta' || evt.type === 'reason.text_delta' || evt.type === 'request.progressed') return false
       // Tool events belong to the reasoning conversation only when a reason
       // worker is a party (caller or target). Host lifecycle calls (hiw->host
       // suspend/resume), which involve no reason worker, stay out of talk.
@@ -168,15 +171,15 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       .map(([tid, v]) => ({ traceId: tid, ...v }))
   }, [events, streamingMode, talkWorkers, deliveries])
 
-  // Live tool output: accumulate tool.partial by call_id. Only populated when
+  // Live tool output: accumulate request.progressed by request_id. Only populated when
   // streaming mode is on; the partial text renders inside the matching
   // tool.request card.
   const toolPartials = useMemo(() => {
     if (!streamingMode) return {} as Record<string, string>
     const map: Record<string, string> = {}
     for (const evt of events) {
-      if (evt.type !== 'tool.partial') continue
-      const callId = (evt.payload?.call_id as string) || ''
+      if (evt.type !== 'request.progressed') continue
+      const callId = (evt.request_id as string) || ''
       if (!callId) continue
       // Respect the same talkWorkers filter as relevantEvents.
       if (talkWorkers.size > 0) {
@@ -188,12 +191,13 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const partial = (evt.payload?.partial as string) || ''
       map[callId] = (map[callId] || '') + partial
     }
-    // Once a tool has a terminal event (completed/failed/rejected), its result
-    // card takes over and the live streaming content in the tool.request
-    // card is cleared.
+    // Once a tool reaches a terminal event (completed/failed/rejected/cancel),
+    // its result card takes over and the live streaming content in the
+    // tool.request card is cleared. Progressed events are NOT terminal — they
+    // keep accumulating above.
     for (const evt of events) {
-      if (isToolEvent(evt.type) && evt.type !== 'tool.request') {
-        const callId = (evt.payload?.call_id as string) || ''
+      if (evt.type === 'request.completed' || evt.type === 'request.failed' || evt.type === 'request.rejected' || evt.type === 'request.cancel') {
+        const callId = (evt.request_id as string) || ''
         if (callId) delete map[callId]
       }
     }
@@ -324,7 +328,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     if (isReasonBoundary(evt.type)) continue
     // Response-only mode: hide the intermediate process (thinking + tool calls,
     // including cancels).
-    if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || evt.type === 'tool.cancel' || isToolEvent(evt.type) || evt.type === 'worker.update' || evt.type === 'worker.updated' || evt.type === 'worker.query' || evt.type === 'worker.status')) continue
+    if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || isToolEvent(evt.type))) continue
 
     // System events (timer/abort) always render their sender avatar, so they
     // must also advance the avatar streak — otherwise the next reason worker
@@ -517,8 +521,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       continue
     }
 
-    // tool.cancel — a cancelled tool call notice, styled like the tool blocks
-    if (evt.type === 'tool.cancel') {
+    // request.cancel — a cancelled request notice, styled like the tool blocks
+    if (evt.type === 'request.cancel') {
       nodes.push(
         <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
 <div style={{ border: '1px solid ' + colors.border, padding: tPad, fontSize: tFontSize, lineHeight: 1.5, color: colors.textDim }}>
@@ -582,19 +586,19 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const contentLen = toolContent(evt, false).length
       const summary = toolSummary(evt)
       const statusColor = evt.type === 'tool.request' ? colors.toolRequested
-        : evt.type === 'tool.completed' ? colors.toolCompleted
-        : evt.type === 'tool.failed' ? colors.toolFailed
+        : evt.type === 'request.completed' ? colors.toolCompleted
+        : evt.type === 'request.failed' ? colors.toolFailed
         : colors.textDim
 
       const toolLabel = evt.type === 'tool.request' ? 'Tool Call'
-        : evt.type === 'tool.completed' ? 'Tool Result'
-        : evt.type === 'tool.failed' ? 'Tool Failed'
+        : evt.type === 'request.completed' ? 'Tool Result'
+        : evt.type === 'request.failed' ? 'Tool Failed'
         : 'Tool Rejected'
 
       // Dim other tool events when one is expanded
       const isDimmed = anyToolExpanded && !isExpanded
 
-      // Streaming: accumulated tool.partial output shown live in the
+      // Streaming: accumulated request.progressed output shown live in the
       // tool.request card while the call is in flight.
       const partialText = evt.type === 'tool.request' ? (toolPartials[callId] || '') : ''
 
@@ -640,7 +644,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     <span style={{ width: 8, height: 8, borderRadius: 4, background: isDimmed ? colors.textDimmed : statusColor, flexShrink: 0, opacity: 0.5 }} />
                     <span style={{ color: isDimmed ? colors.textDimmed : colors.textDim, fontSize: tFontSize }}>{toolLabel} {summary}</span>
                   </span>
-                  {(evt.type === 'tool.completed' || evt.type === 'tool.request') && contentLen > 0 && (
+                  {(evt.type === 'request.completed' || evt.type === 'tool.request') && contentLen > 0 && (
                     <>
                       <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
                       <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{contentLen} chars</span>
@@ -753,17 +757,6 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             </div>
           )}
           <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} />
-        </div>
-      )
-    } else if (evt.type === 'worker.update' || evt.type === 'worker.updated' || evt.type === 'worker.status') {
-      nodes.push(
-        <div key={evt.id} style={{ maxWidth: bubbleMax }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
-              <WorkerBadge id={evt.worker_id} show={true} />
-            </div>
-          )}
-          <WorkerUpdateBlock evt={evt} compact={compactMode} />
         </div>
       )
     } else {

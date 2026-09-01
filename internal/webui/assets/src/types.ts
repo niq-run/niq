@@ -5,6 +5,7 @@ export interface EventPayload {
   target_worker_id: string
   timestamp: number
   trace_id: string
+  request_id?: string
   recipients?: string[]
   payload: Record<string, any>
 }
@@ -31,7 +32,7 @@ export interface WorkerInfo {
 }
 
 // ProviderOption is one selectable LLM provider of a reason worker, as
-// reported by the worker itself via worker.query provider.list.
+// reported by the worker itself via the provider.list event.
 export interface ProviderOption {
   name: string
   default: string

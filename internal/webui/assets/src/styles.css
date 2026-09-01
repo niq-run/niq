@@ -94,7 +94,7 @@
 .picker-row { transition: background 0.12s; }
 .picker-row:hover { background: rgba(128,128,128,0.15); }
 
-/* ── Collapsible content blocks (thinking, tool cards, worker update): subtle
+/* ── Collapsible content blocks (thinking, tool cards, request results): subtle
    background on hover so their click-to-toggle affordance is visible */
 .block-card { transition: background 0.12s, border-color 0.12s; }
 .block-card:hover { background: rgba(128,128,128,0.10); }
