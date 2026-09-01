@@ -121,6 +121,11 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
             {worker.managed ? (
               <>
                 <div style={{ marginBottom: 22 }}>
+                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
+                    {suspended
+                      ? 'Resume the worker: reconnect it to the bus and restart it from its last snapshot.'
+                      : 'Suspend the worker: stop it and release its bus connection (state is kept on disk).'}
+                  </div>
                   <span
                     onClick={handleAction}
                     className="btn-hover"
@@ -128,13 +133,13 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
                   >
                     {suspended ? 'resume' : 'suspend'}
                   </span>
-                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>
-                    {suspended
-                      ? 'Resume the worker: reconnect it to the bus and restart it from its last snapshot.'
-                      : 'Suspend the worker: stop it and release its bus connection (state is kept on disk).'}
-                  </div>
                 </div>
                 <div>
+                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
+                    {isArchived
+                      ? 'Restore the worker: show it again in the worker selector.'
+                      : 'Archive the worker: hide it from the worker selector until you restore it here.'}
+                  </div>
                   <span
                     onClick={() => onToggleArchived(worker.id)}
                     className="btn-hover"
@@ -142,11 +147,6 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
                   >
                     {isArchived ? 'restore' : 'archive'}
                   </span>
-                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>
-                    {isArchived
-                      ? 'Restore the worker: show it again in the worker selector.'
-                      : 'Archive the worker: hide it from the worker selector until you restore it here.'}
-                  </div>
                 </div>
               </>
             ) : (
