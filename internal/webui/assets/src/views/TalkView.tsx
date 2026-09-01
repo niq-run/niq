@@ -34,6 +34,76 @@ interface TalkViewProps {
   isMobile: boolean
 }
 
+// StreamTrace is one in-flight reason trace being accumulated from
+// reason.*_delta events, dropped once its final reason.thinking / reason.response
+// arrives.
+type StreamTrace = { traceId: string; thinking: string; text: string; workerId: string; lastTs: number }
+
+// computeStreamingTraces accumulates reason.*_delta by trace_id. A trace is
+// dropped once its terminal reason.thinking / reason.response event arrives.
+function computeStreamingTraces(events: EventPayload[], talkWorkers: Set<string>, deliveries: Record<string, string[]>): StreamTrace[] {
+  const map: Record<string, { thinking: string; text: string; workerId: string; lastTs: number }> = {}
+  const finalized = new Set<string>()
+  for (const evt of events) {
+    const t = evt.type
+    if (t !== 'reason.thinking_delta' && t !== 'reason.text_delta' &&
+        t !== 'reason.thinking' && t !== 'reason.response') continue
+    const tid = evt.trace_id
+    if (!tid) continue
+    if (t === 'reason.thinking' || t === 'reason.response') {
+      finalized.add(tid)
+      continue
+    }
+    if (finalized.has(tid)) continue
+    // Respect the same talkWorkers filter as relevantEvents.
+    if (talkWorkers.size > 0) {
+      const recipients = deliveries[evt.id] || evt.recipients
+      if (!talkWorkers.has(evt.worker_id) &&
+          !talkWorkers.has(evt.target_worker_id) &&
+          !(recipients && recipients.some(r => talkWorkers.has(r)))) continue
+    }
+    if (!map[tid]) map[tid] = { thinking: '', text: '', workerId: evt.worker_id, lastTs: evt.timestamp }
+    const delta = (evt.payload?.delta as string) || ''
+    if (t === 'reason.thinking_delta') map[tid].thinking += delta
+    else map[tid].text += delta
+    map[tid].lastTs = evt.timestamp
+  }
+  return Object.entries(map)
+    .filter(([tid]) => !finalized.has(tid))
+    .map(([tid, v]) => ({ traceId: tid, ...v }))
+}
+
+// computeToolPartials accumulates request.progressed output by request_id, and
+// clears a call's partial once it reaches a terminal event.
+function computeToolPartials(events: EventPayload[], talkWorkers: Set<string>, deliveries: Record<string, string[]>): Record<string, string> {
+  const map: Record<string, string> = {}
+  for (const evt of events) {
+    if (evt.type !== 'request.progressed') continue
+    const callId = (evt.request_id as string) || ''
+    if (!callId) continue
+    // Respect the same talkWorkers filter as relevantEvents.
+    if (talkWorkers.size > 0) {
+      const recipients = deliveries[evt.id] || evt.recipients
+      if (!talkWorkers.has(evt.worker_id) &&
+          !talkWorkers.has(evt.target_worker_id) &&
+          !(recipients && recipients.some(r => talkWorkers.has(r)))) continue
+    }
+    const partial = (evt.payload?.partial as string) || ''
+    map[callId] = (map[callId] || '') + partial
+  }
+  // Once a tool reaches a terminal event (completed/failed/rejected/cancel),
+  // its result card takes over and the live streaming content in the
+  // invocation card is cleared. Progressed events are NOT terminal — they
+  // keep accumulating above.
+  for (const evt of events) {
+    if (evt.type === 'request.completed' || evt.type === 'request.failed' || evt.type === 'request.rejected' || evt.type === 'request.cancel') {
+      const callId = (evt.request_id as string) || ''
+      if (callId) delete map[callId]
+    }
+  }
+  return map
+}
+
 const inputRenderers: Record<string, React.FC<{evt: EventPayload; onTraceClick: (id: string) => void}>> = {
   'timer.elapsed': TimerElapsedBlock,
 }
@@ -149,73 +219,30 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return m
   }, [events])
 
-  // Active streaming traces: accumulate reason.*_delta by trace_id, drop a
-  // trace once its final reason.thinking / reason.response arrives.
-  const streamingTraces = useMemo(() => {
-    if (!streamingMode) return [] as { traceId: string; thinking: string; text: string; workerId: string; lastTs: number }[]
-    const map: Record<string, { thinking: string; text: string; workerId: string; lastTs: number }> = {}
-    const finalized = new Set<string>()
-    for (const evt of events) {
-      const t = evt.type
-      if (t !== 'reason.thinking_delta' && t !== 'reason.text_delta' &&
-          t !== 'reason.thinking' && t !== 'reason.response') continue
-      const tid = evt.trace_id
-      if (!tid) continue
-      if (t === 'reason.thinking' || t === 'reason.response') {
-        finalized.add(tid)
-        continue
-      }
-      if (finalized.has(tid)) continue
-      // Respect the same talkWorkers filter as relevantEvents.
-      if (talkWorkers.size > 0) {
-        const recipients = deliveries[evt.id] || evt.recipients
-        if (!talkWorkers.has(evt.worker_id) &&
-            !talkWorkers.has(evt.target_worker_id) &&
-            !(recipients && recipients.some(r => talkWorkers.has(r)))) continue
-      }
-      if (!map[tid]) map[tid] = { thinking: '', text: '', workerId: evt.worker_id, lastTs: evt.timestamp }
-      const delta = (evt.payload?.delta as string) || ''
-      if (t === 'reason.thinking_delta') map[tid].thinking += delta
-      else map[tid].text += delta
-      map[tid].lastTs = evt.timestamp
-    }
-    return Object.entries(map)
-      .filter(([tid]) => !finalized.has(tid))
-      .map(([tid, v]) => ({ traceId: tid, ...v }))
-  }, [events, streamingMode, talkWorkers, deliveries])
+  // Streaming content (reason.*_delta and request.progressed) is recomputed
+  // on a 2s tick rather than per SSE event, so rapid delta bursts coalesce
+  // into a single repaint instead of re-rendering on every event.
+  const eventsRef = useRef(events)
+  eventsRef.current = events
+  const [streamingTraces, setStreamingTraces] = useState<StreamTrace[]>([])
+  const [toolPartials, setToolPartials] = useState<Record<string, string>>({})
 
-  // Live tool output: accumulate request.progressed by request_id. Only populated when
-  // streaming mode is on; the partial text renders inside the matching
-  // invocation card.
-  const toolPartials = useMemo(() => {
-    if (!streamingMode) return {} as Record<string, string>
-    const map: Record<string, string> = {}
-    for (const evt of events) {
-      if (evt.type !== 'request.progressed') continue
-      const callId = (evt.request_id as string) || ''
-      if (!callId) continue
-      // Respect the same talkWorkers filter as relevantEvents.
-      if (talkWorkers.size > 0) {
-        const recipients = deliveries[evt.id] || evt.recipients
-        if (!talkWorkers.has(evt.worker_id) &&
-            !talkWorkers.has(evt.target_worker_id) &&
-            !(recipients && recipients.some(r => talkWorkers.has(r)))) continue
+  useEffect(() => {
+    const compute = () => {
+      if (!streamingMode) {
+        setStreamingTraces([])
+        setToolPartials({})
+        return
       }
-      const partial = (evt.payload?.partial as string) || ''
-      map[callId] = (map[callId] || '') + partial
+      const evs = eventsRef.current
+      setStreamingTraces(computeStreamingTraces(evs, talkWorkers, deliveries))
+      setToolPartials(computeToolPartials(evs, talkWorkers, deliveries))
     }
-    // Once a tool reaches a terminal event (completed/failed/rejected/cancel),
-    // its result card takes over and the live streaming content in the
-    // invocation card is cleared. Progressed events are NOT terminal — they
-    // keep accumulating above.
-    for (const evt of events) {
-      if (evt.type === 'request.completed' || evt.type === 'request.failed' || evt.type === 'request.rejected' || evt.type === 'request.cancel') {
-        const callId = (evt.request_id as string) || ''
-        if (callId) delete map[callId]
-      }
-    }
-    return map
-  }, [events, streamingMode, talkWorkers, deliveries])
+    compute()
+    const t = setInterval(compute, 2000)
+    return () => clearInterval(t)
+  }, [streamingMode, talkWorkers, deliveries])
+
 
   useEffect(() => {
     const count = relevantEvents.length
@@ -716,25 +743,75 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             )}
             {isExpanded && displayContent && (
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
-                <SyntaxHighlighter
-                  language="json"
-                  style={dark ? vscDarkPlus : oneLight}
-                  PreTag="div"
-                  customStyle={{
-                    margin: 0,
-                    padding: '6px 8px',
-                    borderRadius: 4,
-                    fontSize: fontSizes.sm,
-                    lineHeight: 1.4,
-                    whiteSpace: wrapCode ? 'pre-wrap' : 'pre',
-                    wordBreak: wrapCode ? 'break-word' : 'normal',
-                    maxHeight: 320,
-                    overflowY: 'auto',
-                    overflowX: 'auto',
-                  }}
-                >
-                  {displayContent}
-                </SyntaxHighlighter>
+                {isInvocation && resultEvt ? (
+                  <>
+                    <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      arguments
+                    </div>
+                    <SyntaxHighlighter
+                      language="json"
+                      style={dark ? vscDarkPlus : oneLight}
+                      PreTag="div"
+                      customStyle={{
+                        margin: 0,
+                        padding: '6px 8px',
+                        borderRadius: 4,
+                        fontSize: fontSizes.sm,
+                        lineHeight: 1.4,
+                        whiteSpace: wrapCode ? 'pre-wrap' : 'pre',
+                        wordBreak: wrapCode ? 'break-word' : 'normal',
+                        maxHeight: 320,
+                        overflowY: 'auto',
+                        overflowX: 'auto',
+                      }}
+                    >
+                      {content}
+                    </SyntaxHighlighter>
+                    <div style={{ margin: '10px 0 6px', height: 1, background: dark ? 'rgba(128,128,128,0.25)' : 'rgba(128,128,128,0.18)' }} />
+                    <div style={{ fontSize: fontSizes.xs, color: resultEvt.type === 'request.failed' ? colors.toolFailed : resultEvt.type === 'request.rejected' ? colors.textDimmed : colors.toolCompleted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      result
+                    </div>
+                    <SyntaxHighlighter
+                      language="json"
+                      style={dark ? vscDarkPlus : oneLight}
+                      PreTag="div"
+                      customStyle={{
+                        margin: 0,
+                        padding: '6px 8px',
+                        borderRadius: 4,
+                        fontSize: fontSizes.sm,
+                        lineHeight: 1.4,
+                        whiteSpace: wrapCode ? 'pre-wrap' : 'pre',
+                        wordBreak: wrapCode ? 'break-word' : 'normal',
+                        maxHeight: 320,
+                        overflowY: 'auto',
+                        overflowX: 'auto',
+                      }}
+                    >
+                      {mergedResult}
+                    </SyntaxHighlighter>
+                  </>
+                ) : (
+                  <SyntaxHighlighter
+                    language="json"
+                    style={dark ? vscDarkPlus : oneLight}
+                    PreTag="div"
+                    customStyle={{
+                      margin: 0,
+                      padding: '6px 8px',
+                      borderRadius: 4,
+                      fontSize: fontSizes.sm,
+                      lineHeight: 1.4,
+                      whiteSpace: wrapCode ? 'pre-wrap' : 'pre',
+                      wordBreak: wrapCode ? 'break-word' : 'normal',
+                      maxHeight: 320,
+                      overflowY: 'auto',
+                      overflowX: 'auto',
+                    }}
+                  >
+                    {displayContent}
+                  </SyntaxHighlighter>
+                )}
               </div>
             )}
             {partialText && (
