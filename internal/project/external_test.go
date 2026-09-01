@@ -130,7 +130,7 @@ func findStatus(sts []UnmanagedStatus, id string) *UnmanagedStatus {
 func TestProvisionUnmanaged(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	p, err := CreateProject("proj", &TemplateConfig{Workers: []WorkerConfig{
-		{Type: "mcp", ID: "ext", Managed: boolPtr(false), Command: []string{"npx", "x"}, Subscriptions: []string{"tool.request"}},
+		{Type: "mcp", ID: "ext", Managed: boolPtr(false), Command: []string{"npx", "x"}, Subscriptions: []string{"*"}},
 	}})
 	if err != nil {
 		t.Fatalf("CreateProject: %v", err)

@@ -9,29 +9,77 @@ import (
 	"github.com/niq-run/niq/pkg/baseworker"
 )
 
-func (w *HostWorker) handleToolCall(evt event.Event) {
-	tc := baseworker.ParseToolCall(evt)
+// The host worker's tools, each its own event type.
+const (
+	TypeSpawn   event.EventType = "spawn"
+	TypeSuspend event.EventType = "suspend"
+	TypeResume  event.EventType = "resume"
+)
 
-	var result string
-	var err error
-
-	switch tc.Name {
-	case "spawn":
-		result, err = w.handleSpawn(tc)
-	case "suspend":
-		result, err = w.handleSuspend(tc)
-	case "resume":
-		result, err = w.handleResume(tc)
-	default:
-		w.ReplyUnknownTool(tc)
-		return
+// registerExtensions declares the host tools: each is an extension served by
+// its own event type, announced to peers via AnnounceReady.
+func (w *HostWorker) registerExtensions() {
+	obj := func(props map[string]any) map[string]any {
+		return map[string]any{"type": "object", "properties": props}
 	}
 
+	w.Register(baseworker.Extension{
+		Event:       TypeSpawn,
+		Description: "Create a new worker. Type determines worker kind (reason, workspace, ...). Type-specific arguments (e.g. path, provider, model, programs, events) are passed as top-level properties.",
+		Parameters: obj(map[string]any{
+			"type": map[string]any{
+				"type":        "string",
+				"description": "Worker type to spawn.",
+			},
+			"id": map[string]any{
+				"type":        "string",
+				"description": "Optional worker ID. Builders may derive a default (e.g. workspace from path).",
+			},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		result, err := w.handleSpawn(tc)
+		w.reply(evt, string(TypeSpawn), result, err)
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeSuspend,
+		Description: "Suspend a running worker: snapshots its state, stops its goroutine and releases its bus connection. The worker can later be resumed.",
+		Parameters: obj(map[string]any{
+			"worker_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the worker to suspend.",
+			},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		result, err := w.handleSuspend(tc)
+		w.reply(evt, string(TypeSuspend), result, err)
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeResume,
+		Description: "Resume a suspended worker: reconnects its bus channel, restores its snapshot and starts it.",
+		Parameters: obj(map[string]any{
+			"worker_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the worker to resume.",
+			},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		result, err := w.handleResume(tc)
+		w.reply(evt, string(TypeResume), result, err)
+	})
+}
+
+// reply answers a tool invocation with request.completed / request.failed.
+func (w *HostWorker) reply(evt event.Event, toolName, result string, err error) {
 	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, err.Error(), tc.TraceID)
+		w.ReplyFailed(evt.WorkerId, evt.RequestId, toolName, err.Error(), evt.TraceID)
 		return
 	}
-	w.ReplyCompleted(tc.CallerID, tc.CallID, tc.Name, result, tc.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, toolName, result, evt.TraceID)
 }
 
 // handleSpawn forwards the spawn request to the WorkerService, which
@@ -71,63 +119,4 @@ func (w *HostWorker) handleResume(tc baseworker.ToolCall) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf(`{"worker_id":%q,"status":"running"}`, id), nil
-}
-
-// ── Bus publishing ──
-
-func (w *HostWorker) publishReady() {
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "host",
-		"tools": []map[string]any{
-			{
-				"name":        "spawn",
-				"description": "Create a new worker. Type determines worker kind (reason, workspace, ...). Type-specific arguments (e.g. path, provider, model, programs, events) are passed as top-level properties.",
-				"parameters": map[string]any{
-					"type":                 "object",
-					"description":          "Worker type and type-specific construction arguments.",
-					"additionalProperties": true,
-					"properties": map[string]any{
-						"type": map[string]any{
-							"type":        "string",
-							"description": "Worker type to spawn.",
-						},
-						"id": map[string]any{
-							"type":        "string",
-							"description": "Optional worker ID. Builders may derive a default (e.g. workspace from path).",
-						},
-					},
-					"required": []any{"type"},
-				},
-			},
-			{
-				"name":        "suspend",
-				"description": "Suspend a running worker: snapshots its state, stops its goroutine and releases its bus connection. The worker can later be resumed.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"worker_id": map[string]any{
-							"type":        "string",
-							"description": "ID of the worker to suspend.",
-						},
-					},
-					"required": []any{"worker_id"},
-				},
-			},
-			{
-				"name":        "resume",
-				"description": "Resume a suspended worker: reconnects its bus channel, restores its snapshot and starts it.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"worker_id": map[string]any{
-							"type":        "string",
-							"description": "ID of the worker to resume.",
-						},
-					},
-					"required": []any{"worker_id"},
-				},
-			},
-		},
-	}))
 }

@@ -8,7 +8,6 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/llm"
-	"github.com/niq-run/niq/core/worker"
 	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
@@ -42,13 +41,17 @@ func TestPrepareReasoningBuildsRequest(t *testing.T) {
 	}
 }
 
-// TestHandleToolCallsDispatches verifies tool calls are grouped by target and a
-// tool.request is sent to each provider with the mapped (original) tool name.
+// TestHandleToolCallsDispatches verifies tool calls are grouped by target and
+// dispatched as the capability's own event type to the declaring worker.
 func TestHandleToolCallsDispatches(t *testing.T) {
 	ch := newTestChannel()
 	w := newTestWorker(nil, ch)
-	w.tools["workspace__bash"] = worker.Tool{Name: "workspace__bash", Provider: "workspace"}
-	w.toolNameMap["workspace__bash"] = "bash"
+
+	// A peer worker announces a "bash" tool via the watch channel.
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "workspace", map[string]any{
+		"worker_id": "workspace",
+		"watch":     []map[string]any{{"event": "bash", "desc": "Run a command"}},
+	}))
 
 	calls := []llm.ContentBlock{
 		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace__bash"},
@@ -57,25 +60,25 @@ func TestHandleToolCallsDispatches(t *testing.T) {
 	w.handleToolCalls(context.Background(), calls, "trace1")
 	// handleToolCalls unlocks internally.
 
-	// The tool.request should be directed to workspace with the mapped name.
-	var name string
-	for _, e := range ch.eventsOf(event.TypeToolRequest) {
-		name, _ = e.Payload["name"].(string)
+	// The call is dispatched to workspace as its own event type "bash".
+	found := false
+	for _, e := range ch.eventsOf("bash") {
+		if e.RequestId == "c1" {
+			found = true
+		}
 	}
-	if name != "bash" {
-		t.Fatalf("expected tool.request with mapped name %q, got %q", "bash", name)
+	if !found {
+		t.Fatal("expected a bash event to workspace with RequestId c1")
 	}
 }
 
-// TestHandleToolCallsNoMappingFails verifies a tool known to w.tools but absent
-// from the toolNameMap is treated as a mismatch: it is NOT dispatched, an error
-// tool_result lands in the transcript, and a tool_unavailable notice is
-// broadcast (no silent trim-based guess).
-func TestHandleToolCallsNoMappingFails(t *testing.T) {
+// TestHandleToolCallsUnknownFails verifies an unknown tool (not discovered) is
+// NOT dispatched, an error tool_result lands in the transcript, and a
+// tool_unavailable notice is broadcast.
+func TestHandleToolCallsUnknownFails(t *testing.T) {
 	ch := newTestChannel()
 	w := newTestWorker(nil, ch)
-	// Known to w.tools but deliberately missing from toolNameMap.
-	w.tools["workspace__bash"] = worker.Tool{Name: "workspace__bash", Provider: "workspace"}
+	// No worker announces "bash", so it is unknown.
 
 	calls := []llm.ContentBlock{
 		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace__bash"},
@@ -84,11 +87,11 @@ func TestHandleToolCallsNoMappingFails(t *testing.T) {
 	w.handleToolCalls(context.Background(), calls, "trace1")
 
 	// Nothing dispatched.
-	if n := len(ch.eventsOf(event.TypeToolRequest)); n != 0 {
-		t.Fatalf("expected no tool.request (mapping missing), got %d", n)
+	if n := len(ch.eventsOf("bash")); n != 0 {
+		t.Fatalf("expected no dispatch (tool unknown), got %d", n)
 	}
 
-	// The mismatch surfaces as a tool_unavailable notice broadcast.
+	// The failure surfaces as a tool_unavailable notice broadcast.
 	var gotStop string
 	for _, e := range ch.eventsOf(event.EventType("reason.response")) {
 		if sr, _ := e.Payload["stop_reason"].(string); sr != "" {
@@ -107,7 +110,7 @@ func TestHandleToolCallsNoMappingFails(t *testing.T) {
 		}
 	}
 	if !foundErr {
-		t.Fatal("transcript should carry an error tool_result for the unmapped tool")
+		t.Fatal("transcript should carry an error tool_result for the unknown tool")
 	}
 }
 
@@ -124,7 +127,7 @@ func TestHandleToolCallsUnavailable(t *testing.T) {
 	w.mu.Lock()
 	w.handleToolCalls(context.Background(), calls, "trace1")
 
-	if len(ch.eventsOf(event.TypeToolRequest)) != 0 {
+	if len(ch.eventsOf("bash")) != 0 {
 		t.Fatal("unavailable tool must not be dispatched")
 	}
 	// The transcript should contain the unavailable-tool tool_result.
@@ -205,7 +208,7 @@ func TestFinalMessageReturns(t *testing.T) {
 	}
 }
 
-// TestMetaExtensionCallAndStripToolCalls moved to pkg/worker/reason:
+// TestTranscriptEditCallAndStripToolCalls moved to pkg/worker/reason:
 // context.compress / context.rotate are now the default worker's toolkit, not
 // the shared mechanism's.
 

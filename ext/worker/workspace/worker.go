@@ -43,10 +43,10 @@ type WorkspaceWorker struct {
 }
 
 func New(cfg Config) *WorkspaceWorker {
+	// Workspace tools are dynamic (mode/backend dependent), so the worker
+	// subscribes to everything and routes via the extension registry.
 	subs := []event.EventPattern{
-		event.NewPattern(event.TypeToolRequest),
-		event.NewPattern(event.TypeRequestCancel),
-		event.NewPattern(event.TypeWorkerDiscover),
+		event.NewPattern("*"),
 	}
 	return &WorkspaceWorker{
 		BaseWorker: baseworker.NewBaseWorker(cfg.ID, subs, cfg.Bus),
@@ -69,7 +69,7 @@ func (w *WorkspaceWorker) Start(ctx context.Context) error {
 	w.buildHandlers()
 	busCh, _ := w.Channel.Receive(runCtx)
 	go w.watch(runCtx, busCh)
-	w.publishReady()
+	w.AnnounceReady("workspace", nil)
 	w.started = true
 	return nil
 }
@@ -105,14 +105,13 @@ func (w *WorkspaceWorker) watch(ctx context.Context, busCh <-chan event.Event) {
 func (w *WorkspaceWorker) process(ctx context.Context, evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
-		w.publishReady()
+		w.AnnounceReady("workspace", nil)
 	case event.TypeRequestCancel:
 		callID := evt.RequestId
 		log.Printf("[workspace %s] cancel requested for %s (best-effort)", w.ID(), callID)
-	case event.TypeToolRequest:
-		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
-			return
+	default:
+		if !w.DispatchExtension(evt) {
+			log.Printf("[workspace %s] no extension for event %s", w.ID(), evt.Type)
 		}
-		w.handleToolCall(ctx, evt)
 	}
 }

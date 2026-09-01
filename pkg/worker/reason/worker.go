@@ -76,10 +76,16 @@ func NewWorker(cfg Config) *Worker {
 		subs = append(subs, h.Pattern)
 	}
 	subs = append(subs,
+		event.NewPattern(reasonBase.TypeContextCompress),
+		event.NewPattern(reasonBase.TypeProviderSwitch),
+		event.NewPattern(reasonBase.TypeProviderList),
+		event.NewPattern(reasonBase.TypeProviderCurrent),
+		event.NewPattern(TypeSendMessage),
+		event.NewPattern(TypeListWorkers),
+		event.NewPattern(TypeContextRotate),
 		event.NewPattern(event.TypeRequestCompleted),
 		event.NewPattern(event.TypeRequestFailed),
 		event.NewPattern(event.TypeRequestRejected),
-		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeWorkerReady),
 		event.NewPattern(event.TypeWorkerGone),
 		event.NewPattern(event.TypeWorkerDiscover),

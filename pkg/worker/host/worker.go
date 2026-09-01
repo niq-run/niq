@@ -27,7 +27,7 @@ type Config struct {
 }
 
 // HostWorker is a bus-facing worker that manages other worker lifecycles.
-// It subscribes to tool.request and worker.discover, and exposes
+// It subscribes to its tool events and worker.discover, and exposes
 // spawn/suspend/resume tools on the bus. Actual lifecycle operations are
 // delegated to workerhost.WorkerService.
 type HostWorker struct {
@@ -44,14 +44,18 @@ func New(cfg Config) *HostWorker {
 	if id == "" {
 		id = "host"
 	}
-	return &HostWorker{
+	w := &HostWorker{
 		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern(event.TypeToolRequest),
+			event.NewPattern(TypeSpawn),
+			event.NewPattern(TypeSuspend),
+			event.NewPattern(TypeResume),
 			event.NewPattern(event.TypeRequestCancel),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),
 		engine: cfg.Engine,
 	}
+	w.registerExtensions()
+	return w
 }
 
 // Start subscribes to the bus and begins watching for tool calls.
@@ -68,7 +72,7 @@ func (w *HostWorker) Start(ctx context.Context) error {
 
 	busCh, _ := w.Channel.Receive(runCtx)
 	go w.watch(runCtx, busCh)
-	w.publishReady()
+	w.AnnounceReady("host", nil)
 
 	w.started = true
 	log.Println("[host] started")
@@ -113,15 +117,14 @@ func (w *HostWorker) process(evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
 		if evt.WorkerId != w.ID() {
-			w.publishReady()
+			w.AnnounceReady("host", nil)
 		}
 	case event.TypeRequestCancel:
 		callID := evt.RequestId
 		log.Printf("[host %s] cancel requested for %s (best-effort)", w.ID(), callID)
-	case event.TypeToolRequest:
-		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
-			return
+	default:
+		if !w.DispatchExtension(evt) {
+			log.Printf("[host %s] no extension for event %s", w.ID(), evt.Type)
 		}
-		w.handleToolCall(evt)
 	}
 }

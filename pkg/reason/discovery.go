@@ -3,7 +3,7 @@
 //
 // This is the INBOUND half of presence — it consumes worker.ready /
 // worker.gone and maintains the unified discovered universe (w.discovered,
-// w.publishMap) plus the dispatch table (w.tools / w.toolNameMap) derived from
+// w.publishMap) plus the dispatch table (w.tools) derived from
 // it. The OUTBOUND half — announcing this worker's own contract — lives in
 // announce.go. The extension registry — what this worker itself declares and
 // how it answers — lives in pkg/baseworker.
@@ -86,14 +86,14 @@ func (w *BaseReasonWorker) DiscoveredWorkers() []DiscoveredWorker {
 	return out
 }
 
-// handleWorkerReady learns a worker's capabilities and published events from
+// HandleWorkerReady learns a worker's capabilities and published events from
 // its worker.ready announcement, feeding the unified discovery universe
 // (discovered) and the tool table used for dispatch. Each ready event carries
 // that worker's complete contract (the worker excludes itself from its own
 // presence broadcast and sends its full contract to itself), so the source's
 // previous view is replaced wholesale — which is also what lets a
 // re-announcement update a worker's capabilities.
-func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
+func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 	workerID, _ := evt.Payload["worker_id"].(string)
 	if workerID == "" {
 		return
@@ -115,28 +115,6 @@ func (w *BaseReasonWorker) handleWorkerReady(evt event.Event) {
 				if len(watchRaw) > 0 {
 					log.Printf("[reason %s] received watch from %s (%d entries)", w.ID(), workerID, len(watchRaw))
 				}
-			}
-		}
-	}
-
-	// Parse tools (legacy announcements) into the discovery universe.
-	if b, err := json.Marshal(evt.Payload["tools"]); err == nil {
-		var toolsRaw []map[string]any
-		if err := json.Unmarshal(b, &toolsRaw); err == nil {
-			for _, m := range toolsRaw {
-				name, _ := m["name"].(string)
-				desc, _ := m["description"].(string)
-				params, _ := m["parameters"].(map[string]any)
-				if name == "" {
-					continue
-				}
-				w.discovered = append(w.discovered, DiscoveredCapability{
-					Source: workerID, Event: event.TypeToolRequest, KeyField: "name",
-					Key: name, Description: desc, Parameters: params,
-				})
-			}
-			if len(toolsRaw) > 0 {
-				log.Printf("[reason %s] received %d tool(s) from %s", w.ID(), len(toolsRaw), workerID)
 			}
 		}
 	}
@@ -205,28 +183,27 @@ func (w *BaseReasonWorker) handleWorkerGone(evt event.Event) {
 	log.Printf("[reason %s] removed tools and events from %s", w.ID(), workerID)
 }
 
-// rebuildDispatchTable derives the dispatch table (w.tools + toolNameMap) from
+// rebuildDispatchTable derives the dispatch table (w.tools) from
 // the discovery universe, so the two stay in step and the discovery universe is
 // the single source of truth. Only peer tool.request capabilities become
 // callable tools: own capabilities dispatch through the registry instead, so
 // they are intentionally not indexed here. Called whenever discovered changes
-// (handleWorkerReady / handleWorkerGone).
+// (HandleWorkerReady / handleWorkerGone).
 func (w *BaseReasonWorker) rebuildDispatchTable() {
 	for name := range w.tools {
 		delete(w.tools, name)
-		delete(w.toolNameMap, name)
 	}
 	for _, cap := range w.discovered {
-		if cap.Event != event.TypeToolRequest || cap.Source == w.ID() || cap.Key == "" {
-			continue
+		if cap.Source == w.ID() {
+			continue // own capabilities dispatch through the registry
 		}
-		t := worker.Tool{Name: cap.Key, Description: cap.Description,
+		id := string(cap.Event)
+		if cap.KeyField != "" {
+			id = cap.Key
+		}
+		t := worker.Tool{Name: id, Description: cap.Description,
 			Parameters: cap.Parameters, Provider: cap.Source}
 		t.Name = encodeToolName(w, t)
-		// Reverse mapping (encoded name -> original declared name) so dispatch
-		// can hand a worker back its exact dotted name, e.g.
-		// provider__program.search -> program.search.
-		w.toolNameMap[t.Name] = cap.Key
 		w.tools[t.Name] = t
 	}
 }
@@ -246,10 +223,6 @@ func (w *BaseReasonWorker) allTools() []worker.Tool {
 // (with inner '.' -> '_'); tools backed by another worker become provider__name, so
 // the worker/tool boundary is unambiguous. Invariant: worker IDs and tool
 // names must not contain "__" (double underscore); '__' is the separator.
-//
-// The original declared name is preserved in w.toolNameMap (see
-// handleWorkerReady); dispatch restores it so a worker receives its exact
-// dotted tool name rather than the encoded form.
 func encodeToolName(w *BaseReasonWorker, t worker.Tool) string {
 	p, n := t.Provider, t.Name
 	if p == "" || p == w.ID() {
@@ -268,12 +241,12 @@ func bareToolName(t worker.Tool) string {
 	return strings.TrimPrefix(t.Name, t.Provider+"__")
 }
 
-// setToolTimeoutTool is the bare-name contract for the tool built-in timeout:
-// if any worker provides a tool whose bare name is "set_tool_timeout", the
+// timeoutTool is the bare-name contract for the tool built-in timeout:
+// if any worker provides a tool whose bare name is "timeout", the
 // reason worker treats it as this round's tool-call timeout. Provider-agnostic
 // — the timer worker need not be named "timer". If no worker provides it, the
 // timeout feature is simply disabled.
-const setToolTimeoutTool = "set_tool_timeout"
+const timeoutTool = "timeout"
 
 // timeoutToolFor returns the tool backing a name if it is the timeout tool.
 func (w *BaseReasonWorker) timeoutToolFor(name string) (worker.Tool, bool) {
@@ -281,7 +254,7 @@ func (w *BaseReasonWorker) timeoutToolFor(name string) (worker.Tool, bool) {
 	if !ok {
 		return worker.Tool{}, false
 	}
-	if t.Name == name && bareToolName(t) == setToolTimeoutTool {
+	if t.Name == name && bareToolName(t) == timeoutTool {
 		return t, true
 	}
 	return worker.Tool{}, false

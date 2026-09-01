@@ -30,7 +30,7 @@ type Config struct {
 }
 
 // Worker is a bus-facing worker that manages Program lifecycle.
-// It subscribes to tool.request and worker.discover, and exposes
+// It subscribes to its tool events and worker.discover, and exposes
 // search/load/edit/register/delete tools on the bus.
 //
 // Programs are discovered from the Backend at startup and cached in the
@@ -54,14 +54,20 @@ func New(cfg Config) *Worker {
 	if id == "" {
 		id = "program"
 	}
-	return &Worker{
+	w := &Worker{
 		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern(event.TypeToolRequest),
+			event.NewPattern(TypeSearch),
+			event.NewPattern(TypeLoad),
+			event.NewPattern(TypeEdit),
+			event.NewPattern(TypeRegister),
+			event.NewPattern(TypeDelete),
 			event.NewPattern(event.TypeWorkerDiscover),
 		}, cfg.Bus),
 		backend:  cfg.Backend,
 		programs: make(map[string]*program.Program),
 	}
+	w.registerExtensions()
+	return w
 }
 
 // Start subscribes to the bus, discovers programs from the backend,
@@ -84,7 +90,7 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	busCh, _ := w.Channel.Receive(runCtx)
 	go w.watch(runCtx, busCh)
-	w.publishReady()
+	w.AnnounceReady("program", nil)
 
 	w.started = true
 	log.Printf("[program] started with %d programs", w.listPrograms())
@@ -195,131 +201,11 @@ func (w *Worker) process(ctx context.Context, evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
 		if evt.WorkerId != w.ID() {
-			w.publishReady()
+			w.AnnounceReady("program", nil)
 		}
-	case event.TypeToolRequest:
-		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
-			return
+	default:
+		if !w.DispatchExtension(evt) {
+			log.Printf("[program %s] no extension for event %s", w.ID(), evt.Type)
 		}
-		w.handleToolCall(ctx, evt)
 	}
-}
-
-// publishReady announces this worker's tools on the bus.
-func (w *Worker) publishReady() {
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "program",
-		"tools": []map[string]any{
-			{
-				"name":        "search",
-				"description": "Search for available programs by name, description, or tag. Returns matching programs with their metadata (name, content_type, description, tags, locked). Use load to read the actual content.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"query": map[string]any{
-							"type":        "string",
-							"description": "Search query — matches against program name, description, and tags (case-insensitive substring).",
-						},
-						"content_type": map[string]any{
-							"type":        "string",
-							"description": "Optional filter: 'instruction' or 'playbook'.",
-							"enum":        []string{"instruction", "playbook"},
-						},
-					},
-					"required": []any{"query"},
-				},
-			},
-			{
-				"name":        "load",
-				"description": "Load a specific content file from a program. Use this to progressively load sub-contents after reading the entry content via the search tool.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"program": map[string]any{
-							"type":        "string",
-							"description": "Program name.",
-						},
-						"path": map[string]any{
-							"type":        "string",
-							"description": "Relative path to the content file within the program directory (e.g. 'rules/go.md').",
-						},
-					},
-					"required": []any{"program", "path"},
-				},
-			},
-			{
-				"name":        "edit",
-				"description": "Edit a program's content file with an atomic find-and-replace. Cannot edit locked programs.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"program": map[string]any{
-							"type":        "string",
-							"description": "Program name (also the directory name).",
-						},
-						"path": map[string]any{
-							"type":        "string",
-							"description": "Relative path to the content file within the program directory (e.g. 'PROGRAM.md' or 'rules/go.md').",
-						},
-						"old_text": map[string]any{
-							"type":        "string",
-							"description": "The exact text to find and replace.",
-						},
-						"new_text": map[string]any{
-							"type":        "string",
-							"description": "The replacement text. May be empty to delete the matched text.",
-						},
-					},
-					"required": []any{"program", "path", "old_text"},
-				},
-			},
-			{
-				"name":        "register",
-				"description": "Register a new program at runtime. Creates the program directory and PROGRAM.md file on disk. Cannot modify or overwrite locked programs.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name": map[string]any{
-							"type":        "string",
-							"description": "Program name (also used as the directory name).",
-						},
-						"content_type": map[string]any{
-							"type":        "string",
-							"description": "Program type: 'instruction' or 'playbook'.",
-							"enum":        []string{"instruction", "playbook"},
-						},
-						"description": map[string]any{
-							"type":        "string",
-							"description": "Short description of what this program does.",
-						},
-						"tags": map[string]any{
-							"type":        "array",
-							"description": "Tags for search and categorization.",
-							"items":       map[string]any{"type": "string"},
-						},
-						"content": map[string]any{
-							"type":        "string",
-							"description": "The entry content body (the part after the YAML frontmatter).",
-						},
-					},
-					"required": []any{"name", "content_type", "content"},
-				},
-			},
-			{
-				"name":        "delete",
-				"description": "Delete a program and all its contents. Cannot delete locked programs.",
-				"parameters": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name": map[string]any{
-							"type":        "string",
-							"description": "Program name to delete.",
-						},
-					},
-					"required": []any{"name"},
-				},
-			},
-		},
-	}))
 }

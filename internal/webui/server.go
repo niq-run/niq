@@ -405,27 +405,26 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(views)
 }
 
-// handleSuspend suspends a host-managed worker by publishing tool.request to
-// the host worker (data-plane, auditable).
+// handleSuspend suspends a host-managed worker by sending the host worker's
+// suspend event (data-plane, auditable).
 func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	evts := []event.Event{event.New(event.TypeToolRequest, "webui-hiw", map[string]any{
-		"call_id":   "webui-suspend-" + id,
-		"name":      "suspend",
+	evt := event.New("suspend", "webui-hiw", map[string]any{
 		"arguments": map[string]any{"worker_id": id},
-	})}
-	_ = s.hiw.Channel.Send(r.Context(), evts[0], "host")
+	})
+	evt.RequestId = "webui-suspend-" + id
+	_ = s.hiw.Channel.Send(r.Context(), evt, "host")
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// handleResume resumes a host-managed worker via the host worker's tools.
+// handleResume resumes a host-managed worker via the host worker's resume
+// event.
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	evt := event.New(event.TypeToolRequest, "webui-hiw", map[string]any{
-		"call_id":   "webui-resume-" + id,
-		"name":      "resume",
+	evt := event.New("resume", "webui-hiw", map[string]any{
 		"arguments": map[string]any{"worker_id": id},
 	})
+	evt.RequestId = "webui-resume-" + id
 	_ = s.hiw.Channel.Send(r.Context(), evt, "host")
 	w.WriteHeader(http.StatusAccepted)
 }

@@ -119,9 +119,8 @@ func (w *BaseReasonWorker) scheduleRateLimitBackoff(traceID string, callErr erro
 // scheduleRateLimitBackoff, so the reminder only needs to wake the round up.
 func (w *BaseReasonWorker) dispatchElapseReminder(traceID string, attempt int) {
 	callID := fmt.Sprintf("niq_rl_%d_%d", time.Now().UnixNano(), attempt)
-	evt := event.New(event.TypeToolRequest, w.ID(), map[string]any{
+	evt := event.New("elapse", w.ID(), map[string]any{
 		"worker_id": w.ID(),
-		"name":      "elapse",
 		"arguments": map[string]any{
 			"duration_ms": rateLimitBackoffDuration.Milliseconds(),
 			"purpose": fmt.Sprintf("API rate limit (HTTP 429) hit; retrying after %s, attempt %d/%d",

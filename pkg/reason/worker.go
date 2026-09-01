@@ -127,24 +127,24 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	}
 
 	w := &BaseReasonWorker{
-		BaseWorker:      baseworker.NewBaseWorker(cfg.ID, cfg.Subscriptions, cfg.Bus),
-		llmProvider:     initialProvider,
-		providerSources: cfg.ProviderSources,
-		providerName:    cfg.ProviderName,
-		providerModel:   cfg.ProviderModel,
-		transcript:      cfg.Transcript,
-		tools:           make(map[string]worker.Tool),
-		publishMap:      make(map[string][]EventPublish),
-		toolListBuilder: defaultToolListBuilder,
-		toolNameMap:     make(map[string]string),
-		eventConverters: cfg.EventConverters,
-		programs:        cfg.Programs,
-		requestTracker:  requesttracker.NewRequestTracker(),
-		contextWindow:   cfg.ContextWindow,
-		budgetSoft:      cfg.BudgetSoft,
-		budgetHard:      cfg.BudgetHard,
-		keepTail:        cfg.KeepTail,
-		reasoningEffort: cfg.ReasoningEffort,
+		BaseWorker:           baseworker.NewBaseWorker(cfg.ID, cfg.Subscriptions, cfg.Bus),
+		llmProvider:          initialProvider,
+		providerSources:      cfg.ProviderSources,
+		providerName:         cfg.ProviderName,
+		providerModel:        cfg.ProviderModel,
+		transcript:           cfg.Transcript,
+		tools:                make(map[string]worker.Tool),
+		publishMap:           make(map[string][]EventPublish),
+		toolListBuilder:      defaultToolListBuilder,
+		eventConverters:      cfg.EventConverters,
+		programs:             cfg.Programs,
+		requestTracker:       requesttracker.NewRequestTracker(),
+		transcriptEditEvents: make(map[event.EventType]bool),
+		contextWindow:        cfg.ContextWindow,
+		budgetSoft:           cfg.BudgetSoft,
+		budgetHard:           cfg.BudgetHard,
+		keepTail:             cfg.KeepTail,
+		reasoningEffort:      cfg.ReasoningEffort,
 	}
 	if len(cfg.SeedMessages) > 0 {
 		w.transcript.Apply(transcript.InputPatch{Messages: cfg.SeedMessages})
@@ -200,27 +200,19 @@ func (w *BaseReasonWorker) TryReason(ctx context.Context) {
 	w.tryReason(ctx)
 }
 
-// ExtensionEntries returns the full watch announcement (every extension, SelfOnly
-// included) for this worker — the directed self-contract handed to
-// handleWorkerReady. Exported so embedding workers can build their own
-// announcement; the test package uses it to assert the LLM-facing contract.
-func (w *BaseReasonWorker) ExtensionEntries() []map[string]any { return w.extensionEntries() }
-
-// LLMToolDefs returns the tool definitions exposed to the LLM (this worker's
-// own extensions, learned from its directed full-contract announcement).
-func (w *BaseReasonWorker) LLMToolDefs() []llm.ToolDef { return w.llmToolDefs() }
-
-// ExtensionByToolName looks up a registered extension by its LLM-facing tool
-// name. Exported for inspection by embedding workers and tests.
-func (w *BaseReasonWorker) ExtensionByToolName(name string) (baseworker.Extension, bool) {
-	return w.extensionByToolName(name)
-}
-
-// MetaExtensionCall reports whether msg contains a call to a meta extension
-// (a registered extension whose event is not tool.request) and returns that
-// block. Exported for embedding workers and tests.
-func (w *BaseReasonWorker) MetaExtensionCall(msg llm.Message) (llm.ContentBlock, bool) {
-	return w.metaExtensionCall(msg)
+// RegisterTranscriptEditEvent declares an event type whose call EDITS this
+// worker's own working transcript (e.g. context.compress / context.rotate).
+//
+// This is a subset of the worker's self-invoked (meta) extensions: a call to
+// any own extension is routed to self by its own event, but only a
+// transcript-editing one needs special treatment — its call is excluded from
+// the transcript, because the edit produces a brand-new context that must not
+// contain a pairing marker for the edit action itself, only the trigger
+// signal. Other meta operations (e.g. provider.switch) are ordinary calls with
+// a normal request.* result. Reason-worker specific: only reason workers have
+// a transcript to edit.
+func (w *BaseReasonWorker) RegisterTranscriptEditEvent(typ event.EventType) {
+	w.transcriptEditEvents[typ] = true
 }
 
 // StripToolCalls returns a copy of msg with all tool-call blocks removed,
@@ -230,7 +222,6 @@ func StripToolCalls(msg llm.Message) llm.Message { return stripToolCalls(msg) }
 // HandleWorkerReady applies a peer (or self) worker.ready announcement,
 // replacing that worker's whole contract. Exported for embedding workers and
 // tests.
-func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) { w.handleWorkerReady(evt) }
 
 // Start begins the event watch. It returns an error if the worker is already
 // started. Provided by the base so embedding reason-family workers inherit
@@ -249,7 +240,7 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 	busCh, _ := w.Channel.Receive(runCtx)
 	go w.watch(runCtx, busCh)
 
-	w.broadcastReady()
+	w.BroadcastReady()
 	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerDiscover, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 	}))
@@ -386,18 +377,18 @@ type BaseReasonWorker struct {
 	baseworker.BaseWorker
 	mu sync.Mutex
 
-	llmProvider     llm.LLMProvider
-	providerSources ProviderSources
-	providerName    string // active provider name (status reporting)
-	providerModel   string // active provider model (status reporting)
-	transcript      transcript.Transcript
-	tools           map[string]worker.Tool // tools from the bus + built-ins; read by dispatch
-	discovered      []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
-	toolListBuilder ToolListBuilder        // LLM tool list policy (extension point)
-	programs        []program.Program
-	publishMap      map[string][]EventPublish // worker ID -> published events
-	toolNameMap     map[string]string         // encoded LLM-facing name -> original declared name
-	requestTracker  *requesttracker.RequestTracker
+	llmProvider          llm.LLMProvider
+	providerSources      ProviderSources
+	providerName         string // active provider name (status reporting)
+	providerModel        string // active provider model (status reporting)
+	transcript           transcript.Transcript
+	tools                map[string]worker.Tool // tools from the bus + built-ins; read by dispatch
+	discovered           []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
+	toolListBuilder      ToolListBuilder        // LLM tool list policy (extension point)
+	programs             []program.Program
+	publishMap           map[string][]EventPublish // worker ID -> published events
+	requestTracker       *requesttracker.RequestTracker
+	transcriptEditEvents map[event.EventType]bool // self-editing events, excluded from the transcript (see RegisterTranscriptEditEvent)
 	// toolCallSeq mints globally-unique tool-call ids for calls whose model
 	// omitted one. It must be monotonic across rounds (not per-turn) because the
 	// tracker persists pending calls between rounds — a per-turn "call_0" would
@@ -411,7 +402,7 @@ type BaseReasonWorker struct {
 	started                 bool
 	needReason              bool
 	isReasoning             bool
-	activeTimeout           string                      // current round's set_tool_timeout call_id, "" if none
+	activeTimeout           string                      // current round's timeout call_id, "" if none
 	activeTimeoutProvider   string                      // worker that set the active timeout (set time), "" if none
 	interruptReason         requesttracker.PreemptCause // why the current reasoning round was interrupted
 	immediateReasoningCause requesttracker.PreemptCause // why the next reasoning round was triggered

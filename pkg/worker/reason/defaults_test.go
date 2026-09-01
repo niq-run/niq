@@ -15,7 +15,7 @@ import (
 func TestCoreExtensionsRegistered(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 
-	if cap, ok := w.ExtensionByToolName("send_message"); !ok || cap.Event != event.TypeToolRequest {
+	if cap, ok := w.ExtensionByToolName("send_message"); !ok || cap.Event != event.EventType("send_message") {
 		t.Fatalf("send_message not registered as tool.request extension: %+v ok=%v", cap, ok)
 	}
 	if cap, ok := w.ExtensionByToolName("context_compress"); !ok || cap.Event != reasonBase.TypeContextCompress {
@@ -27,7 +27,7 @@ func TestCoreExtensionsRegistered(t *testing.T) {
 // the worker's own exposed capabilities and nothing else — provider
 // switch/status are not exposed, and the context meta ops are. The worker
 // learns its own capabilities from its directed full-contract announcement,
-// processed by handleWorkerReady like any other worker's.
+// processed by HandleWorkerReady like any other worker's.
 func TestCoreExtensionsExposedToLLM(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 
@@ -66,25 +66,13 @@ func keysOf(m map[string]bool) []string {
 // presence broadcast excludes this worker and omits SelfOnly extensions,
 // while the directed announcement to itself carries the full contract. The
 // worker therefore receives exactly one self-sourced ready (its complete view),
-// which keeps handleWorkerReady's whole-source replacement semantics valid.
+// which keeps HandleWorkerReady's whole-source replacement semantics valid.
 func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
 	ch := newMockChannel()
 	w := NewWorker(Config{ID: "w1", Bus: ch})
 
 	w.BroadcastReady()
 
-	watchHasName := func(evt event.Event, name string) bool {
-		watch, ok := evt.Payload["watch"].([]map[string]any)
-		if !ok {
-			return false
-		}
-		for _, e := range watch {
-			if n, _ := e["name"].(string); n == name {
-				return true
-			}
-		}
-		return false
-	}
 	watchHasEvent := func(evt event.Event, typ string) bool {
 		watch, ok := evt.Payload["watch"].([]map[string]any)
 		if !ok {
@@ -115,23 +103,23 @@ func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
 	if presence == nil || directed == nil {
 		t.Fatal("expected one presence broadcast (self excluded) and one directed announcement")
 	}
-	if watchHasName(*presence, "send_message") || watchHasName(*presence, "list_workers") {
+	if watchHasEvent(*presence, "send_message") || watchHasEvent(*presence, "list_workers") {
 		t.Fatal("presence broadcast must not carry the SelfOnly core tools")
 	}
 	if !watchHasEvent(*presence, "provider.switch") {
 		t.Fatal("presence broadcast must keep non-SelfOnly extensions")
 	}
-	if !watchHasName(*directed, "send_message") || !watchHasName(*directed, "list_workers") {
+	if !watchHasEvent(*directed, "send_message") || !watchHasEvent(*directed, "list_workers") {
 		t.Fatal("directed announcement must carry the full contract, SelfOnly included")
 	}
 }
 
-// TestMetaExtensionCallAndStripToolCalls verifies meta extension detection
+// TestTranscriptEditCallAndStripToolCalls verifies transcript-edit detection
 // and that a meta call (which never produces a tool result) is excluded from
-// the transcript: MetaExtensionCall flags the response by LLMName, and
+// the transcript: TranscriptEditCall flags the response by LLMName, and
 // StripToolCalls removes all tool_calls while keeping thinking/text. The
 // context.compress / context.rotate meta ops are the default worker's toolkit.
-func TestMetaExtensionCallAndStripToolCalls(t *testing.T) {
+func TestTranscriptEditCallAndStripToolCalls(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()}) // default toolkit registered at construction
 
 	metaMsg := llm.Message{
@@ -143,8 +131,8 @@ func TestMetaExtensionCallAndStripToolCalls(t *testing.T) {
 			{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "ws-tmp-niq-test__ls"},
 		},
 	}
-	if _, ok := w.MetaExtensionCall(metaMsg); !ok {
-		t.Fatal("MetaExtensionCall should detect context_compress")
+	if _, ok := w.TranscriptEditCall(metaMsg); !ok {
+		t.Fatal("TranscriptEditCall should detect context_compress")
 	}
 
 	stripped := reasonBase.StripToolCalls(metaMsg)
@@ -153,7 +141,7 @@ func TestMetaExtensionCallAndStripToolCalls(t *testing.T) {
 	}
 
 	plain := llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}}
-	if _, ok := w.MetaExtensionCall(plain); ok {
-		t.Fatal("MetaExtensionCall must be false without a meta extension call")
+	if _, ok := w.TranscriptEditCall(plain); ok {
+		t.Fatal("TranscriptEditCall must be false without a transcript-edit call")
 	}
 }
