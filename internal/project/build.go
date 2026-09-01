@@ -99,17 +99,17 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	baseURL, _ := p["base_url"].(string)
 	model, _ := p["model"].(string)
 
-	subAllow := eventPatternsFromStrings(stringSlice(p["subscriptions"]))
-	if len(subAllow) == 0 {
-		for _, t := range []string{
-			"request.completed", "request.failed", "request.rejected",
-			"worker.ready", "worker.gone", "worker.discover", "worker.abort",
-			"worker.update", "worker.query",
-			"timer.timeout", "timer.reminder", "worker.input",
-		} {
-			subAllow = append(subAllow, event.NewPattern(event.EventType(t)))
-		}
-	}
+	// SubscribeAllow: only broadcast delivery needs listing. Directed events
+	// (tool calls, their request.* results, timer.timeout/reminder) reach the
+	// worker regardless; broadcast traffic to a reason worker is the worker
+	// presence lifecycle, worker.input (hiw broadcasts when untargeted) and
+	// the request.* completions the worker itself broadcasts (context ops,
+	// provider meta). Template subscriptions override this default.
+	subAllow := subAllowFromParams(p, []string{
+		"request.completed", "request.failed", "request.rejected",
+		"worker.ready", "worker.gone", "worker.discover", "worker.abort",
+		"worker.input",
+	})
 	pubAllow := stringSlice(p["publish"])
 	if len(pubAllow) == 0 {
 		pubAllow = []string{"*"}
@@ -201,9 +201,9 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	cfg.ID = id
 	cfg.Params = params
 
-	connect := specConnect(ctx, id, "workspace", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeWorkerDiscover),
-	})
+	connect := specConnect(ctx, id, "workspace", []string{"*"}, subAllowFromParams(p, []string{
+		"worker.discover",
+	}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return workspace.New(workspace.Config{
 			ID:      id,
@@ -222,14 +222,17 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 // ── host ──
 
 func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
 		id = "host"
 	}
-	connect := specConnect(ctx, id, "host", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeRequestCancel),
-		event.NewPattern(event.TypeWorkerDiscover),
-	})
+	// SubscribeAllow: host's tool events (spawn/suspend/resume) are directed
+	// calls — no listing needed. request.cancel is directed too (sent to the
+	// target worker), so the default grant is just worker.discover.
+	connect := specConnect(ctx, id, "host", []string{"*"}, subAllowFromParams(p, []string{
+		"worker.discover",
+	}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerSvc})
 	}
@@ -245,13 +248,14 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 // ── timer ──
 
 func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
 		id = "timer"
 	}
-	connect := specConnect(ctx, id, "timer", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeWorkerDiscover),
-	})
+	connect := specConnect(ctx, id, "timer", []string{"*"}, subAllowFromParams(p, []string{
+		"worker.discover",
+	}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return timer.New(timer.Config{ID: id, Bus: ch})
 	}
@@ -287,6 +291,7 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 // ── program ──
 
 func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
 		id = "program"
@@ -305,9 +310,9 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}
 	os.MkdirAll(abs, 0755)
 
-	connect := specConnect(ctx, id, "program", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeWorkerDiscover),
-	})
+	connect := specConnect(ctx, id, "program", []string{"*"}, subAllowFromParams(p, []string{
+		"worker.discover",
+	}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return programworker.New(programworker.Config{
 			ID:      id,
@@ -446,6 +451,21 @@ func eventPatternsFromStrings(types []string) []event.EventPattern {
 		out = append(out, event.NewPattern(event.EventType(t)))
 	}
 	return out
+}
+
+// subAllowFromParams resolves a worker's SubscribeAllow (the broadcast
+// delivery whitelist) from the config's subscriptions, falling back to the
+// given hardcoded defaults when none are configured. The template value and
+// the defaults are both only the initial grant: the control plane can edit
+// SubscribeAllow at runtime via the registry API. Note SubscribeAllow only
+// gates Broadcast delivery — directed tool calls always reach their target
+// regardless of it, so tool capability events belong in the worker's own
+// declarations, not here.
+func subAllowFromParams(p map[string]any, defaults []string) []event.EventPattern {
+	if sub := eventPatternsFromStrings(stringSlice(p["subscriptions"])); len(sub) > 0 {
+		return sub
+	}
+	return eventPatternsFromStrings(defaults)
 }
 
 func sanitizeWorkerID(path string) string {
