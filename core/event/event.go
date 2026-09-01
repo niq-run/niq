@@ -84,7 +84,7 @@ func NewPattern(typ EventType) EventPattern {
 // PatternMatches reports whether an event type matches a subscription pattern.
 // Supports:
 //   - "*"            — matches any event type
-//   - exact match     — e.g. "tool.completed"
+//   - exact match     — e.g. "request.completed"
 //   - "Prefix.*"      — prefix wildcard, also matches the bare prefix
 //     (e.g. "github.*" matches "github" and "github.issue.new")
 //

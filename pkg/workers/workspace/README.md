@@ -7,7 +7,7 @@ Workspace Worker provides file read, write, edit, shell command execution
 Two layers:
 
 ```
-bus (tool.request / tool.completed)
+bus (tool event → request.completed)
   |
   ▼
 WorkspaceWorker        bus protocol: subscribe, dispatch, format
@@ -82,7 +82,7 @@ Routing is purely by `TargetWorkerID` on the event envelope. Tool names are bare
 strings:
 
 ```
-Event{Type: "tool.request", TargetWorkerID: "ws-proj"}
+Event{Type: "read", TargetWorkerID: "ws-proj"}
   Payload: {"name": "read", "arguments": `{"path":"main.go"}`}
   → w.handlers["read"](ctx, {"path": "main.go"})
 ```

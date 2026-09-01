@@ -1,8 +1,9 @@
 // Package host provides the HostWorker — the bus-facing worker that exposes
 // spawn/suspend/resume tools for managing other workers' lifecycles.
 //
-// HostWorker is deliberately thin: it handles the bus protocol (tool.request
-// events, replies) and forwards lifecycle operations to workerhost.WorkerService.
+// HostWorker is deliberately thin: it handles the bus protocol (tool
+// invocation events, replies) and forwards lifecycle operations to
+// workerhost.WorkerService.
 // It holds no knowledge of how specific worker types are built — that lives in
 // the Builder registry the assembly layer registers on the WorkerService.
 package host

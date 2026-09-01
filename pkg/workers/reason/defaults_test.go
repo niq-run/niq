@@ -9,14 +9,14 @@ import (
 )
 
 // TestCoreExtensionsRegistered verifies the default worker registers its
-// toolkit on the extension registry: send_message / list_workers as
-// tool.request loop-backs and context.compress / context.rotate as their own event types
+// toolkit on the extension registry: send_message / list_workers / context
+// ops each as their own event type, and the context ops as self-editing
 // meta extensions.
 func TestCoreExtensionsRegistered(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 
 	if cap, ok := w.ExtensionByToolName("send_message"); !ok || cap.Event != event.EventType("send_message") {
-		t.Fatalf("send_message not registered as tool.request extension: %+v ok=%v", cap, ok)
+		t.Fatalf("send_message not registered under its own event type: %+v ok=%v", cap, ok)
 	}
 	if cap, ok := w.ExtensionByToolName("context_compress"); !ok || cap.Event != reasonBase.TypeContextCompress {
 		t.Fatalf("context_compress not registered as context.compress extension: %+v ok=%v", cap, ok)

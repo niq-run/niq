@@ -48,13 +48,14 @@ Self-contained sub-domains extracted as subpackages:
 | Package | Responsibility |
 |---|---|
 | `pkg/reason/transcript` | the `Transcript` interface + sealed `TranscriptPatch` variants (the context-construction algebra) + `AccumulateTranscript`, the default accumulate implementation — self-synchronized, with meta-edit buffering |
-| `pkg/reason/requesttracker` | `RequestTracker` — lifecycle of the `tool.request` events this worker issued (Pending/Parked, late results) + `PreemptCause` (why a wait/round was preempted) |
+| `pkg/reason/requesttracker` | `RequestTracker` — lifecycle of the requests this worker issued under each capability's own event type (Pending/Parked, late results) + `PreemptCause` (why a wait/round was preempted) |
 
 Note on vocabulary: a tool call has two names. On the **LLM side** the
 transcript holds tool calls (`ToolPlaceholdersPatch`, `ToolResultPatch`, ...).
-On the **bus side** this worker sends `tool.request` events, tracked by
-`RequestTracker`. Discovery is likewise split by direction: `discovery.go`
-learns others' contracts, `announce.go` declares this worker's own.
+On the **bus side** this worker sends an invocation event under the
+capability's own event type, tracked by `RequestTracker`. Discovery is
+likewise split by direction: `discovery.go` learns others' contracts,
+`announce.go` declares this worker's own.
 
 The shared base every built-in worker embeds — `BaseWorker` (identity,
 subscriptions, tool-request replies, arg helpers) plus the generic `Extension`
@@ -115,7 +116,7 @@ Other events are dispatched by `process`:
 | timer.reminder | treat as input (schedule level) | yes |
 | worker.ready/gone | learn/forget the worker's tools | no |
 | request.completed/failed/rejected | resolve or park-late + update transcript | when resolved |
-| tool.request | route the call to the owning worker (or loop back to self) | no |
+| capability event (e.g. send_message, context.compress, provider.*) | dispatch to the registered extension (SelfOnly calls arrive addressed to self) | no |
 | context.compress / provider.* (meta events) | run the registered meta extension asynchronously | when done |
 | worker.input | handle per the three input_mode levels | depends on level |
 
@@ -125,11 +126,11 @@ A reason worker serves tools through the extension registry (pkg/baseworker):
 each registered extension declares the event it responds to and the handler
 that serves it. The LLM-facing tool list is the builder's view over the
 discovered capability universe (pkg/reason/discovery.go) — own and peer tools
-alike, named `provider__name` for peers. `tool.request` remains the default
-invocation event for LLM tools; invoking any capability is answered with the
-one request-response convention: `request.completed` (result) /
-`request.failed` / `request.rejected`, echoing the request's `RequestId`
-(empty id = notification, no reply).
+alike, named `provider__name` for peers. Each capability is invoked under its
+own event type (the old `tool.request` dispatch event is retired); invoking
+any capability is answered with the one request-response convention:
+`request.completed` (result) / `request.failed` / `request.rejected`,
+echoing the request's `RequestId` (empty id = notification, no reply).
 
 A meta extension (context.compress, provider.switch, ...) is a direct edit of
 this worker's own state — it is registered with its **own event type**, not

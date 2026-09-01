@@ -1,18 +1,19 @@
-// Outgoing tool.request lifecycle tracking.
+// Outgoing request lifecycle tracking.
 //
 // A tool call is two things under two names: the LLM sees a tool call in the
-// transcript, while this worker puts a tool.request on the bus and waits for
-// its result. This package owns the bus-side half — RequestTracker follows the
-// tool.request events this worker has issued until their results come back.
-// It manages its own pending map only; the caller is responsible for
-// publishing tool.request / cancel events to the bus and for building outcome
-// messages.
+// transcript, while this worker invokes the capability on the bus under the
+// extension's own event type and waits for the request.completed / request.failed /
+// request.rejected result that echoes the call's RequestId. This package owns
+// the bus-side half — RequestTracker follows the requests this worker has
+// issued until their results come back. It manages its own pending map only;
+// the caller is responsible for publishing the invocation / request.cancel
+// events to the bus and for building outcome messages.
 //
 // Status only tracks the state of calls still present in the map:
 //
 // Add          → Pending (reasoner is waiting)
 // parkAll      → Parked  (stopped waiting, kept for late results)
-// tool result  → removed (outcome handled by the caller from the event)
+// result       → removed (outcome handled by the caller from the event)
 // late result  → matched via ResolveLate, removed, contextualized
 //
 // Terminal outcomes (completed / failed / rejected) are not tracked here —
@@ -28,7 +29,7 @@ import (
 
 // PreemptCause records why a wait was preempted. It has two consumers:
 //
-//   - why an issued tool.request was parked (so a late result can be framed
+//   - why an issued request was parked (so a late result can be framed
 //     with the correct context), and
 //   - why a reasoning round was interrupted (abort / input preemption) or a
 //     new one triggered (reminder / timeout).
@@ -54,19 +55,19 @@ const (
 	RequestParked  RequestStatus = "parked"  // no longer awaited; may still return late
 )
 
-// TrackedRequest is one issued tool.request, from dispatch until its result
+// TrackedRequest is one issued request, from dispatch until its result
 // arrives (or it is parked and later matched as a late result).
 type TrackedRequest struct {
 	CallID    string
 	Name      string
-	TargetID  string // worker the tool.request was sent to (used for recall)
+	TargetID  string // worker the invocation was sent to (used for recall)
 	Status    RequestStatus
 	ParkCause PreemptCause // meaningful when Status == RequestParked
 }
 
-// RequestTracker manages the lifecycle of the tool.request events this worker
-// has issued, in the pending map. It tracks Pending/Parked requests; the
-// caller publishes tool.request / cancel events to the bus and resolves tool
+// RequestTracker manages the lifecycle of the requests this worker has
+// issued, in the pending map. It tracks Pending/Parked requests; the caller
+// publishes the invocation / request.cancel events to the bus and resolves
 // result events via HandleResponse / ResolveLate.
 type RequestTracker struct {
 	mu      sync.Mutex
@@ -83,7 +84,7 @@ func NewRequestTracker() *RequestTracker {
 // Add begins tracking tool calls as Pending requests.
 // targetID is the worker the calls were/will be addressed to (recorded for
 // recall). The caller is responsible for publishing the corresponding
-// tool.request events to each target.
+// invocation events to each target.
 func (m *RequestTracker) Add(targetID string, toolCalls []llm.ContentBlock) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

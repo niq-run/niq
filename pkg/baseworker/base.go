@@ -59,10 +59,11 @@ func (w *BaseWorker) Start(ctx context.Context) error {
 // ── Tool-serving helpers ──
 //
 // These cover the repetitive parts every worker that exposes tools over the
-// bus repeats: parsing a tool.request event and replying with a completed
-// or failed result. Workers embed BaseWorker and call these directly.
+// bus repeats: parsing a tool-invocation event and replying with a
+// request.completed / request.failed result. Workers embed BaseWorker and
+// call these directly.
 
-// ToolCall holds the parsed, common fields of a tool.request event.
+// ToolCall holds the parsed, common fields of a tool-invocation event.
 type ToolCall struct {
 	CallID   string
 	Name     string
@@ -71,7 +72,7 @@ type ToolCall struct {
 	TraceID  string
 }
 
-// ParseToolCall extracts the common fields from a tool.request event.
+// ParseToolCall extracts the common fields from a tool-invocation event.
 // Args is always a non-nil map so handlers can write into it safely.
 func ParseToolCall(evt event.Event) ToolCall {
 	args, _ := evt.Payload["arguments"].(map[string]any)
@@ -125,7 +126,7 @@ func (w *BaseWorker) ReplyRejected(callerID, callID, name, reason, traceID strin
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
-// ReplyUnknownTool replies to a tool.request whose name no handler matched.
+// ReplyUnknownTool replies to a tool-invocation whose name no handler matched.
 func (w *BaseWorker) ReplyUnknownTool(tc ToolCall) {
 	w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "unknown tool: "+tc.Name, tc.TraceID)
 }

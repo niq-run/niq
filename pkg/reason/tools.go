@@ -1,12 +1,13 @@
 // The LLM-facing tool surface: which tools the model is offered, and sending
-// the tool.request events for the calls it makes.
+// the invocation events for the calls it makes.
 //
 // Two halves meet here:
 //
 //   - the tool-list policy (ToolListBuilder / LLMToolDefs) decides what the
 //     model sees, reading the bus-discovered universe from discovery.go, and
 //   - sendToolRequests puts the model's chosen calls on the bus as
-//     tool.request events (tracked afterwards by requesttracker.go).
+//     invocation events on each capability's own event type (tracked
+//     afterwards by requesttracker.go).
 //
 // This file does not own any discovery state; it reads it.
 package reason
@@ -32,9 +33,8 @@ type ToolListBuilder func(w *BaseReasonWorker, caps []DiscoveredCapability) []ll
 // defaultToolListBuilder is the default policy producing the LLM tool list from
 // the discovered capability universe: every own capability outside the
 // provider.* management domain is exposed under its event-type name, and every
-// peer capability under provider__name. With tool.request retired, there is no
-// tool-vs-meta distinction at the event level — any capability is invoked by
-// its own event, and the builder's policy decides what the LLM sees. Custom
+// peer capability under provider__name. Any capability is invoked by its own
+// event type — the builder's policy decides what the LLM sees. Custom
 // builders replace this.
 func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []llm.ToolDef {
 	defs := make([]llm.ToolDef, 0, len(caps))

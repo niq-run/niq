@@ -33,8 +33,8 @@ func TestEventPatternMatches(t *testing.T) {
 		want    bool
 	}{
 		{"wildcard", EventPattern{Type: "*"}, "anything", "", true},
-		{"exact", EventPattern{Type: "tool.completed"}, "tool.completed", "", true},
-		{"exact-miss", EventPattern{Type: "tool.completed"}, "tool.failed", "", false},
+		{"exact", EventPattern{Type: "request.completed"}, "request.completed", "", true},
+		{"exact-miss", EventPattern{Type: "request.completed"}, "request.failed", "", false},
 		{"prefix", EventPattern{Type: "github.*"}, "github.issue.new", "", true},
 		{"prefix-miss", EventPattern{Type: "github.*"}, "gitlab.issue", "", false},
 		{"empty-miss", EventPattern{}, "anything", "", false},
