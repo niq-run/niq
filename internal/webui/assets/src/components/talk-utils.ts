@@ -19,7 +19,7 @@ export function getInputText(evt: EventPayload): string {
 // ── Type checks ──
 
 export function isToolEvent(type: string): boolean {
-  return type === 'tool.request' || type === 'tool.completed' || type === 'tool.failed' || type === 'tool.rejected'
+  return type === 'tool.request' || type === 'request.completed' || type === 'request.failed' || type === 'request.rejected' || type === 'request.progressed' || type === 'request.cancel'
 }
 
 export function isReasonBoundary(type: string): boolean {
@@ -37,7 +37,7 @@ export function toolSummary(evt: EventPayload): string {
 }
 
 export function toolCallId(evt: EventPayload): string {
-  return (evt.payload?.call_id as string) || ''
+  return evt.request_id || ''
 }
 
 export function toolContent(evt: EventPayload, formatted: boolean): string {
@@ -48,7 +48,12 @@ export function toolContent(evt: EventPayload, formatted: boolean): string {
     if (args) return format(args)
     return ''
   }
-  if (evt.type === 'tool.completed') {
+  if (evt.type === 'request.progressed') {
+    const partial = evt.payload?.partial
+    if (typeof partial === 'string') return partial
+    return ''
+  }
+  if (evt.type === 'request.completed') {
     const result = evt.payload?.result
     if (typeof result === 'string') {
       if (formatted) {
@@ -62,12 +67,12 @@ export function toolContent(evt: EventPayload, formatted: boolean): string {
     if (result) return format(result)
     return ''
   }
-  if (evt.type === 'tool.failed') {
+  if (evt.type === 'request.failed') {
     const err = evt.payload?.error
     if (err) return String(err)
     return ''
   }
-  if (evt.type === 'tool.rejected') {
+  if (evt.type === 'request.rejected') {
     const reason = evt.payload?.reason
     if (reason) return String(reason)
     return ''
@@ -78,7 +83,7 @@ export function toolContent(evt: EventPayload, formatted: boolean): string {
 // ── Event type → color ──
 
 export function getTypeColor(type: string, colors: import('../theme').Palette): string {
-  if (type.startsWith('tool.')) return colors.eventType.tool
+  if (type.startsWith('tool.') || type.startsWith('request.')) return colors.eventType.tool
   if (type.startsWith('reason.')) return colors.eventType.reason
   if (type.startsWith('worker.')) return colors.eventType.worker
   if (type.startsWith('hiw.')) return colors.eventType.hiw

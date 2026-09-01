@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 
 // payloadInlineLimit is the largest payload rendered inline. Past it the payload
-// is rendered only on demand: a worker.status provider.list snapshot carries
+// is rendered only on demand: a request.completed provider.list snapshot carries
 // every provider with every model each of them reports, and in practice runs to
 // hundreds of kilobytes (a five-provider config measured ~187 KB) — far too
 // large to drop into the event stream, and very expensive to syntax-highlight.

@@ -155,8 +155,8 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
 }
 
 // ProviderSection is a bespoke model switcher for a reason worker: it asks the
-// worker itself for its selectable providers (worker.query provider.list) and
-// switches the active pair (worker.update provider.switch). A later pass will
+// worker itself for its selectable providers (the provider.list event) and
+// switches the active pair (the provider.switch event). A later pass will
 // generalise this from the worker's declared capabilities into a form.
 function ProviderSection({ workerId }: { workerId: string }) {
   const { colors } = useTheme()
