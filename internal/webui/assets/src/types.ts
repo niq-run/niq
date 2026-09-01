@@ -62,6 +62,16 @@ export interface ProviderSwitchResult {
 
 export type ViewMode = 'talk' | 'events' | 'workers'
 
+// ViewSettings are the talk/events view preference toggles, persisted to
+// localStorage across sessions.
+export interface ViewSettings {
+  thinkingExpanded: boolean
+  compactMode: boolean
+  streamingMode: boolean
+  responseOnly: boolean
+}
+export type ViewSettingKey = keyof ViewSettings
+
 // ContextInfo is what /api/context returns: which mode the SPA is in and, in
 // project (control_url) where to reach the control plane.
 export interface ContextInfo {
