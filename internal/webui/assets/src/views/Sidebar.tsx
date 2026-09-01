@@ -1,14 +1,6 @@
 import { useState, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme, fontSizes, type Palette } from '../theme'
-import { type WorkerInfo, type ViewMode } from '../types'
-
-interface ViewSettings {
-  thinkingExpanded: boolean
-  compactMode: boolean
-  streamingMode: boolean
-  responseOnly: boolean
-}
-type ViewSettingKey = keyof ViewSettings
+import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 
 interface SidebarProps {
   view: ViewMode

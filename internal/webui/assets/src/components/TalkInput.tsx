@@ -179,7 +179,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           else broadcast). Click to open the target/mention picker. */}
       <div style={{ position: 'relative', display: 'inline-block', marginBottom: 4 }}>
         <span
-          onClick={(e) => { e.stopPropagation(); setPickerMode('target'); setPickerOpen(v => !v) }}
+          onClick={(e) => { e.stopPropagation(); setPickerMode('target'); setMentionIndex(0); setPickerOpen(v => !v) }}
           title={shownTarget ? `targeting ${shownTarget} — click to change` : 'broadcasting; click to target a worker'}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, lineHeight: '16px',
@@ -197,9 +197,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
               header={pickerMode === 'mention' ? 'mention' : 'target'}
               options={pickList.map(w => ({ id: w.id, label: w.id, sublabel: w.type }))}
               selectedId={pickerMode === 'target' ? (shownTarget || undefined) : undefined}
-              activeIndex={pickerMode === 'mention' ? mentionIndex : undefined}
+              activeIndex={mentionIndex}
               onSelect={commitPicker}
-              onActivate={(i) => { if (pickerMode === 'mention') setMentionIndex(i) }}
+              onActivate={(i) => setMentionIndex(i)}
               footer={pickerMode !== 'mention' ? {
                 label: 'broadcast (no target)',
                 checked: !shownTarget,

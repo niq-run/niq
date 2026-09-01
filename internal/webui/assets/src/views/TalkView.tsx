@@ -262,8 +262,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     if (grew && autoScrollRef.current && scrollRef.current) {
       const animated = Date.now() - mountedAt.current > 1000
       setTimeout(() => {
-        if (autoScrollRef.current && scrollRef.current) {
-          scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: animated ? 'smooth' : 'auto' })
+        const el = scrollRef.current
+        if (autoScrollRef.current && el) {
+          // When already pinned to the bottom, follow new content instantly —
+          // a smooth scroll from the bottom reads as a stutter/re-scroll.
+          const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
+          el.scrollTo({ top: el.scrollHeight, behavior: animated && !nearBottom ? 'smooth' : 'auto' })
         }
       }, 0)
     }

@@ -13,7 +13,23 @@ import { useTheme, fontSizes } from './theme'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived } from './services/api'
-import type { ContextInfo, EventPayload, ViewMode, WorkerInfo } from './types'
+import type { ContextInfo, EventPayload, ViewMode, ViewSettings, ViewSettingKey, WorkerInfo } from './types'
+
+// Talk view settings are persisted to localStorage so toggles survive reloads.
+const VIEW_SETTINGS_KEY = 'niq.view-settings'
+const DEFAULT_VIEW_SETTINGS: ViewSettings = {
+  thinkingExpanded: true,
+  compactMode: false,
+  streamingMode: false,
+  responseOnly: false,
+}
+function loadViewSettings(): ViewSettings {
+  try {
+    const raw = localStorage.getItem(VIEW_SETTINGS_KEY)
+    if (raw) return { ...DEFAULT_VIEW_SETTINGS, ...JSON.parse(raw) }
+  } catch { /* fall through to defaults */ }
+  return DEFAULT_VIEW_SETTINGS
+}
 
 // Right-hand event detail panel: default 40% of the viewport, resizable by
 // dragging its left edge, never narrower than this.
@@ -84,11 +100,16 @@ export default function App() {
   const [deliveries, setDeliveries] = useState<Record<string, string[]>>({})
   const [talkWorkers, setTalkWorkers] = useState<Set<string>>(new Set())
   const [mentionTarget, setMentionTarget] = useState('')
-  // Talk view settings (moved from TalkView's header to the sidebar)
-  const [thinkingExpanded, setThinkingExpanded] = useState(true)
-  const [compactMode, setCompactMode] = useState(false)
-  const [streamingMode, setStreamingMode] = useState(false)
-  const [responseOnly, setResponseOnly] = useState(false)
+  // Talk view settings (moved from TalkView's header to the sidebar), persisted
+  // to localStorage so they survive reloads / new sessions.
+  const [viewSettings, setViewSettings] = useState<ViewSettings>(loadViewSettings)
+  const toggleViewSetting = (k: ViewSettingKey) => {
+    setViewSettings(vs => {
+      const next = { ...vs, [k]: !vs[k] }
+      try { localStorage.setItem(VIEW_SETTINGS_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+      return next
+    })
+  }
   const [traceFilter, setTraceFilter] = useState('')
 
   const eventsRef = useRef<EventPayload[]>([])
@@ -174,12 +195,10 @@ export default function App() {
   useEffect(() => {
     // No project → no event stream.
     if (mode !== 'project') return
-    // A management panel is showing, not this project's events.
-    if (panel) return
-    // The SSE is not tied to the view: talk, workers, and any other non-events
-    // view all keep the same project-level connection alive (see streamKey
-    // above). We never tear it down on a view switch, so the event log stays
-    // warm. `view` is deliberately absent from the effect deps.
+    // The SSE stays up across views AND management panels: tearing it down on
+    // a panel switch would race a rebuild against a message sent right after
+    // returning to talk, and its live events could be lost. The cost of one
+    // idle connection is negligible.
     const params = new URLSearchParams()
     if (view === 'events') {
       for (const id of filterWorkers) params.append('worker', id)
@@ -251,7 +270,7 @@ export default function App() {
     return () => es.close()
     // `view` intentionally excluded: talk↔workers must keep the same connection.
     // `streamKey` already encodes the events-view filter, so traceFilter is redundant here.
-  }, [streamKey, mode, projectBase, panel])
+  }, [streamKey, mode, projectBase])
 
   // ── Polling (only meaningful when a project is attached). The URL is
   // prefixed with projectBase so in dev (?project=&port=) it hits the project's
@@ -454,13 +473,8 @@ export default function App() {
         workers={workers}
         talkWorkers={talkWorkers}
         onToggleWorker={toggleWorker}
-        viewSettings={{ thinkingExpanded, compactMode, streamingMode, responseOnly }}
-        onToggleViewSetting={(k) => {
-          if (k === 'thinkingExpanded') setThinkingExpanded(v => !v)
-          else if (k === 'compactMode') setCompactMode(v => !v)
-          else if (k === 'streamingMode') setStreamingMode(v => !v)
-          else setResponseOnly(v => !v)
-        }}
+        viewSettings={viewSettings}
+        onToggleViewSetting={toggleViewSetting}
         mode={mode}
         project={projectName}
         panel={panel}
@@ -524,10 +538,10 @@ export default function App() {
               onMention={(id) => { setInput(prev => prev + '@' + id + ' '); setMentionTarget(id); setMentionKey(k => k + 1) }}
               deliveries={deliveries}
               workerTypes={workerTypes}
-              thinkingExpanded={thinkingExpanded}
-              compactMode={compactMode}
-              streamingMode={streamingMode}
-              responseOnly={responseOnly}
+              thinkingExpanded={viewSettings.thinkingExpanded}
+              compactMode={viewSettings.compactMode}
+              streamingMode={viewSettings.streamingMode}
+              responseOnly={viewSettings.responseOnly}
               isMobile={isMobile}
             />
 
