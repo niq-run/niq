@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	stdhttp "net/http"
 	"strings"
 	"sync"
@@ -113,6 +114,11 @@ func (w *WorkerSide) readSSE(ctx context.Context, r io.ReadCloser, ch chan event
 		case <-ctx.Done():
 			return
 		}
+	}
+	// A non-EOF scanner error (truncated / malformed stream) ends the read;
+	// ignore it when we were cancelled anyway.
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		log.Printf("[httptrans] worker %s SSE read error: %v", w.workerID, err)
 	}
 }
 
