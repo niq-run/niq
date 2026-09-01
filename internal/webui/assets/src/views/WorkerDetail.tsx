@@ -98,7 +98,6 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
               Subscribe Allow
               <span
                 onClick={() => { setEditingSub((v) => !v); setSubNote('') }}
-                className="btn-hover"
                 style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, textTransform: 'none', letterSpacing: 0, marginLeft: 10, userSelect: 'none' }}
               >
                 {editingSub ? 'close' : 'edit'}
