@@ -486,12 +486,12 @@ func (w *BaseReasonWorker) ensureToolCallIDs(msg llm.Message) {
 func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.ContentBlock, traceID string) {
 	busCalls := toolCalls
 
-	// Meta extensions (event != tool.request) directly edit this worker's
-	// own state and bypass the tool lifecycle: no placeholder, no tracker, no
-	// dispatch. If any call in this batch targets a meta extension, the batch
-	// is handled by the meta path: the meta call is converted back into its
-	// worker.update / worker.query event and sent to self, which reason
-	// processes asynchronously.
+	// Meta extensions (self-editing, see RegisterTranscriptEditEvent) directly
+	// edit this worker's own state and bypass the tool lifecycle: no
+	// placeholder, no tracker, no dispatch. If any call in this batch targets
+	// a meta extension, the batch is handled by the meta path: the meta call
+	// is converted back into the extension's own event and sent to self,
+	// which reason processes asynchronously.
 	var metaCall *llm.ContentBlock
 	var metaCap baseworker.Extension
 	for i := range busCalls {
@@ -515,10 +515,10 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 			return
 		}
 
-		// Convert the tool call back into the extension's event (e.g.
-		// context_compress → worker.update op=context.compress) and send it to
-		// self, routed via the bus for audit; the meta operation completes
-		// asynchronously and schedules the next round.
+		// Convert the tool call back into the extension's own event (e.g.
+		// context_compress → context.compress) and send it to self, routed via
+		// the bus for audit; the meta operation completes asynchronously and
+		// schedules the next round.
 		argsMap := map[string]any{}
 		if metaCall.ToolArguments != "" {
 			json.Unmarshal([]byte(metaCall.ToolArguments), &argsMap)
@@ -556,7 +556,7 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	// Source — this worker for own tools (loop back to self), the declaring
 	// peer otherwise. Unknown tools (not discovered, e.g. hallucinated by the
 	// LLM) are failed immediately instead of broadcast — broadcasting
-	// confuses other workers that subscribe to tool requests.
+	// confuses other workers that subscribe to those events.
 	callsByTarget := make(map[string][]llm.ContentBlock)
 	var unavailable []string
 	for _, tc := range busCalls {

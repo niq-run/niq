@@ -33,7 +33,7 @@ import (
 // (Extension / Register) lives in pkg/baseworker.
 type DiscoveredCapability struct {
 	Source      string          // declaring worker ID (own ID for self)
-	Event       event.EventType // tool.request / worker.update / worker.query / custom
+	Event       event.EventType // the extension's own event type (send_message, context.compress, ...) or worker.update / worker.query
 	KeyField    string
 	Key         string
 	Description string
@@ -134,8 +134,8 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 }
 
 // discoveredFromWatch parses a worker.ready "watch" entry into a DiscoveredCapability.
-// tool.request entries carry the tool name top-level; worker.update / worker.query
-// entries fold the discriminator (op / subject) into parameters.
+// Tool-capability entries carry the tool name top-level; worker.update /
+// worker.query entries fold the discriminator (op / subject) into parameters.
 func discoveredFromWatch(source string, e map[string]any) (DiscoveredCapability, bool) {
 	typ, _ := e["event"].(string)
 	if typ == "" {
@@ -185,7 +185,7 @@ func (w *BaseReasonWorker) handleWorkerGone(evt event.Event) {
 
 // rebuildDispatchTable derives the dispatch table (w.tools) from
 // the discovery universe, so the two stay in step and the discovery universe is
-// the single source of truth. Only peer tool.request capabilities become
+// the single source of truth. Only peer-declared capabilities become
 // callable tools: own capabilities dispatch through the registry instead, so
 // they are intentionally not indexed here. Called whenever discovered changes
 // (HandleWorkerReady / handleWorkerGone).
@@ -209,7 +209,7 @@ func (w *BaseReasonWorker) rebuildDispatchTable() {
 }
 
 // allTools returns every tool in the dispatch table (all peer-declared
-// tool.request capabilities, under their encoded LLM-facing names).
+// capabilities, under their encoded LLM-facing names).
 func (w *BaseReasonWorker) allTools() []worker.Tool {
 	tools := make([]worker.Tool, 0, len(w.tools))
 	for _, t := range w.tools {

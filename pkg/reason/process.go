@@ -152,7 +152,7 @@ func (w *BaseReasonWorker) handleReminder(evt event.Event) {
 	w.scheduleInput(msgs, requesttracker.PreemptCauseReminder)
 }
 
-// handleToolResult processes a tool.completed/failed/rejected event.
+// handleToolResult processes a request.completed/failed/rejected event.
 // Normal path: a Pending call resolves — replace its [pending] placeholder
 // with the outcome. Late path: a Parked call matched — append a contextualized
 // user message (a second tool_result for the same call_id would violate the
@@ -218,7 +218,7 @@ func (w *BaseReasonWorker) handleInput(evt event.Event) {
 }
 
 // recallToolCalls best-effort cancels in-flight tool calls by sending a
-// tool.cancel event to each call's target worker.
+// request.cancel event to each call's target worker.
 func (w *BaseReasonWorker) recallToolCalls(tcs []*requesttracker.TrackedRequest) {
 	byTarget := make(map[string][]string)
 	for _, rc := range tcs {
@@ -299,7 +299,7 @@ func (w *BaseReasonWorker) parkPending(cause requesttracker.PreemptCause) []*req
 }
 
 // cancelTimeout cancels the current round's active timeout timer by sending a
-// tool.cancel event to the worker that set it. Called when all tools have
+// request.cancel event to the worker that set it. Called when all tools have
 // resolved — the timeout is no longer needed.
 func (w *BaseReasonWorker) cancelTimeout() {
 	if w.activeTimeout == "" {

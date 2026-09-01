@@ -8,7 +8,7 @@
 //
 // The policy dispatcher is decideLLMError, called from openStream's retry
 // loop. Both recovery actions are event-driven through the bus
-// (worker.update for compression, tool.request→timer.reminder for
+// (worker.update for compression, an elapse→timer.reminder for
 // rate limits) so they stay auditable and never block the reason goroutine
 // with a synchronous sleep.
 package reason

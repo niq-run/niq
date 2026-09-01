@@ -51,7 +51,7 @@ func TestScheduleRateLimitBackoff(t *testing.T) {
 	// Exactly maxRateLimitRetries elapse requests went to the timer worker.
 	reqs := ch.eventsOf("elapse")
 	if len(reqs) != maxRateLimitRetries {
-		t.Fatalf("dispatched %d tool.request, want %d", len(reqs), maxRateLimitRetries)
+		t.Fatalf("dispatched %d elapse requests, want %d", len(reqs), maxRateLimitRetries)
 	}
 	for i, evt := range reqs {
 		if evt.Type != "elapse" {

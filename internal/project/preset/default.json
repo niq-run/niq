@@ -5,21 +5,20 @@
       "id": "niq",
       "subscriptions": [
         "worker.input",
-        "tool.completed",
-        "tool.failed",
-        "tool.rejected",
+        "request.completed",
+        "request.failed",
+        "request.rejected",
         "worker.ready",
         "worker.gone",
         "worker.discover",
         "worker.abort",
         "timer.timeout",
         "timer.reminder",
-        "tool.request",
         "decision.made"
       ]
     },
     { "type": "timer", "id": "timer" },
     { "type": "host", "id": "host" },
-    { "type": "program", "id": "program", "subscriptions": ["tool.request", "worker.discover"] }
+    { "type": "program", "id": "program", "subscriptions": ["search", "load", "edit", "register", "delete", "worker.discover"] }
   ]
 }

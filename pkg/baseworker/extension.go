@@ -6,8 +6,9 @@
 // uniform. Registering an extension declares an event the worker responds to
 // (which flows into worker.ready's "watch") and binds a handler that executes
 // when the event arrives on the bus. The event type carries the extension
-// kind: tool.request → tool (loop-back), worker.update → meta update,
-// worker.query → meta query — and any event type can be registered.
+// kind: a worker's own tool invocations loop back on their own event type
+// (e.g. send_message, context.compress, provider.*), and any event type can
+// be registered.
 //
 // Registration is safe at any time — before Start (in a worker's constructor)
 // or at runtime. The registry is internally synchronized; handlers are looked

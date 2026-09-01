@@ -5,7 +5,7 @@
 // management, and system-prompt construction.
 //
 // Two self-contained sub-domains live in subpackages: the transcript
-// construction core (pkg/reason/transcript) and the outgoing tool.request
+// construction core (pkg/reason/transcript) and the outgoing request
 // tracker (pkg/reason/requesttracker). The generic worker base and its
 // extension registry live in pkg/baseworker.
 //
