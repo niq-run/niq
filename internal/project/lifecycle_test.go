@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/niq-run/niq/core/worker"
-	"github.com/niq-run/niq/pkg/services/eventbus"
-	"github.com/niq-run/niq/pkg/services/eventbus/transport/inprocess"
+	"github.com/niq-run/niq/pkg/eventbus"
+	"github.com/niq-run/niq/pkg/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/pkg/services/workerhost"
 )
 
