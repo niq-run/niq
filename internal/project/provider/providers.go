@@ -11,7 +11,7 @@ import (
 
 	llm "github.com/niq-run/niq/core/llm"
 	"github.com/niq-run/niq/pkg/reason"
-	"github.com/niq-run/niq/pkg/service/workerhost"
+	"github.com/niq-run/niq/pkg/services/workerhost"
 )
 
 // EnsureLLMConfigured gates project startup on an LLM provider being configured
@@ -125,10 +125,11 @@ func (s *providerSources) Build(name, model string) (llm.LLMProvider, error) {
 	return BuildWithOverrides(p, "", "", model), nil
 }
 
-// List enumerates every configured provider and its models. The model list is
-// the configured models merged (best-effort) with the models reported by the
-// provider's API; an API failure falls back to the configured list alone.
-// ModelDetails carries per-model metadata (e.g. ContextWindow) when available.
+// List enumerates every configured provider and its models. A provider with a
+// non-empty configured model list reports exactly that list; otherwise the
+// model list comes (best-effort) from the provider's API, and an API failure
+// yields an empty list. ModelDetails carries per-model metadata (e.g.
+// ContextWindow) when available.
 func (s *providerSources) List() []reason.ProviderInfo {
 	cfg, err := Load()
 	if err != nil {
@@ -156,30 +157,33 @@ func (s *providerSources) List() []reason.ProviderInfo {
 // roughly this times the number of configured providers.
 const listModelsTimeout = 3 * time.Second
 
-// modelsFor returns the merged model set for a provider as []llm.ModelInfo:
-// configured models first, then any API-reported models not already present.
-// ContextWindow is taken from the API when reported, otherwise falls back to
-// the provider's configured context_window. If the provider API is
-// unreachable or errors, the configured models (with config context window) are
-// returned so the provider list query still works offline.
+// modelsFor returns the model set for a provider as []llm.ModelInfo. A
+// non-empty configured model list is authoritative: the user explicitly pinned
+// the offered models (some providers report unwieldy lists), so the provider's
+// API is not queried at all. Only when no models are configured does it fall
+// back to a live API query. ContextWindow comes from the per-model spec or,
+// failing that, the provider's configured context_window.
 func (s *providerSources) modelsFor(p Entry) []llm.ModelInfo {
-	configModels := p.Models
-	details := make([]llm.ModelInfo, 0, len(configModels))
-	seen := make(map[string]struct{}, len(configModels))
-	for _, ms := range configModels {
-		seen[ms.Name] = struct{}{}
-		cw := ms.ContextWindow
-		if cw == 0 {
-			cw = p.ContextWindow
+	// Configured list wins over discovery: serve it as-is, no API call.
+	if len(p.Models) > 0 {
+		details := make([]llm.ModelInfo, 0, len(p.Models))
+		for _, ms := range p.Models {
+			cw := ms.ContextWindow
+			if cw == 0 {
+				cw = p.ContextWindow
+			}
+			details = append(details, llm.ModelInfo{
+				ID:            ms.Name,
+				Name:          ms.Name,
+				Provider:      p.Type,
+				ContextWindow: cw,
+			})
 		}
-		details = append(details, llm.ModelInfo{
-			ID:            ms.Name,
-			Name:          ms.Name,
-			Provider:      p.Type,
-			ContextWindow: cw,
-		})
+		return details
 	}
-	// Bound the live model-list call: this runs on the reason worker's event
+
+	// No models configured: discover them from the provider's API. Bound the
+	// live model-list call: this runs on the reason worker's event
 	// loop while it holds its lock (worker.query provider.list), and provider
 	// clients are built without an HTTP timeout, so an unresponsive endpoint
 	// here would stall the whole worker indefinitely.
@@ -187,14 +191,11 @@ func (s *providerSources) modelsFor(p Entry) []llm.ModelInfo {
 	defer cancel()
 	apiModels, err := Build(p).ListModels(ctx)
 	if err != nil {
-		log.Printf("[project] provider %q: model list from API unavailable (%v), using configured list", p.Name, err)
-		return details
+		log.Printf("[project] provider %q: model list from API unavailable (%v)", p.Name, err)
+		return nil
 	}
+	details := make([]llm.ModelInfo, 0, len(apiModels))
 	for _, m := range apiModels {
-		if _, ok := seen[m.ID]; ok {
-			continue
-		}
-		seen[m.ID] = struct{}{}
 		// Prefer the API-reported window; fall back to the provider config.
 		if m.ContextWindow == 0 {
 			m.ContextWindow = p.ContextWindow

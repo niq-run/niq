@@ -20,6 +20,12 @@
 // api_key and header values support ${VAR} / $VAR environment-variable
 // expansion; custom headers are applied after the built-in auth headers and
 // may therefore override them.
+//
+// A provider with a non-empty models list is authoritative: the list is
+// served as-is and the provider's model-list API is never queried, letting a
+// user override discovery (some providers report unwieldy lists) with a
+// hand-picked selection. Without models, the list is discovered from the
+// provider's API at query time.
 package provider
 
 import (
@@ -39,8 +45,10 @@ import (
 //
 // Model is the default model used when none is selected explicitly; Models is
 // the full list of models the provider offers, each with optional per-model
-// metadata such as ContextWindow. When Model is empty and Models is non-empty,
-// Model falls back to Models[0] (see ResolveDefaultModel).
+// metadata such as ContextWindow. When Models is non-empty it is served
+// verbatim and the provider's model-list API is never queried; when empty,
+// models are discovered from the provider's API. When Model is empty and
+// Models is non-empty, Model falls back to Models[0] (see ResolveDefaultModel).
 type Entry struct {
 	Name    string `json:"name"`
 	Type    string `json:"type"`
