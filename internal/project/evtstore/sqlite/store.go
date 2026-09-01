@@ -55,6 +55,7 @@ func (s *Store) migrate() error {
 		target_worker_id TEXT DEFAULT '',
 		recipients      TEXT DEFAULT '',
 		trace_id        TEXT,
+		request_id      TEXT,
 		specversion     TEXT,
 		dataschema      TEXT
 	);
@@ -64,8 +65,37 @@ func (s *Store) migrate() error {
 	-- (no worker filter), which the worker-scoped indexes can't be used for at scale.
 	CREATE INDEX IF NOT EXISTS idx_events_time ON events(timestamp DESC);
 	`
-	_, err := s.db.Exec(query)
-	return err
+	if _, err := s.db.Exec(query); err != nil {
+		return err
+	}
+	// Older databases predate the request_id column: add it so request →
+	// response pairing survives restart (the webui correlates a tool call with
+	// its request.* result by request_id).
+	rows, err := s.db.Query(`PRAGMA table_info(events)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasRequestID := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "request_id" {
+			hasRequestID = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasRequestID {
+		_, err = s.db.Exec(`ALTER TABLE events ADD COLUMN request_id TEXT`)
+		return err
+	}
+	return nil
 }
 
 // Append implements [store.AppendStore].
@@ -83,10 +113,10 @@ func (s *Store) Append(ctx context.Context, events ...event.Event) error {
 		payload, _ := json.Marshal(evt.Payload)
 		recipients, _ := json.Marshal(evt.Recipients)
 		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO events
-			(id, type, worker_id, payload, timestamp, target_worker_id, recipients, trace_id, specversion, dataschema)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, type, worker_id, payload, timestamp, target_worker_id, recipients, trace_id, request_id, specversion, dataschema)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			evt.ID, evt.Type, evt.WorkerId, string(payload),
-			evt.Timestamp, evt.TargetWorkerID, string(recipients), evt.TraceID, evt.SpecVersion, evt.DataSchema,
+			evt.Timestamp, evt.TargetWorkerID, string(recipients), evt.TraceID, evt.RequestId, evt.SpecVersion, evt.DataSchema,
 		)
 		if err != nil {
 			return fmt.Errorf("sqlite: append event %s: %w", evt.ID, err)
@@ -101,7 +131,7 @@ func (s *Store) Append(ctx context.Context, events ...event.Event) error {
 
 func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts) ([]event.Event, error) {
 	query := `SELECT id, type, worker_id, payload, timestamp, target_worker_id,
-			recipients, trace_id, specversion, dataschema
+			recipients, trace_id, request_id, specversion, dataschema
 			FROM events WHERE 1=1`
 	var args []any
 
@@ -165,13 +195,13 @@ func (s *Store) query(ctx context.Context, query string, args ...any) ([]event.E
 	var result []event.Event
 	for rows.Next() {
 		var (
-			evt             event.Event
-			payloadRaw      string
-			recipientsRaw   string
-			traceID, sv, ds sql.NullString
+			evt                 event.Event
+			payloadRaw          string
+			recipientsRaw       string
+			traceID, rid, sv, ds sql.NullString
 		)
 		if err := rows.Scan(&evt.ID, &evt.Type, &evt.WorkerId, &payloadRaw,
-			&evt.Timestamp, &evt.TargetWorkerID, &recipientsRaw, &traceID, &sv, &ds); err != nil {
+			&evt.Timestamp, &evt.TargetWorkerID, &recipientsRaw, &traceID, &rid, &sv, &ds); err != nil {
 			return nil, fmt.Errorf("sqlite: scan: %w", err)
 		}
 		if payloadRaw != "" {
@@ -181,6 +211,7 @@ func (s *Store) query(ctx context.Context, query string, args ...any) ([]event.E
 			json.Unmarshal([]byte(recipientsRaw), &evt.Recipients)
 		}
 		evt.TraceID = traceID.String
+		evt.RequestId = rid.String
 		evt.SpecVersion = sv.String
 		evt.DataSchema = ds.String
 		result = append(result, evt)

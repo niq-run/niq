@@ -37,10 +37,13 @@ export function isReasonBoundary(type: string): boolean {
 // ── Tool helpers ──
 
 export function toolSummary(evt: EventPayload): string {
-  // Keep the title to just the tool name. The failure is already signalled by
-  // the "Tool Failed" label, and the full error lives in the expandable body
-  // (toolContent) — surfacing it here made the single-line title wrap.
-  const name = evt.payload?.name as string || ''
+  // For a tool invocation the payload carries no name — the event type IS the
+  // tool (each capability is invoked under its own event type). Results carry
+  // the name echoed back by the serving worker. The failure is already
+  // signalled by the "Tool Failed" label, and the full error lives in the
+  // expandable body (toolContent) — surfacing it here made the single-line
+  // title wrap.
+  const name = (evt.payload?.name as string) || (isToolInvocation(evt) ? evt.type : '')
   return `[${name}]`
 }
 
