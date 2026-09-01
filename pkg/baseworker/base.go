@@ -60,8 +60,10 @@ func (w *BaseWorker) Start(ctx context.Context) error {
 //
 // These cover the repetitive parts every worker that exposes tools over the
 // bus repeats: parsing a tool-invocation event and replying with a
-// request.completed / request.failed result. Workers embed BaseWorker and
-// call these directly.
+// request.completed / request.failed / request.rejected result. Workers embed
+// BaseWorker and call these directly. The replies carry no tool name: the
+// caller identifies the tool by correlating the echoed request_id with the
+// invocation (whose event type IS the tool).
 
 // ToolCall holds the parsed, common fields of a tool-invocation event.
 type ToolCall struct {
@@ -90,9 +92,8 @@ func ParseToolCall(evt event.Event) ToolCall {
 
 // ReplyCompleted answers a request caller with a request.completed result,
 // echoing the request's id and propagating the trace ID.
-func (w *BaseWorker) ReplyCompleted(callerID, callID, name, result, traceID string) {
+func (w *BaseWorker) ReplyCompleted(callerID, callID, result, traceID string) {
 	evt := event.New(event.TypeRequestCompleted, w.ID(), map[string]any{
-		"name":   name,
 		"result": result,
 	})
 	evt.RequestId = callID
@@ -102,9 +103,8 @@ func (w *BaseWorker) ReplyCompleted(callerID, callID, name, result, traceID stri
 
 // ReplyFailed answers a request caller with a request.failed error message,
 // echoing the request's id and propagating the trace ID.
-func (w *BaseWorker) ReplyFailed(callerID, callID, name, errMsg, traceID string) {
+func (w *BaseWorker) ReplyFailed(callerID, callID, errMsg, traceID string) {
 	evt := event.New(event.TypeRequestFailed, w.ID(), map[string]any{
-		"name":  name,
 		"error": errMsg,
 	})
 	evt.RequestId = callID
@@ -116,9 +116,8 @@ func (w *BaseWorker) ReplyFailed(callerID, callID, name, errMsg, traceID string)
 // carrying the reason. It is used when a worker declines a call based on its
 // own rules (e.g. a safety guard) or after a human-in-the-loop approval is
 // denied. Echoes the request's id and propagates the trace ID.
-func (w *BaseWorker) ReplyRejected(callerID, callID, name, reason, traceID string) {
+func (w *BaseWorker) ReplyRejected(callerID, callID, reason, traceID string) {
 	evt := event.New(event.TypeRequestRejected, w.ID(), map[string]any{
-		"name":   name,
 		"reason": reason,
 	})
 	evt.RequestId = callID
@@ -128,7 +127,7 @@ func (w *BaseWorker) ReplyRejected(callerID, callID, name, reason, traceID strin
 
 // ReplyUnknownTool replies to a tool-invocation whose name no handler matched.
 func (w *BaseWorker) ReplyUnknownTool(tc ToolCall) {
-	w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "unknown tool: "+tc.Name, tc.TraceID)
+	w.ReplyFailed(tc.CallerID, tc.CallID, "unknown tool: "+tc.Name, tc.TraceID)
 }
 
 // ArgString returns the string value of a tool argument, or "" if absent.

@@ -136,6 +136,19 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     })
   }, [events, talkWorkers, deliveries, workerTypes])
 
+  // request_id → terminal result event. A tool invocation is rendered with its
+  // matched result merged into the same card (the result row is then skipped),
+  // so the result's identity comes from the invocation, not from a name field.
+  const resultByRequestId = useMemo(() => {
+    const m: Record<string, EventPayload> = {}
+    for (const evt of events) {
+      if ((evt.type === 'request.completed' || evt.type === 'request.failed' || evt.type === 'request.rejected') && evt.request_id) {
+        m[evt.request_id] = evt
+      }
+    }
+    return m
+  }, [events])
+
   // Active streaming traces: accumulate reason.*_delta by trace_id, drop a
   // trace once its final reason.thinking / reason.response arrives.
   const streamingTraces = useMemo(() => {
@@ -581,16 +594,37 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     // Tool events: render individually in natural order
     if (isToolEvent(evt.type) || isToolInvocation(evt)) {
       const callId = toolCallId(evt)
+      const isInvocation = isToolInvocation(evt)
+      // A terminal result whose invocation is in the stream is merged into
+      // that invocation's card; skip the standalone result row.
+      const resultEvt = isInvocation ? resultByRequestId[callId] : undefined
+      if (!isInvocation && resultByRequestId[callId] === evt) continue
+
       const isExpanded = expandedContent.has(callId)
       const content = toolContent(evt, isExpanded)
-      const contentLen = toolContent(evt, false).length
+      const mergedResult = resultEvt ? toolContent(resultEvt, isExpanded) : ''
+      // Invocation card shows the arguments plus, when answered, the merged
+      // result body below it.
+      const displayContent = isInvocation && mergedResult
+        ? (content ? content + '\n\n—— result ——\n\n' + mergedResult : mergedResult)
+        : content
+      const contentLen = (isInvocation && mergedResult
+        ? content + '\n\n—— result ——\n\n' + mergedResult
+        : toolContent(evt, false)).length
       const summary = toolSummary(evt)
-      const statusColor = isToolInvocation(evt) ? colors.toolRequested
+      // Status colour: an answered invocation takes the outcome colour
+      // (completed/failed/rejected); an in-flight one stays toolRequested.
+      const statusColor = isInvocation
+        ? resultEvt
+          ? resultEvt.type === 'request.completed' ? colors.toolCompleted
+          : resultEvt.type === 'request.failed' ? colors.toolFailed
+          : colors.textDim
+          : colors.toolRequested
         : evt.type === 'request.completed' ? colors.toolCompleted
         : evt.type === 'request.failed' ? colors.toolFailed
         : colors.textDim
 
-      const toolLabel = isToolInvocation(evt) ? 'Tool Call'
+      const toolLabel = isInvocation ? 'Tool Call'
         : evt.type === 'request.completed' ? 'Tool Result'
         : evt.type === 'request.failed' ? 'Tool Failed'
         : 'Tool Rejected'
@@ -599,8 +633,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const isDimmed = anyToolExpanded && !isExpanded
 
       // Streaming: accumulated request.progressed output shown live in the
-      // invocation card while the call is in flight.
-      const partialText = isToolInvocation(evt) ? (toolPartials[callId] || '') : ''
+      // invocation card while the call is in flight (only before it resolves).
+      const partialText = isInvocation && !resultEvt ? (toolPartials[callId] || '') : ''
 
       nodes.push(
         <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
@@ -680,7 +714,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                 <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}>{formatTime(evt.timestamp)}</span>
               </div>
             )}
-            {isExpanded && content && (
+            {isExpanded && displayContent && (
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
                 <SyntaxHighlighter
                   language="json"
@@ -699,7 +733,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     overflowX: 'auto',
                   }}
                 >
-                  {content}
+                  {displayContent}
                 </SyntaxHighlighter>
               </div>
             )}

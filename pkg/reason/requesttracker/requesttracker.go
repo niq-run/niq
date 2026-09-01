@@ -102,14 +102,16 @@ func (m *RequestTracker) Add(targetID string, toolCalls []llm.ContentBlock) {
 	}
 }
 
-// HandleResponse reports whether a Pending request matched the tool result
-// event and was removed from the tracker. It does not interpret the event —
+// HandleResponse matches a tool result event against a Pending request and
+// removes it from the tracker. It returns the matched request (carrying the
+// tool name, which the result event no longer self-describes) or nil when the
+// event does not resolve a pending call. It does not interpret the event —
 // the outcome (result / fail / reject reason) is read by the caller when
 // building the message.
-func (m *RequestTracker) HandleResponse(evt event.Event) bool {
+func (m *RequestTracker) HandleResponse(evt event.Event) *TrackedRequest {
 	callID := evt.RequestId
 	if callID == "" {
-		return false
+		return nil
 	}
 
 	m.mu.Lock()
@@ -117,10 +119,10 @@ func (m *RequestTracker) HandleResponse(evt event.Event) bool {
 
 	run, ok := m.pending[callID]
 	if !ok || run.Status != RequestPending {
-		return false
+		return nil
 	}
 	delete(m.pending, callID)
-	return true
+	return run
 }
 
 // ParkAll marks every still-Pending request as Parked with the given cause and

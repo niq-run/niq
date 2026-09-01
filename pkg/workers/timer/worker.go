@@ -218,7 +218,7 @@ func (w *Worker) handleTickAfter(callID, toolName, callerID string, args map[str
 		"purpose":   purpose,
 		"status":    "scheduled",
 	})
-	w.ReplyCompleted(callerID, callID, toolName, string(result), traceID)
+	w.ReplyCompleted(callerID, callID, string(result), traceID)
 }
 
 func (w *Worker) handleCancel(callID, toolName, callerID string, args map[string]any, traceID string) {
@@ -233,8 +233,8 @@ func (w *Worker) handleCancel(callID, toolName, callerID string, args map[string
 	w.mu.Unlock()
 
 	if ok {
-		w.ReplyCompleted(callerID, callID, toolName, `{"status":"cancelled"}`, traceID)
+		w.ReplyCompleted(callerID, callID, `{"status":"cancelled"}`, traceID)
 	} else {
-		w.ReplyFailed(callerID, callID, toolName, "timer not found: "+timerID, traceID)
+		w.ReplyFailed(callerID, callID, "timer not found: "+timerID, traceID)
 	}
 }

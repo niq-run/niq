@@ -76,10 +76,10 @@ func (w *HostWorker) registerExtensions() {
 // reply answers a tool invocation with request.completed / request.failed.
 func (w *HostWorker) reply(evt event.Event, toolName, result string, err error) {
 	if err != nil {
-		w.ReplyFailed(evt.WorkerId, evt.RequestId, toolName, err.Error(), evt.TraceID)
+		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
 		return
 	}
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, toolName, result, evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, result, evt.TraceID)
 }
 
 // handleSpawn forwards the spawn request to the WorkerService, which
