@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { type WorkerInfo, type ProviderOption, type ProviderSelection } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
-import { suspendWorker, resumeWorker, fetchWorkerProviders, switchWorkerProvider, updateWorkerAllow } from '../services/api'
+import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, fetchWorkerProviders, switchWorkerProvider, updateWorkerAllow } from '../services/api'
 
 interface WorkerDetailProps {
   worker: WorkerInfo
@@ -21,6 +21,23 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
   const typeColor = worker.type ? getWorkerTypeColor(worker.type, colors) : colors.textDimmed
   const [editingSub, setEditingSub] = useState(false)
   const [subNote, setSubNote] = useState('')
+  const [umBusy, setUmBusy] = useState('')
+  const [umNote, setUmNote] = useState('')
+
+  const unmanagedAction = async (op: 'start' | 'stop' | 'restart') => {
+    setUmBusy(op)
+    setUmNote('')
+    try {
+      if (op === 'start') await startWorker(worker.id)
+      else if (op === 'stop') await stopWorker(worker.id)
+      else await restartWorker(worker.id)
+      setUmNote({ start: 'starting…', stop: 'stopping…', restart: 'restarting…' }[op])
+    } catch (e) {
+      setUmNote((e as Error)?.message || op + ' failed')
+    } finally {
+      setUmBusy('')
+    }
+  }
 
   const handleAction = async () => {
     if (suspended) await resumeWorker(worker.id)
@@ -149,6 +166,43 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
                   </span>
                 </div>
               </>
+            ) : worker.unmanaged ? (
+              <div>
+                <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
+                  {worker.unmanaged_state === 'running'
+                    ? 'Stop the external worker process, or restart it against the same project.json definition.'
+                    : 'Start this external worker process declared in project.json: launch its command and connect it to the bus.'}
+                </div>
+                {worker.unmanaged_state === 'running' ? (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span
+                      onClick={() => unmanagedAction('stop')}
+                      className="btn-hover"
+                      style={{ cursor: umBusy ? 'default' : 'pointer', opacity: umBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                    >
+                      {umBusy === 'stop' ? 'Stopping…' : 'stop'}
+                    </span>
+                    <span
+                      onClick={() => unmanagedAction('restart')}
+                      className="btn-hover"
+                      style={{ cursor: umBusy ? 'default' : 'pointer', opacity: umBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                    >
+                      {umBusy === 'restart' ? 'Restarting…' : 'restart'}
+                    </span>
+                  </div>
+                ) : (
+                  <span
+                    onClick={() => unmanagedAction('start')}
+                    className="btn-hover"
+                    style={{ cursor: umBusy ? 'default' : 'pointer', opacity: umBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                  >
+                    {umBusy === 'start' ? 'Starting…' : 'start'}
+                  </span>
+                )}
+                {umNote && (
+                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{umNote}</div>
+                )}
+              </div>
             ) : (
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>not host-managed</span>
             )}

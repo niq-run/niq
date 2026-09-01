@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -467,5 +468,36 @@ func (a *webuiUnmanagedAdapter) List() []webui.UnmanagedStatus {
 	for _, st := range a.supervisor.List() {
 		out = append(out, webui.UnmanagedStatus{ID: st.ID, Type: st.Type, State: st.State, Alive: st.Alive})
 	}
+	return out
+}
+
+// Declared returns every worker project.json declares as external (unmanaged),
+// merging the supervisor's live state so declared-but-not-started workers show
+// as stopped. These drive the UI's "start" button for idle external workers.
+func (a *webuiUnmanagedAdapter) Declared() []webui.UnmanagedStatus {
+	if a.projectID == "" {
+		return nil
+	}
+	p, err := LoadProject(a.projectID)
+	if err != nil {
+		return nil
+	}
+	running := map[string]bool{}
+	for _, st := range a.supervisor.List() {
+		running[st.ID] = st.State == "running"
+	}
+	var out []webui.UnmanagedStatus
+	for _, spec := range p.Workers {
+		if spec.Managed {
+			continue
+		}
+		st := webui.UnmanagedStatus{ID: spec.ID, Type: spec.Type, State: "stopped"}
+		if running[spec.ID] {
+			st.State = "running"
+			st.Alive = true
+		}
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
