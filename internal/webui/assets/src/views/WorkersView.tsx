@@ -9,9 +9,10 @@ interface WorkersViewProps {
   onOpenEvents: (id: string) => void
   archived: Set<string>
   isMobile: boolean
+  onRefresh?: () => void
 }
 
-export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived, isMobile }: WorkersViewProps) {
+export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived, isMobile, onRefresh }: WorkersViewProps) {
   const { colors } = useTheme()
 
   // Single-line cells with ellipsis (same as the events table), with a taller
@@ -48,9 +49,19 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
       {/* On mobile the app-level top bar heads the page, so the in-view header
           is skipped (same as the talk/events views). */}
       {!isMobile && (
-        <div style={{ marginBottom: 12, fontSize: fontSizes.xl, color: colors.text }}>
+        <div style={{ marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, display: 'flex', alignItems: 'baseline', gap: 10 }}>
           Workers{' '}
           <span style={{ color: colors.textMuted, fontSize: fontSizes.md }}>({workers.length})</span>
+          {onRefresh && (
+            <span
+              onClick={onRefresh}
+              className="btn-hover"
+              title="re-scan project.json for declared workers"
+              style={{ marginLeft: 'auto', cursor: 'pointer', fontSize: fontSizes.sm, color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', userSelect: 'none' }}
+            >
+              refresh
+            </span>
+          )}
         </div>
       )}
 

@@ -145,6 +145,23 @@ export async function resumeWorker(id: string): Promise<void> {
   await fetch(p(`/api/workers/${encodeURIComponent(id)}/resume`), { method: 'POST' })
 }
 
+// startWorker / stopWorker / restartWorker control an external (unmanaged)
+// worker process launched by the project supervisor.
+export async function startWorker(id: string): Promise<void> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/start`), { method: 'POST' })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'start failed: ' + res.status)
+}
+
+export async function stopWorker(id: string): Promise<void> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/stop`), { method: 'POST' })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'stop failed: ' + res.status)
+}
+
+export async function restartWorker(id: string): Promise<void> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/restart`), { method: 'POST' })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'restart failed: ' + res.status)
+}
+
 // updateWorkerAllow edits a worker's allow lists on the bus registry. Either
 // list may be omitted to keep its current value. SubscribeAllow patterns may
 // carry the optional source restriction ({type, source_id}).

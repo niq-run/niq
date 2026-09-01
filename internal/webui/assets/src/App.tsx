@@ -262,6 +262,15 @@ export default function App() {
   // worker list right away.
   usePolling<WorkerInfo[]>(workersURL, 5000, setWorkers, mode === 'project' && !panel)
 
+  // Manual refresh: re-fetch the worker list immediately, so a worker just
+  // declared in project.json appears without waiting for the next poll.
+  const refreshWorkers = useCallback(async () => {
+    try {
+      const res = await fetch(workersURL)
+      if (res.ok) setWorkers(await res.json())
+    } catch { /* next poll retries */ }
+  }, [workersURL])
+
   // ── Callbacks ──
   const sendMessage = useCallback(() => {
     if (!input.trim() || sending) return
@@ -548,6 +557,7 @@ export default function App() {
               onSelect={selectWorker}
               onOpenEvents={handleSelectWorker}
               isMobile={isMobile}
+              onRefresh={refreshWorkers}
             />
             {selectedWorker && (
               isMobile ? (

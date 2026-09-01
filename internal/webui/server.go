@@ -60,12 +60,16 @@ type UnmanagedStatus struct {
 }
 
 // UnmanagedController controls external (unmanaged) workers. Implemented by
-// the project assembly layer; nil disables the endpoints.
+// the project assembly layer; nil disables the endpoints. List returns the
+// workers the controller currently supervises; Declared returns every worker
+// declared as external in project.json (including ones not yet started), so
+// the UI can offer a start button for declared-but-idle workers.
 type UnmanagedController interface {
 	Start(id string) error
 	Stop(id string) error
 	Restart(id string) error
 	List() []UnmanagedStatus
+	Declared() []UnmanagedStatus
 }
 
 // AssetsFS exposes the embedded SPA static assets for reuse by the control server.
@@ -372,7 +376,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 
 	unmngd := map[string]UnmanagedStatus{}
 	if s.unmngd != nil {
-		for _, st := range s.unmngd.List() {
+		for _, st := range s.unmngd.Declared() {
 			unmngd[st.ID] = st
 		}
 	}
@@ -398,6 +402,17 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.registry.Lookup(wi.ID); !ok {
 			views = append(views, WorkerView{
 				ID: wi.ID, Type: wi.Type, Managed: true, State: string(wi.State), Online: online[wi.ID],
+			})
+		}
+	}
+
+	// Include external (unmanaged) workers declared in project.json whose
+	// identity is not yet registered — i.e. declared but never started. The
+	// UI offers a start button for these.
+	for _, st := range unmngd {
+		if _, ok := s.registry.Lookup(st.ID); !ok {
+			views = append(views, WorkerView{
+				ID: st.ID, Type: st.Type, Unmanaged: true, UnmanagedState: st.State,
 			})
 		}
 	}
