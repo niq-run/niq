@@ -41,6 +41,9 @@ type Worker struct {
 }
 
 // New creates an HTTP tool gateway worker.
+// The http worker's tools, each its own event type.
+const TypeWebfetch event.EventType = "webfetch"
+
 func New(cfg Config) *Worker {
 	id := cfg.ID
 	if id == "" {
@@ -50,15 +53,17 @@ func New(cfg Config) *Worker {
 	if c == nil {
 		c = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &Worker{
+	// HTTP tools are static (webfetch) plus whatever MCP servers later add, so
+	// the worker subscribes to everything and routes via the extension registry.
+	w := &Worker{
 		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern(event.TypeToolRequest),
-			event.NewPattern(event.TypeRequestCancel),
-			event.NewPattern(event.TypeWorkerDiscover),
+			event.NewPattern("*"),
 		}, cfg.Bus),
 		client:    c,
 		mcpConfig: cfg.MCPConfig,
 	}
+	w.registerExtensions()
+	return w
 }
 
 func (w *Worker) Start(ctx context.Context) error {
@@ -73,7 +78,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	w.cancelRun = cancelFn
 	busCh, _ := w.Channel.Receive(runCtx)
 	go w.watch(runCtx, busCh)
-	w.publishReady()
+	w.AnnounceReady("http", nil)
 	w.started = true
 	log.Printf("[http worker %s] started (mcp servers: %d)", w.ID(), len(w.mcpServers))
 	return nil
@@ -110,74 +115,42 @@ func (w *Worker) watch(ctx context.Context, busCh <-chan event.Event) {
 func (w *Worker) process(evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
-		w.publishReady()
+		w.AnnounceReady("http", nil)
 	case event.TypeRequestCancel:
 		callID := evt.RequestId
 		log.Printf("[http worker %s] cancel requested for %s (best-effort)", w.ID(), callID)
-	case event.TypeToolRequest:
-		if evt.TargetWorkerID != "" && evt.TargetWorkerID != w.ID() {
+	default:
+		if !w.DispatchExtension(evt) {
+			log.Printf("[http worker %s] no extension for event %s", w.ID(), evt.Type)
+		}
+	}
+}
+
+// registerExtensions declares the http worker's tools: each is an extension
+// served by its own event type, announced to peers via AnnounceReady.
+func (w *Worker) registerExtensions() {
+	w.Register(baseworker.Extension{
+		Event:       TypeWebfetch,
+		Description: "Fetch the contents of a URL and return the raw response body (up to 1 MB). Follows redirects automatically.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{"type": "string", "description": "The URL to fetch."},
+			},
+			"required": []any{"url"},
+		},
+	}, func(evt event.Event) {
+		callID := evt.RequestId
+		name := string(evt.Type)
+		callerID := evt.WorkerId
+		args, _ := evt.Payload["arguments"].(map[string]any)
+		result, err := w.handleWebfetch(args)
+		if err != nil {
+			w.publishFailed(callerID, callID, name, err)
 			return
 		}
-		w.handleToolCall(evt)
-	}
-}
-
-func (w *Worker) handleToolCall(evt event.Event) {
-	callID := evt.RequestId
-	name, _ := evt.Payload["name"].(string)
-	callerID := evt.WorkerId
-	args, _ := evt.Payload["arguments"].(map[string]any)
-
-	var result string
-	var err error
-	switch name {
-	case "webfetch":
-		result, err = w.handleWebfetch(args)
-	default:
-		handled, res, mcperr := w.tryMCPTool(name, args)
-		if handled {
-			result, err = res, mcperr
-		} else {
-			err = fmt.Errorf("http worker: unknown tool %s", name)
-		}
-	}
-	if err != nil {
-		w.publishFailed(callerID, callID, name, err)
-		return
-	}
-	w.publishCompleted(callerID, callID, name, result)
-}
-
-// ── Bus publishing ──
-
-func (w *Worker) publishReady() {
-	tools := []map[string]any{
-		{
-			"name":        "webfetch",
-			"description": "Fetch the contents of a URL and return the raw response body (up to 1 MB). Follows redirects automatically.",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"url": map[string]any{"type": "string", "description": "The URL to fetch."},
-				},
-				"required": []any{"url"},
-			},
-		},
-	}
-	for _, srv := range w.mcpServers {
-		for _, t := range srv.tools {
-			tools = append(tools, map[string]any{
-				"name":        t.Name,
-				"description": t.Description,
-				"parameters":  t.Parameters,
-			})
-		}
-	}
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "http",
-		"tools":     tools,
-	}))
+		w.publishCompleted(callerID, callID, name, result)
+	})
 }
 
 func (w *Worker) publishCompleted(callerID, callID, toolName, result string) {

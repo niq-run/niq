@@ -19,7 +19,15 @@ export function getInputText(evt: EventPayload): string {
 // ── Type checks ──
 
 export function isToolEvent(type: string): boolean {
-  return type === 'tool.request' || type === 'request.completed' || type === 'request.failed' || type === 'request.rejected' || type === 'request.progressed' || type === 'request.cancel'
+  return type === 'request.completed' || type === 'request.failed' || type === 'request.rejected' || type === 'request.progressed' || type === 'request.cancel'
+}
+
+// isToolInvocation reports whether an event is a tool call: with tool.request
+// retired, invocations arrive as their own event type, distinguished by the
+// "arguments" payload (only tool calls carry it). Pairs with its result via
+// the shared request_id.
+export function isToolInvocation(evt: EventPayload): boolean {
+  return !!(evt.payload && evt.payload.arguments)
 }
 
 export function isReasonBoundary(type: string): boolean {
@@ -43,7 +51,7 @@ export function toolCallId(evt: EventPayload): string {
 export function toolContent(evt: EventPayload, formatted: boolean): string {
   const format = (v: any): string =>
     formatted ? JSON.stringify(v, null, 2) : JSON.stringify(v)
-  if (evt.type === 'tool.request') {
+  if (isToolInvocation(evt)) {
     const args = evt.payload?.arguments
     if (args) return format(args)
     return ''

@@ -30,11 +30,6 @@ const (
 	TypeWorkerUpdate EventType = "worker.update"
 	TypeWorkerQuery  EventType = "worker.query"
 
-	// Tool invocation: tool.request remains the conventional invocation event
-	// for LLM-facing tools. The responses to ANY invocation (tool or not) use
-	// the request.* convention below — the one request-response pairing.
-	TypeToolRequest EventType = "tool.request"
-
 	// The request-response pairing convention: any invocation of a capability
 	// is answered with one of these, echoing the Event.RequestId of the
 	// request. request.completed carries the result; request.failed /

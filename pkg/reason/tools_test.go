@@ -29,26 +29,26 @@ func TestEncodeToolNameExternal(t *testing.T) {
 	if got := encodeToolName(w, worker.Tool{Name: "bash", Provider: "workspace"}); got != "workspace__bash" {
 		t.Fatalf("external encode = %q, want workspace__bash", got)
 	}
-	if got := encodeToolName(w, worker.Tool{Name: "set_tool_timeout", Provider: "timer"}); got != "timer__set_tool_timeout" {
-		t.Fatalf("timer encode = %q, want timer__set_tool_timeout", got)
+	if got := encodeToolName(w, worker.Tool{Name: "timeout", Provider: "timer"}); got != "timer__timeout" {
+		t.Fatalf("timer encode = %q, want timer__timeout", got)
 	}
 }
 
-// TestHandleWorkerReadyAndGone verifies tools and published events are learned
-// from worker.ready and forgotten on worker.gone.
+// TestHandleWorkerReadyAndGone verifies capabilities and published events are
+// learned from worker.ready and forgotten on worker.gone.
 func TestHandleWorkerReadyAndGone(t *testing.T) {
 	w := newTestWorker(nil, newTestChannel())
 
 	ready := event.New(event.TypeWorkerReady, "workspace", map[string]any{
 		"worker_id": "workspace",
-		"tools": []map[string]any{
-			{"name": "bash", "description": "run a command", "parameters": map[string]any{"type": "object"}},
+		"watch": []map[string]any{
+			{"event": "bash", "desc": "run a command", "parameters": map[string]any{"type": "object"}},
 		},
 		"publishes": []map[string]any{
 			{"type": "fs.changed", "description": "a file changed"},
 		},
 	})
-	w.handleWorkerReady(ready)
+	w.HandleWorkerReady(ready)
 
 	// Tool is prefixed with the worker ID (encoded as provider__name).
 	if _, ok := w.tools["workspace__bash"]; !ok {
@@ -81,69 +81,67 @@ func keys(m map[string]worker.Tool) []string {
 // send_message / list_workers / context.compress / context.rotate toolkit (and
 // its SelfOnly announcement behavior) lives in the default worker now, not in
 // the shared reason mechanism.
-// TestToolNameMapRestoresDottedNames verifies that when a worker declares a
-// dotted tool name (e.g. program.search), the encoded LLM-facing name is
-// recorded in toolNameMap and dispatch hands the worker back its original
-// dotted name instead of the encoded/underscore form.
-func TestToolNameMapRestoresDottedNames(t *testing.T) {
+// TestPeerDottedToolDispatches verifies a peer's dotted event type
+// (program.search) is exposed to the LLM as provider__program_search and a
+// call routes back to the peer as the event type itself.
+func TestPeerDottedToolDispatches(t *testing.T) {
 	ch := newTestChannel()
 	w := newTestWorker(nil, ch)
 
-	// A worker announces a dotted tool name.
+	// A peer announces a dotted event-type tool.
 	ready := event.New(event.TypeWorkerReady, "program", map[string]any{
 		"worker_id": "program",
-		"tools": []map[string]any{
-			{"name": "program.search", "description": "find a program"},
-		},
+		"watch":     []map[string]any{{"event": "program.search", "desc": "find a program"}},
 	})
-	w.handleWorkerReady(ready)
+	w.HandleWorkerReady(ready)
 
-	// It is encoded as provider__name for the LLM, with the mapping kept.
-	if got := w.toolNameMap["program__program_search"]; got != "program.search" {
-		t.Fatalf("toolNameMap = %q, want %q", got, "program.search")
-	}
-
-	// Dispatch restores the original dotted name to the provider.
-	calls := []llm.ContentBlock{
-		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "program__program_search"},
-	}
-	w.mu.Lock()
-	w.handleToolCalls(context.Background(), calls, "trace1")
-
-	var gotName string
-	for _, e := range ch.eventsOf(event.TypeToolRequest) {
-		if n, _ := e.Payload["name"].(string); n != "" {
-			gotName = n
+	// Exposed to the LLM under provider__name (dots -> underscores).
+	found := false
+	for _, d := range w.LLMToolDefs() {
+		if d.Name == "program__program_search" {
+			found = true
 		}
 	}
-	if gotName != "program.search" {
-		t.Fatalf("dispatched tool name = %q, want %q", gotName, "program.search")
+	if !found {
+		t.Fatal("dotted peer tool not exposed to the LLM under provider__name")
+	}
+
+	// A call routes back as the event type.
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "program__program_search"},
+	}, "trace1")
+
+	foundEvt := false
+	for _, e := range ch.eventsOf("program.search") {
+		if e.RequestId == "c1" {
+			foundEvt = true
+		}
+	}
+	if !foundEvt {
+		t.Fatal("expected a program.search event to the program worker")
 	}
 }
 
-// TestPeerWatchToolDispatchable verifies a peer's tool.request capability
-// announced via the watch (the reason-worker discovery channel) is not just
-// exposed to the LLM but also dispatchable: the encoded source__name lives in
-// the dispatch table, and a tool call routes back to the declaring worker with
-// its original name. Regression for "tool call unavailable: source__tool".
-func TestPeerWatchToolDispatchable(t *testing.T) {
+// TestPeerToolDispatchable verifies a peer's event-typed capability is exposed
+// to the LLM under provider__name and a tool call routes back to the declaring
+// worker as its own event type. Regression for "tool call unavailable:
+// source__tool".
+func TestPeerToolDispatchable(t *testing.T) {
 	ch := newTestChannel()
 	w := newTestWorker(nil, ch)
 
-	// A peer reason worker announces a custom tool as a tool.request capability.
+	// A peer worker announces an event-typed capability via the watch channel.
 	ready := event.New(event.TypeWorkerReady, "cute-assistant", map[string]any{
 		"worker_id": "cute-assistant",
 		"watch": []map[string]any{
-			{"event": "tool.request", "name": "remember", "desc": "Remember a fact",
+			{"event": "remember", "desc": "Remember a fact",
 				"parameters": map[string]any{"type": "object", "properties": map[string]any{}}},
 		},
 	})
-	w.handleWorkerReady(ready)
+	w.HandleWorkerReady(ready)
 
-	// The encoded name is in the dispatch table, mapped back to the original.
-	if got := w.toolNameMap["cute-assistant__remember"]; got != "remember" {
-		t.Fatalf("toolNameMap = %q, want remember", got)
-	}
+	// The encoded name is in the dispatch table.
 	tool, ok := w.tools["cute-assistant__remember"]
 	if !ok || tool.Provider != "cute-assistant" {
 		t.Fatalf("dispatch table missing peer tool: %+v", tool)
@@ -151,7 +149,7 @@ func TestPeerWatchToolDispatchable(t *testing.T) {
 
 	// The LLM-facing name is exactly the dispatch key.
 	found := false
-	for _, d := range w.llmToolDefs() {
+	for _, d := range w.LLMToolDefs() {
 		if d.Name == "cute-assistant__remember" {
 			found = true
 		}
@@ -160,19 +158,19 @@ func TestPeerWatchToolDispatchable(t *testing.T) {
 		t.Fatal("peer tool not exposed to the LLM under the dispatch name")
 	}
 
-	// A tool call routes back to the declaring worker with the original name.
+	// A tool call routes back to the declaring worker as its own event type.
 	w.mu.Lock()
 	w.handleToolCalls(context.Background(), []llm.ContentBlock{
 		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "cute-assistant__remember"},
 	}, "trace1")
 
-	var gotName string
-	for _, e := range ch.eventsOf(event.TypeToolRequest) {
-		if n, _ := e.Payload["name"].(string); n != "" {
-			gotName = n
+	foundEvt := false
+	for _, e := range ch.eventsOf("remember") {
+		if e.RequestId == "c1" {
+			foundEvt = true
 		}
 	}
-	if gotName != "remember" {
-		t.Fatalf("dispatched tool name = %q, want remember", gotName)
+	if !foundEvt {
+		t.Fatal("expected a remember event to the declaring worker")
 	}
 }

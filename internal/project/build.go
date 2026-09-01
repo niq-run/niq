@@ -102,10 +102,10 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	subAllow := eventPatternsFromStrings(stringSlice(p["subscriptions"]))
 	if len(subAllow) == 0 {
 		for _, t := range []string{
-			"tool.completed", "tool.failed", "tool.rejected",
+			"request.completed", "request.failed", "request.rejected",
 			"worker.ready", "worker.gone", "worker.discover", "worker.abort",
 			"worker.update", "worker.query",
-			"timer.timeout", "timer.reminder", "worker.input", "tool.request",
+			"timer.timeout", "timer.reminder", "worker.input",
 		} {
 			subAllow = append(subAllow, event.NewPattern(event.EventType(t)))
 		}
@@ -202,7 +202,6 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	cfg.Params = params
 
 	connect := specConnect(ctx, id, "workspace", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeWorkerDiscover),
 	})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
@@ -228,7 +227,6 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 		id = "host"
 	}
 	connect := specConnect(ctx, id, "host", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeRequestCancel),
 		event.NewPattern(event.TypeWorkerDiscover),
 	})
@@ -252,7 +250,6 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 		id = "timer"
 	}
 	connect := specConnect(ctx, id, "timer", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeWorkerDiscover),
 	})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
@@ -309,7 +306,6 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	os.MkdirAll(abs, 0755)
 
 	connect := specConnect(ctx, id, "program", []string{"*"}, []event.EventPattern{
-		event.NewPattern(event.TypeToolRequest),
 		event.NewPattern(event.TypeWorkerDiscover),
 	})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {

@@ -49,14 +49,13 @@ func TestScheduleRateLimitBackoff(t *testing.T) {
 	}
 
 	// Exactly maxRateLimitRetries elapse requests went to the timer worker.
-	reqs := ch.eventsOf(event.TypeToolRequest)
+	reqs := ch.eventsOf("elapse")
 	if len(reqs) != maxRateLimitRetries {
 		t.Fatalf("dispatched %d tool.request, want %d", len(reqs), maxRateLimitRetries)
 	}
 	for i, evt := range reqs {
-		name, _ := evt.Payload["name"].(string)
-		if name != "elapse" {
-			t.Fatalf("req %d: want name=elapse, got %q", i, name)
+		if evt.Type != "elapse" {
+			t.Fatalf("req %d: want type=elapse, got %q", i, evt.Type)
 		}
 		args, _ := evt.Payload["arguments"].(map[string]any)
 		if args == nil {

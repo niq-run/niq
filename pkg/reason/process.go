@@ -23,7 +23,6 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/llm"
-	"github.com/niq-run/niq/pkg/baseworker"
 	"github.com/niq-run/niq/pkg/reason/requesttracker"
 	"github.com/niq-run/niq/pkg/reason/transcript"
 )
@@ -40,7 +39,7 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 	switch {
 	case evt.Type == event.TypeWorkerDiscover:
 		if evt.WorkerId != w.ID() {
-			w.broadcastReady()
+			w.BroadcastReady()
 		}
 	case evt.Type == event.TypeWorkerAbort:
 		w.handleAbort(evt)
@@ -49,25 +48,19 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 	case evt.Type == "timer.reminder":
 		w.handleReminder(evt)
 	case evt.Type == event.TypeWorkerReady:
-		w.handleWorkerReady(evt)
+		w.HandleWorkerReady(evt)
 	case evt.Type == event.TypeWorkerGone:
 		w.handleWorkerGone(evt)
 	case isToolResultEvent(evt.Type):
 		w.handleToolResult(evt)
-	case evt.Type == event.TypeToolRequest:
-		// Extension channel: a tool.request targeting this worker. The
-		// registered tool handler serves it; an unknown tool is rejected.
-		tc := baseworker.ParseToolCall(evt)
-		if !w.DispatchExtension(evt) {
-			w.replyUnknownTool(tc)
-		}
 	case evt.Type == event.TypeWorkerInput:
 		w.handleInput(evt)
 	default:
-		// Extension channel for any other event type: worker.update /
-		// worker.query and the meta event types (context.compress, provider.*)
-		// all route here to the registered extension by event type (and
-		// discriminator, if the extension uses one).
+		// Extension channel for any other event type: own tool events
+		// (send_message, context.compress, provider.*) and worker.update /
+		// worker.query all route here to the registered extension by event
+		// type (and discriminator, if the extension uses one). An unregistered
+		// event is dropped.
 		if !w.DispatchExtension(evt) {
 			log.Printf("[reason %s] no extension for event %s", w.ID(), evt.Type)
 		}
@@ -131,7 +124,7 @@ func (w *BaseReasonWorker) handleAbort(_ event.Event) {
 	w.needReason = false
 }
 
-// handleTimeout processes a timer.timeout event (from set_tool_timeout).
+// handleTimeout processes a timer.timeout event (from timeout).
 // Records a system message and schedules a fresh reasoning round.
 // Stale timers (cancelled or prior batch) are silently discarded.
 func (w *BaseReasonWorker) handleTimeout(evt event.Event) {

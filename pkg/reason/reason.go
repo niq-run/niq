@@ -82,7 +82,7 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	w.parkPending(cause)
 
 	traceID = w.currentTraceID
-	tools := w.llmToolDefs()
+	tools := w.LLMToolDefs()
 	c := &llm.Context{
 		SystemPrompt:    w.buildInstruction(),
 		Messages:        w.transcript.Render(),
@@ -334,7 +334,7 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// The applied assistant message carries only thinking/text; handleToolCalls
 	// still sees the calls and emits worker.update.
 	appliedMsg := finalMsg
-	if _, isMeta := w.metaExtensionCall(finalMsg); isMeta {
+	if _, isMeta := w.TranscriptEditCall(finalMsg); isMeta {
 		appliedMsg = stripToolCalls(finalMsg)
 	}
 	// Guarantee every tool call carries a stable id before it enters the
@@ -437,14 +437,15 @@ func (w *BaseReasonWorker) handleContextBudget(ctx context.Context, msg llm.Mess
 	}
 }
 
-// metaExtensionCall reports whether any tool call in msg targets a registered
-// meta extension (one whose event is worker.update / worker.query, exposed to
-// the LLM by its default tool name). When present, the round's tool calls are excluded
-// from the transcript and the meta operation runs via its own event.
-func (w *BaseReasonWorker) metaExtensionCall(msg llm.Message) (llm.ContentBlock, bool) {
+// TranscriptEditCall reports whether any tool call in msg targets a registered
+// transcript-editing extension (a self-invoked op that rewrites this worker's
+// own context). When present, the round's tool calls are excluded from the
+// transcript — the edit produces a fresh context, so no pairing marker for the
+// edit action itself — and the call runs via its own event.
+func (w *BaseReasonWorker) TranscriptEditCall(msg llm.Message) (llm.ContentBlock, bool) {
 	for _, b := range msg.Content {
 		if b.Type == llm.ContentToolCall {
-			if cap, ok := w.extensionByToolName(b.ToolName); ok && cap.Event != event.TypeToolRequest {
+			if cap, ok := w.ExtensionByToolName(b.ToolName); ok && w.transcriptEditEvents[cap.Event] {
 				return b, true
 			}
 		}
@@ -494,7 +495,7 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	var metaCall *llm.ContentBlock
 	var metaCap baseworker.Extension
 	for i := range busCalls {
-		if cap, ok := w.extensionByToolName(busCalls[i].ToolName); ok && cap.Event != event.TypeToolRequest {
+		if cap, ok := w.ExtensionByToolName(busCalls[i].ToolName); ok && w.transcriptEditEvents[cap.Event] {
 			metaCall = &busCalls[i]
 			metaCap = cap
 			break
@@ -538,7 +539,7 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 
 	// Record the current round's single timeout timer, if any. At most one
 	// is meaningful - the first timer to fire parks all pending tools; a
-	// second set_tool_timeout in the same round is treated as a misplaced
+	// second timeout in the same round is treated as a misplaced
 	// config and overwrites the first (leak accepted). Only record if a
 	// provider actually offers the timeout tool.
 	for _, tc := range busCalls {
@@ -550,54 +551,28 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 
 	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: busCalls})
 
-	// Group tool calls by target worker, then publish tool.request
-	// for each group. The bus routes each batch to the correct worker.
-	// Unknown tools (not in w.tools, e.g. hallucinated by the LLM) are
-	// failed immediately instead of broadcast — broadcasting confuses
-	// other workers that subscribe to tool.request.
-	toolNames := make([]string, len(busCalls))
-	for i, tc := range busCalls {
-		toolNames[i] = tc.ToolName
-	}
-	log.Printf("[reason %s] requesting %d tool call(s) via bus: %v", w.ID(), len(busCalls), toolNames)
+	// Group tool calls by owning worker, then publish each call as its own
+	// event type to that worker. The owning worker is the discovered cap's
+	// Source — this worker for own tools (loop back to self), the declaring
+	// peer otherwise. Unknown tools (not discovered, e.g. hallucinated by the
+	// LLM) are failed immediately instead of broadcast — broadcasting
+	// confuses other workers that subscribe to tool requests.
 	callsByTarget := make(map[string][]llm.ContentBlock)
 	var unavailable []string
 	for _, tc := range busCalls {
-		var failReason string
-		// Own tool extensions (default tool name = tool name) loop back to
-		// this worker; they are served by the registered tool handler.
-		if cap, ok := w.extensionByToolName(tc.ToolName); ok && cap.Event == event.TypeToolRequest {
-			callsByTarget[w.ID()] = append(callsByTarget[w.ID()], tc)
-			continue
-		}
-		t, ok := w.tools[tc.ToolName]
+		cap, ok := w.capabilityByToolName(tc.ToolName)
 		if !ok {
-			// Unknown / hallucinated: nothing on the bus declares it.
-			failReason = "tool not available"
-		} else if orig, ok := w.toolNameMap[tc.ToolName]; ok {
-			// Hand the target worker back its original declared tool name via
-			// the saved mapping (provider__program.search -> program.search).
-			tc.ToolName = orig
-			callsByTarget[t.Provider] = append(callsByTarget[t.Provider], tc)
+			log.Printf("[reason %s] unavailable tool %s - not dispatched", w.ID(), tc.ToolName)
+			unavailable = append(unavailable, tc.ToolName)
+			w.transcript.Apply(transcript.ToolResultPatch{
+				CallID: tc.ToolCallID,
+				Name:   tc.ToolName,
+				Text:   "Unknown tool '" + tc.ToolName + "': tool not available - not dispatched.",
+				IsErr:  true,
+			})
 			continue
-		} else {
-			// Known to w.tools but absent from the mapping: a name mismatch.
-			// Do not guess by stripping a prefix; fail it like an unavailable
-			// tool (no dispatch, error tool_result, and a tool_unavailable notice).
-			failReason = "no reverse mapping"
 		}
-
-		// Shared failure tail for undispatchable calls (not found, or mapping
-		// missing): record in the unavailable list, write an error tool_result
-		// into the transcript, and do not dispatch.
-		log.Printf("[reason %s] unavailable tool %s (%s) - not dispatched", w.ID(), tc.ToolName, failReason)
-		unavailable = append(unavailable, tc.ToolName)
-		w.transcript.Apply(transcript.ToolResultPatch{
-			CallID: tc.ToolCallID,
-			Name:   tc.ToolName,
-			Text:   "Unknown tool '" + tc.ToolName + "': " + failReason + " - not dispatched.",
-			IsErr:  true,
-		})
+		callsByTarget[cap.Source] = append(callsByTarget[cap.Source], tc)
 	}
 	for target, calls := range callsByTarget {
 		w.requestTracker.Add(target, calls)

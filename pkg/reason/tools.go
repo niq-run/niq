@@ -3,7 +3,7 @@
 //
 // Two halves meet here:
 //
-//   - the tool-list policy (ToolListBuilder / llmToolDefs) decides what the
+//   - the tool-list policy (ToolListBuilder / LLMToolDefs) decides what the
 //     model sees, reading the bus-discovered universe from discovery.go, and
 //   - sendToolRequests puts the model's chosen calls on the bus as
 //     tool.request events (tracked afterwards by requesttracker.go).
@@ -30,29 +30,17 @@ import (
 type ToolListBuilder func(w *BaseReasonWorker, caps []DiscoveredCapability) []llm.ToolDef
 
 // defaultToolListBuilder is the default policy producing the LLM tool list from
-// the discovered capability universe: own tool.request capabilities and own
-// meta capabilities outside the provider.* management domain are exposed (meta
-// capabilities under their extensionToolName); peer tool.request capabilities are
-// exposed under provider__name. Custom builders replace this.
+// the discovered capability universe: every own capability outside the
+// provider.* management domain is exposed under its event-type name, and every
+// peer capability under provider__name. With tool.request retired, there is no
+// tool-vs-meta distinction at the event level — any capability is invoked by
+// its own event, and the builder's policy decides what the LLM sees. Custom
+// builders replace this.
 func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []llm.ToolDef {
 	defs := make([]llm.ToolDef, 0, len(caps))
 	for _, cap := range caps {
-		var name string
-		switch {
-		case cap.Source == w.ID() && cap.Event == event.TypeToolRequest:
-			// Own tool (tool.request + name): expose under its bare tool name.
-			name = cap.Key
-		case cap.Source == w.ID() && !strings.HasPrefix(string(cap.Event), "provider."):
-			// Own meta capability: expose under its event-type name
-			// (context.compress → context_compress). The provider.* management
-			// domain is excluded — it is not LLM-callable.
-			name = extensionToolName(baseworker.Extension{Event: cap.Event, KeyField: cap.KeyField, Key: cap.Key})
-		case cap.Source != w.ID() && cap.Event == event.TypeToolRequest:
-			// Same encoding as the dispatch table, so the name the LLM sees is
-			// exactly the name dispatch looks up (dots -> underscores, and the
-			// source prefix).
-			name = encodeToolName(w, worker.Tool{Name: cap.Key, Provider: cap.Source})
-		default:
+		if cap.Source == w.ID() && strings.HasPrefix(string(cap.Event), "provider.") {
+			// The provider.* management domain is not LLM-callable.
 			continue
 		}
 		params := cap.Parameters
@@ -63,7 +51,7 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 			delete(params, cap.KeyField)
 		}
 		defs = append(defs, llm.ToolDef{
-			Name:        name,
+			Name:        toolNameFor(w, cap),
 			Description: cap.Description,
 			Parameters:  params,
 		})
@@ -71,22 +59,49 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 	return defs
 }
 
-// llmToolDefs builds the LLM tool list via the worker's tool-list builder
+// LLMToolDefs builds the LLM tool list via the worker's tool-list builder
 // over the discovered capability universe. Called at the start of every
 // reasoning round.
-func (w *BaseReasonWorker) llmToolDefs() []llm.ToolDef {
+func (w *BaseReasonWorker) LLMToolDefs() []llm.ToolDef {
 	return w.toolListBuilder(w, w.discoveredCapabilities())
+}
+
+// toolNameFor is the LLM-facing name of a discovered capability: an own
+// capability is its identifier (event type, or discriminator Key for a shared
+// event) with dots → underscores; a peer capability is provider__identifier.
+// It is the single naming used by both the tool-list builder and the reverse
+// lookup (capabilityByToolName), so routing always agrees with the list.
+func toolNameFor(w *BaseReasonWorker, cap DiscoveredCapability) string {
+	id := string(cap.Event)
+	if cap.KeyField != "" {
+		id = cap.Key
+	}
+	if cap.Source == w.ID() {
+		return strings.ReplaceAll(id, ".", "_")
+	}
+	return encodeToolName(w, worker.Tool{Name: id, Provider: cap.Source})
+}
+
+// capabilityByToolName finds a discovered capability by its LLM-facing tool
+// name. Used to route LLM tool calls: the cap carries the owning Source and
+// the event type to send. Own capabilities route back to self; peer
+// capabilities go to their Source — both invoked by the cap's own event.
+func (w *BaseReasonWorker) capabilityByToolName(name string) (DiscoveredCapability, bool) {
+	for _, cap := range w.discoveredCapabilities() {
+		if toolNameFor(w, cap) == name {
+			return cap, true
+		}
+	}
+	return DiscoveredCapability{}, false
 }
 
 // extensionToolName is the default LLM-facing name for an own extension: its
 // identifier with dots → underscores (context.compress → context_compress).
 // The identifier is the discriminator Key when the extension is multiplexed on
-// a shared event (tool.request + name), or the event type itself when the
-// extension is identified by its own event (context.compress). The default
-// tool-list builder names exposed extensions with it, and the reason worker
-// reverse-maps LLM tool calls back to meta extensions with the same
-// convention, so a custom builder that exposes a meta extension must keep this
-// name for the meta routing to recognize it.
+// a shared event, or the event type itself when the extension is identified by
+// its own event. Used to reverse-map LLM tool calls back to registered
+// extensions for meta (self-editing) detection; the routing itself reads the
+// discovered universe via capabilityByToolName.
 func extensionToolName(ext baseworker.Extension) string {
 	id := ext.Key
 	if ext.KeyField == "" {
@@ -95,12 +110,10 @@ func extensionToolName(ext baseworker.Extension) string {
 	return strings.ReplaceAll(id, ".", "_")
 }
 
-// extensionByToolName finds a registered extension by its default LLM-facing
-// tool name (extensionToolName). Used to route LLM tool calls: a meta
-// extension is triggered by converting the tool call back into its
-// worker.update/worker.query event; an own tool extension loops back as
-// tool.request.
-func (w *BaseReasonWorker) extensionByToolName(name string) (baseworker.Extension, bool) {
+// ExtensionByToolName finds a registered own extension by its default
+// LLM-facing tool name (extensionToolName). Used to detect self-editing (meta)
+// extensions when routing an LLM call.
+func (w *BaseReasonWorker) ExtensionByToolName(name string) (baseworker.Extension, bool) {
 	for _, e := range w.Extensions() {
 		if extensionToolName(e) == name {
 			return e, true
@@ -109,29 +122,31 @@ func (w *BaseReasonWorker) extensionByToolName(name string) (baseworker.Extensio
 	return baseworker.Extension{}, false
 }
 
-// sendToolRequests sends a directed tool.request event for each tool call
-// to its target worker. The tracker only manages the pending map; the caller
-// is responsible for delivering the requests to the bus.
+// sendToolRequests sends a directed event for each tool call to its target
+// worker, using the capability's own event type and echoing the call's id as
+// the RequestId. The tracker only manages the pending map; the caller is
+// responsible for delivering the requests to the bus.
 func (w *BaseReasonWorker) sendToolRequests(target, callerID string, calls []llm.ContentBlock, traceID string) {
 	for _, tc := range calls {
+		cap, ok := w.capabilityByToolName(tc.ToolName)
+		if !ok {
+			continue
+		}
 		var argsMap map[string]any
 		if tc.ToolArguments != "" {
 			json.Unmarshal([]byte(tc.ToolArguments), &argsMap)
 		}
-		evt := event.New(event.TypeToolRequest, callerID, map[string]any{
+		if cap.KeyField != "" {
+			argsMap[cap.KeyField] = cap.Key
+		}
+		evt := event.New(cap.Event, callerID, map[string]any{
 			"worker_id": callerID,
-			"name":      tc.ToolName,
 			"arguments": argsMap,
 		})
 		evt.RequestId = tc.ToolCallID
 		evt.TraceID = traceID
 		_ = w.Channel.Send(context.Background(), evt, target)
 	}
-}
-
-// replyUnknownTool replies to a tool call no registered extension handled.
-func (w *BaseReasonWorker) replyUnknownTool(tc baseworker.ToolCall) {
-	w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "Unknown tool: "+tc.Name, tc.TraceID)
 }
 
 // cloneParams returns a shallow copy of a parameter map, so a caller can add

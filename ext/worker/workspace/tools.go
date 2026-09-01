@@ -9,6 +9,7 @@ import (
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/worker"
 	backend "github.com/niq-run/niq/ext/service/wsbackend"
+	"github.com/niq-run/niq/pkg/baseworker"
 )
 
 // buildHandlers probes the backend's low-level interfaces and assembles
@@ -152,45 +153,7 @@ func (w *WorkspaceWorker) buildHandlers() {
 	}
 
 	w.handlers = m
-}
-
-// ── Tool dispatch ──
-
-func (w *WorkspaceWorker) handleToolCall(ctx context.Context, evt event.Event) {
-	callID := evt.RequestId
-	name, _ := evt.Payload["name"].(string)
-	callerID := evt.WorkerId
-	traceID := evt.TraceID
-
-	log.Printf("[workspace %s] tool call: %s (id=%s)", w.ID(), name, callID)
-
-	args, _ := evt.Payload["arguments"].(map[string]any)
-
-	handler, ok := w.handlers[name]
-	if !ok {
-		w.publishFailed(callerID, callID, name, fmt.Errorf("unknown tool: %s", name), traceID)
-		return
-	}
-
-	ctx = backend.WithOnUpdate(ctx, func(partial string) {
-		evt := event.New(event.TypeRequestProgressed, w.ID(), map[string]any{
-			"worker_id": callerID,
-			"name":      name,
-			"partial":   partial,
-		})
-		evt.RequestId = callID
-		evt.Transient = true // live-streaming only, not durable history
-		_ = w.Channel.Send(context.Background(), evt, callerID)
-	})
-
-	result, err := handler(ctx, args)
-	if err != nil {
-		log.Printf("[workspace %s] tool error: %v", w.ID(), err)
-		w.publishFailed(callerID, callID, name, err, traceID)
-		return
-	}
-
-	w.publishCompleted(callerID, callID, name, result, traceID)
+	w.registerExtensions()
 }
 
 // ── Bus publishing ──
@@ -218,133 +181,99 @@ func (w *WorkspaceWorker) publishFailed(callerID, callID, toolName string, err e
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
-// publishReady announces available tools via worker.ready.
-func (w *WorkspaceWorker) publishReady() {
-	ts := make([]map[string]any, 0, len(w.handlers))
-
-	if _, ok := w.handlers["read"]; ok {
-		ts = append(ts, map[string]any{
-			"name":        "read",
-			"description": "Read the contents of a file within the workspace. Returns content with line numbers. Supports offset/limit pagination for large files.",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path":   map[string]any{"type": "string", "description": "Path to the file, relative to the workspace root."},
-					"offset": map[string]any{"type": "integer", "description": "1-indexed line number to start reading from. Defaults to 1."},
-					"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to read. Defaults to 2000."},
+// registerExtensions declares each available workspace tool as an extension
+// served by its own event type (the tool name), announced to peers via
+// AnnounceReady. Only tools whose handler is present (the mode/backend
+// supports them) are registered.
+func (w *WorkspaceWorker) registerExtensions() {
+	ctx := context.Background()
+	type spec struct {
+		desc   string
+		params map[string]any
+	}
+	specs := map[string]spec{
+		"read": {
+			desc: "Read the contents of a file within the workspace. Returns content with line numbers. Supports offset/limit pagination for large files.",
+			params: map[string]any{"type": "object", "properties": map[string]any{
+				"path":   map[string]any{"type": "string", "description": "Path to the file, relative to the workspace root."},
+				"offset": map[string]any{"type": "integer", "description": "1-indexed line number to start reading from. Defaults to 1."},
+				"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to read. Defaults to 2000."},
+			}, "required": []any{"path"}},
+		},
+		"write": {
+			desc: "Write content to a file within the workspace. Overwrites the entire file. Creates parent directories if needed.",
+			params: map[string]any{"type": "object", "properties": map[string]any{
+				"path":    map[string]any{"type": "string", "description": "Path to the file, relative to the workspace root."},
+				"content": map[string]any{"type": "string", "description": "Full content to write to the file."},
+			}, "required": []any{"path", "content"}},
+		},
+		"edit": {
+			desc: "Edit a file by applying one or more find-and-replace operations. Each edit specifies old_text and new_text. Uses fuzzy Unicode quote normalization as fallback.",
+			params: map[string]any{"type": "object", "properties": map[string]any{
+				"path": map[string]any{"type": "string", "description": "Path to the file, relative to the workspace root."},
+				"edits": map[string]any{"type": "array", "description": "Array of {old_text, new_text} objects to apply.", "items": map[string]any{
+					"type": "object", "properties": map[string]any{
+						"old_text": map[string]any{"type": "string", "description": "The exact text to find."},
+						"new_text": map[string]any{"type": "string", "description": "The replacement text."},
+					}, "required": []any{"old_text", "new_text"}},
 				},
-				"required": []any{"path"},
-			},
+			}, "required": []any{"path", "edits"}},
+		},
+		"bash": {
+			desc: "Run a shell command within the workspace root directory. Returns exit code, stdout, and stderr. Output larger than 20KB is truncated to its head and tail. Supports optional timeout.",
+			params: map[string]any{"type": "object", "properties": map[string]any{
+				"command": map[string]any{"type": "string", "description": "The shell command to execute."},
+				"cwd":     map[string]any{"type": "string", "description": "Working directory relative to workspace root."},
+				"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional, capped at 300)."},
+			}, "required": []any{"command"}},
+		},
+		"grep": {
+			desc: "Search files recursively using grep -rn. Returns file:line:content matches.",
+			params: map[string]any{"type": "object", "properties": map[string]any{
+				"pattern": map[string]any{"type": "string", "description": "Regex pattern to search for."},
+				"path":    map[string]any{"type": "string", "description": "Directory to search. Defaults to workspace root."},
+				"include": map[string]any{"type": "string", "description": "File glob to include (e.g. *.go)."},
+				"exclude": map[string]any{"type": "string", "description": "File glob to exclude (e.g. *_test.go)."},
+			}, "required": []any{"pattern"}},
+		},
+		"find": {
+			desc: "Find files by name glob using find -name.",
+			params: map[string]any{"type": "object", "properties": map[string]any{
+				"path":    map[string]any{"type": "string", "description": "Directory to search. Defaults to workspace root."},
+				"pattern": map[string]any{"type": "string", "description": "Filename glob pattern (e.g. *.go)."},
+			}, "required": []any{"pattern"}},
+		},
+		"ls": {
+			desc: "List directory contents. Returns a structured summary with entries marked as [file] or [dir].",
+			params: map[string]any{"type": "object", "properties": map[string]any{
+				"path": map[string]any{"type": "string", "description": "Directory to list. Defaults to workspace root."},
+			}},
+		},
+	}
+	for name, sp := range specs {
+		if _, ok := w.handlers[name]; !ok {
+			continue
+		}
+		name := name
+		w.Register(baseworker.Extension{Event: event.EventType(name), Description: sp.desc, Parameters: sp.params}, func(evt event.Event) {
+			tc := baseworker.ParseToolCall(evt)
+			tc.Name = name
+			w.dispatchHandler(ctx, tc)
 		})
 	}
+}
 
-	if _, ok := w.handlers["write"]; ok {
-		ts = append(ts, map[string]any{
-			"name":        "write",
-			"description": "Write content to a file within the workspace. Overwrites the entire file. Creates parent directories if needed.",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path":    map[string]any{"type": "string", "description": "Path to the file, relative to the workspace root."},
-					"content": map[string]any{"type": "string", "description": "Full content to write to the file."},
-				},
-				"required": []any{"path", "content"},
-			},
-		})
+// dispatchHandler serves a tool call through the registered handler map.
+func (w *WorkspaceWorker) dispatchHandler(ctx context.Context, tc baseworker.ToolCall) {
+	handler, ok := w.handlers[tc.Name]
+	if !ok {
+		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "unknown tool: "+tc.Name, tc.TraceID)
+		return
 	}
-
-	if _, ok := w.handlers["edit"]; ok {
-		ts = append(ts, map[string]any{
-			"name":        "edit",
-			"description": "Edit a file by applying one or more find-and-replace operations. Each edit specifies old_text and new_text. Uses fuzzy Unicode quote normalization as fallback.",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{"type": "string", "description": "Path to the file, relative to the workspace root."},
-					"edits": map[string]any{
-						"type":        "array",
-						"description": "Array of {old_text, new_text} objects to apply.",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"old_text": map[string]any{"type": "string", "description": "The exact text to find."},
-								"new_text": map[string]any{"type": "string", "description": "The replacement text."},
-							},
-							"required": []any{"old_text", "new_text"},
-						},
-					},
-				},
-				"required": []any{"path", "edits"},
-			},
-		})
+	result, err := handler(ctx, tc.Args)
+	if err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, err.Error(), tc.TraceID)
+		return
 	}
-
-	if _, ok := w.handlers["bash"]; ok {
-		ts = append(ts, map[string]any{
-			"name":        "bash",
-			"description": "Run a shell command within the workspace root directory. Returns exit code, stdout, and stderr. Output larger than 20KB is truncated to its head and tail. Supports optional timeout.",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"command": map[string]any{"type": "string", "description": "The shell command to execute."},
-					"cwd":     map[string]any{"type": "string", "description": "Working directory relative to workspace root."},
-					"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional, capped at 300)."},
-				},
-				"required": []any{"command"},
-			},
-		})
-	}
-
-	if _, ok := w.handlers["grep"]; ok {
-		ts = append(ts, map[string]any{
-			"name":        "grep",
-			"description": "Search files recursively using grep -rn. Returns file:line:content matches.",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"pattern": map[string]any{"type": "string", "description": "Regex pattern to search for."},
-					"path":    map[string]any{"type": "string", "description": "Directory to search. Defaults to workspace root."},
-					"include": map[string]any{"type": "string", "description": "File glob to include (e.g. *.go)."},
-					"exclude": map[string]any{"type": "string", "description": "File glob to exclude (e.g. *_test.go)."},
-				},
-				"required": []any{"pattern"},
-			},
-		})
-	}
-
-	if _, ok := w.handlers["find"]; ok {
-		ts = append(ts, map[string]any{
-			"name":        "find",
-			"description": "Find files by name glob using find -name.",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path":    map[string]any{"type": "string", "description": "Directory to search. Defaults to workspace root."},
-					"pattern": map[string]any{"type": "string", "description": "Filename glob pattern (e.g. *.go)."},
-				},
-				"required": []any{"pattern"},
-			},
-		})
-	}
-
-	if _, ok := w.handlers["ls"]; ok {
-		ts = append(ts, map[string]any{
-			"name":        "ls",
-			"description": "List directory contents. Returns a structured summary with entries marked as [file] or [dir].",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"path": map[string]any{"type": "string", "description": "Directory to list. Defaults to workspace root."},
-				},
-			},
-		})
-	}
-
-	evt := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "workspace",
-		"tools":     ts,
-	})
-	_ = w.Channel.Broadcast(context.Background(), evt)
-	log.Printf("[workspace %s] published worker.ready with %d tools (mode=%d)", w.ID(), len(ts), w.mode)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, tc.Name, result, tc.TraceID)
 }

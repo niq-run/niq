@@ -34,7 +34,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	}
 
 	w.Register(baseworker.Extension{
-		Event: event.TypeToolRequest, KeyField: "name", Key: "send_message",
+		Event: TypeSendMessage,
 		// SelfOnly: a worker's own addressed-messaging tool is not something
 		// peers should be able to call, so it is announced only to itself.
 		SelfOnly:    true,
@@ -45,11 +45,11 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		}),
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		handleSendMessage(w, tc.CallID, tc.Name, tc.CallerID, tc.TraceID, tc.Args)
+		handleSendMessage(w, tc.CallID, string(evt.Type), tc.CallerID, tc.TraceID, tc.Args)
 	})
 
 	w.Register(baseworker.Extension{
-		Event: event.TypeToolRequest, KeyField: "name", Key: "list_workers",
+		Event: TypeListWorkers,
 		// SelfOnly: list_workers reports this worker's own contract and is not
 		// exposed to peers.
 		SelfOnly:    true,
@@ -57,7 +57,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		Parameters:  obj(map[string]any{}),
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		handleListWorkers(w, tc.CallID, tc.Name, tc.CallerID, tc.TraceID, tc.Args)
+		handleListWorkers(w, tc.CallID, string(evt.Type), tc.CallerID, tc.TraceID, tc.Args)
 	})
 
 	w.Register(baseworker.Extension{
@@ -83,11 +83,24 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	}, func(evt event.Event) {
 		handleContextOp(w, evt, compactDirective)
 	})
+
+	// The context ops are self-editing: a call rewrites this worker's own
+	// transcript, so the mechanism excludes them from it (see
+	// BaseReasonWorker.RegisterTranscriptEditEvent).
+	w.RegisterTranscriptEditEvent(reasonBase.TypeContextCompress)
+	w.RegisterTranscriptEditEvent(TypeContextRotate)
 }
 
 // TypeContextRotate is the default worker's context-rotate event — its own
 // extra beyond the mechanism's context.compress convention, so it lives here.
 const TypeContextRotate event.EventType = "context.rotate"
+
+// The default worker's own LLM-facing tools, each its own event type (see the
+// request-response convention in pkg/reason).
+const (
+	TypeSendMessage event.EventType = "send_message"
+	TypeListWorkers event.EventType = "list_workers"
+)
 
 // handleSendMessage serves the send_message tool: forwards the text to the
 // target worker as a worker.input event and replies with a tool result.

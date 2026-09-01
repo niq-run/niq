@@ -12,24 +12,153 @@ import (
 	"github.com/niq-run/niq/pkg/baseworker"
 )
 
-// handleToolCall dispatches tool.request events to the appropriate handler.
-func (w *Worker) handleToolCall(ctx context.Context, evt event.Event) {
-	tc := baseworker.ParseToolCall(evt)
+// The program worker's tools, each its own event type.
+const (
+	TypeSearch   event.EventType = "search"
+	TypeLoad     event.EventType = "load"
+	TypeEdit     event.EventType = "edit"
+	TypeRegister event.EventType = "register"
+	TypeDelete   event.EventType = "delete"
+)
 
-	switch tc.Name {
-	case "search":
+// registerExtensions declares the program tools: each is an extension served
+// by its own event type, announced to peers via AnnounceReady.
+func (w *Worker) registerExtensions() {
+	ctx := context.Background()
+
+	w.Register(baseworker.Extension{
+		Event:       TypeSearch,
+		Description: "Search for available programs by name, description, or tag. Returns matching programs with their metadata (name, content_type, description, tags, locked). Use load to read the actual content.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{
+					"type":        "string",
+					"description": "Search query — matches against program name, description, and tags (case-insensitive substring).",
+				},
+				"content_type": map[string]any{
+					"type":        "string",
+					"description": "Optional filter: 'instruction' or 'playbook'.",
+					"enum":        []string{"instruction", "playbook"},
+				},
+			},
+			"required": []any{"query"},
+		},
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		tc.Name = string(evt.Type)
 		w.handleSearch(ctx, tc)
-	case "load":
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeLoad,
+		Description: "Load a specific content file from a program. Use this to progressively load sub-contents after reading the entry content via the search tool.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"program": map[string]any{
+					"type":        "string",
+					"description": "Program name.",
+				},
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Relative path to the content file within the program directory (e.g. 'rules/go.md').",
+				},
+			},
+			"required": []any{"program", "path"},
+		},
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		tc.Name = string(evt.Type)
 		w.handleLoad(ctx, tc)
-	case "edit":
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeEdit,
+		Description: "Edit a program's content file with an atomic find-and-replace. Cannot edit locked programs.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"program": map[string]any{
+					"type":        "string",
+					"description": "Program name (also the directory name).",
+				},
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Relative path to the content file within the program directory (e.g. 'PROGRAM.md' or 'rules/go.md').",
+				},
+				"old_text": map[string]any{
+					"type":        "string",
+					"description": "The exact text to find and replace.",
+				},
+				"new_text": map[string]any{
+					"type":        "string",
+					"description": "The replacement text. May be empty to delete the matched text.",
+				},
+			},
+			"required": []any{"program", "path", "old_text"},
+		},
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		tc.Name = string(evt.Type)
 		w.handleEdit(ctx, tc)
-	case "register":
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeRegister,
+		Description: "Register a new program at runtime. Creates the program directory and PROGRAM.md file on disk. Cannot modify or overwrite locked programs.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Program name (also used as the directory name).",
+				},
+				"content_type": map[string]any{
+					"type":        "string",
+					"description": "Program type: 'instruction' or 'playbook'.",
+					"enum":        []string{"instruction", "playbook"},
+				},
+				"description": map[string]any{
+					"type":        "string",
+					"description": "Short description of what this program does.",
+				},
+				"tags": map[string]any{
+					"type":        "array",
+					"description": "Tags for search and categorization.",
+					"items":       map[string]any{"type": "string"},
+				},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "The entry content body (the part after the YAML frontmatter).",
+				},
+			},
+			"required": []any{"name", "content_type", "content"},
+		},
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		tc.Name = string(evt.Type)
 		w.handleRegister(ctx, tc)
-	case "delete":
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeDelete,
+		Description: "Delete a program and all its contents. Cannot delete locked programs.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Program name to delete.",
+				},
+			},
+			"required": []any{"name"},
+		},
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		tc.Name = string(evt.Type)
 		w.handleDelete(ctx, tc)
-	default:
-		w.ReplyUnknownTool(tc)
-	}
+	})
 }
 
 // handleSearch handles the search tool call.

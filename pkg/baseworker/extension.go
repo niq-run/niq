@@ -21,6 +21,7 @@
 package baseworker
 
 import (
+	"context"
 	"sync"
 
 	"github.com/niq-run/niq/core/event"
@@ -30,13 +31,12 @@ import (
 // extended: each registration teaches the base to recognize one more
 // (event, discriminator) pair and answer it with a handler.
 type Extension struct {
-	// Event is the event type the extension responds to. Any event type is
-	// allowed; tool.request / worker.update / worker.query are the base
-	// channels registered by BaseWorker itself.
+	// Event is the event type the extension responds to — its identity. Any
+	// event type is allowed; invoking the extension means sending this event.
 	Event event.EventType
-	// KeyField is the payload field holding the discriminator (e.g. "name" for
-	// tool.request, "op" for worker.update, "subject" for worker.query). Empty
-	// means the extension matches the event type alone.
+	// KeyField is the payload field holding the discriminator when several
+	// extensions multiplex on one event type. Empty means the extension is
+	// identified by the event type alone.
 	KeyField string
 	// Key is the value KeyField must equal. Empty when KeyField is empty.
 	Key string
@@ -135,6 +135,70 @@ func (w *BaseWorker) Extensions() []Extension {
 	out := make([]Extension, 0, len(w.extensions.regs))
 	for _, r := range w.extensions.regs {
 		out = append(out, r.ext)
+	}
+	return out
+}
+
+// watchEntry renders one extension into the worker.ready "watch" wire entry:
+// its event type identifies the capability; a KeyField, when present, folds
+// the discriminator into the parameters (a shared event multiplexing several
+// capabilities). The wire field is literally "watch" — see announce.go in
+// pkg/reason for the naming note.
+func (w *BaseWorker) watchEntry(ext Extension) map[string]any {
+	entry := map[string]any{"event": string(ext.Event), "desc": ext.Description}
+	if ext.KeyField != "" {
+		params := cloneMap(ext.Parameters)
+		params[ext.KeyField] = ext.Key
+		entry["parameters"] = params
+	} else if len(ext.Parameters) > 0 {
+		entry["parameters"] = ext.Parameters
+	}
+	return entry
+}
+
+// WatchEntries renders the registry into the worker.ready "watch" wire format.
+// includeSelfOnly controls whether SelfOnly extensions are rendered: a
+// peer-facing broadcast leaves them out (they are not callable by peers),
+// while a worker's own view includes them.
+func (w *BaseWorker) WatchEntries(includeSelfOnly bool) []map[string]any {
+	caps := w.Extensions()
+	out := make([]map[string]any, 0, len(caps))
+	for _, e := range caps {
+		if e.SelfOnly && !includeSelfOnly {
+			continue
+		}
+		out = append(out, w.watchEntry(e))
+	}
+	return out
+}
+
+// AnnounceReady broadcasts this worker's presence on the bus: the externally
+// callable contract (SelfOnly left out), self excluded. publishes is the wire
+// form of the events this worker declares it emits (worker.ready "publishes"),
+// nil if it publishes none. This is the generic announcement every worker uses
+// to tell PEERS what it serves — it is not for self, so there is no
+// self-directed half here. The reason worker additionally sends itself its
+// full contract (including SelfOnly) so it can learn its own capabilities
+// through the same discovery pipeline as everyone else; that is its own extra,
+// not part of this helper.
+func (w *BaseWorker) AnnounceReady(workerType string, publishes []map[string]any) {
+	payload := map[string]any{
+		"worker_id": w.ID(),
+		"type":      workerType,
+		"watch":     w.WatchEntries(false),
+	}
+	if len(publishes) > 0 {
+		payload["publishes"] = publishes
+	}
+	presence := event.New(event.TypeWorkerReady, w.ID(), payload)
+	presence.ExcludeWorkerID = w.ID()
+	_ = w.Channel.Broadcast(context.Background(), presence)
+}
+
+func cloneMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
 	}
 	return out
 }

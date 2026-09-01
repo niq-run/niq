@@ -10,7 +10,7 @@ import ThinkingBlock from '../components/ThinkingBlock'
 import ResponseBlock from '../components/ResponseBlock'
 import TimerElapsedBlock from '../components/TimerElapsedBlock'
 import {
-  getInputText, isToolEvent, isReasonBoundary,
+  getInputText, isToolEvent, isToolInvocation, isReasonBoundary,
   toolContent, toolSummary, toolCallId,
   formatEventPayload, formatTime, truncate, findReferencedInput,
 } from '../components/talk-utils'
@@ -108,7 +108,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return events.filter(evt => {
       if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort') return false
       // Internal meta plumbing (context.compress / provider.*) is never a
-      // talk row — the LLM-facing tool card (tool.request + request.*) is its
+      // talk row — the LLM-facing tool card (invocation + request.*) is its
       // user-facing representation.
       if (evt.type === 'context.compress' || evt.type === 'context.rotate' || evt.type.startsWith('provider.')) return false
       // Delta / partial events are never rendered as standalone rows. When
@@ -120,7 +120,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       // suspend/resume), which involve no reason worker, stay out of talk.
       // The hasAnyReason guard defers filtering until we know the worker types,
       // so a not-yet-loaded list doesn't hide everything on first paint.
-      if (isToolEvent(evt.type) && hasAnyReason && !involvesReason(evt)) return false
+      if ((isToolEvent(evt.type) || isToolInvocation(evt)) && hasAnyReason && !involvesReason(evt)) return false
       if (talkWorkers.size === 0) return true // show all when none selected
       const recipients = deliveries[evt.id] || evt.recipients
       if (evt.type === 'worker.input') {
@@ -173,7 +173,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
 
   // Live tool output: accumulate request.progressed by request_id. Only populated when
   // streaming mode is on; the partial text renders inside the matching
-  // tool.request card.
+  // invocation card.
   const toolPartials = useMemo(() => {
     if (!streamingMode) return {} as Record<string, string>
     const map: Record<string, string> = {}
@@ -193,7 +193,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     }
     // Once a tool reaches a terminal event (completed/failed/rejected/cancel),
     // its result card takes over and the live streaming content in the
-    // tool.request card is cleared. Progressed events are NOT terminal — they
+    // invocation card is cleared. Progressed events are NOT terminal — they
     // keep accumulating above.
     for (const evt of events) {
       if (evt.type === 'request.completed' || evt.type === 'request.failed' || evt.type === 'request.rejected' || evt.type === 'request.cancel') {
@@ -579,18 +579,18 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     }
 
     // Tool events: render individually in natural order
-    if (isToolEvent(evt.type)) {
+    if (isToolEvent(evt.type) || isToolInvocation(evt)) {
       const callId = toolCallId(evt)
       const isExpanded = expandedContent.has(callId)
       const content = toolContent(evt, isExpanded)
       const contentLen = toolContent(evt, false).length
       const summary = toolSummary(evt)
-      const statusColor = evt.type === 'tool.request' ? colors.toolRequested
+      const statusColor = isToolInvocation(evt) ? colors.toolRequested
         : evt.type === 'request.completed' ? colors.toolCompleted
         : evt.type === 'request.failed' ? colors.toolFailed
         : colors.textDim
 
-      const toolLabel = evt.type === 'tool.request' ? 'Tool Call'
+      const toolLabel = isToolInvocation(evt) ? 'Tool Call'
         : evt.type === 'request.completed' ? 'Tool Result'
         : evt.type === 'request.failed' ? 'Tool Failed'
         : 'Tool Rejected'
@@ -599,8 +599,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const isDimmed = anyToolExpanded && !isExpanded
 
       // Streaming: accumulated request.progressed output shown live in the
-      // tool.request card while the call is in flight.
-      const partialText = evt.type === 'tool.request' ? (toolPartials[callId] || '') : ''
+      // invocation card while the call is in flight.
+      const partialText = isToolInvocation(evt) ? (toolPartials[callId] || '') : ''
 
       nodes.push(
         <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
@@ -644,7 +644,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     <span style={{ width: 8, height: 8, borderRadius: 4, background: isDimmed ? colors.textDimmed : statusColor, flexShrink: 0, opacity: 0.5 }} />
                     <span style={{ color: isDimmed ? colors.textDimmed : colors.textDim, fontSize: tFontSize }}>{toolLabel} {summary}</span>
                   </span>
-                  {(evt.type === 'request.completed' || evt.type === 'tool.request') && contentLen > 0 && (
+                  {(evt.type === 'request.completed' || isToolInvocation(evt)) && contentLen > 0 && (
                     <>
                       <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
                       <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{contentLen} chars</span>
