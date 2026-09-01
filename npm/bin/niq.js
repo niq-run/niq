@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // niq launcher: forwards to the platform-specific binary installed as an
-// optional dependency (@54c1/niq-<os>-<arch>).
+// optional dependency (@niq.run/niq-<os>-<arch>).
 
 'use strict';
 
@@ -24,11 +24,11 @@ if (!pkgOs || !pkgArch) {
 
 let subpkg;
 try {
-  subpkg = require.resolve(`@54c1/niq-${pkgOs}-${pkgArch}/package.json`);
+  subpkg = require.resolve(`@niq.run/niq-${pkgOs}-${pkgArch}/package.json`);
 } catch (e) {
   console.error(
-    `niq: binary package @54c1/niq-${pkgOs}-${pkgArch} is not installed.\n` +
-    'Try reinstalling with:\n\n  npm install @54c1/niq --force\n'
+    `niq: binary package @niq.run/niq-${pkgOs}-${pkgArch} is not installed.\n` +
+    'Try reinstalling with:\n\n  npm install @niq.run/niq --force\n'
   );
   process.exit(1);
 }

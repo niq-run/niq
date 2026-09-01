@@ -1,5 +1,5 @@
 {
-  "name": "@54c1/niq-webui",
+  "name": "@niq.run/niq-webui",
   "private": true,
   "version": "0.1.0",
   "type": "module",

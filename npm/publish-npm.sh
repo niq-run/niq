@@ -4,7 +4,7 @@
 # Usage: ./npm/publish-npm.sh <version> <dist-dir> [--dry-run]
 #
 # Layout produced:
-#   <dist>/npm/@54c1/niq-<os>-<arch>/   platform subpackages (binary only)
+#   <dist>/npm/@niq.run/niq-<os>-<arch>/   platform subpackages (binary only)
 #   <dist>/npm/niq/                     main package (copied from npm/)
 #
 # goreleaser archives are named niq_<os>_<arch>.tar.gz where
@@ -54,7 +54,7 @@ for archive in "${DIST}"/niq_*_*.tar.gz "${DIST}"/niq_*_*.zip; do
     continue
   fi
 
-  pkgdir="${OUT}/@54c1/niq-${nos}-${narch}"
+  pkgdir="${OUT}/@niq.run/niq-${nos}-${narch}"
   mkdir -p "${pkgdir}/bin"
   if [[ "$base" == *.zip ]]; then
     unzip -j -o "$archive" 'niq.exe' -d "${pkgdir}/bin/" >/dev/null
@@ -64,7 +64,7 @@ for archive in "${DIST}"/niq_*_*.tar.gz "${DIST}"/niq_*_*.zip; do
 
   cat > "${pkgdir}/package.json" <<EOF
 {
-  "name": "@54c1/niq-${nos}-${narch}",
+  "name": "@niq.run/niq-${nos}-${narch}",
   "version": "${VERSION}",
   "description": "niq binary for ${nos}-${narch}",
   "license": "MIT",
@@ -98,10 +98,10 @@ if [ "$DRY_RUN" = "--dry-run" ]; then
   exit 0
 fi
 
-for pkgjson in "${OUT}"/@54c1/*/package.json "${OUT}"/niq/package.json; do
+for pkgjson in "${OUT}"/@niq.run/*/package.json "${OUT}"/niq/package.json; do
   dir="$(dirname "$pkgjson")"
   echo "publishing $(basename "$dir")@${VERSION}"
-  (cd "$dir" && npm publish --access public)
+  (cd "$dir" && npm publish --access public --registry=https://registry.npmjs.org)
 done
 
 echo "done."

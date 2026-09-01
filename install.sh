@@ -3,7 +3,7 @@
 # into ~/.niq/bin (or $NIQ_INSTALL_DIR) and prints PATH instructions.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/54c1/niq/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/install.sh | sh
 #
 # Options (env vars):
 #   NIQ_INSTALL_DIR  target directory (default: ~/.niq/bin)
@@ -11,7 +11,7 @@
 
 set -eu
 
-REPO="54c1/niq"
+REPO="niq-run/niq"
 INSTALL_DIR="${NIQ_INSTALL_DIR:-$HOME/.niq/bin}"
 VERSION="${NIQ_VERSION:-}"
 
@@ -23,7 +23,7 @@ os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m)
 case "$os" in
   linux|darwin) ;;
-  *) fail "unsupported OS: $os. Use npm: npm install -g @54c1/niq" ;;
+  *) fail "unsupported OS: $os. Use npm: npm install -g @niq.run/niq" ;;
 esac
 case "$arch" in
   x86_64|amd64) arch=amd64 ;;

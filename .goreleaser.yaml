@@ -45,5 +45,5 @@ changelog:
 
 release:
   github:
-    owner: 54c1
+    owner: niq-run
     name: niq
