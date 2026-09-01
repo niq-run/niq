@@ -103,23 +103,10 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
                 {editingSub ? 'close' : 'edit'}
               </span>
             </div>
-            {!editingSub ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontFamily: 'monospace' }}>
-                {(worker.subscribe_allow || []).length === 0 ? (
-                  <span style={{ color: colors.detailValue, fontSize: fontSizes.base, fontFamily: 'inherit' }}>{'\u2014'}</span>
-                ) : (
-                  (worker.subscribe_allow || []).map((p, i) => (
-                    <div key={i} style={{ fontSize: fontSizes.xs, color: colors.textDim, lineHeight: '18px', wordBreak: 'break-all' }}>
-                      {p.type}
-                      {p.source_id && (
-                        <span style={{ color: colors.textDimmed }}> {'\u2190'} {p.source_id}</span>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
+            {editingSub ? (
+              <SubscribeAllowEditor key="edit" worker={worker} onDone={(note) => { setEditingSub(false); setSubNote(note) }} />
             ) : (
-              <SubscribeAllowEditor worker={worker} onDone={(note) => { setEditingSub(false); setSubNote(note) }} />
+              <SubscribeAllowEditor key="view" worker={worker} readOnly />
             )}
             {subNote && (
               <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{subNote}</div>
@@ -361,18 +348,25 @@ function ProviderSection({ workerId }: { workerId: string }) {
   )
 }
 
-// SubscribeAllowEditor edits a worker's SubscribeAllow list against the bus
-// registry. Each row is a type (supports "*", "Prefix.*", exact) plus an
-// optional source restricting delivery to events published by that worker.
-// Saving replaces the whole list; the worker list polls every few seconds and
-// refreshes the read-only chips after the round trip.
-function SubscribeAllowEditor({ worker, onDone }: { worker: WorkerInfo; onDone: (note: string) => void }) {
+// SubscribeAllowEditor renders the SubscribeAllow list in the same row layout
+// as the editor: one row per pattern, each with a type field and an optional
+// source field. In readOnly mode it shows the worker's current list with the
+// fields disabled; in edit mode it drafts a replacement and saves it against
+// the bus registry. Saving replaces the whole list; the worker list polls and
+// refreshes the read-only view after the round trip.
+function SubscribeAllowEditor({ worker, readOnly = false, onDone }: { worker: WorkerInfo; readOnly?: boolean; onDone?: (note: string) => void }) {
   const { colors } = useTheme()
-  const [rows, setRows] = useState<{ type: string; source: string }[]>(() =>
+  const [draft, setDraft] = useState<{ type: string; source: string }[]>(() =>
     (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source_id || '' })),
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  // Read-only view tracks the worker prop directly (the draft would go stale
+  // as the list polls); edit mode drafts on its own state.
+  const rows = readOnly
+    ? (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source_id || '' }))
+    : draft
 
   const inputStyle: React.CSSProperties = {
     flex: 1,
@@ -384,11 +378,12 @@ function SubscribeAllowEditor({ worker, onDone }: { worker: WorkerInfo; onDone: 
     color: colors.text,
     border: '1px solid ' + colors.border,
     borderRadius: 4,
+    opacity: readOnly ? 0.75 : 1,
   }
 
   const save = async () => {
-    const valid = rows.filter((r) => r.type.trim() !== '')
-    if (valid.length === 0 && rows.length > 0) {
+    const valid = draft.filter((r) => r.type.trim() !== '')
+    if (valid.length === 0 && draft.length > 0) {
       setError('each row needs an event type')
       return
     }
@@ -400,7 +395,7 @@ function SubscribeAllowEditor({ worker, onDone }: { worker: WorkerInfo; onDone: 
           r.source.trim() ? { type: r.type.trim(), source_id: r.source.trim() } : { type: r.type.trim() },
         ),
       })
-      onDone('saved — takes effect immediately')
+      onDone?.('saved — takes effect immediately')
     } catch (e) {
       setError((e as Error)?.message || 'save failed')
     } finally {
@@ -415,42 +410,48 @@ function SubscribeAllowEditor({ worker, onDone }: { worker: WorkerInfo; onDone: 
           <input
             value={r.type}
             placeholder="event type (worker.ready, request.*, …)"
-            onChange={(e) => { const n = [...rows]; n[i] = { ...n[i], type: e.target.value }; setRows(n) }}
+            disabled={readOnly}
+            onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], type: e.target.value }; setDraft(n) }}
             style={inputStyle}
           />
           <input
             value={r.source}
             placeholder="source (optional)"
-            onChange={(e) => { const n = [...rows]; n[i] = { ...n[i], source: e.target.value }; setRows(n) }}
+            disabled={readOnly}
+            onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], source: e.target.value }; setDraft(n) }}
             style={{ ...inputStyle, flex: '0 1 150px' }}
           />
-          <span
-            onClick={() => setRows(rows.filter((_, j) => j !== i))}
-            className="btn-hover"
-            title="remove"
-            style={{ cursor: 'pointer', color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none', padding: '0 4px' }}
-          >
-            {'\u2715'}
-          </span>
+          {!readOnly && (
+            <span
+              onClick={() => setDraft(draft.filter((_, j) => j !== i))}
+              className="btn-hover"
+              title="remove"
+              style={{ cursor: 'pointer', color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none', padding: '0 4px' }}
+            >
+              {'\u2715'}
+            </span>
+          )}
         </div>
       ))}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
-        <span
-          onClick={() => setRows([...rows, { type: '', source: '' }])}
-          className="btn-hover"
-          style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
-        >
-          + add
-        </span>
-        <span
-          onClick={save}
-          className="btn-hover"
-          style={{ cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
-        >
-          {saving ? 'Saving…' : 'save'}
-        </span>
-        {error && <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</span>}
-      </div>
+      {!readOnly && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+          <span
+            onClick={() => setDraft([...draft, { type: '', source: '' }])}
+            className="btn-hover"
+            style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+          >
+            + add
+          </span>
+          <span
+            onClick={save}
+            className="btn-hover"
+            style={{ cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+          >
+            {saving ? 'Saving…' : 'save'}
+          </span>
+          {error && <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</span>}
+        </div>
+      )}
       {rows.length === 0 && (
         <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 8, lineHeight: 1.5 }}>
           no subscriptions — the worker receives no broadcasts (directed calls and their results still reach it)
