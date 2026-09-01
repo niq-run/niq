@@ -17,15 +17,15 @@ import (
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/store"
 	"github.com/niq-run/niq/core/worker"
-	evtsqlite "github.com/niq-run/niq/ext/service/evtstore/sqlite"
+	evtsqlite "github.com/niq-run/niq/internal/project/evtstore/sqlite"
 	providerpkg "github.com/niq-run/niq/internal/project/provider"
 	"github.com/niq-run/niq/internal/webui"
-	"github.com/niq-run/niq/pkg/service/eventbus"
-	eventbusapi "github.com/niq-run/niq/pkg/service/eventbus/api"
-	"github.com/niq-run/niq/pkg/service/eventbus/transport/httptrans"
-	"github.com/niq-run/niq/pkg/service/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/pkg/service/workerhost"
-	"github.com/niq-run/niq/pkg/worker/hiw"
+	"github.com/niq-run/niq/pkg/services/eventbus"
+	eventbusapi "github.com/niq-run/niq/pkg/services/eventbus/api"
+	"github.com/niq-run/niq/pkg/services/eventbus/transport/httptrans"
+	"github.com/niq-run/niq/pkg/services/eventbus/transport/inprocess"
+	"github.com/niq-run/niq/pkg/services/workerhost"
+	"github.com/niq-run/niq/pkg/workers/hiw"
 )
 
 // ProjectRunOptions controls running a single project instance (its own bus and

@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/niq-run/niq/core/worker"
-	"github.com/niq-run/niq/pkg/service/eventbus"
-	"github.com/niq-run/niq/pkg/service/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/pkg/service/workerhost"
+	"github.com/niq-run/niq/pkg/services/eventbus"
+	"github.com/niq-run/niq/pkg/services/eventbus/transport/inprocess"
+	"github.com/niq-run/niq/pkg/services/workerhost"
 )
 
 // newTestEngine wires up a registry, engine and in-process listener exactly as

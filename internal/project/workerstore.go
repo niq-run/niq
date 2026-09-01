@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/niq-run/niq/core/worker"
-	"github.com/niq-run/niq/pkg/service/workerhost"
+	"github.com/niq-run/niq/pkg/services/workerhost"
 )
 
 // FileWorkerStore persists workers under a root directory, one subdirectory

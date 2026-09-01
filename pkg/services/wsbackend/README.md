@@ -1,6 +1,6 @@
 # wsbackend
 
-wsbackend is niq's workspace backend abstraction layer (under pkg/service/). It defines **interface contracts** for filesystem operations, command execution, and file search, and provides an **embedded local implementation** along with **pure helper functions**.
+wsbackend is niq's workspace backend abstraction layer (under pkg/services/). It defines **interface contracts** for filesystem operations, command execution, and file search, and provides an **embedded local implementation** along with **pure helper functions**.
 
 The workspace worker consumes wsbackend through interface assertions and never imports concrete implementations.
 

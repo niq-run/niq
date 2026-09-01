@@ -8,7 +8,7 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/worker"
-	backend "github.com/niq-run/niq/ext/service/wsbackend"
+	backend "github.com/niq-run/niq/pkg/services/wsbackend"
 	"github.com/niq-run/niq/pkg/baseworker"
 )
 

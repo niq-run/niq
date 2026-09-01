@@ -71,7 +71,7 @@ interface. The wire format bridges them and is unchanged.
 
 The generic tools (`send_message`, `list_workers`) and the context meta ops
 (`context.compress`, `context.rotate`) are **not** here — they are the default
-reason worker's own toolkit (`pkg/worker/reason`). The mechanism only declares
+reason worker's own toolkit (`pkg/workers/reason`). The mechanism only declares
 the `context.compress` convention and fires it under window pressure; shrinking
 the transcript is the worker's strategy.
 
