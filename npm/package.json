@@ -1,7 +1,7 @@
 {
-  "name": "@54c1/niq",
-  "version": "0.0.0",
-  "description": "niq - neural interface quantum",
+  "name": "@niq.run/niq",
+  "version": "0.1.0",
+  "description": "niq - an AI agent",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -14,12 +14,12 @@
     "bin/"
   ],
   "optionalDependencies": {
-    "@54c1/niq-darwin-arm64": "0.0.0",
-    "@54c1/niq-darwin-x64": "0.0.0",
-    "@54c1/niq-linux-arm64": "0.0.0",
-    "@54c1/niq-linux-x64": "0.0.0",
-    "@54c1/niq-win32-x64": "0.0.0",
-    "@54c1/niq-win32-arm64": "0.0.0"
+    "@niq.run/niq-darwin-arm64": "0.0.0",
+    "@niq.run/niq-darwin-x64": "0.0.0",
+    "@niq.run/niq-linux-arm64": "0.0.0",
+    "@niq.run/niq-linux-x64": "0.0.0",
+    "@niq.run/niq-win32-x64": "0.0.0",
+    "@niq.run/niq-win32-arm64": "0.0.0"
   },
   "engines": {
     "node": ">=14"
