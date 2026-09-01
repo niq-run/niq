@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -254,7 +253,7 @@ func (b *EmbeddedBackend) runBash(ctx context.Context, command, cwd string, onLi
 	cmd.Dir = cwd
 	// Own process group: killing the group reaps every descendant, so a
 	// backgrounded subprocess cannot outlive the command's deadline.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setOwnProcessGroup(cmd)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -407,20 +406,6 @@ func exceededLimits(out, errOut *boundedWriter, limits BashLimits) bool {
 		return true
 	}
 	return false
-}
-
-// killGroup sends SIGTERM to the whole process group, escalating to SIGKILL
-// shortly after so a process that ignores SIGTERM cannot survive.
-func killGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
-	}
-	pgid := -cmd.Process.Pid
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
-	go func() {
-		time.Sleep(2 * time.Second)
-		_ = syscall.Kill(pgid, syscall.SIGKILL)
-	}()
 }
 
 // Grep runs `grep -rn` inside the workspace root and returns

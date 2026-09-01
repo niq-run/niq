@@ -19,7 +19,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	corebus "github.com/niq-run/niq/core/bus"
@@ -198,9 +197,8 @@ func (s *UnmanagedSupervisor) supervise(st *procState) {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		// Run the worker in its own process group so cancelling the context can
-		// kill the whole tree (a launcher like npx or sh spawns children that
-		// would otherwise leak after the direct child dies).
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		// kill the whole tree (platform shim; see proc_unix.go / proc_windows.go).
+		setOwnProcessGroup(cmd)
 
 		start := time.Now()
 		if err := cmd.Start(); err != nil {
@@ -214,7 +212,7 @@ func (s *UnmanagedSupervisor) supervise(st *procState) {
 			go func() {
 				select {
 				case <-st.ctx.Done():
-					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+					killTree(cmd)
 				case <-killDone:
 				}
 			}()
