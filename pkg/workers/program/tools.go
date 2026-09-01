@@ -176,7 +176,7 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 
 	progs, err := w.search(query, ct)
 	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("search error: %v", err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("search error: %v", err), tc.TraceID)
 		return
 	}
 
@@ -201,11 +201,11 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 
 	b, err := json.Marshal(results)
 	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("marshal error: %v", err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("marshal error: %v", err), tc.TraceID)
 		return
 	}
 
-	w.ReplyCompleted(tc.CallerID, tc.CallID, tc.Name, string(b), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, string(b), tc.TraceID)
 	log.Printf("[program] search query=%q ct=%q → %d results", query, ctStr, len(results))
 }
 
@@ -215,7 +215,7 @@ func (w *Worker) handleLoad(ctx context.Context, tc baseworker.ToolCall) {
 	contentPath, _ := tc.Args["path"].(string)
 
 	if progName == "" || contentPath == "" {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "program and path are required", tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "program and path are required", tc.TraceID)
 		return
 	}
 
@@ -223,7 +223,7 @@ func (w *Worker) handleLoad(ctx context.Context, tc baseworker.ToolCall) {
 	fullPath := joinPath(progName, contentPath)
 	raw, err := w.backend.Read(ctx, fullPath)
 	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("read %s: %v", fullPath, err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("read %s: %v", fullPath, err), tc.TraceID)
 		return
 	}
 
@@ -233,7 +233,7 @@ func (w *Worker) handleLoad(ctx context.Context, tc baseworker.ToolCall) {
 		raw = body
 	}
 
-	w.ReplyCompleted(tc.CallerID, tc.CallID, tc.Name, raw, tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, raw, tc.TraceID)
 	log.Printf("[program] load %s/%s → backend (%d chars)", progName, contentPath, len(raw))
 }
 
@@ -246,24 +246,24 @@ func (w *Worker) handleEdit(ctx context.Context, tc baseworker.ToolCall) {
 	newText, _ := tc.Args["new_text"].(string)
 
 	if progName == "" || contentPath == "" || oldText == "" {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "program, path, and old_text are required", tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "program,  path,  and old_text are required", tc.TraceID)
 		return
 	}
 
 	// Locked programs cannot be modified via meta-extensions.
 	if existing, err := w.get(progName); err == nil && existing.Locked {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name,
+		w.ReplyFailed(tc.CallerID, tc.CallID,
 			fmt.Sprintf("cannot edit locked program: %q", progName), tc.TraceID)
 		return
 	}
 
 	fullPath := joinPath(progName, contentPath)
 	if err := w.backend.Edit(ctx, fullPath, oldText, newText); err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("edit %s: %v", fullPath, err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("edit %s: %v", fullPath, err), tc.TraceID)
 		return
 	}
 
-	w.ReplyCompleted(tc.CallerID, tc.CallID, tc.Name,
+	w.ReplyCompleted(tc.CallerID, tc.CallID,
 		fmt.Sprintf("edited %s in program %q", contentPath, progName), tc.TraceID)
 	log.Printf("[program] edit %s/%s", progName, contentPath)
 }
@@ -289,13 +289,13 @@ func (w *Worker) handleRegister(ctx context.Context, tc baseworker.ToolCall) {
 	}
 
 	if name == "" || ctStr == "" || content == "" {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "name, content_type, and content are required", tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "name,  content_type,  and content are required", tc.TraceID)
 		return
 	}
 
 	// Check if the program already exists and is locked.
 	if existing, err := w.get(name); err == nil && existing.Locked {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name,
+		w.ReplyFailed(tc.CallerID, tc.CallID,
 			fmt.Sprintf("cannot modify locked program: %q", name), tc.TraceID)
 		return
 	}
@@ -307,7 +307,7 @@ func (w *Worker) handleRegister(ctx context.Context, tc baseworker.ToolCall) {
 	case "playbook":
 		ct = program.ContentTypePlaybook
 	default:
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("invalid content_type: %s", ctStr), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("invalid content_type: %s", ctStr), tc.TraceID)
 		return
 	}
 
@@ -318,7 +318,7 @@ func (w *Worker) handleRegister(ctx context.Context, tc baseworker.ToolCall) {
 
 	entryPath := joinPath(name, "PROGRAM.md")
 	if err := w.backend.Write(ctx, entryPath, fullContent); err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("write failed: %v", err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("write failed: %v", err), tc.TraceID)
 		return
 	}
 
@@ -333,11 +333,11 @@ func (w *Worker) handleRegister(ctx context.Context, tc baseworker.ToolCall) {
 	}
 
 	if err := w.register(prog); err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("register failed: %v", err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("register failed: %v", err), tc.TraceID)
 		return
 	}
 
-	w.ReplyCompleted(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("program %q registered", name), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, fmt.Sprintf("program %q registered", name), tc.TraceID)
 	log.Printf("[program] register: %s (%s)", name, ct)
 }
 
@@ -347,18 +347,18 @@ func (w *Worker) handleDelete(ctx context.Context, tc baseworker.ToolCall) {
 	name, _ := tc.Args["name"].(string)
 
 	if name == "" {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "name is required", tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "name is required", tc.TraceID)
 		return
 	}
 
 	// Check if the program exists and is locked.
 	existing, err := w.get(name)
 	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("program %q not found", name), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("program %q not found", name), tc.TraceID)
 		return
 	}
 	if existing.Locked {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name,
+		w.ReplyFailed(tc.CallerID, tc.CallID,
 			fmt.Sprintf("cannot delete locked program: %q", name), tc.TraceID)
 		return
 	}
@@ -366,7 +366,7 @@ func (w *Worker) handleDelete(ctx context.Context, tc baseworker.ToolCall) {
 	// Remove the program directory from the backend.
 	// We use the program name as the directory path.
 	if err := w.backend.Remove(ctx, name); err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("delete failed: %v", err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("delete failed: %v", err), tc.TraceID)
 		return
 	}
 
@@ -375,6 +375,6 @@ func (w *Worker) handleDelete(ctx context.Context, tc baseworker.ToolCall) {
 	delete(w.programs, name)
 	w.pMu.Unlock()
 
-	w.ReplyCompleted(tc.CallerID, tc.CallID, tc.Name, fmt.Sprintf("program %q deleted", name), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, fmt.Sprintf("program %q deleted", name), tc.TraceID)
 	log.Printf("[program] delete: %s", name)
 }

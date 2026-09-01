@@ -8,8 +8,8 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/worker"
-	backend "github.com/niq-run/niq/pkg/services/wsbackend"
 	"github.com/niq-run/niq/pkg/baseworker"
+	backend "github.com/niq-run/niq/pkg/services/wsbackend"
 )
 
 // buildHandlers probes the backend's low-level interfaces and assembles
@@ -267,13 +267,13 @@ func (w *WorkspaceWorker) registerExtensions() {
 func (w *WorkspaceWorker) dispatchHandler(ctx context.Context, tc baseworker.ToolCall) {
 	handler, ok := w.handlers[tc.Name]
 	if !ok {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, "unknown tool: "+tc.Name, tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "unknown tool: "+tc.Name, tc.TraceID)
 		return
 	}
 	result, err := handler(ctx, tc.Args)
 	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, tc.Name, err.Error(), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
 		return
 	}
-	w.ReplyCompleted(tc.CallerID, tc.CallID, tc.Name, result, tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, result, tc.TraceID)
 }

@@ -33,14 +33,18 @@ func TestRequestTrackerHandleResponse(t *testing.T) {
 	m := NewRequestTracker()
 	m.Add("workspace", []llm.ContentBlock{tcBlock("a", "bash"), tcBlock("b", "read")})
 
-	if !m.HandleResponse(resultEvent(event.TypeRequestCompleted, "a")) {
+	if tr := m.HandleResponse(resultEvent(event.TypeRequestCompleted, "a")); tr == nil {
 		t.Fatal("handleResponse should match call a")
+	} else if tr.Name != "bash" {
+		t.Fatalf("matched request name = %q, want bash", tr.Name)
 	}
 	if m.Resolved() {
 		t.Fatal("still pending call b")
 	}
-	if !m.HandleResponse(resultEvent(event.TypeRequestFailed, "b")) {
+	if tr := m.HandleResponse(resultEvent(event.TypeRequestFailed, "b")); tr == nil {
 		t.Fatal("handleResponse should match call b")
+	} else if tr.Name != "read" {
+		t.Fatalf("matched request name = %q, want read", tr.Name)
 	}
 	if !m.Resolved() {
 		t.Fatal("all calls resolved")
@@ -52,7 +56,7 @@ func TestRequestTrackerHandleResponse(t *testing.T) {
 func TestRequestTrackerHandleResponseUnknown(t *testing.T) {
 	m := NewRequestTracker()
 	m.Add("workspace", []llm.ContentBlock{tcBlock("a", "bash")})
-	if m.HandleResponse(resultEvent(event.TypeRequestCompleted, "nope")) {
+	if m.HandleResponse(resultEvent(event.TypeRequestCompleted, "nope")) != nil {
 		t.Fatal("unknown call_id must not match")
 	}
 	if m.Resolved() {

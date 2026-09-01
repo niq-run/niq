@@ -159,13 +159,14 @@ func (w *BaseReasonWorker) handleReminder(evt event.Event) {
 // pairing invariant). Untracked call_ids (e.g. synthetic cancel responses) are
 // ignored.
 func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
-	// Normal resolution of a Pending call.
-	if w.requestTracker.HandleResponse(evt) {
+	// Normal resolution of a Pending call. The result event no longer carries
+	// the tool name (it is paired by request_id), so the name comes from the
+	// matched tracked request.
+	if tr := w.requestTracker.HandleResponse(evt); tr != nil {
 		callID := evt.RequestId
 		if callID != "" {
-			name, _ := evt.Payload["name"].(string)
 			text, isErr := resultOutcome(evt)
-			w.transcript.Apply(transcript.ToolResultPatch{CallID: callID, Name: name, Text: text, IsErr: isErr})
+			w.transcript.Apply(transcript.ToolResultPatch{CallID: callID, Name: tr.Name, Text: text, IsErr: isErr})
 		}
 		// All tool calls resolved
 		if w.requestTracker.Resolved() {
@@ -178,11 +179,10 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	// Late result for a Parked call.
 	if parked := w.requestTracker.ResolveLate(evt); parked != nil {
 		callID := evt.RequestId
-		name, _ := evt.Payload["name"].(string)
-		if callID != "" && name != "" {
+		if callID != "" && parked.Name != "" {
 			if text, _ := resultOutcome(evt); text != "" {
 				w.transcript.Apply(transcript.LateResultPatch{
-					CallID: callID, Name: name, Text: text, Cause: string(parked.ParkCause),
+					CallID: callID, Name: parked.Name, Text: text, Cause: string(parked.ParkCause),
 				})
 			}
 		}

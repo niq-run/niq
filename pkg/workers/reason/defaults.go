@@ -108,7 +108,7 @@ func handleSendMessage(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 	target, _ := args["target"].(string)
 	text, _ := args["text"].(string)
 	if target == "" || text == "" {
-		w.ReplyFailed(callerID, callID, toolName, "target and text are required", traceID)
+		w.ReplyFailed(callerID, callID, "target and text are required", traceID)
 		return
 	}
 
@@ -116,7 +116,7 @@ func handleSendMessage(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 	msgEvt.TraceID = w.CurrentTraceID()
 	_ = w.Channel.Send(context.Background(), msgEvt, target)
 
-	w.ReplyCompleted(callerID, callID, toolName, fmt.Sprintf("message sent to %s", target), traceID)
+	w.ReplyCompleted(callerID, callID, fmt.Sprintf("message sent to %s", target), traceID)
 }
 
 // handleListWorkers serves the list_workers tool: it returns all known workers
@@ -130,14 +130,14 @@ func handleListWorkers(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 	snapshot := w.DiscoveredWorkers()
 	b, err := json.Marshal(snapshot)
 	if err != nil {
-		w.ReplyFailed(callerID, callID, toolName, fmt.Sprintf(
+		w.ReplyFailed(callerID, callID, fmt.Sprintf(
 			"list_workers could not serialize the worker list: a worker's announced tool/event carried "+
 				"a field that cannot be serialized (%v). This usually means a worker.ready declared an invalid "+
 				"schema. Ask that worker to fix its declaration, then retry.", err), traceID)
 		return
 	}
 
-	w.ReplyCompleted(callerID, callID, toolName, string(b), traceID)
+	w.ReplyCompleted(callerID, callID, string(b), traceID)
 	log.Printf("[reason %s] list_workers → %d workers", w.ID(), len(snapshot))
 }
 
