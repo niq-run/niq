@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/niq-run/niq/core/program"
-	"github.com/niq-run/niq/ext/service/wsbackend"
+	"github.com/niq-run/niq/pkg/services/wsbackend"
 )
 
 // Backend adapts wsbackend.EmbeddedBackend to program.Backend.

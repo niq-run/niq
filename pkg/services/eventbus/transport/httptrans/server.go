@@ -11,7 +11,7 @@ import (
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
-	"github.com/niq-run/niq/pkg/service/eventbus"
+	"github.com/niq-run/niq/pkg/services/eventbus"
 )
 
 // Server is the HTTP transport server — the "守塔人" for remote workers.

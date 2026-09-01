@@ -14,7 +14,7 @@ export OPENAI_API_KEY=sk-xxxx
 
 ```
 cd niq && go build ./... && go vet ./...
-cd niq && go test ./pkg/service/bus/ -count=1
+cd niq && go test ./pkg/services/bus/ -count=1
 ```
 
 ### Run

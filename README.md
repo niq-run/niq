@@ -56,7 +56,7 @@ Once started, open <http://localhost:19763> for the WebUI — chat, inspect even
 
 ```sh
 cd niq && go build ./... && go vet ./...
-cd niq && go test ./pkg/service/eventbus/ -count=1
+cd niq && go test ./pkg/services/eventbus/ -count=1
 ```
 
 ### Data directory
