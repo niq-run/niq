@@ -25,8 +25,8 @@ import (
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
 	reasonBase "github.com/niq-run/niq/pkg/reason"
-	"github.com/niq-run/niq/pkg/services/eventbus"
-	eventbusapi "github.com/niq-run/niq/pkg/services/eventbus/api"
+	"github.com/niq-run/niq/pkg/eventbus"
+	eventbusapi "github.com/niq-run/niq/pkg/eventbus/api"
 	"github.com/niq-run/niq/pkg/services/workerhost"
 	"github.com/niq-run/niq/pkg/workers/hiw"
 )

@@ -13,7 +13,7 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/store"
-	"github.com/niq-run/niq/pkg/services/eventbus"
+	"github.com/niq-run/niq/pkg/eventbus"
 )
 
 // Filter controls which events a subscriber receives.
