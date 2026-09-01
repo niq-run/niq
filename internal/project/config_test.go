@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/niq-run/niq/core/event"
 )
 
 // TestSeedTemplates verifies first-run seeding populates an empty templates
@@ -76,5 +78,68 @@ func TestLoadTemplatePrefersDisk(t *testing.T) {
 	}
 	if len(fromDisk.Workers) != 1 || fromDisk.Workers[0].ID != "solo" {
 		t.Fatalf("disk template not preferred: %+v", fromDisk.Workers)
+	}
+}
+
+// TestSubscriptionSpecParsing verifies a subscription entry accepts both the
+// bare type string and the {"type","source"} object form.
+func TestSubscriptionSpecParsing(t *testing.T) {
+	raw := `{"workers":[{"type":"reason","id":"r","subscriptions":[
+		"worker.discover",
+		{"type":"request.completed","source":"timer"}
+	]}]}`
+	cfg, err := parseConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	subs := cfg.Workers[0].Subscriptions
+	if len(subs) != 2 {
+		t.Fatalf("subscriptions = %+v, want 2 entries", subs)
+	}
+	if subs[0].Type != "worker.discover" || subs[0].Source != "" {
+		t.Fatalf("string entry = %+v, want type-only worker.discover", subs[0])
+	}
+	if subs[1].Type != "request.completed" || subs[1].Source != "timer" {
+		t.Fatalf("object entry = %+v, want request.completed from timer", subs[1])
+	}
+
+	// Round-trip through workerConfigParams → subscriptionPatterns must yield
+	// the same EventPatterns, source included.
+	p := workerConfigParams(cfg.Workers[0])
+	patterns := subscriptionPatterns(p["subscriptions"])
+	if len(patterns) != 2 {
+		t.Fatalf("patterns = %+v, want 2", patterns)
+	}
+	if patterns[0].Type != "worker.discover" || patterns[0].SourceID != "" {
+		t.Fatalf("pattern[0] = %+v, want worker.discover", patterns[0])
+	}
+	if patterns[1].Type != "request.completed" || patterns[1].SourceID != "timer" {
+		t.Fatalf("pattern[1] = %+v, want request.completed/timer", patterns[1])
+	}
+	if !patterns[1].Matches(event.New("request.completed", "timer", nil)) {
+		t.Fatal("pattern[1] should match request.completed from timer")
+	}
+	if patterns[1].Matches(event.New("request.completed", "niq", nil)) {
+		t.Fatal("pattern[1] must reject request.completed from another source")
+	}
+}
+
+// TestSubAllowFromParams verifies the template-first / hardcoded-default rule.
+func TestSubAllowFromParams(t *testing.T) {
+	// Configured subscriptions win, source preserved.
+	cfg, err := parseConfig([]byte(`{"workers":[{"type":"reason","id":"r","subscriptions":["worker.ready",{"type":"request.completed","source":"niq"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := subAllowFromParams(workerConfigParams(cfg.Workers[0]), []string{"worker.discover"})
+	if len(got) != 2 || got[0].Type != "worker.ready" || got[1].SourceID != "niq" {
+		t.Fatalf("configured subs not honored: %+v", got)
+	}
+
+	// No config → hardcoded defaults.
+	empty, _ := parseConfig([]byte(`{"workers":[{"type":"reason","id":"r"}]}`))
+	got = subAllowFromParams(workerConfigParams(empty.Workers[0]), []string{"worker.discover"})
+	if len(got) != 1 || got[0].Type != "worker.discover" {
+		t.Fatalf("defaults not used: %+v", got)
 	}
 }

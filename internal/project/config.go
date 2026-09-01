@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/niq-run/niq/core/event"
 )
 
 //go:embed preset/*.json
@@ -27,19 +29,52 @@ type TemplateConfig struct {
 	Workers []WorkerConfig `json:"workers"`
 }
 
+// SubscriptionSpec is one SubscribeAllow entry. It accepts either a bare
+// event-type string ("worker.discover") or an object restricting the source:
+// {"type": "request.completed", "source": "timer"}. The source field limits
+// broadcast delivery to events published by that worker; empty means any
+// source. It is the config-level spelling of event.EventPattern.
+type SubscriptionSpec struct {
+	Type   event.EventType `json:"type"`
+	Source string          `json:"source,omitempty"`
+}
+
+// ToPattern converts the spec into the bus-level EventPattern it stands for.
+func (s SubscriptionSpec) ToPattern() event.EventPattern {
+	return event.EventPattern{Type: s.Type, SourceID: s.Source}
+}
+
+// UnmarshalJSON accepts a bare type string or a {"type","source"} object, so
+// existing string-only configs keep parsing.
+func (s *SubscriptionSpec) UnmarshalJSON(b []byte) error {
+	var typeOnly string
+	if err := json.Unmarshal(b, &typeOnly); err == nil {
+		s.Type = event.EventType(typeOnly)
+		s.Source = ""
+		return nil
+	}
+	type alias SubscriptionSpec
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return fmt.Errorf("project: bad subscription entry %s: %w", b, err)
+	}
+	*s = SubscriptionSpec(a)
+	return nil
+}
+
 // WorkerConfig describes a single worker instance declaration.
 type WorkerConfig struct {
-	Type          string   `json:"type"` // reason / workspace / host / timer / hiw / program
-	ID            string   `json:"id"`
-	Instruction   string   `json:"instruction,omitempty"`
-	Provider      string   `json:"provider,omitempty"`
-	APIKey        string   `json:"api_key,omitempty"`
-	BaseURL       string   `json:"base_url,omitempty"`
-	Model         string   `json:"model,omitempty"`
-	Subscriptions []string `json:"subscriptions,omitempty"`
-	Publish       []string `json:"publish,omitempty"`
-	RootDir       string   `json:"root_dir,omitempty"`
-	Archived      bool     `json:"archived,omitempty"`
+	Type          string             `json:"type"` // reason / workspace / host / timer / hiw / program
+	ID            string             `json:"id"`
+	Instruction   string             `json:"instruction,omitempty"`
+	Provider      string             `json:"provider,omitempty"`
+	APIKey        string             `json:"api_key,omitempty"`
+	BaseURL       string             `json:"base_url,omitempty"`
+	Model         string             `json:"model,omitempty"`
+	Subscriptions []SubscriptionSpec `json:"subscriptions,omitempty"`
+	Publish       []string           `json:"publish,omitempty"`
+	RootDir       string             `json:"root_dir,omitempty"`
+	Archived      bool               `json:"archived,omitempty"`
 	// Managed marks the worker as host-managed (in-process, worker dir is the
 	// config authority). nil or true = managed; false = an external process
 	// launched by the project via Command/Env/Cwd.
@@ -184,7 +219,11 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 	if len(wc.Subscriptions) > 0 {
 		arr := make([]any, len(wc.Subscriptions))
 		for i, s := range wc.Subscriptions {
-			arr[i] = s
+			m := map[string]any{"type": string(s.Type)}
+			if s.Source != "" {
+				m["source"] = s.Source
+			}
+			arr[i] = m
 		}
 		p["subscriptions"] = arr
 	}

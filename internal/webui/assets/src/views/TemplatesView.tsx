@@ -133,7 +133,7 @@ export default function TemplatesView() {
                     </div>
                     {(w.subscriptions && w.subscriptions.length > 0) && (
                       <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginTop: 4, fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                        {w.subscriptions.join(', ')}
+                        {w.subscriptions.map((s: any) => (typeof s === 'string' ? s : (s.source ? `${s.type} ← ${s.source}` : s.type))).join(', ')}
                       </div>
                     )}
                   </div>

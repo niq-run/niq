@@ -453,6 +453,31 @@ func eventPatternsFromStrings(types []string) []event.EventPattern {
 	return out
 }
 
+// subscriptionPatterns parses config subscription entries into bus patterns.
+// Each entry is a bare event-type string or a {"type","source"} object (see
+// SubscriptionSpec); both spell the same EventPattern.
+func subscriptionPatterns(v any) []event.EventPattern {
+	raw, _ := v.([]any)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]event.EventPattern, 0, len(raw))
+	for _, r := range raw {
+		switch e := r.(type) {
+		case string:
+			out = append(out, event.NewPattern(event.EventType(e)))
+		case map[string]any:
+			t, _ := e["type"].(string)
+			if t == "" {
+				continue
+			}
+			s, _ := e["source"].(string)
+			out = append(out, event.EventPattern{Type: event.EventType(t), SourceID: s})
+		}
+	}
+	return out
+}
+
 // subAllowFromParams resolves a worker's SubscribeAllow (the broadcast
 // delivery whitelist) from the config's subscriptions, falling back to the
 // given hardcoded defaults when none are configured. The template value and
@@ -462,7 +487,7 @@ func eventPatternsFromStrings(types []string) []event.EventPattern {
 // regardless of it, so tool capability events belong in the worker's own
 // declarations, not here.
 func subAllowFromParams(p map[string]any, defaults []string) []event.EventPattern {
-	if sub := eventPatternsFromStrings(stringSlice(p["subscriptions"])); len(sub) > 0 {
+	if sub := subscriptionPatterns(p["subscriptions"]); len(sub) > 0 {
 		return sub
 	}
 	return eventPatternsFromStrings(defaults)

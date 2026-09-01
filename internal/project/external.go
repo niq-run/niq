@@ -23,6 +23,7 @@ import (
 	"time"
 
 	corebus "github.com/niq-run/niq/core/bus"
+	"github.com/niq-run/niq/core/event"
 )
 
 // Environment variables passed to unmanaged workers so they can connect to the
@@ -283,9 +284,12 @@ func provisionUnmanaged(registry corebus.IdentityRegistry, projectID string, spe
 		}
 	}
 
-	subAllow := spec.Subscriptions
+	subAllow := make([]event.EventPattern, 0, len(spec.Subscriptions))
+	for _, s := range spec.Subscriptions {
+		subAllow = append(subAllow, s.ToPattern())
+	}
 	if len(subAllow) == 0 {
-		subAllow = []string{"*"}
+		subAllow = []event.EventPattern{{Type: "*"}}
 	}
 	pubAllow := spec.Publish
 	if len(pubAllow) == 0 {
@@ -295,7 +299,7 @@ func provisionUnmanaged(registry corebus.IdentityRegistry, projectID string, spe
 		WorkerID:       spec.ID,
 		Type:           spec.Type,
 		PublishAllow:   pubAllow,
-		SubscribeAllow: eventPatternsFromStrings(subAllow),
+		SubscribeAllow: subAllow,
 		Credential:     spec.Credential,
 	}
 	if err := registry.Register(identity); err != nil {
@@ -315,7 +319,7 @@ func provisionUnmanaged(registry corebus.IdentityRegistry, projectID string, spe
 			}
 			return registry.Register(identity)
 		}
-		return registry.Update(spec.ID, pubAllow, eventPatternsFromStrings(subAllow))
+		return registry.Update(spec.ID, pubAllow, subAllow)
 	}
 	return nil
 }
