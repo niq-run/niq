@@ -104,13 +104,20 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
               </span>
             </div>
             {!editingSub ? (
-              <AllowTags
-                items={(worker.subscribe_allow || []).map((p) => ({
-                  label: p.source_id ? `${p.type}@${p.source_id}` : p.type,
-                  title: p.source_id ? `${p.type} from ${p.source_id}` : p.type,
-                }))}
-                colors={colors}
-              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontFamily: 'monospace' }}>
+                {(worker.subscribe_allow || []).length === 0 ? (
+                  <span style={{ color: colors.detailValue, fontSize: fontSizes.base, fontFamily: 'inherit' }}>{'\u2014'}</span>
+                ) : (
+                  (worker.subscribe_allow || []).map((p, i) => (
+                    <div key={i} style={{ fontSize: fontSizes.xs, color: colors.textDim, lineHeight: '18px', wordBreak: 'break-all' }}>
+                      {p.type}
+                      {p.source_id && (
+                        <span style={{ color: colors.textDimmed }}> {'\u2190'} {p.source_id}</span>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
             ) : (
               <SubscribeAllowEditor worker={worker} onDone={(note) => { setEditingSub(false); setSubNote(note) }} />
             )}
