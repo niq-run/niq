@@ -6,12 +6,13 @@ import { suspendWorker, resumeWorker, fetchWorkerProviders, switchWorkerProvider
 
 interface WorkerDetailProps {
   worker: WorkerInfo
+  allWorkers: WorkerInfo[]
   onClose: () => void
   archived: Set<string>
   onToggleArchived: (id: string) => void
 }
 
-export default function WorkerDetail({ worker, onClose, archived, onToggleArchived }: WorkerDetailProps) {
+export default function WorkerDetail({ worker, allWorkers, onClose, archived, onToggleArchived }: WorkerDetailProps) {
   const { colors } = useTheme()
   const suspended = worker.managed && worker.state === 'suspended'
   const isArchived = archived.has(worker.id)
@@ -104,9 +105,9 @@ export default function WorkerDetail({ worker, onClose, archived, onToggleArchiv
               </span>
             </div>
             {editingSub ? (
-              <SubscribeAllowEditor key="edit" worker={worker} onDone={(note) => { setEditingSub(false); setSubNote(note) }} />
+              <SubscribeAllowEditor key="edit" worker={worker} allWorkers={allWorkers} onDone={(note) => { setEditingSub(false); setSubNote(note) }} />
             ) : (
-              <SubscribeAllowEditor key="view" worker={worker} readOnly />
+              <SubscribeAllowEditor key="view" worker={worker} allWorkers={allWorkers} readOnly />
             )}
             {subNote && (
               <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{subNote}</div>
@@ -354,7 +355,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
 // fields disabled; in edit mode it drafts a replacement and saves it against
 // the bus registry. Saving replaces the whole list; the worker list polls and
 // refreshes the read-only view after the round trip.
-function SubscribeAllowEditor({ worker, readOnly = false, onDone }: { worker: WorkerInfo; readOnly?: boolean; onDone?: (note: string) => void }) {
+function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDone }: { worker: WorkerInfo; allWorkers?: WorkerInfo[]; readOnly?: boolean; onDone?: (note: string) => void }) {
   const { colors } = useTheme()
   const [draft, setDraft] = useState<{ type: string; source: string }[]>(() =>
     (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source_id || '' })),
@@ -409,18 +410,25 @@ function SubscribeAllowEditor({ worker, readOnly = false, onDone }: { worker: Wo
         <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
           <input
             value={r.type}
-            placeholder="event type (worker.ready, request.*, …)"
+            placeholder={readOnly ? undefined : 'event type (worker.ready, request.*, …)'}
             disabled={readOnly}
             onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], type: e.target.value }; setDraft(n) }}
             style={inputStyle}
           />
-          <input
+          <select
             value={r.source}
-            placeholder="source (optional)"
             disabled={readOnly}
             onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], source: e.target.value }; setDraft(n) }}
-            style={{ ...inputStyle, flex: '0 1 150px' }}
-          />
+            style={{ ...inputStyle, flex: '0 1 170px', appearance: 'none' }}
+          >
+            <option value="" style={{ background: colors.bgLight, color: colors.text }}>any source</option>
+            {r.source !== '' && !allWorkers.some((w) => w.id === r.source) && (
+              <option value={r.source} style={{ background: colors.bgLight, color: colors.text }}>{r.source}</option>
+            )}
+            {allWorkers.map((w) => (
+              <option key={w.id} value={w.id} style={{ background: colors.bgLight, color: colors.text }}>{w.id}</option>
+            ))}
+          </select>
           {!readOnly && (
             <span
               onClick={() => setDraft(draft.filter((_, j) => j !== i))}

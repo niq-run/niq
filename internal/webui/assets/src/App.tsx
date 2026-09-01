@@ -554,6 +554,7 @@ export default function App() {
                 <MobileDetailPanel>
                   <WorkerDetail
                     worker={selectedWorker}
+                    allWorkers={workers}
                     onClose={() => setSelectedWorkerId(null)}
                     archived={archived}
                     onToggleArchived={toggleArchived}
@@ -563,6 +564,7 @@ export default function App() {
                 <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
                   <WorkerDetail
                     worker={selectedWorker}
+                    allWorkers={workers}
                     onClose={() => setSelectedWorkerId(null)}
                     archived={archived}
                     onToggleArchived={toggleArchived}
