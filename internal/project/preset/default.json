@@ -1,24 +1,8 @@
 {
   "workers": [
-    {
-      "type": "reason",
-      "id": "niq",
-      "subscriptions": [
-        "worker.input",
-        "request.completed",
-        "request.failed",
-        "request.rejected",
-        "worker.ready",
-        "worker.gone",
-        "worker.discover",
-        "worker.abort",
-        "timer.timeout",
-        "timer.reminder",
-        "decision.made"
-      ]
-    },
+    { "type": "reason", "id": "niq" },
     { "type": "timer", "id": "timer" },
     { "type": "host", "id": "host" },
-    { "type": "program", "id": "program", "subscriptions": ["search", "load", "edit", "register", "delete", "worker.discover"] }
+    { "type": "program", "id": "program" }
   ]
 }
