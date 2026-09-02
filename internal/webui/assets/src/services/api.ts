@@ -162,6 +162,14 @@ export async function restartWorker(id: string): Promise<void> {
   if (!res.ok) throw new Error((await res.text()).trim() || 'restart failed: ' + res.status)
 }
 
+// deleteWorker permanently removes a worker: stops it, revokes its identity,
+// deletes its persisted state, and drops its project.json declaration
+// (unmanaged workers).
+export async function deleteWorker(id: string): Promise<void> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}`), { method: 'DELETE' })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'delete failed: ' + res.status)
+}
+
 // updateWorkerAllow edits a worker's allow lists on the bus registry. Either
 // list may be omitted to keep its current value. SubscribeAllow patterns may
 // carry the optional source restriction ({type, source_id}).

@@ -29,13 +29,13 @@ type ProjectPorts struct {
 // launches after the bus is up, using Command/Env/Cwd; their bus credential is
 // generated on first launch and persisted here.
 type ProjectWorker struct {
-	ID            string            `json:"id"`
-	Type          string            `json:"type"`
-	Managed       bool              `json:"managed"`
-	Credential    string            `json:"credential,omitempty"`
-	Command       []string          `json:"command,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`
-	Cwd           string            `json:"cwd,omitempty"`
+	ID            string             `json:"id"`
+	Type          string             `json:"type"`
+	Managed       bool               `json:"managed"`
+	Credential    string             `json:"credential,omitempty"`
+	Command       []string           `json:"command,omitempty"`
+	Env           map[string]string  `json:"env,omitempty"`
+	Cwd           string             `json:"cwd,omitempty"`
 	Subscriptions []SubscriptionSpec `json:"subscriptions,omitempty"`
 	Publish       []string           `json:"publish,omitempty"`
 }
@@ -136,6 +136,39 @@ func FindWorker(p *Project, id string) (ProjectWorker, bool) {
 		}
 	}
 	return ProjectWorker{}, false
+}
+
+// RemoveWorkerDecl removes a worker's declaration from a project's project.json
+// (persisted immediately). It only edits the declaration; it does not stop a
+// running process or touch the bus registry / state dirs.
+func RemoveWorkerDecl(projectID, id string) error {
+	p, err := LoadProject(projectID)
+	if err != nil {
+		return err
+	}
+	out := p.Workers[:0]
+	for _, w := range p.Workers {
+		if w.ID != id {
+			out = append(out, w)
+		}
+	}
+	p.Workers = out
+	return SaveProject(p)
+}
+
+// removeWorkerStateDir deletes a worker's persisted per-worker directory
+// (<project>/workers/<id>), i.e. its config/state/snapshot/stdout. Missing
+// dirs are a no-op.
+func removeWorkerStateDir(projectID, id string) error {
+	dir := filepath.Join(workersRoot(projectID), sanitizeID(id))
+	return os.RemoveAll(dir)
+}
+
+// workersRoot returns the project's per-worker state directory root. The
+// authoritative layout lives in run Assembly's StateDir; this mirrors it so
+// deletes can clean up persisted state consistently.
+func workersRoot(projectID string) string {
+	return filepath.Join(ProjectDir(projectID), "workers")
 }
 
 // workerConfigPath returns the authoritative config.json path for a worker.

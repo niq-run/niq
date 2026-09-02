@@ -8,6 +8,7 @@ import (
 	"net"
 	stdhttp "net/http"
 	"sync"
+	"time"
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
@@ -155,9 +156,21 @@ func (s *Server) handleEvents(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		return
 	}
 
+	// Flush the headers up front so the client's connect handshake (fetch to
+	// /events) resolves immediately, independent of when the first event is
+	// routed here. Without this, the response has no body data yet, the headers
+	// are not flushed, and the worker's bus connection stays pending until some
+	// other bus traffic wakes it up.
+	flusher.Flush()
+
 	log.Printf("[httptrans] SSE stream started for %s", workerID)
 
-	// SSE loop: read from toWorker, push via SSE.
+	// SSE loop: read from toWorker, push via SSE. A keepalive ticker writes
+	// an SSE comment each interval so the connection never sits idle long
+	// enough to trip a client/hop body timeout (e.g. undici's ~5min default on
+	// the /events fetch body). Comments are silently ignored by SSE parsers.
+	keepalive := time.NewTicker(25 * time.Second)
+	defer keepalive.Stop()
 	for {
 		select {
 		case evt, ok := <-toWorker:
@@ -169,6 +182,10 @@ func (s *Server) handleEvents(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 				continue
 			}
 			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+
+		case <-keepalive.C:
+			fmt.Fprint(w, ": keepalive\n\n")
 			flusher.Flush()
 
 		case <-r.Context().Done():

@@ -9,10 +9,11 @@ import { makeMdComponents } from '../components/MarkdownComponents'
 import ThinkingBlock from '../components/ThinkingBlock'
 import ResponseBlock from '../components/ResponseBlock'
 import TimerElapsedBlock from '../components/TimerElapsedBlock'
+import SystemReminderBlock from '../components/SystemReminderBlock'
 import {
   getInputText, isToolEvent, isToolInvocation, isReasonBoundary,
   toolContent, toolSummary, toolCallId,
-  formatEventPayload, formatTime, truncate, findReferencedInput,
+  formatEventPayload, formatTime, truncate, findReferencedInput, splitSystemReminder,
 } from '../components/talk-utils'
 import type { EventPayload } from '../types'
 
@@ -275,12 +276,27 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     prevStreamLen.current = streamLen
   }, [relevantEvents, streamingTraces, toolPartials])
 
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
-    autoScrollRef.current = atBottom
-  }, [])
+  	const handleScroll = useCallback(() => {
+  		const el = scrollRef.current
+  		if (!el) return
+  		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
+  		autoScrollRef.current = atBottom
+  	}, [])
+
+	// Scroll to an event node if it is present in the current list; no-op when
+	// it is not (e.g. filtered out or loaded-on-request).
+	const scrollToEvent = useCallback((evtId: string) => {
+		const el = scrollRef.current
+		if (!el) return
+		const target = el.querySelector(`[data-evt-id="${CSS.escape(evtId)}"]`) as HTMLElement | null
+		if (!target) return
+		// Position relative to the scroll container (getBoundingClientRect is
+		// viewport-based and stable regardless of offsetParent), then scroll so
+		// the node's top sits just under the container top.
+		autoScrollRef.current = false
+		const top = target.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 12
+		el.scrollTo({ top, behavior: 'smooth' })
+	}, [])
 
   // ── Worker name label (avatar) ──
   // Only reason workers are mentionable: they get the hover underline and a
@@ -374,41 +390,60 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     // including cancels).
     if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || isToolEvent(evt.type))) continue
 
+    // A terminal result whose invocation is in the stream is merged into that
+    // invocation's card and never rendered as its own row. Skip it before the
+    // avatar bookkeeping below: its worker_id is the callee (lark, host, ...)
+    // and letting it advance the streak would break it invisibly, making the
+    // real speaker's next event re-show the avatar.
+    if (!isToolInvocation(evt) && isToolEvent(evt.type) && resultByRequestId[toolCallId(evt)] === evt) continue
+
     // System events (timer/abort) always render their sender avatar, so they
     // must also advance the avatar streak — otherwise the next reason worker
     // event after a timer would wrongly see the same speaker and skip its avatar.
-    const alwaysAvatar = evt.type === 'timer.reminder' || evt.type === 'timer.timeout' || evt.type === 'worker.abort'
-    const shouldShowAvatar = alwaysAvatar || isReason(evt.worker_id) || evt.worker_id === humanId
-    const showBadge = shouldShowAvatar && evt.worker_id !== lastAvatarId
+    	const alwaysAvatar = evt.type === 'timer.reminder' || evt.type === 'timer.timeout' || evt.type === 'worker.abort'
+    	// Show a worker-name avatar for reason workers, the human, system events,
+    	// and any right-aligned message (e.g. an external worker like the lark
+    	// bridge speaking to a reason worker) so its identity is visible.
+    	const shouldShowAvatar = alwaysAvatar || isReason(evt.worker_id) || evt.worker_id === humanId || isRightAligned(evt)
+    // Notice rows that render without an avatar (interrupted / cancelled /
+    // timer-elapsed) must not consume the streak either: nothing identifying
+    // the speaker is displayed, so a streak they set would be invisible.
+    const showBadge = shouldShowAvatar && evt.worker_id !== lastAvatarId &&
+      evt.type !== 'reason.interrupted' && evt.type !== 'request.cancel' && evt.type !== 'timer.elapsed'
     if (showBadge) lastAvatarId = evt.worker_id
 
     // worker.input
     if (evt.type === 'worker.input') {
       const alignRight = isRightAligned(evt)
+      const { reminder, content } = splitSystemReminder(getInputText(evt))
       nodes.push(
-        <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
+        		<div key={evt.id} data-evt-id={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
+        		  {showBadge && (
+        			<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
               <WorkerBadge id={evt.worker_id} show={true} />
             </div>
           )}
-          <div
-            style={{
-              maxWidth: alignRight ? '70%' : bubbleMax,
-              display: alignRight ? 'inline-block' : undefined,
-              textAlign: 'left',
-              background: colors.bgLight, // same card background as responses
-              border: '1px solid ' + colors.border,
-              padding: alignRight ? '10px 14px' : '6px 10px',
-              fontSize: alignRight ? fontSizes.base : fontSizes.sm,
-              fontFamily: alignRight ? undefined : 'monospace',
-              lineHeight: 1.5,
-              color: colors.text,
-            }}
+         		  <div
+            			style={{
+            			  maxWidth: alignRight ? '70%' : bubbleMax,
+            			  minWidth: 0,
+            			  // inline-block both sides: shrink to content (capped) so a
+            			  // left-aligned broadcast message isn't always 70% wide.
+            			  display: 'inline-block',
+            			  textAlign: 'left',
+            			  background: colors.bgLight, // same card background as responses
+            			  border: '1px solid ' + colors.border,
+            			  padding: alignRight ? '10px 14px' : '6px 10px',
+            			  fontSize: alignRight ? fontSizes.base : fontSizes.sm,
+            			  fontFamily: alignRight ? undefined : 'monospace',
+            			  lineHeight: 1.5,
+            			  color: colors.text,
+            			  boxSizing: 'border-box',
+            			}}
           >
             {/* Message box title, styled like the avatar: sender@target. A
                 broadcast (no target) shows a "broadcast" label instead. */}
-            <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, width: '100%', justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap' }}>
+            			<div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap' }}>
               {evt.target_worker_id ? (
                 <>
                   <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold', fontFamily: 'monospace' }}>
@@ -423,7 +458,10 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
             </div>
             <div className="md-content">
-              <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>{getInputText(evt)}</Markdown>
+              {reminder && <SystemReminderBlock reminder={reminder} />}
+              {content ? (
+                <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>{content}</Markdown>
+              ) : null}
             </div>
             {evt.trace_id && (
               <div style={{ marginTop: 6, textAlign: alignRight ? 'right' : 'left' }}>
@@ -626,10 +664,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     if (isToolEvent(evt.type) || isToolInvocation(evt)) {
       const callId = toolCallId(evt)
       const isInvocation = isToolInvocation(evt)
-      // A terminal result whose invocation is in the stream is merged into
-      // that invocation's card; skip the standalone result row.
       const resultEvt = isInvocation ? resultByRequestId[callId] : undefined
-      if (!isInvocation && resultByRequestId[callId] === evt) continue
 
       const isExpanded = expandedContent.has(callId)
       const content = toolContent(evt, isExpanded)
@@ -876,16 +911,16 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     } else if (evt.type === 'reason.response') {
       const ref = findReferencedInput(events, evt)
       const isDimmed = anyToolExpanded
-      nodes.push(
-        <div key={evt.id} style={{ maxWidth: bubbleMax, opacity: isDimmed ? 0.35 : 1, transition: 'opacity 0.15s' }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
-              <WorkerBadge id={evt.worker_id} show={true} />
-            </div>
-          )}
-          <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} />
-        </div>
-      )
+    		  nodes.push(
+    			<div key={evt.id} data-evt-id={evt.id} style={{ maxWidth: bubbleMax, opacity: isDimmed ? 0.35 : 1, transition: 'opacity 0.15s' }}>
+    			  {showBadge && (
+    				<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
+    				  <WorkerBadge id={evt.worker_id} show={true} />
+    				</div>
+    			  )}
+    			  <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} quotedEvtId={ref?.evtId} onQuoteClick={scrollToEvent} />
+    			</div>
+    		  )
     } else {
       nodes.push(
         <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: 12, fontSize: fontSizes.sm, color: colors.textDimmed }}>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { type WorkerInfo, type ProviderOption, type ProviderSelection } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
-import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, fetchWorkerProviders, switchWorkerProvider, updateWorkerAllow } from '../services/api'
+import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, updateWorkerAllow } from '../services/api'
 
 interface WorkerDetailProps {
   worker: WorkerInfo
@@ -10,9 +10,10 @@ interface WorkerDetailProps {
   onClose: () => void
   archived: Set<string>
   onToggleArchived: (id: string) => void
+  onDeleted: (id: string) => void
 }
 
-export default function WorkerDetail({ worker, allWorkers, onClose, archived, onToggleArchived }: WorkerDetailProps) {
+export default function WorkerDetail({ worker, allWorkers, onClose, archived, onToggleArchived, onDeleted }: WorkerDetailProps) {
   const { colors } = useTheme()
   const suspended = worker.managed && worker.state === 'suspended'
   const isArchived = archived.has(worker.id)
@@ -23,6 +24,21 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
   const [subNote, setSubNote] = useState('')
   const [umBusy, setUmBusy] = useState('')
   const [umNote, setUmNote] = useState('')
+  const [confirmDel, setConfirmDel] = useState(false)
+  const [delBusy, setDelBusy] = useState(false)
+
+  const doDelete = async () => {
+    setDelBusy(true)
+    try {
+      await deleteWorker(worker.id)
+      onDeleted(worker.id)
+    } catch (e) {
+      setUmNote((e as Error)?.message || 'delete failed')
+      setConfirmDel(false)
+    } finally {
+      setDelBusy(false)
+    }
+  }
 
   const unmanagedAction = async (op: 'start' | 'stop' | 'restart') => {
     setUmBusy(op)
@@ -203,13 +219,47 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
                   <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{umNote}</div>
                 )}
               </div>
-            ) : (
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>not host-managed</span>
-            )}
-          </div>
+            			) : (
+            				<span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>not host-managed</span>
+            			)}
 
-          {/* Model / Provider — only reason workers carry ProviderSources.
-              Keyed by worker id so switching workers cannot leak one worker's
+            			{/* Danger: permanently remove this worker. */}
+            			<div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
+            				<div style={{ color: colors.detailLabel, fontSize: fontSizes.sm, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
+            					Delete
+            				</div>
+            				{confirmDel ? (
+            					<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            						<span style={{ color: colors.textDim, fontSize: fontSizes.sm }}>Stop & delete {worker.id}? This cannot be undone.</span>
+            						<span
+            							onClick={doDelete}
+            							className="btn-hover"
+            							style={{ cursor: delBusy ? 'default' : 'pointer', opacity: delBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
+            						>
+            							{delBusy ? 'Deleting…' : 'confirm delete'}
+            						</span>
+            						<span
+            							onClick={() => setConfirmDel(false)}
+            							className="btn-hover"
+            							style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+            						>
+            							cancel
+            						</span>
+            					</div>
+            				) : (
+            					<span
+            						onClick={() => { setConfirmDel(true); setUmNote('') }}
+            						className="btn-hover"
+            						style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
+            					>
+            						delete
+            					</span>
+            				)}
+            			</div>
+            		  </div>
+
+            		  {/* Model / Provider — only reason workers carry ProviderSources.
+            			  Keyed by worker id so switching workers cannot leak one worker's
               provider state into another. */}
           {worker.type === 'reason' && <ProviderSection key={worker.id} workerId={worker.id} />}
         </div>

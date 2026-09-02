@@ -58,12 +58,35 @@ func (e *Engine) Connect(workerID string, ch corebus.BusSideChannel) error {
 	return nil
 }
 
-// Disconnect marks a worker as offline and removes its channel.
+// Disconnect marks a worker as offline, removes its channel, and broadcasts a
+// worker.gone presence event so peers (e.g. reason's discovery) drop its
+// tools/events. Called on delete, suspend, crash and shutdown.
 func (e *Engine) Disconnect(workerID string) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	if _, ok := e.channels[workerID]; !ok {
+		e.mu.Unlock()
+		return
+	}
 	delete(e.channels, workerID)
+	e.mu.Unlock()
 	log.Printf("[eventbus] worker %s disconnected", workerID)
+
+	e.broadcastGone(context.Background(), workerID)
+}
+
+// broadcastGone advertises a worker's departure as a worker.gone broadcast.
+// from is the departed worker; the payload names it so reason's discovery can
+// age it out. Best-effort. Routing reuses HandleRequest so subscription
+// matching, persistence and onEvent observers all apply.
+func (e *Engine) broadcastGone(ctx context.Context, workerID string) {
+	evt := event.New(event.TypeWorkerGone, workerID, map[string]any{
+		"worker_id": workerID,
+	})
+	// The departed worker is excluded from its own broadcast (it cannot
+	// receive anyway — it is offline), but set it so a straggler reconnecting
+	// under the same id does not observe its own gone event.
+	evt.ExcludeWorkerID = workerID
+	e.HandleRequest(ctx, corebus.Request{Type: corebus.RequestBroadcast, Events: []event.Event{evt}}, workerID)
 }
 
 // HandleRequest processes a delivery request from a worker.
