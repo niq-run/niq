@@ -9,26 +9,26 @@ niq has exactly three core concepts:
 - **Event** — the only communication language between Workers, delivered over the event bus.
 
 > **Collaboration is extension.**
->
-> niq grows not by adding new abstractions, but by adding more participants that cooperate over the event bus. Every capability (reasoning, tool execution, safety guards, lifecycle) is a Worker. Extending a capability and having a human join the collaboration are the same act — a user is just another collaborating participant, and there can be one or many of them. In niq, everything is workers collaborating over the event bus.
+
+niq grows not by adding new abstractions, but by adding more participants that cooperate over the event bus. Every capability (reasoning, tool execution, safety guards, lifecycle) is a Worker. Extending a capability and having a human join the collaboration are the same act — a user is just another collaborating participant, and there can be one or many of them. In niq, everything is workers collaborating over the event bus.
 
 > **Status: early, fast-moving development.** The design is still evolving; APIs and behavior may change without notice.
 
 ## Install
 
-**npm** (recommended) — the binary for your platform is installed automatically as an npm optional dependency, no postinstall scripts:
+**npm** (recommended):
 
 ```sh
 npm install -g @niq.run/niq
 ```
 
-**Install script** — downloads the prebuilt binary from GitHub Releases into `~/.niq/bin`:
+**Install script** (installs to `~/.niq/bin`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/install.sh | sh
 ```
 
-**From source** — Go 1.25+:
+**From source** (Go 1.25+):
 
 ```sh
 git clone https://github.com/niq-run/niq
@@ -40,17 +40,20 @@ cd niq && make build   # → ./bin/niq
 niq has two layers: a **control plane**, and **projects** — each project is an isolated agent instance with its own event bus, worker set and WebUI on its own ports.
 
 ```sh
-# 1. start the control plane (default :9527)
+# start the control plane (default :9527)
 niq
+```
 
-# 2. create a project from the default template
+Open **http://localhost:9527** — the control plane's WebUI lists your projects and can create and start one from a template, no terminal needed.
+
+Prefer the CLI? Both steps can also be done manually:
+
+```sh
 niq project create my-project
-
-# 3. run it in this process
 niq project run my-project
 ```
 
-Ports are assigned dynamically on first run and then persisted per project, so they stay stable across restarts (`--bus` / `--webui` override). `niq project list` shows each project's `webui` and `bus` ports — open the WebUI in your browser to chat, watch the event flow and manage workers.
+Each project serves its own WebUI — use it to chat, watch the event flow and manage workers. Ports are assigned dynamically on first run and then persisted per project, so they stay stable across restarts (`--bus` / `--webui` override). `niq project list` shows each project's `webui` and `bus` ports.
 
 ### Model provider
 
