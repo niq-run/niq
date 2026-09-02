@@ -14,58 +14,79 @@ Core insight: **collaboration is extension.** niq grows not by adding new abstra
 
 > **Status: early, fast-moving development.** The design is still evolving; APIs and behavior may change without notice.
 
-## Project layout
+## Install
 
+**npm** (recommended) — the binary for your platform is installed automatically as an npm optional dependency, no postinstall scripts:
+
+```sh
+npm install -g @niq.run/niq
 ```
-core/         interfaces & types (contracts, not implementations)
-pkg/          implementations (workers, services, bus, transports)
-internal/     control plane, project runtime, WebUI
-cmd/          CLI entry point
-doc/          design docs & dev notes
+
+**Install script** — downloads the prebuilt binary from GitHub Releases into `~/.niq/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/install.sh | sh
+```
+
+**From source** — Go 1.25+:
+
+```sh
+git clone https://github.com/niq-run/niq
+cd niq && make build   # → ./bin/niq
 ```
 
 ## Quick start
 
-### Prerequisites
-
-- Go 1.22+
-- A model API key (for the reason worker), set in `~/.zshenv`:
-
-  ```sh
-  export OPENAI_API_KEY=sk-xxxx
-  ```
-
-### Run
+niq has two layers: a **control plane**, and **projects** — each project is an isolated agent instance with its own event bus, worker set and WebUI on its own ports.
 
 ```sh
-# Start the control plane (listens on :9527 by default)
-cd niq && go run ./cmd/niq/
+# 1. start the control plane (default :9527)
+niq
 
-# Or build first
-make build
-./bin/niq
+# 2. create a project from the default template
+niq project create my-project
 
-# Then create and run a project from the WebUI, or from the CLI:
-./bin/niq project create my-project
-./bin/niq project run my-project
+# 3. run it in this process
+niq project run my-project
 ```
 
-Once started, open <http://localhost:19763> for the WebUI — chat, inspect events, and view workers.
+Ports are assigned dynamically on first run and then persisted per project, so they stay stable across restarts (`--bus` / `--webui` override). `niq project list` shows each project's `webui` and `bus` ports — open the WebUI in your browser to chat, watch the event flow and manage workers.
 
-### Build & test
+### Model provider
+
+The `reason` worker talks to an LLM provider. Provider settings (endpoint, model, API key) live in `~/.niq/common/providers/provider.json`; `api_key` and header values support environment-variable expansion — e.g. `"api_key": "${OPENAI_API_KEY}"` keeps secrets out of stored files.
+
+## Project layout
+
+```
+core/      interfaces & types (contracts, not implementations)
+pkg/       implementations (workers, services, bus, transports)
+internal/  control plane, project runtime, WebUI
+cmd/       CLI entry point
+npm/       npm distribution (launcher shim + package template)
+ext/       external worker implementations (HTTP)
+```
+
+## Build & test
 
 ```sh
-cd niq && go build ./... && go vet ./...
-cd niq && go test ./pkg/eventbus/ -count=1
+go build ./... && go vet ./...
+go test ./pkg/eventbus/ -count=1
 ```
 
-### Data directory
+## Data directory
 
 Runtime data lives under `~/.niq/`:
 
 ```
 ~/.niq/
-  ├── id/identities.json    # worker identity registry (owned by the bus)
-  ├── programs/             # Program storage
-  └── niq.log               # run log
+  bin/                         prebuilt binary (install.sh)
+  niq.log                      control-plane log
+  common/
+    templates/                 project templates
+    providers/provider.json    shared provider config (API keys via env expansion)
+  projects/<id>/               one directory per project
+    id/identities.json         worker identity registry (owned by the bus)
+    programs/                  Program storage
+    logs/                      daily-rotated run logs
 ```
