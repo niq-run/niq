@@ -79,6 +79,7 @@ done
 mkdir -p "${OUT}/niq"
 mkdir -p "${OUT}/niq/bin"
 cp "${ROOT}/npm/bin/niq.js" "${OUT}/niq/bin/"
+cp "${ROOT}/npm/README.md" "${OUT}/niq/README.md"
 node - "${VERSION}" "${OUT}" "${ROOT}" <<'EOF'
 const [version, out, root] = process.argv.slice(2);
 const fs = require('fs');
@@ -98,10 +99,25 @@ if [ "$DRY_RUN" = "--dry-run" ]; then
   exit 0
 fi
 
+REGISTRY="https://registry.npmjs.org"
+
+# published "<name>@<version>" → 0 if that exact version already exists on the
+# registry, so re-runs (CI retries, tag re-pushes) skip instead of failing with
+# EPUBLISHALREADY.
+published() {
+  npm view "$1" version --registry="$REGISTRY" >/dev/null 2>&1
+}
+
 for pkgjson in "${OUT}"/@niq.run/*/package.json "${OUT}"/niq/package.json; do
   dir="$(dirname "$pkgjson")"
-  echo "publishing $(basename "$dir")@${VERSION}"
-  (cd "$dir" && npm publish --access public --registry=https://registry.npmjs.org)
+  name="$(cd "$dir" && node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).name")"
+  ver="$(cd "$dir" && node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
+  if published "${name}@${ver}"; then
+    echo "skip ${name}@${ver} (already published)"
+    continue
+  fi
+  echo "publishing ${name}@${ver}"
+  (cd "$dir" && npm publish --access public --registry="$REGISTRY")
 done
 
 echo "done."
