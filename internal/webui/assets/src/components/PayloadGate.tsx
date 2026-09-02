@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
+import { useI18n } from '../i18n'
 
 // payloadInlineLimit is the largest payload rendered inline. Past it the payload
 // is rendered only on demand: a request.completed provider.list snapshot carries
@@ -34,6 +35,7 @@ interface PayloadGateProps {
 // than the caller's (highlighted) render.
 export default function PayloadGate({ json, children }: PayloadGateProps) {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const [show, setShow] = useState(json.length <= payloadInlineLimit)
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<number | undefined>(undefined)
@@ -85,11 +87,11 @@ export default function PayloadGate({ json, children }: PayloadGateProps) {
   // copy/download stay reachable both before and after the reveal.
   const actions = huge ? (
     <>
-      <span onClick={copy} className="btn-hover" style={actionStyle} title="copy the raw payload to the clipboard">
-        {copied ? 'copied' : 'copy'}
+      <span onClick={copy} className="btn-hover" style={actionStyle} title={t('payload.copy.tooltip')}>
+        {copied ? t('payload.copied') : t('payload.copy')}
       </span>
-      <span onClick={download} className="btn-hover" style={actionStyle} title="download the raw payload as JSON">
-        download
+      <span onClick={download} className="btn-hover" style={actionStyle} title={t('payload.download.tooltip')}>
+        {t('payload.download')}
       </span>
     </>
   ) : null
@@ -129,8 +131,8 @@ export default function PayloadGate({ json, children }: PayloadGateProps) {
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <span onClick={() => setShow(true)} className="btn-hover" style={actionStyle} title="render this payload">
-        payload too large ({formatSize(json.length)}) — click to render{huge ? ' as plain text' : ''}
+      <span onClick={() => setShow(true)} className="btn-hover" style={actionStyle} title={t('payload.render.tooltip')}>
+        {huge ? t('payload.tooLargePlain', { size: formatSize(json.length) }) : t('payload.tooLarge', { size: formatSize(json.length) })}
       </span>
       {actions}
     </div>

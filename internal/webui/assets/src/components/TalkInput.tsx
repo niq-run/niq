@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useTheme, fontSizes } from '../theme'
+import { useI18n } from '../i18n'
 import PickerDropdown, { type PickerOption } from './PickerDropdown'
 import type { WorkerInfo } from '../types'
 
@@ -22,6 +23,7 @@ interface TalkInputProps {
 
 export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget, isMobile }: TalkInputProps) {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerMode, setPickerMode] = useState<'mention' | 'target'>('target')
@@ -162,9 +164,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   //   schedule  = level 2 (no interrupt; respond promptly next round)
   //   append    = level 1 (only when idle; least intrusive)
   const modeOptions: PickerOption[] = [
-    { id: 'default', label: 'interrupt', description: 'cancel in-flight reasoning and handle now', hint: "interrupt in-flight reasoning and handle now (level 3)" },
-    { id: 'schedule', label: 'schedule', description: 'no interrupt; respond promptly next round', hint: "wake gently; don't interrupt in-flight reasoning (level 2)" },
-    { id: 'append', label: 'append', description: 'only when idle; least intrusive', hint: "only when idle (no reasoning, no pending tools) (level 1)" },
+    { id: 'default', label: t('mode.interrupt'), description: t('mode.interrupt.desc'), hint: t('mode.interrupt.hint') },
+    { id: 'schedule', label: t('mode.schedule'), description: t('mode.schedule.desc'), hint: t('mode.schedule.hint') },
+    { id: 'append', label: t('mode.append'), description: t('mode.append.desc'), hint: t('mode.append.hint') },
   ]
   const currentModeLabel = modeOptions.find(m => m.id === inputMode)?.label ?? inputMode
 
@@ -180,7 +182,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
       <div style={{ position: 'relative', display: 'inline-block', marginBottom: 4 }}>
         <span
           onClick={(e) => { e.stopPropagation(); setPickerMode('target'); setMentionIndex(0); setPickerOpen(v => !v) }}
-          title={shownTarget ? `targeting ${shownTarget} — click to change` : 'broadcasting; click to target a worker'}
+          title={shownTarget ? t('talk.input.target.tooltip', { target: shownTarget }) : t('talk.input.broadcast.tooltip')}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, lineHeight: '16px',
             color: shownTarget ? colors.accent : colors.textDimmed,
@@ -188,20 +190,20 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             borderRadius: 4, padding: '1px 8px', cursor: 'pointer', userSelect: 'none',
           }}
         >
-          {shownTarget ? `→ ${shownTarget}` : '→ broadcast'}
+          {shownTarget ? `→ ${shownTarget}` : t('talk.input.broadcast')}
         </span>
 
         {pickerOpen && (
           <div style={{ position: 'absolute', left: 0, bottom: '100%', marginBottom: 4, zIndex: 100 }}>
             <PickerDropdown
-              header={pickerMode === 'mention' ? 'mention' : 'target'}
+              header={pickerMode === 'mention' ? t('picker.mention') : t('picker.target')}
               options={pickList.map(w => ({ id: w.id, label: w.id, sublabel: w.type }))}
               selectedId={pickerMode === 'target' ? (shownTarget || undefined) : undefined}
               activeIndex={mentionIndex}
               onSelect={commitPicker}
               onActivate={(i) => setMentionIndex(i)}
               footer={pickerMode !== 'mention' ? {
-                label: 'broadcast (no target)',
+                label: t('picker.broadcast'),
                 checked: !shownTarget,
                 onChoose: () => { onClearMentionTarget(); setPickerOpen(false) },
               } : undefined}
@@ -216,7 +218,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         className="talk-input"
-        placeholder='Type a message... (@ to mention a worker, Shift+Enter for new line)'
+        placeholder={t('talk.input.placeholder')}
         rows={3}
         style={{
           width: '100%',
@@ -244,13 +246,13 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
               cursor: 'pointer', userSelect: 'none',
             }}
           >
-            {`mode: ${currentModeLabel}`}
+            {`${t('talk.input.mode')}: ${currentModeLabel}`}
             <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed }}>▾</span>
           </span>
           {modeOpen && (
             <div style={{ position: 'absolute', right: 0, bottom: '100%', marginBottom: 4, zIndex: 100 }}>
               <PickerDropdown
-                header="mode"
+                header={t('picker.header.mode')}
                 options={modeOptions}
                 selectedId={inputMode}
                 onSelect={(id) => { onModeChange(id); setModeOpen(false) }}
@@ -274,7 +276,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             fontFamily: 'monospace',
           }}
         >
-          Stop
+          {t('talk.input.stop')}
         </button>
         <button
           onClick={onSend}
@@ -292,7 +294,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             fontFamily: 'monospace',
           }}
         >
-          Send
+          {t('talk.input.send')}
         </button>
       </div>
     </div>

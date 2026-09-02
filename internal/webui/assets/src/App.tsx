@@ -10,6 +10,7 @@ import TemplatesView from './views/TemplatesView'
 import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
 import { useTheme, fontSizes } from './theme'
+import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived } from './services/api'
@@ -68,6 +69,7 @@ function mergeEvents(existing: EventPayload[], incoming: EventPayload[]): EventP
 
 export default function App() {
   const { dark, colors } = useTheme()
+  const { t } = useI18n()
   const isMobile = useIsMobile()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -494,7 +496,7 @@ export default function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, height: MOBILE_TOP_BAR_HEIGHT, boxSizing: 'border-box', padding: '0 16px', borderBottom: '1px solid ' + colors.border, flexShrink: 0, background: colors.bg, zIndex: 10 }}>
             <button
               onClick={() => setSidebarOpen(true)}
-              title="menu"
+              title={t('app.menu')}
               style={{ background: 'none', border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
             >
               {/* Three drawn bars — the ☰ glyph is not vertically centered in
@@ -506,19 +508,19 @@ export default function App() {
               </span>
             </button>
             <strong style={{ fontSize: fontSizes.md, color: colors.text }}>
-              {panel === 'templates' ? 'Templates'
-                : panel === 'projects' ? 'Projects'
-                : mode !== 'project' ? 'Projects'
-                : view === 'talk' ? 'Talk'
-                : view === 'events' ? 'Events'
-                : 'Workers'}
+              {panel === 'templates' ? t('sidebar.templates')
+                : panel === 'projects' ? t('sidebar.projects')
+                : mode !== 'project' ? t('sidebar.projects')
+                : view === 'talk' ? t('nav.talk')
+                : view === 'events' ? t('nav.events')
+                : t('nav.workers')}
             </strong>
           </div>
         )}
         {reloading && (
           <div style={{ position: 'fixed', top: 60, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 50 }}>
-            <div style={{ background: colors.accentDim, color: colors.text, fontSize: fontSizes.sm, padding: '4px 14px', borderRadius: 4, opacity: 0.95, boxShadow: '0 2px 8px rgba(0,0,0,0.25)' }}>
-              加载中…
+              <div style={{ background: colors.accentDim, color: colors.text, fontSize: fontSizes.sm, padding: '4px 14px', borderRadius: 4, opacity: 0.95, boxShadow: '0 2px 8px rgba(0,0,0,0.25)' }}>
+              {t('app.loading')}
             </div>
           </div>
         )}
@@ -605,28 +607,28 @@ export default function App() {
                 header is skipped (same as the talk view). */}
             {!isMobile && (
               <div style={{ marginTop: 24, marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16 }}>
-                <strong>Events</strong>
+                <strong>{t('nav.events')}</strong>
                 <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
                   {filterWorkers.size > 0 && (
                     <>
-                      filtering <strong style={{ color: colors.textDim }}>[{[...filterWorkers].join(', ')}]</strong>
+                      {t('events.filtering')} <strong style={{ color: colors.textDim }}>[{[...filterWorkers].join(', ')}]</strong>
                       {traceFilter && ' · '}
                     </>
                   )}
                   {traceFilter && (
                     <>
-                      trace <strong style={{ color: colors.textDim }}>{traceFilter}</strong>
+                      {t('events.trace')} <strong style={{ color: colors.textDim }}>{traceFilter}</strong>
                     </>
                   )}
                   {filterWorkers.size === 0 && !traceFilter && (
-                    <strong style={{ color: colors.textDim }}>[all workers]</strong>
+                    <strong style={{ color: colors.textDim }}>{t('events.allWorkers')}</strong>
                   )}
                   {traceFilter && (
                     <span
                       onClick={clearTraceFilter}
                       style={{ cursor: 'pointer', color: colors.textDimmed, textDecoration: 'underline', marginLeft: 12, fontSize: fontSizes.sm }}
                     >
-                      Clear
+                      {t('app.clear')}
                     </span>
                   )}
                 </span>
@@ -641,11 +643,11 @@ export default function App() {
                 <table style={{ width: '100%', minWidth: 680, borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
                   <thead>
                     <tr style={{ textAlign: 'left', color: colors.textDimmed, fontSize: fontSizes.xs }}>
-                      <th style={{ padding: '6px 6px', width: 80, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="event timestamp">Time</th>
-                      <th style={{ padding: '6px 6px', width: 180, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="event type">Type</th>
-                      <th style={{ padding: '6px 6px', width: 240, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="worker that published the event">Worker ID</th>
-                      <th style={{ padding: '6px 6px', width: 120, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="who received the event (delivered to)">Reception</th>
-                      <th style={{ padding: '6px 6px', position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title="summary of the event payload">Content</th>
+                      <th style={{ padding: '6px 6px', width: 80, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('events.col.time.tooltip')}>{t('events.col.time')}</th>
+                      <th style={{ padding: '6px 6px', width: 180, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('events.col.type.tooltip')}>{t('events.col.type')}</th>
+                      <th style={{ padding: '6px 6px', width: 240, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('events.col.workerId.tooltip')}>{t('events.col.workerId')}</th>
+                      <th style={{ padding: '6px 6px', width: 120, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('events.col.reception.tooltip')}>{t('events.col.reception')}</th>
+                      <th style={{ padding: '6px 6px', position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('events.col.content.tooltip')}>{t('events.col.content')}</th>
                     </tr>
                   </thead>
                   <tbody>

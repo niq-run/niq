@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
+import { useI18n } from '../i18n'
 import { usePolling } from '../hooks/usePolling'
 import { CONTROL, fetchProjects, fetchTemplates, createProject, startProject, stopProject, restartProject } from '../services/api'
 import type { ProjectInfo } from '../types'
@@ -9,6 +10,7 @@ import type { ProjectInfo } from '../types'
 // its WebUI URL. All control-plane calls go to the control server on :9527.
 export default function ProjectsView() {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [templates, setTemplates] = useState<string[]>([])
   const [newName, setNewName] = useState('')
@@ -34,8 +36,8 @@ export default function ProjectsView() {
 
   const create = async () => {
     const name = newName.trim()
-    if (!name) { setError('project id is required'); return }
-    if (!newTemplate) { setError('a template is required'); return }
+    if (!name) { setError(t('projects.error.idRequired')); return }
+    if (!newTemplate) { setError(t('projects.error.templateRequired')); return }
     setCreating(true)
     setError('')
     try {
@@ -43,7 +45,7 @@ export default function ProjectsView() {
       setNewName('')
       refresh()
     } catch (e) {
-      setError('failed to create project ' + name)
+      setError(t('projects.error.create', { name }))
     }
     setCreating(false)
   }
@@ -55,7 +57,7 @@ export default function ProjectsView() {
       await startProject(id)
       refresh()
     } catch (e) {
-      setError('failed to start project ' + id)
+      setError(t('projects.error.start', { id }))
     }
     setBusy(null)
   }
@@ -67,7 +69,7 @@ export default function ProjectsView() {
       await restartProject(id)
       refresh()
     } catch (e) {
-      setError('failed to restart project ' + id)
+      setError(t('projects.error.restart', { id }))
     }
     setBusy(null)
   }
@@ -83,13 +85,13 @@ export default function ProjectsView() {
     try {
       await stopProject(id)
     } catch (e) {
-      setError('failed to stop project ' + id)
+      setError(t('projects.error.stop', { id }))
     }
   }
 
   return (
     <div style={{ flex: 1, padding: 24, overflowY: 'auto' }}>
-      <h3 style={{ margin: '0 0 16px', color: colors.accent, fontSize: fontSizes.xl }}>Projects</h3>
+      <h3 style={{ margin: '0 0 16px', color: colors.accent, fontSize: fontSizes.xl }}>{t('projects.title')}</h3>
 
       {/* New project: pick a name + template, then create & start. */}
       <div
@@ -107,7 +109,7 @@ export default function ProjectsView() {
         <input
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          placeholder="new project id"
+          placeholder={t('projects.newId.placeholder')}
           style={{
             flex: 1,
             minWidth: 180,
@@ -142,7 +144,7 @@ export default function ProjectsView() {
             opacity: creating ? 0.6 : 1,
           }}
         >
-          {creating ? 'Creating…' : 'Create & Start'}
+          {creating ? t('projects.creating') : t('projects.create')}
         </button>
       </div>
 
@@ -150,7 +152,7 @@ export default function ProjectsView() {
 
       {projects.length === 0 ? (
         <div style={{ color: colors.textDim, fontSize: fontSizes.md }}>
-          No projects yet. Create one from a template, e.g. <code>niq project create demo --template default</code>.
+          {t('projects.empty', { cmd: 'niq project create demo --template default' })}
         </div>
       ) : (
         projects.map((p) => (
@@ -170,9 +172,9 @@ export default function ProjectsView() {
               <div style={{ color: colors.text, fontSize: fontSizes.md }}>{p.id}</div>
               <div style={{ fontSize: fontSizes.xs, color: colors.textDim }}>
                 <span style={{ color: p.running ? colors.toolCompleted : colors.textDimmed }}>
-                  {p.running ? 'running' : 'stopped'}
+                  {p.running ? t('projects.running') : t('projects.stopped')}
                 </span>
-                {' · '}{p.workers?.length ?? 0} workers
+                {' · '}{t('projects.workerCount', { n: p.workers?.length ?? 0 })}
                 {p.ports?.webui ? ` · webui :${p.ports.webui}` : ''}
                 {p.ports?.bus ? ` · bus :${p.ports.bus}` : ''}
               </div>
@@ -180,7 +182,7 @@ export default function ProjectsView() {
             {busy?.id === p.id ? (
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, color: colors.textDim }}>
                 <span className="niq-spinner" style={{ width: 13, height: 13, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
-                {busy.op === 'restart' ? 'Restarting…' : 'Starting…'}
+                {busy.op === 'restart' ? t('projects.restarting') : t('projects.starting')}
               </span>
             ) : p.running ? (
               <>
@@ -191,7 +193,7 @@ export default function ProjectsView() {
                     rel="noopener noreferrer"
                     style={{ color: colors.accent, fontSize: fontSizes.sm, textDecoration: 'none' }}
                   >
-                    Jump ↗
+                    {t('projects.jump')}
                   </a>
                 )}
                 <button
@@ -206,7 +208,7 @@ export default function ProjectsView() {
                     fontSize: fontSizes.sm,
                   }}
                 >
-                  Restart
+                  {t('projects.restart')}
                 </button>
                 <button
                   onClick={() => stop(p.id)}
@@ -220,7 +222,7 @@ export default function ProjectsView() {
                     fontSize: fontSizes.sm,
                   }}
                 >
-                  Stop
+                  {t('projects.stop')}
                 </button>
               </>
             ) : (
@@ -236,7 +238,7 @@ export default function ProjectsView() {
                   fontSize: fontSizes.sm,
                 }}
               >
-                Start
+                {t('projects.start')}
               </button>
             )}
           </div>

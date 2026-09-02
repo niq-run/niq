@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
+import { useI18n } from '../i18n'
 import { usePolling } from '../hooks/usePolling'
 import { CONTROL, fetchTemplates, fetchTemplate, createTemplate, deleteTemplate } from '../services/api'
 
@@ -8,6 +9,7 @@ import { CONTROL, fetchTemplates, fetchTemplate, createTemplate, deleteTemplate 
 // the control plane on :9527.
 export default function TemplatesView() {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const [templates, setTemplates] = useState<string[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [detail, setDetail] = useState<any>(null)
@@ -31,14 +33,14 @@ export default function TemplatesView() {
 
   const create = async () => {
     const id = newId.trim()
-    if (!id || !copyFrom) { setError('a name and a source template are required'); return }
+    if (!id || !copyFrom) { setError(t('templates.error.required')); return }
     setError('')
     try {
       await createTemplate(id, copyFrom)
       setNewId('')
       setSelected(id)
     } catch (e) {
-      setError('failed to create template ' + id)
+      setError(t('templates.error.create', { id }))
     }
   }
 
@@ -48,7 +50,7 @@ export default function TemplatesView() {
       await deleteTemplate(name)
       if (selected === name) { setSelected(null); setDetail(null) }
     } catch (e) {
-      setError('failed to delete template ' + name)
+      setError(t('templates.error.delete', { id: name }))
     }
   }
 
@@ -58,14 +60,14 @@ export default function TemplatesView() {
     <div style={{ flex: 1, minWidth: 0, display: 'flex', overflow: 'hidden' }}>
       {/* Left: list + clone */}
       <div style={{ width: 320, minWidth: 320, padding: 24, overflowY: 'auto', borderRight: '1px solid ' + colors.border }}>
-        <h3 style={{ margin: '0 0 16px', color: colors.accent, fontSize: fontSizes.xl }}>Templates</h3>
+        <h3 style={{ margin: '0 0 16px', color: colors.accent, fontSize: fontSizes.xl }}>{t('sidebar.templates')}</h3>
 
         {/* Clone a template */}
         <div style={{ border: '1px solid ' + colors.border, borderRadius: 6, padding: '12px', marginBottom: 16, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           <input
             value={newId}
             onChange={(e) => setNewId(e.target.value)}
-            placeholder="new template id"
+            placeholder={t('templates.newId.placeholder')}
             style={{ flex: 1, minWidth: 120, padding: '6px 10px', fontSize: fontSizes.md, background: colors.bgLight, border: '1px solid ' + colors.border, color: colors.text, outline: 'none' }}
           />
           {templates.length > 0 && (
@@ -81,21 +83,21 @@ export default function TemplatesView() {
             onClick={create}
             style={{ cursor: 'pointer', background: colors.accent, color: '#fff', border: 'none', borderRadius: 4, padding: '6px 14px', fontSize: fontSizes.sm }}
           >
-            Clone
+            {t('templates.clone')}
           </button>
         </div>
 
         {error && <div style={{ color: colors.toolFailed, marginBottom: 12, fontSize: fontSizes.sm }}>{error}</div>}
 
         {templates.length === 0 ? (
-          <div style={{ color: colors.textDim, fontSize: fontSizes.md }}>No templates.</div>
+          <div style={{ color: colors.textDim, fontSize: fontSizes.md }}>{t('templates.empty')}</div>
         ) : (
-          templates.map((t) => (
+          templates.map((tmpl) => (
             <div
-              key={t}
-              onClick={() => select(t)}
+              key={tmpl}
+              onClick={() => select(tmpl)}
               style={{
-                border: '1px solid ' + (selected === t ? colors.accent : colors.border),
+                border: '1px solid ' + (selected === tmpl ? colors.accent : colors.border),
                 borderRadius: 6,
                 padding: '10px 14px',
                 marginBottom: 8,
@@ -105,12 +107,12 @@ export default function TemplatesView() {
                 cursor: 'pointer',
               }}
             >
-              <div style={{ flex: 1, color: selected === t ? colors.accent : colors.text, fontSize: fontSizes.md }}>{t}</div>
+              <div style={{ flex: 1, color: selected === tmpl ? colors.accent : colors.text, fontSize: fontSizes.md }}>{tmpl}</div>
               <button
-                onClick={(e) => { e.stopPropagation(); remove(t) }}
+                onClick={(e) => { e.stopPropagation(); remove(tmpl) }}
                 style={{ cursor: 'pointer', background: 'transparent', color: colors.toolFailed, border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 10px', fontSize: fontSizes.sm }}
               >
-                Delete
+                {t('templates.delete')}
               </button>
             </div>
           ))
@@ -124,7 +126,7 @@ export default function TemplatesView() {
             <h3 style={{ margin: '0 0 6px', color: colors.accent, fontSize: fontSizes.lg }}>{selected}</h3>
             {Array.isArray(detail?.workers) ? (
               <>
-                <div style={{ color: colors.textDim, fontSize: fontSizes.sm, marginBottom: 14 }}>{detail.workers.length} worker(s)</div>
+                <div style={{ color: colors.textDim, fontSize: fontSizes.sm, marginBottom: 14 }}>{t('templates.workerCount', { n: detail.workers.length })}</div>
                 {detail.workers.map((w: any, i: number) => (
                   <div key={i} style={{ border: '1px solid ' + colors.border, borderRadius: 6, padding: '10px 14px', marginBottom: 8 }}>
                     <div style={{ color: colors.text, fontSize: fontSizes.md }}>
@@ -146,7 +148,7 @@ export default function TemplatesView() {
             )}
           </>
         ) : (
-          <div style={{ color: colors.textDimmed, fontSize: fontSizes.md }}>Select a template to see its definition.</div>
+          <div style={{ color: colors.textDimmed, fontSize: fontSizes.md }}>{t('templates.emptyHint')}</div>
         )}
       </div>
     </div>

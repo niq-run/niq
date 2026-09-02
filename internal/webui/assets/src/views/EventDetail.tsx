@@ -3,6 +3,7 @@ import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useTheme, fontSizes } from '../theme'
+import { useI18n } from '../i18n'
 import { type EventPayload } from '../types'
 import { getTypeColor, formatTime } from '../components/talk-utils'
 import { makeMdComponents } from '../components/MarkdownComponents'
@@ -16,6 +17,7 @@ interface EventDetailProps {
 
 export default function EventDetail({ evt, deliveries, onClose }: EventDetailProps) {
   const { dark, colors } = useTheme()
+  const { t } = useI18n()
   const time = formatTime(evt.timestamp)
   const typeColor = getTypeColor(evt.type, colors)
   // Serialised once and handed to the size gate, which decides whether the
@@ -73,7 +75,7 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
         <span
           onClick={onClose}
           className="btn-hover"
-          title="close"
+          title={t('detail.close.tooltip')}
           style={{
             cursor: "pointer",
             marginLeft: "auto",
@@ -110,15 +112,15 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
 
         <div style={{ padding: "10px 12px", background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
           <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 16px", alignItems: "baseline" }}>
-            <DetailRow label="ID" value={evt.id} colors={colors} />
-            <DetailRow label="TraceID" value={evt.trace_id || "(none)"} colors={colors} />
-            <DetailRow label="Time" value={`${time} (${evt.timestamp})`} colors={colors} />
-            <DetailRow label="Target" value={evt.target_worker_id || "(broadcast)"} colors={colors} />
-            {recipients && <DetailRow label="Delivered" value={recipients.join(", ")} colors={colors} />}
+            <DetailRow label={t('detail.id')} value={evt.id} colors={colors} />
+            <DetailRow label={t('detail.traceId')} value={evt.trace_id || t('detail.none')} colors={colors} />
+            <DetailRow label={t('detail.time')} value={`${time} (${evt.timestamp})`} colors={colors} />
+            <DetailRow label={t('detail.target')} value={evt.target_worker_id || t('detail.broadcast')} colors={colors} />
+            {recipients && <DetailRow label={t('detail.delivered')} value={recipients.join(", ")} colors={colors} />}
           </div>
           <div style={{ marginTop: 8, borderTop: "1px solid " + colors.detailBorder, paddingTop: 8 }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px", fontFamily: "monospace" }}>
-              Payload
+              {t('detail.payload')}
             </div>
             <PayloadGate json={payloadJSON}>
               <SyntaxHighlighter

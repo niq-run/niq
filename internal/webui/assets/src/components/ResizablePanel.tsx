@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme } from '../theme'
+import { useI18n } from '../i18n'
 
 interface ResizablePanelProps {
   width: number
@@ -16,6 +17,7 @@ interface ResizablePanelProps {
  */
 export default function ResizablePanel({ width, minWidth, maxWidth, onWidthChange, children }: ResizablePanelProps) {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const [hovering, setHovering] = useState(false)
   const widthRef = useRef(width)
   widthRef.current = width
@@ -45,7 +47,7 @@ export default function ResizablePanel({ width, minWidth, maxWidth, onWidthChang
         onMouseDown={startDrag}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
-        title="drag to resize"
+        title={t('panel.resize.tooltip')}
         style={{ width: 12, flexShrink: 0, cursor: 'col-resize', position: 'relative', userSelect: 'none' }}
       >
         {/* Thin full-height line, flush with the panel's left edge */}

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
+import { useI18n } from '../i18n'
 
 interface SystemReminderBlockProps {
   reminder: string
@@ -17,12 +18,13 @@ const EXPANDED_MIN_WIDTH = 200
  */
 export default function SystemReminderBlock({ reminder }: SystemReminderBlockProps) {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
 
   return (
     <div
       onClick={() => setOpen((v) => !v)}
-      title={open ? 'click to collapse' : 'click to expand'}
+      title={open ? t('sr.collapse.tooltip') : t('sr.expand.tooltip')}
       style={{
         marginTop: 6,
         marginBottom: 10,
@@ -48,7 +50,7 @@ export default function SystemReminderBlock({ reminder }: SystemReminderBlockPro
       }}
     >
       <span style={{ display: 'block', fontStyle: 'italic', color: colors.textDimmed, marginBottom: open ? 2 : 0 }}>
-        system reminder
+        {t('sr.label')}
       </span>
       {open && <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{reminder}</span>}
     </div>
