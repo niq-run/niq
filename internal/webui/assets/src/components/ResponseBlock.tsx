@@ -1,6 +1,7 @@
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
+import { useI18n } from '../i18n'
 import { getContentText, oneLine, splitSystemReminder } from './talk-utils'
 import { makeMdComponents } from './MarkdownComponents'
 import type { EventPayload } from '../types'
@@ -16,6 +17,7 @@ interface ResponseBlockProps {
 
 export default function ResponseBlock({ evt, quotedText, quotedWorker, quotedEvtId, onQuoteClick }: ResponseBlockProps) {
   const { dark, colors } = useTheme()
+  const { t } = useI18n()
   const text = getContentText(evt)
   const lineColor = dark ? 'rgba(128,128,128,0.3)' : 'rgba(128,128,128,0.25)'
   const quoted = quotedText ? splitSystemReminder(quotedText) : null
@@ -47,7 +49,7 @@ export default function ResponseBlock({ evt, quotedText, quotedWorker, quotedEvt
 			  is available in the current list. */}
 		  <div
 			onClick={quotedEvtId && onQuoteClick ? () => onQuoteClick(quotedEvtId!) : undefined}
-			title={quotedEvtId && onQuoteClick ? 'jump to original message' : undefined}
+			title={quotedEvtId && onQuoteClick ? t('response.jump.tooltip') : undefined}
 			style={{
 			  background: colors.bgLight,
 			  border: '1px solid ' + colors.border,

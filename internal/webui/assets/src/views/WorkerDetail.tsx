@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
+import { useI18n } from '../i18n'
 import { type WorkerInfo, type ProviderOption, type ProviderSelection } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
 import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, updateWorkerAllow } from '../services/api'
@@ -15,10 +16,11 @@ interface WorkerDetailProps {
 
 export default function WorkerDetail({ worker, allWorkers, onClose, archived, onToggleArchived, onDeleted }: WorkerDetailProps) {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const suspended = worker.managed && worker.state === 'suspended'
   const isArchived = archived.has(worker.id)
-  const connection = worker.online === false ? 'offline' : 'online'
-  const lifecycle = worker.managed ? (suspended ? 'suspended' : 'running') : '\u2014'
+  const connection = worker.online === false ? t('worker.offline') : t('worker.online')
+  const lifecycle = worker.managed ? (suspended ? t('worker.suspended') : t('worker.running')) : '\u2014'
   const typeColor = worker.type ? getWorkerTypeColor(worker.type, colors) : colors.textDimmed
   const [editingSub, setEditingSub] = useState(false)
   const [subNote, setSubNote] = useState('')
@@ -47,7 +49,7 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
       if (op === 'start') await startWorker(worker.id)
       else if (op === 'stop') await stopWorker(worker.id)
       else await restartWorker(worker.id)
-      setUmNote({ start: 'starting…', stop: 'stopping…', restart: 'restarting…' }[op])
+      setUmNote({ start: t('wd.starting'), stop: t('wd.stopping'), restart: t('wd.restarting') }[op])
     } catch (e) {
       setUmNote((e as Error)?.message || op + ' failed')
     } finally {
@@ -93,7 +95,7 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
         <span
           onClick={onClose}
           className="btn-hover"
-          title="close"
+          title={t('detail.close.tooltip')}
           style={{
             cursor: 'pointer',
             marginLeft: 'auto',
@@ -114,26 +116,26 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
       <div style={{ padding: 14 }}>
         <div style={{ padding: '10px 12px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 16px', alignItems: 'baseline' }}>
-            <DetailRow label="ID" value={worker.id} colors={colors} />
-            <DetailRow label="Type" value={worker.type || '(none)'} colors={colors} />
-            <DetailRow label="Connection" value={connection} colors={colors} />
-            <DetailRow label="Lifecycle" value={lifecycle} colors={colors} />
-            <DetailRow label="Managed" value={worker.managed ? 'yes' : 'no'} colors={colors} />
-            <DetailRow label="Credential" value={worker.credential || '(none)'} colors={colors} />
+            <DetailRow label={t('wd.id')} value={worker.id} colors={colors} />
+            <DetailRow label={t('wd.type')} value={worker.type || '(none)'} colors={colors} />
+            <DetailRow label={t('wd.connection')} value={connection} colors={colors} />
+            <DetailRow label={t('wd.lifecycle')} value={lifecycle} colors={colors} />
+            <DetailRow label={t('wd.managed')} value={worker.managed ? t('wd.yes') : t('wd.no')} colors={colors} />
+            <DetailRow label={t('wd.credential')} value={worker.credential || '(none)'} colors={colors} />
           </div>
 
           <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
-              Publish Allow
+              {t('wd.publishAllow')}
             </div>
             <AllowTags items={(worker.publish_allow || []).map((t) => ({ label: t, title: t }))} colors={colors} />
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, margin: '16px 0 8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
-              Subscribe Allow
+              {t('wd.subscribeAllow')}
               <span
                 onClick={() => { setEditingSub((v) => !v); setSubNote('') }}
                 style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, textTransform: 'none', letterSpacing: 0, marginLeft: 10, userSelect: 'none' }}
               >
-                {editingSub ? 'close' : 'edit'}
+                {editingSub ? t('wd.close') : t('wd.edit')}
               </span>
             </div>
             {editingSub ? (
@@ -149,36 +151,36 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
           {/* Action area, separated by a horizontal line */}
           <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 18 }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
-              Actions
+              {t('wd.actions')}
             </div>
             {worker.managed ? (
               <>
                 <div style={{ marginBottom: 22 }}>
                   <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
                     {suspended
-                      ? 'Resume the worker: reconnect it to the bus and restart it from its last snapshot.'
-                      : 'Suspend the worker: stop it and release its bus connection (state is kept on disk).'}
+                      ? t('wd.resume.desc')
+                      : t('wd.suspend.desc')}
                   </div>
                   <span
                     onClick={handleAction}
                     className="btn-hover"
                     style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
                   >
-                    {suspended ? 'resume' : 'suspend'}
+                    {suspended ? t('wd.resume') : t('wd.suspend')}
                   </span>
                 </div>
                 <div>
                   <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
                     {isArchived
-                      ? 'Restore the worker: show it again in the worker selector.'
-                      : 'Archive the worker: hide it from the worker selector until you restore it here.'}
+                      ? t('wd.restore.desc')
+                      : t('wd.archive.desc')}
                   </div>
                   <span
                     onClick={() => onToggleArchived(worker.id)}
                     className="btn-hover"
                     style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
                   >
-                    {isArchived ? 'restore' : 'archive'}
+                    {isArchived ? t('wd.restore') : t('wd.archive')}
                   </span>
                 </div>
               </>
@@ -186,8 +188,8 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
               <div>
                 <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
                   {worker.unmanaged_state === 'running'
-                    ? 'Stop the external worker process, or restart it against the same project.json definition.'
-                    : 'Start this external worker process declared in project.json: launch its command and connect it to the bus.'}
+                    ? t('wd.unmanaged.running.desc')
+                    : t('wd.unmanaged.start.desc')}
                 </div>
                 {worker.unmanaged_state === 'running' ? (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -196,14 +198,14 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
                       className="btn-hover"
                       style={{ cursor: umBusy ? 'default' : 'pointer', opacity: umBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
                     >
-                      {umBusy === 'stop' ? 'Stopping…' : 'stop'}
+                      {umBusy === 'stop' ? t('wd.stopping') : t('wd.stop')}
                     </span>
                     <span
                       onClick={() => unmanagedAction('restart')}
                       className="btn-hover"
                       style={{ cursor: umBusy ? 'default' : 'pointer', opacity: umBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
                     >
-                      {umBusy === 'restart' ? 'Restarting…' : 'restart'}
+                      {umBusy === 'restart' ? t('wd.restarting') : t('wd.restart')}
                     </span>
                   </div>
                 ) : (
@@ -212,7 +214,7 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
                     className="btn-hover"
                     style={{ cursor: umBusy ? 'default' : 'pointer', opacity: umBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
                   >
-                    {umBusy === 'start' ? 'Starting…' : 'start'}
+                    {umBusy === 'start' ? t('wd.starting') : t('wd.start')}
                   </span>
                 )}
                 {umNote && (
@@ -220,30 +222,30 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
                 )}
               </div>
             			) : (
-            				<span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>not host-managed</span>
+            				<span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.notManaged')}</span>
             			)}
 
             			{/* Danger: permanently remove this worker. */}
             			<div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
             				<div style={{ color: colors.detailLabel, fontSize: fontSizes.sm, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
-            					Delete
+            					{t('wd.delete')}
             				</div>
             				{confirmDel ? (
             					<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            						<span style={{ color: colors.textDim, fontSize: fontSizes.sm }}>Stop & delete {worker.id}? This cannot be undone.</span>
+            						<span style={{ color: colors.textDim, fontSize: fontSizes.sm }}>{t('wd.delete.confirm', { id: worker.id })}</span>
             						<span
             							onClick={doDelete}
             							className="btn-hover"
             							style={{ cursor: delBusy ? 'default' : 'pointer', opacity: delBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
             						>
-            							{delBusy ? 'Deleting…' : 'confirm delete'}
+            							{delBusy ? t('wd.deleting') : t('wd.confirmDelete')}
             						</span>
             						<span
             							onClick={() => setConfirmDel(false)}
             							className="btn-hover"
             							style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
             						>
-            							cancel
+            							{t('wd.cancel')}
             						</span>
             					</div>
             				) : (
@@ -252,7 +254,7 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
             						className="btn-hover"
             						style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
             					>
-            						delete
+            						{t('wd.delete')}
             					</span>
             				)}
             			</div>
@@ -274,6 +276,7 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
 // generalise this from the worker's declared capabilities into a form.
 function ProviderSection({ workerId }: { workerId: string }) {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const [expanded, setExpanded] = useState(false)
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [current, setCurrent] = useState<ProviderSelection>({ provider: '', model: '' })
@@ -349,7 +352,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
         setError(res.error || 'the worker refused the switch')
         return
       }
-      setDoneNote('switched — takes effect from the next reasoning round')
+      setDoneNote(t('wd.switched'))
       await load()
     } catch (e) {
       setError((e as Error)?.message || 'provider switch failed')
@@ -367,7 +370,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
         style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', gap: 8, userSelect: 'none' }}
       >
         <span style={{ color: colors.detailLabel, fontSize: fontSizes.base, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
-          Model / Provider
+          {t('wd.modelProvider')}
         </span>
         <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{expanded ? '−' : '+'}</span>
         {!expanded && current.provider && (
@@ -382,7 +385,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
           {loading && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: colors.textDimmed, fontSize: fontSizes.sm }}>
               <span className="niq-spinner" style={{ width: 13, height: 13, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
-              asking the worker for its providers…
+              {t('wd.askingProviders')}
             </div>
           )}
 
@@ -391,13 +394,13 @@ function ProviderSection({ workerId }: { workerId: string }) {
           )}
 
           {!loading && !error && providers.length === 0 && (
-            <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>this worker reports no switchable providers</div>
+            <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.noProviders')}</div>
           )}
 
           {!loading && !error && providers.length > 0 && (
             <>
               <div style={{ marginBottom: 10 }}>
-                <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginBottom: 4 }}>Provider</div>
+                <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginBottom: 4 }}>{t('wd.provider')}</div>
                 <select value={selProvider} onChange={(e) => pickProvider(e.target.value)} style={selectStyle}>
                   {providers.map((p) => (
                     <option key={p.name} value={p.name} style={{ background: colors.bgLight, color: colors.text }}>
@@ -408,7 +411,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
               </div>
 
               <div style={{ marginBottom: 10 }}>
-                <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginBottom: 4 }}>Model</div>
+                <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginBottom: 4 }}>{t('wd.model')}</div>
                 <select value={selModel} onChange={(e) => { setSelModel(e.target.value); setDoneNote('') }} style={selectStyle}>
                   {(models.includes(selModel) ? models : [selModel, ...models]).filter(Boolean).map((m) => (
                     <option key={m} value={m} style={{ background: colors.bgLight, color: colors.text }}>
@@ -434,7 +437,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
                     userSelect: 'none',
                   }}
                 >
-                  {switching ? 'Updating…' : unchanged ? 'current' : 'update provider'}
+                  {switching ? t('wd.updating') : unchanged ? t('wd.current') : t('wd.updateProvider')}
                 </span>
                 {switching && (
                   <span className="niq-spinner" style={{ width: 13, height: 13, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
@@ -442,7 +445,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
               </div>
 
               <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>
-                {doneNote || 'Update the worker’s active provider and model.'}
+                {doneNote || t('wd.updateProvider.hint')}
               </div>
             </>
           )}
@@ -460,6 +463,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
 // refreshes the read-only view after the round trip.
 function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDone }: { worker: WorkerInfo; allWorkers?: WorkerInfo[]; readOnly?: boolean; onDone?: (note: string) => void }) {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const [draft, setDraft] = useState<{ type: string; source: string }[]>(() =>
     (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source_id || '' })),
   )
@@ -488,7 +492,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
   const save = async () => {
     const valid = draft.filter((r) => r.type.trim() !== '')
     if (valid.length === 0 && draft.length > 0) {
-      setError('each row needs an event type')
+      setError(t('wd.rowNeedsType'))
       return
     }
     setSaving(true)
@@ -499,7 +503,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
           r.source.trim() ? { type: r.type.trim(), source_id: r.source.trim() } : { type: r.type.trim() },
         ),
       })
-      onDone?.('saved — takes effect immediately')
+      onDone?.(t('wd.saved'))
     } catch (e) {
       setError((e as Error)?.message || 'save failed')
     } finally {
@@ -513,7 +517,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
         <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
           <input
             value={r.type}
-            placeholder={readOnly ? undefined : 'event type (worker.ready, request.*, …)'}
+            placeholder={readOnly ? undefined : t('wd.subPlaceholder')}
             disabled={readOnly}
             onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], type: e.target.value }; setDraft(n) }}
             style={inputStyle}
@@ -524,7 +528,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
             onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], source: e.target.value }; setDraft(n) }}
             style={{ ...inputStyle, flex: '0 1 170px', appearance: 'none' }}
           >
-            <option value="" style={{ background: colors.bgLight, color: colors.text }}>any source</option>
+            <option value="" style={{ background: colors.bgLight, color: colors.text }}>{t('wd.anySource')}</option>
             {r.source !== '' && !allWorkers.some((w) => w.id === r.source) && (
               <option value={r.source} style={{ background: colors.bgLight, color: colors.text }}>{r.source}</option>
             )}
@@ -536,7 +540,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
             <span
               onClick={() => setDraft(draft.filter((_, j) => j !== i))}
               className="btn-hover"
-              title="remove"
+              title={t('wd.remove')}
               style={{ cursor: 'pointer', color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none', padding: '0 4px' }}
             >
               {'\u2715'}
@@ -551,21 +555,21 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
             className="btn-hover"
             style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
           >
-            + add
+            {t('wd.add')}
           </span>
           <span
             onClick={save}
             className="btn-hover"
             style={{ cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
           >
-            {saving ? 'Saving…' : 'save'}
+            {saving ? t('wd.saving') : t('wd.save')}
           </span>
           {error && <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</span>}
         </div>
       )}
       {rows.length === 0 && (
         <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 8, lineHeight: 1.5 }}>
-          no subscriptions — the worker receives no broadcasts (directed calls and their results still reach it)
+          {t('wd.noSubscriptions')}
         </div>
       )}
     </div>

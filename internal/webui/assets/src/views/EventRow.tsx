@@ -1,4 +1,5 @@
 import { useTheme, fontSizes } from '../theme'
+import { useI18n } from '../i18n'
 import { type EventPayload } from '../types'
 import { getTypeColor, summaryText, formatTime } from '../components/talk-utils'
 
@@ -22,6 +23,7 @@ export default function EventRow({
   isMobile,
 }: EventRowProps) {
   const { colors } = useTheme()
+  const { t } = useI18n()
   const time = formatTime(evt.timestamp)
   const typeColor = getTypeColor(evt.type, colors)
   const recipients = deliveries[evt.id] || evt.recipients
@@ -81,7 +83,7 @@ export default function EventRow({
         {/* Worker ID: dotted underline, click to filter this source's events */}
         <span
           onClick={(e) => { e.stopPropagation(); onOpenWorker(evt.worker_id) }}
-          title={"view events from " + evt.worker_id}
+          title={t('workers.viewEvents.tooltip', { id: evt.worker_id })}
           style={{ color: colors.text, textDecoration: "underline dotted", cursor: "pointer" }}
         >
           {evt.worker_id}

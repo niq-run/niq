@@ -1,5 +1,6 @@
 import { useState, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme, fontSizes, type Palette } from '../theme'
+import { useI18n } from '../i18n'
 import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 
 interface SidebarProps {
@@ -25,8 +26,6 @@ interface SidebarProps {
   onNavigate: () => void
 }
 
-const VIEW_LABELS: Record<ViewMode, string> = { talk: 'Talk', events: 'Events', workers: 'Workers' }
-
 // Sidebar resize: the draggable width range, persisted in localStorage.
 const DEFAULT_SIDEBAR_WIDTH = 230
 const MIN_SIDEBAR_WIDTH = 180
@@ -38,6 +37,27 @@ function loadSidebarWidth(): number {
 
 export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, panel, onSelectPanel, archived, isMobile, open, onNavigate }: SidebarProps) {
   const { dark, toggle, colors } = useTheme()
+  const { lang, setLang, t } = useI18n()
+  // Hovered sidebar option (non-toggle, non-checkbox rows) — shows a full-width
+  // row highlight. Excludes the view-setting switches and the worker-selector
+  // checkbox rows.
+  const [hoverId, setHoverId] = useState<string | null>(null)
+  const hoverStyle = (id: string): CSSProperties => ({
+    background: hoverId === id ? colors.bgLight : 'transparent',
+    // Full-width row highlight that bleeds to the sidebar edges. The options
+    // list sits at gap:0 (flush rows), so neighbouring hovered rows form one
+    // continuous strip with no gap between their backgrounds. The vertical
+    // padding gives the text breathing room and makes the highlight taller
+    // (larger inner padding) without any overlap.
+    margin: '0 -' + contentPadX + 'px',
+    padding: '6px ' + contentPadX + 'px',
+    borderRadius: 0,
+    transition: 'background 0.12s',
+  })
+
+  // View labels must be computed inside the component (not module-level) so
+  // they re-render when the language changes.
+  const VIEW_LABELS: Record<ViewMode, string> = { talk: t('nav.talk'), events: t('nav.events'), workers: t('nav.workers') }
 
   // ── Logo drag: the logo can be dragged sideways and springs back. Dragging
   // it all the way right toggles a mirror flip that plays out while the logo
@@ -235,8 +255,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   }
 
   // Mobile touch: bigger text and taller hit areas so the options are easy to
-  // tap on a phone. Desktop keeps the compact sizes.
-  const optSize = isMobile ? fontSizes.xl : fontSizes.md
+  // tap on a phone. Desktop keeps the compact sizes, nudged up one pixel from
+  // the shared md scale at the user's request (sidebar text slightly larger).
+  const optSize = isMobile ? fontSizes.xl : fontSizes.md + 1
   const optLineNum = isMobile ? 40 : 20
   const optLine = optLineNum + 'px'
   const optPad = isMobile ? '4px 0' : undefined
@@ -245,6 +266,11 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // stay edge-to-edge.
   const contentPadX = isMobile ? 24 : 16
   const hrX = isMobile ? -24 : -16
+  // Inter-row gap for the options list. Kept at 0 so the rows sit flush: with
+  // the hover background bleeding full-width, neighbouring hovered rows read as
+  // one continuous strip with no gap between their backgrounds. Vertical spacing
+  // between text comes from each row's own padding instead.
+  const optGap = 0
   // Checkbox size: a bit bigger on mobile for easier tapping.
   const checkSize = isMobile ? 16 : 13
 
@@ -267,7 +293,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           onDoubleClick={handleResizeReset}
           onMouseEnter={() => setResizeHover(true)}
           onMouseLeave={() => setResizeHover(false)}
-          title="drag to resize, double-click to reset"
+          title={t('sidebar.resize.tooltip')}
           style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: 12, cursor: 'col-resize', zIndex: 5, userSelect: 'none' }}
         >
           {/* Grip centered on the divider (drawn by the root's borderRight),
@@ -287,7 +313,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
           <button
             onClick={onNavigate}
-            title="close"
+            title={t('sidebar.close')}
             style={{ background: 'none', border: '1px solid ' + colors.border, borderRadius: 4, color: colors.textDim, fontSize: fontSizes.md, lineHeight: 1, padding: '4px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
           >
             ✕
@@ -349,18 +375,20 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           horizontal margin lets the section dividers span edge-to-edge (into
           the sidebar's padding), while the padding keeps the text inset. The
           flex column + gap reproduces the sidebar's original item spacing. */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', margin: isMobile ? '0 -24px' : '0 -16px', padding: `0 ${contentPadX}px`, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', margin: isMobile ? '0 -24px' : '0 -16px', padding: `0 ${contentPadX}px`, display: 'flex', flexDirection: 'column', gap: optGap }}>
 
       {/* View selector — the three agent views; absent in control mode (no
           project is attached, so talk/events/workers are unavailable) */}
       {mode === 'project' && (<>
       <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '8px ' + hrX + 'px 16px' }} />
-      <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>Views</strong>
+      <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.views')}</strong>
       {(Object.keys(VIEW_LABELS) as ViewMode[]).map((v) => (
         <div
           key={v}
           onClick={() => { setView(v); onNavigate() }}
-          style={{ cursor: 'pointer', color: view === v ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, padding: optPad }}
+          onMouseEnter={() => setHoverId('view:' + v)}
+          onMouseLeave={() => setHoverId(null)}
+          style={{ ...hoverStyle('view:' + v), cursor: 'pointer', color: view === v ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
         >
           {VIEW_LABELS[v]}{view === v ? ' \u25C9' : ''}
         </div>
@@ -372,7 +400,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       {view !== 'workers' && (
         <>
           <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
-          <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>Worker Selector</strong>
+          <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.workerSelector')}</strong>
           {workers.filter(w => (view !== 'talk' || w.type === 'reason') && !archived.has(w.id)).map((w) => {
             const isActive = view === 'talk'
               ? talkWorkers.has(w.id)
@@ -394,7 +422,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   >
                     {w.id}
                   </span>
-                  <span style={{ color: connection === 'offline' ? colors.textDimmed : colors.toolCompleted, fontSize: fontSizes.xs, flexShrink: 0 }}>
+                  <span style={{ color: connection === 'offline' ? colors.textDimmed : colors.toolCompleted, fontSize: fontSizes.sm, flexShrink: 0 }}>
                     {connection}
                   </span>
                 </div>
@@ -414,7 +442,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                     >
                       {w.id}
                     </div>
-                    <div style={{ fontSize: fontSizes.xs, lineHeight: '16px', color: colors.textDimmed, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: fontSizes.sm, lineHeight: '16px', color: colors.textDimmed, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       {w.type ? <span style={{ fontStyle: 'italic' }}>{w.type}</span> : null}
                       <span style={{ color: connection === 'offline' ? colors.textDimmed : colors.toolCompleted }}>{connection}</span>
                     </div>
@@ -429,10 +457,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             <>
               <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
               <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>View Settings</strong>
-              <ToggleRow label="Expand Thinking" on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} mobile={isMobile} />
-              <ToggleRow label="Compact Mode" on={viewSettings.compactMode} onToggle={() => onToggleViewSetting('compactMode')} colors={colors} mobile={isMobile} />
-              <ToggleRow label="Streaming Mode" on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} mobile={isMobile} />
-              <ToggleRow label="Response Only" on={viewSettings.responseOnly} onToggle={() => onToggleViewSetting('responseOnly')} colors={colors} mobile={isMobile} />
+              <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} mobile={isMobile} size={optSize} />
+              <ToggleRow label={t('view.toggle.compactMode')} on={viewSettings.compactMode} onToggle={() => onToggleViewSetting('compactMode')} colors={colors} mobile={isMobile} size={optSize} />
+              <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} mobile={isMobile} size={optSize} />
+              <ToggleRow label={t('view.toggle.responseOnly')} on={viewSettings.responseOnly} onToggle={() => onToggleViewSetting('responseOnly')} colors={colors} mobile={isMobile} size={optSize} />
             </>
           )}
         </>
@@ -443,29 +471,40 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           project instance it is a jump/start hop to other projects; in control
           mode it is the only usable thing. */}
       <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
-      <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>Projects</strong>
+      <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.projects')}</strong>
       <div
         onClick={() => { onSelectPanel('projects'); onNavigate() }}
-        style={{ cursor: 'pointer', color: panel === 'projects' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, padding: optPad }}
+        onMouseEnter={() => setHoverId('projects')}
+        onMouseLeave={() => setHoverId(null)}
+        style={{ ...hoverStyle('projects'), cursor: 'pointer', color: panel === 'projects' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
       >
-        Projects{panel === 'projects' ? ' \u25C9' : ''}
+        {t('sidebar.projects')}{panel === 'projects' ? ' \u25C9' : ''}
       </div>
       <div
         onClick={() => { onSelectPanel('templates'); onNavigate() }}
-        style={{ cursor: 'pointer', color: panel === 'templates' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, padding: optPad }}
+        onMouseEnter={() => setHoverId('templates')}
+        onMouseLeave={() => setHoverId(null)}
+        style={{ ...hoverStyle('templates'), cursor: 'pointer', color: panel === 'templates' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
       >
-        Templates{panel === 'templates' ? ' \u25C9' : ''}
+        {t('sidebar.templates')}{panel === 'templates' ? ' \u25C9' : ''}
       </div>
 
       </div>
 
-      {/* Theme toggle — fixed footer, stays put when the options scroll */}
-      <div style={{ flexShrink: 0, marginTop: 16 }}>
+      {/* Theme + language toggles — fixed footer, stays put when the options scroll */}
+      <div style={{ flexShrink: 0, marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
         <div
           onClick={toggle}
-          style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm }}
+          style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm + 1 }}
         >
-          {dark ? 'light' : 'dark'}
+          {dark ? t('theme.light') : t('theme.dark')}
+        </div>
+        <div
+          onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
+          title={t('sidebar.lang.tooltip')}
+          style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm + 1, userSelect: 'none' }}
+        >
+          {lang === 'en' ? t('lang.zh') : t('lang.en')}
         </div>
       </div>
       </div>
@@ -509,10 +548,10 @@ function CheckBox({ active, accent, bg, border, size = 13, style }: { active: bo
 }
 
 // A labeled switch row (the pill toggle), shared by the view settings.
-function ToggleRow({ label, on, onToggle, colors, mobile = false }: { label: string; on: boolean; onToggle: () => void; colors: Palette; mobile?: boolean }) {
+function ToggleRow({ label, on, onToggle, colors, mobile = false, size = fontSizes.sm }: { label: string; on: boolean; onToggle: () => void; colors: Palette; mobile?: boolean; size?: number }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: mobile ? 14 : 8, padding: mobile ? '4px 0' : undefined }}>
-      <span style={{ color: colors.textDim, fontSize: mobile ? fontSizes.md : fontSizes.sm }}>{label}</span>
+      <span style={{ color: colors.textDim, fontSize: size }}>{label}</span>
       <div
         onClick={onToggle}
         style={{
