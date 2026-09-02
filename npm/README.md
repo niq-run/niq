@@ -5,7 +5,7 @@
 niq is an **event-driven agent runtime** — a single agent composed of many **Workers** that collaborate over an event bus. Each worker handles its own focus; together they form the complete agent.
 
 - **Worker** — an actor-like unit with its own state that communicates only through events
-- **Program** — the source of a Worker's capability (natural-language prompts or DSL scripts)
+- **Program** — the source of a Worker's capability: a natural-language prompt (like the skills of mainstream agents) or a DSL script (like programmatic tool calling, PTC) — both are source for generating tool calls
 - **Event** — the only communication language between Workers
 
 > **Status: early, fast-moving development.** The design is still evolving; APIs and behavior may change without notice.
