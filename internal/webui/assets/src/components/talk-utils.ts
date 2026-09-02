@@ -4,6 +4,23 @@ import type { EventPayload } from '../types'
 
 // ── Content extraction ──
 
+/**
+ * Split a message text into an optional `<system-reminder>…</system-reminder>`
+ * block and the remaining user content. Messages without a reminder return
+ * `{ reminder: null, content: text }`. The match is non-greedy so only the
+ * first block is extracted.
+ */
+export function splitSystemReminder(
+  text: string,
+): { reminder: string | null; content: string } {
+  const m = text.match(/<system-reminder>([\s\S]*?)<\/system-reminder>/)
+  if (!m || m.index === undefined) {
+    return { reminder: null, content: text }
+  }
+  const content = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).replace(/^\n+|\n+$/g, '')
+  return { reminder: m[1].trim(), content }
+}
+
 export function getContentText(evt: EventPayload): string {
   if (evt.type === 'reason.thinking' || evt.type === 'reason.response') {
     const content = evt.payload?.content
@@ -175,6 +192,14 @@ function ellipsis(s: string, n: number): string {
   return s.slice(0, n) + '…'
 }
 
+// oneLine collapses whitespace/newlines into a single line and ellipsizes it.
+export function oneLine(s: string, n: number): string {
+  const flat = s.replace(/\s+/g, ' ').trim()
+  return ellipsis(flat, n)
+}
+
+// flatten collapses whitespace/newlines into a single line without truncating.
+// Use with CSS text-overflow:ellipsis for a trailing ellipsis at the edge.
 export { ellipsis }
 
 export function truncate(s: string, n: number): string {
@@ -185,14 +210,14 @@ export function truncate(s: string, n: number): string {
 
 /**
  * Given a response event, finds the worker.input event that shares the same
- * trace_id, if any. Returns the input text and worker_id, or null.
+ * trace_id, if any. Returns the input text, worker_id and event id, or null.
  */
-export function findReferencedInput(events: EventPayload[], responseEvt: EventPayload): { text: string; workerId: string } | null {
+export function findReferencedInput(events: EventPayload[], responseEvt: EventPayload): { text: string; workerId: string; evtId: string } | null {
   if (!responseEvt.trace_id) return null
   for (const evt of events) {
     if (evt.type === 'worker.input' && evt.trace_id === responseEvt.trace_id) {
       const text = getInputText(evt)
-      if (text) return { text, workerId: evt.worker_id }
+      if (text) return { text, workerId: evt.worker_id, evtId: evt.id }
     }
   }
   return null

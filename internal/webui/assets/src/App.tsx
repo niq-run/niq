@@ -576,23 +576,25 @@ export default function App() {
             {selectedWorker && (
               isMobile ? (
                 <MobileDetailPanel>
-                  <WorkerDetail
-                    worker={selectedWorker}
-                    allWorkers={workers}
-                    onClose={() => setSelectedWorkerId(null)}
-                    archived={archived}
-                    onToggleArchived={toggleArchived}
-                  />
-                </MobileDetailPanel>
-              ) : (
-                <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
-                  <WorkerDetail
-                    worker={selectedWorker}
-                    allWorkers={workers}
-                    onClose={() => setSelectedWorkerId(null)}
-                    archived={archived}
-                    onToggleArchived={toggleArchived}
-                  />
+                  					<WorkerDetail
+                  						worker={selectedWorker}
+                  						allWorkers={workers}
+                  						onClose={() => setSelectedWorkerId(null)}
+                  						archived={archived}
+                  						onToggleArchived={toggleArchived}
+                  						onDeleted={(id) => { setSelectedWorkerId(null); refreshWorkers() }}
+                  					/>
+                  				</MobileDetailPanel>
+                  			  ) : (
+                  				<ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
+                  					<WorkerDetail
+                  						worker={selectedWorker}
+                  						allWorkers={workers}
+                  						onClose={() => setSelectedWorkerId(null)}
+                  						archived={archived}
+                  						onToggleArchived={toggleArchived}
+                  						onDeleted={(id) => { setSelectedWorkerId(null); refreshWorkers() }}
+                  					/>
                 </ResizablePanel>
               )
             )}

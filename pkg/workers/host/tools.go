@@ -29,11 +29,19 @@ func (w *HostWorker) registerExtensions() {
 		Parameters: obj(map[string]any{
 			"type": map[string]any{
 				"type":        "string",
-				"description": "Worker type to spawn.",
+				"description": "Worker type to spawn (reason, workspace, ...).",
 			},
 			"id": map[string]any{
 				"type":        "string",
 				"description": "Optional worker ID. Builders may derive a default (e.g. workspace from path).",
+			},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Workspace root directory (required when type=workspace).",
+			},
+			"root_dir": map[string]any{
+				"type":        "string",
+				"description": "Alias for path; workspace root directory (required when type=workspace).",
 			},
 		}),
 	}, func(evt event.Event) {

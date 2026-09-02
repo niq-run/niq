@@ -254,7 +254,7 @@ func runAssembly(opts assemblyOptions) error {
 	// each one (credential + identity) and hand it to the supervisor.
 	var supervisor *UnmanagedSupervisor
 	if busAddr != "" && len(opts.Unmanaged) > 0 {
-		supervisor = NewUnmanagedSupervisor(LocalhostURL(busAddr), log.Printf)
+		supervisor = NewUnmanagedSupervisor(LocalhostURL(busAddr), opts.StateDir, log.Printf)
 		for _, spec := range opts.Unmanaged {
 			s := spec
 			if len(s.Command) == 0 {
@@ -288,6 +288,9 @@ func runAssembly(opts assemblyOptions) error {
 							registry:   registry,
 							projectID:  opts.ContextInfo.Project,
 						})
+					}
+					if opts.ContextInfo.Project != "" {
+						s.SetWorkerDeclRemover(webuiDeclRemover{projectID: opts.ContextInfo.Project})
 					}
 					b, err := s.Bind()
 					if err != nil {
@@ -431,6 +434,19 @@ func resolvePort(addr string) int {
 	return 0
 }
 
+// webuiDeclRemover implements webui.WorkerDeclRemover for a specific project,
+// letting the WebUI remove a managed worker's project.json declaration on delete.
+type webuiDeclRemover struct {
+	projectID string
+}
+
+func (r webuiDeclRemover) RemoveDecl(id string) error {
+	if err := RemoveWorkerDecl(r.projectID, id); err != nil {
+		return err
+	}
+	return removeWorkerStateDir(r.projectID, id)
+}
+
 // webuiUnmanagedAdapter implements webui.UnmanagedController, routing the
 // project WebUI's external-worker controls to the project supervisor.
 type webuiUnmanagedAdapter struct {
@@ -462,6 +478,19 @@ func (a *webuiUnmanagedAdapter) Start(id string) error {
 
 func (a *webuiUnmanagedAdapter) Stop(id string) error    { return a.supervisor.Stop(id) }
 func (a *webuiUnmanagedAdapter) Restart(id string) error { return a.supervisor.Restart(id) }
+
+// Remove stops the worker (if supervised) and deletes its project.json
+// declaration so it is not relaunched next start.
+func (a *webuiUnmanagedAdapter) Remove(id string) error {
+	_ = a.supervisor.Stop(id)
+	if a.projectID == "" {
+		return fmt.Errorf("unmanaged control requires a project")
+	}
+	if err := RemoveWorkerDecl(a.projectID, id); err != nil {
+		return err
+	}
+	return removeWorkerStateDir(a.projectID, id)
+}
 
 func (a *webuiUnmanagedAdapter) List() []webui.UnmanagedStatus {
 	out := make([]webui.UnmanagedStatus, 0, 4)

@@ -12,19 +12,19 @@ import (
 	"github.com/niq-run/niq/core/llm"
 	programpkg "github.com/niq-run/niq/core/program"
 	"github.com/niq-run/niq/core/worker"
-	"github.com/niq-run/niq/pkg/services/pgbackend"
-	"github.com/niq-run/niq/pkg/services/wsbackend"
-	"github.com/niq-run/niq/pkg/workers/workspace"
 	providerpkg "github.com/niq-run/niq/internal/project/provider"
 	"github.com/niq-run/niq/pkg/eventbus"
 	eventbusapi "github.com/niq-run/niq/pkg/eventbus/api"
 	"github.com/niq-run/niq/pkg/eventbus/transport/inprocess"
+	"github.com/niq-run/niq/pkg/services/pgbackend"
 	"github.com/niq-run/niq/pkg/services/workerhost"
+	"github.com/niq-run/niq/pkg/services/wsbackend"
 	"github.com/niq-run/niq/pkg/workers/hiw"
 	"github.com/niq-run/niq/pkg/workers/host"
 	programworker "github.com/niq-run/niq/pkg/workers/program"
 	"github.com/niq-run/niq/pkg/workers/reason"
 	"github.com/niq-run/niq/pkg/workers/timer"
+	"github.com/niq-run/niq/pkg/workers/workspace"
 )
 
 // BuildContext holds shared dependencies that worker builders need.
@@ -201,9 +201,10 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	cfg.ID = id
 	cfg.Params = params
 
-	connect := specConnect(ctx, id, "workspace", []string{"*"}, subAllowFromParams(p, []string{
-		"worker.discover",
-	}))
+	// The workspace subscribes to everything and routes via its extension
+	// registry (see workspace.New), so the registry subscription is "*" too —
+	// not driven by stale params.subscriptions (e.g. an old tool.requested).
+	connect := specConnect(ctx, id, "workspace", []string{"*"}, []event.EventPattern{{Type: "*"}})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return workspace.New(workspace.Config{
 			ID:      id,

@@ -24,9 +24,9 @@ import (
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
-	reasonBase "github.com/niq-run/niq/pkg/reason"
 	"github.com/niq-run/niq/pkg/eventbus"
 	eventbusapi "github.com/niq-run/niq/pkg/eventbus/api"
+	reasonBase "github.com/niq-run/niq/pkg/reason"
 	"github.com/niq-run/niq/pkg/services/workerhost"
 	"github.com/niq-run/niq/pkg/workers/hiw"
 )
@@ -70,6 +70,10 @@ type UnmanagedController interface {
 	Restart(id string) error
 	List() []UnmanagedStatus
 	Declared() []UnmanagedStatus
+	// Remove stops the worker and removes its declaration from project.json
+	// so it is not relaunched on project restart. It does not touch the bus
+	// registry identity or persisted state dirs.
+	Remove(id string) error
 }
 
 // AssetsFS exposes the embedded SPA static assets for reuse by the control server.
@@ -89,10 +93,11 @@ type Server struct {
 	registry  corebus.IdentityRegistry
 	workerSvc *workerhost.WorkerService
 
-	ctxMu    sync.RWMutex
-	context  ContextInfo
-	archived ArchivedStore
-	unmngd   UnmanagedController
+	ctxMu       sync.RWMutex
+	context     ContextInfo
+	archived    ArchivedStore
+	unmngd      UnmanagedController
+	declRemover WorkerDeclRemover
 }
 
 // New creates a WebUI Server.
@@ -132,6 +137,10 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	mux.HandleFunc("POST /api/workers/{id}/start", s.handleUnmanagedStart)
 	mux.HandleFunc("POST /api/workers/{id}/stop", s.handleUnmanagedStop)
 	mux.HandleFunc("POST /api/workers/{id}/restart", s.handleUnmanagedRestart)
+
+	// Delete a worker: stop it, revoke its bus identity, remove its persisted
+	// state, and drop its project.json declaration (unmanaged only).
+	mux.HandleFunc("DELETE /api/workers/{id}", s.handleDeleteWorker)
 
 	// Events pagination: load events before a given anchor.
 	mux.HandleFunc("GET /api/events/before/{id}", s.handleLoadBefore)
@@ -216,6 +225,19 @@ func (s *Server) SetArchivedStore(as ArchivedStore) {
 // the start/stop/restart endpoints).
 func (s *Server) SetUnmanagedController(c UnmanagedController) {
 	s.unmngd = c
+}
+
+// WorkerDeclRemover removes a worker's project.json declaration. Implemented by
+// the assembly layer (which owns the project id); nil means managed-worker
+// deletes do not edit project.json.
+type WorkerDeclRemover interface {
+	RemoveDecl(id string) error
+}
+
+// SetWorkerDeclRemover attaches the project-declaration remover used when
+// deleting a managed worker.
+func (s *Server) SetWorkerDeclRemover(r WorkerDeclRemover) {
+	s.declRemover = r
 }
 
 // SetContext records the mode context the single SPA should render in. Safe to
@@ -725,6 +747,51 @@ func (s *Server) handleUnmanagedRestart(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// handleDeleteWorker permanently removes a worker: it stops the live process
+// (managed worker / unmanaged subprocess), disconnects it from the bus, revokes
+// its registry identity, deletes its persisted state, and (for unmanaged
+// workers) drops its project.json declaration so it is not relaunched.
+func (s *Server) handleDeleteWorker(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	// Stop + clean the live side first. Managed workers live in the worker
+	// service; unmanaged ones in the controller (+ project.json declaration).
+	if s.workerSvc.HasWorker(id) {
+		if err := s.workerSvc.DestroyWorker(id); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		// Also drop the project.json declaration so a managed worker is not
+		// re-declared / re-built on the next project start.
+		if s.declRemover != nil {
+			if err := s.declRemover.RemoveDecl(id); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
+	} else if s.unmngd != nil {
+		if err := s.unmngd.Remove(id); err != nil {
+			http.Error(w, "remove external worker: "+err.Error(), 500)
+			return
+		}
+	}
+
+	// Drop the live bus channel (so it cannot linger online).
+	if s.engine.Channel(id) != nil {
+		s.engine.Disconnect(id)
+	}
+
+	// Revoke the bus identity.
+	if _, ok := s.registry.Lookup(id); ok {
+		if err := s.registry.Revoke(id); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Target string `json:"target"`
@@ -765,7 +832,7 @@ func (s *Server) handleLoadBefore(w http.ResponseWriter, r *http.Request) {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)

@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ const (
 	envBusURL     = "NIQ_BUS_URL"
 	envWorkerID   = "NIQ_WORKER_ID"
 	envWorkerCred = "NIQ_WORKER_CREDENTIAL"
+	envStateDir   = "NIQ_STATE_DIR"
 )
 
 const (
@@ -47,6 +49,7 @@ const (
 // (provisionUnmanaged) and hand a ready spec to Start.
 type UnmanagedSupervisor struct {
 	busURL       string
+	workersRoot  string // project workers/ dir; per-worker stdout logs live under <root>/<id>/stdout.log
 	logf         func(format string, args ...any)
 	initialDelay time.Duration
 	maxDelay     time.Duration
@@ -63,17 +66,23 @@ type procState struct {
 	cancel  context.CancelFunc
 	alive   bool
 	stopped bool
-	mu      sync.Mutex
+	// cmd is the currently-running child (nil when idle / between restarts).
+	// Guarded by mu together with alive.
+	cmd *exec.Cmd
+	mu  sync.Mutex
 }
 
 // NewUnmanagedSupervisor creates a supervisor that launches external workers
-// against the given bus URL.
-func NewUnmanagedSupervisor(busURL string, logf func(string, ...any)) *UnmanagedSupervisor {
+// against the given bus URL. workersRoot is the project's workers/ directory;
+// each worker's stdout is logged to <workersRoot>/<id>/stdout.log (empty to
+// fall back to the supervisor's own stdout/stderr).
+func NewUnmanagedSupervisor(busURL, workersRoot string, logf func(string, ...any)) *UnmanagedSupervisor {
 	if logf == nil {
 		logf = log.Printf
 	}
 	return &UnmanagedSupervisor{
 		busURL:       busURL,
+		workersRoot:  workersRoot,
 		logf:         logf,
 		initialDelay: initialBackoff,
 		maxDelay:     maxBackoff,
@@ -83,23 +92,52 @@ func NewUnmanagedSupervisor(busURL string, logf func(string, ...any)) *Unmanaged
 }
 
 // Start launches an external worker from a ready spec (credential already
-// provisioned). It is a no-op when the worker is already running. The process
-// is supervised: an unexpected exit restarts it with exponential backoff.
+// provisioned). To guarantee at most one live child per worker id, it first
+// kills any existing (possibly stale) child for that id, then launches fresh.
+// The process is supervised: an unexpected exit restarts it with exponential
+// backoff.
 func (s *UnmanagedSupervisor) Start(spec ProjectWorker) error {
 	if len(spec.Command) == 0 {
 		return fmt.Errorf("unmanaged worker %s: command is required", spec.ID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if st, ok := s.procs[spec.ID]; ok && !st.isStopped() {
-		return nil // already running
+
+	// If a worker with this id already has a live child (e.g. a restart raced
+	// with a still-running instance), kill it first so the bus never sees two
+	// connections for the same worker id. The old supervise goroutine keeps its
+	// own captured context and will reap the child, then exit.
+	if old, ok := s.procs[spec.ID]; ok {
+		if !old.isStopped() {
+			s.logf("[unmanaged] %s: replacing running instance before start", spec.ID)
+			old.cancel()
+			s.killCurrent(old)
+		}
 	}
+
+	// Use a fresh procState each launch so the new supervise goroutine never
+	// shares (or races on) a context with a previous one.
 	ctx, cancel := context.WithCancel(context.Background())
 	st := &procState{spec: spec, ctx: ctx, cancel: cancel}
 	s.procs[spec.ID] = st
 	s.wg.Add(1)
 	go s.supervise(st)
 	return nil
+}
+
+// killCurrent terminates the child currently recorded on st, if any. Safe to
+// call with st.mu held or not; it takes the lock internally. The child is left
+// for the owning supervise goroutine to reap (it is already blocked on Wait and
+// will return once the process dies). Callers should cancel st.ctx first.
+func (s *UnmanagedSupervisor) killCurrent(st *procState) {
+	st.mu.Lock()
+	cmd := st.cmd
+	st.cmd = nil
+	st.alive = false
+	st.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		killTree(cmd) // kill the whole process group
+	}
 }
 
 // Stop stops a supervised worker: cancels its supervision context (which kills
@@ -194,8 +232,17 @@ func (s *UnmanagedSupervisor) supervise(st *procState) {
 		if st.spec.Cwd != "" {
 			cmd.Dir = st.spec.Cwd
 		}
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+
+		// Log the worker's stdout/stderr to <workersRoot>/<id>/stdout.log so it
+		// can be inspected after the fact instead of being lost on the
+		// supervisor's own stdout.
+		if w := s.logOutput(st.spec.ID); w != nil {
+			cmd.Stdout = w
+			cmd.Stderr = w
+		} else {
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		}
 		// Run the worker in its own process group so cancelling the context can
 		// kill the whole tree (platform shim; see proc_unix.go / proc_windows.go).
 		setOwnProcessGroup(cmd)
@@ -207,6 +254,7 @@ func (s *UnmanagedSupervisor) supervise(st *procState) {
 		} else {
 			st.mu.Lock()
 			st.alive = true
+			st.cmd = cmd
 			st.mu.Unlock()
 			killDone := make(chan struct{})
 			go func() {
@@ -220,6 +268,7 @@ func (s *UnmanagedSupervisor) supervise(st *procState) {
 			close(killDone)
 			st.mu.Lock()
 			st.alive = false
+			st.cmd = nil
 			st.mu.Unlock()
 			if time.Since(start) > s.stableAfter {
 				delay = s.initialDelay
@@ -237,6 +286,26 @@ func (s *UnmanagedSupervisor) supervise(st *procState) {
 	}
 }
 
+// logOutput opens (creating if needed) an append-only log file for a worker's
+// stdout/stderr at <workersRoot>/<id>/stdout.log. Returns nil when no root is
+// configured, so callers fall back to the supervisor's own stdout/stderr.
+func (s *UnmanagedSupervisor) logOutput(id string) *os.File {
+	if s.workersRoot == "" {
+		return nil
+	}
+	dir := filepath.Join(s.workersRoot, sanitizeID(id))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		s.logf("[unmanaged] %s: cannot create log dir %s: %v", id, dir, err)
+		return nil
+	}
+	w, err := os.OpenFile(filepath.Join(dir, "stdout.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		s.logf("[unmanaged] %s: cannot open stdout.log: %v", id, err)
+		return nil
+	}
+	return w
+}
+
 func (s *UnmanagedSupervisor) buildEnv(spec ProjectWorker) []string {
 	env := os.Environ()
 	env = append(env,
@@ -244,6 +313,17 @@ func (s *UnmanagedSupervisor) buildEnv(spec ProjectWorker) []string {
 		envWorkerID+"="+spec.ID,
 		envWorkerCred+"="+spec.Credential,
 	)
+	// Each external worker gets its own persistent state directory under the
+	// project's workers/ dir. It persists across restarts; what the worker keeps
+	// in it is entirely its own business (the host does not interpret it). The
+	// dir is created so the worker can rely on it existing and being writable.
+	if s.workersRoot != "" {
+		stateDir := filepath.Join(s.workersRoot, sanitizeID(spec.ID))
+		env = append(env, envStateDir+"="+stateDir)
+		if err := os.MkdirAll(stateDir, 0755); err != nil {
+			s.logf("[unmanaged] %s: cannot create state dir %s: %v", spec.ID, stateDir, err)
+		}
+	}
 	for k, v := range spec.Env {
 		env = append(env, k+"="+v)
 	}
