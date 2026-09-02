@@ -6,7 +6,7 @@ niq is an **event-driven agent runtime**. It is a single agent composed of many 
 
 niq has exactly three core concepts:
 
-- **Worker** — a unit that can do things, like an **actor**: it has its own state and communicates only by sending and reacting to messages. A Worker subscribes to events, processes them, and publishes new events. Every capability (reasoning, tool execution, safety guards, lifecycle) is a Worker; there is only one extension concept.
+- **Worker** — a unit that can do things, like an **actor**: it has its own state and communicates only by sending and reacting to messages. A Worker subscribes to events, processes them, and publishes new events. The Worker is niq's only extension point.
 - **Program** — the source code of a Worker's capability (natural-language Prompts, or formalized DSL Scripts).
 - **Event** — the only communication language between Workers, delivered over the event bus.
 
