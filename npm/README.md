@@ -2,7 +2,7 @@
 
 > **niq runs programs that haven't been written yet.**
 
-niq is an **event-driven, decentralized agent runtime** — a single agent composed of many **Workers** that collaborate over an event bus. Each worker handles its own focus; together they form the complete agent.
+niq is an **event-driven agent runtime** — a single agent composed of many **Workers** that collaborate over an event bus. Each worker handles its own focus; together they form the complete agent.
 
 - **Worker** — an actor-like unit with its own state that communicates only through events
 - **Program** — the source of a Worker's capability (natural-language prompts or DSL scripts)
