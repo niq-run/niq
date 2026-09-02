@@ -2,7 +2,7 @@
 
 > **niq runs programs that haven't been written yet.**
 
-niq is an **event-driven, decentralized agent runtime**. It is a single agent, but one composed of many **Workers** (a Worker Swarm) that collaborate over an event bus — each worker handles its own focus, and together they form the complete agent.
+niq is an **event-driven agent runtime**. It is a single agent composed of many **Workers** that collaborate over an event bus — each worker handles its own focus, and together they form the complete agent.
 
 niq has exactly three core concepts:
 
