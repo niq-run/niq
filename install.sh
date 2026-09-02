@@ -1,13 +1,15 @@
 #!/usr/bin/env sh
 # niq one-line installer: downloads a prebuilt binary from GitHub Releases
-# into ~/.niq/bin (or $NIQ_INSTALL_DIR) and prints PATH instructions.
+# into ~/.niq/bin (or $NIQ_INSTALL_DIR), wires it into your shell's PATH, and
+# verifies the binary runs.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/install.sh | sh
 #
 # Options (env vars):
-#   NIQ_INSTALL_DIR  target directory (default: ~/.niq/bin)
-#   NIQ_VERSION      exact release tag to install (default: latest)
+#   NIQ_INSTALL_DIR      target directory (default: ~/.niq/bin)
+#   NIQ_VERSION          exact release tag to install (default: latest)
+#   NIQ_NO_MODIFY_PATH   set to 1 to skip PATH setup
 
 set -eu
 
@@ -70,8 +72,42 @@ chmod +x "$INSTALL_DIR/niq"
 log "installed: $INSTALL_DIR/niq"
 "$INSTALL_DIR/niq" --version || true
 
-case ":$PATH:" in
-  *":$INSTALL_DIR:"*) ;;
-  *) log "NOTE: add $INSTALL_DIR to your PATH, e.g.:"
-     echo "  echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> ~/.zshrc   # or ~/.bashrc" ;;
-esac
+# --- PATH setup: make `niq` callable in new shells ---
+if [ "${NIQ_NO_MODIFY_PATH:-}" = "1" ]; then
+  log "NIQ_NO_MODIFY_PATH=1 — skipped PATH setup. Make sure $INSTALL_DIR is on your PATH."
+else
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*)
+      log "$INSTALL_DIR is already on PATH"
+      ;;
+    *)
+      rc=""
+      case "$(basename "${SHELL:-}")" in
+        zsh)  rc="$HOME/.zshrc" ;;
+        bash)
+          if [ -f "$HOME/.bashrc" ]; then rc="$HOME/.bashrc"
+          elif [ -f "$HOME/.bash_profile" ]; then rc="$HOME/.bash_profile"
+          else rc="$HOME/.bashrc"
+          fi
+          ;;
+        *)
+          # Unknown shell: fall back to the first rc file that exists.
+          if [ -f "$HOME/.zshrc" ]; then rc="$HOME/.zshrc"
+          elif [ -f "$HOME/.bashrc" ]; then rc="$HOME/.bashrc"
+          elif [ -f "$HOME/.bash_profile" ]; then rc="$HOME/.bash_profile"
+          fi
+          ;;
+      esac
+
+      if [ -z "$rc" ]; then
+        log "could not detect a shell rc file — add $INSTALL_DIR to your PATH manually"
+      elif [ -f "$rc" ] && grep -qsF "$INSTALL_DIR" "$rc"; then
+        log "$rc already references $INSTALL_DIR — skipped"
+      else
+        printf '\n# niq (added by the niq installer)\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$rc"
+        log "added $INSTALL_DIR to PATH via $rc"
+        log "open a new terminal, or run: source $rc"
+      fi
+      ;;
+  esac
+fi
