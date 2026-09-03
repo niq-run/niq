@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
@@ -29,6 +30,19 @@ type Engine struct {
 	registry corebus.IdentityRegistry
 	store    store.AppendStore   // optional, nil to disable persistence
 	onEvent  []func(event.Event) // optional hooks, called for every routed event
+
+	// persistStats tracks persistence outcomes for live observability.
+	// persistTotal counts every non-transient event handed to the store;
+	// persistDropped counts those the store rejected (e.g. SQLITE_BUSY),
+	// which are still delivered live to SSE subscribers but never recorded
+	// in the event store — the exact gap behind "no reply in event query".
+	persistTotal   atomic.Uint64
+	persistDropped atomic.Uint64
+}
+
+// PersistStats returns cumulative persistence counters for observation.
+func (e *Engine) PersistStats() (total, dropped uint64) {
+	return e.persistTotal.Load(), e.persistDropped.Load()
 }
 
 // NewEngine creates a new Engine.
@@ -193,13 +207,35 @@ func (e *Engine) OnEvent(fn func(event.Event)) {
 // not persisted, so they don't crowd real messages out of the replay window.
 func (e *Engine) persistEvent(ctx context.Context, evt event.Event) {
 	if e.store != nil && !evt.Transient {
+		e.persistTotal.Add(1)
 		if err := e.store.Append(ctx, evt); err != nil {
-			log.Printf("[eventbus] persist event %s: %v", evt.ID, err)
+			dropped := e.persistDropped.Add(1)
+			// Tag reply events explicitly: a dropped request.* reply is the
+			// symptom the operator is hunting ("tool ran, but no reply in
+			// event query"). It still reached SSE consumers (reason worker,
+			// TalkView) below, so the conversation looks fine while the
+			// persisted history silently misses it.
+			tag := ""
+			if isReplyType(evt.Type) {
+				tag = " [REPLY DROPPED — conversation advanced but store missed it]"
+			}
+			log.Printf("[eventbus] persist DROPPED type=%s id=%s worker=%s target=%s request_id=%s err=%v%s (persisted=%d dropped=%d)",
+				evt.Type, evt.ID, evt.WorkerId, evt.TargetWorkerID, evt.RequestId, err, tag,
+				e.persistTotal.Load()-dropped, dropped)
 		}
 	}
 	for _, fn := range e.onEvent {
 		fn(evt)
 	}
+}
+
+// isReplyType reports whether an event is a request.* reply (completed/failed/
+// rejected). These are the events whose loss is most visible: a tool runs, the
+// caller sees the result, but the event query/reply pairing shows nothing.
+func isReplyType(t event.EventType) bool {
+	return t == event.TypeRequestCompleted ||
+		t == event.TypeRequestFailed ||
+		t == event.TypeRequestRejected
 }
 
 // Channel returns the BusSideChannel for a connected worker, or nil.
