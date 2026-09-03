@@ -227,7 +227,7 @@ export default function App() {
     // clean, correctly-ordered timeline — no merge-across-caches gymnastics.
     const loadInitialHistory = async (watermark: string) => {
       if (!watermark) return
-      const limit = view === 'events' ? 20 : 100
+      const limit = 30
       const workers = view === 'events' ? [...filterWorkers] : []
       const trace = view === 'events' ? traceFilter : ''
       setReloading(true)
@@ -409,7 +409,7 @@ export default function App() {
     const workers = view === 'events' ? [...filterWorkers] : []
     const trace = view === 'events' ? traceFilter : ''
     try {
-      const older = (await loadEventsBefore(oldestId, 20, workers, trace)) as EventPayload[]
+      const older = (await loadEventsBefore(oldestId, 30, workers, trace)) as EventPayload[]
       if (older.length === 0) return
       const filtered = older.filter((e) => e.type !== 'event.delivered')
       if (filtered.length === 0) return
