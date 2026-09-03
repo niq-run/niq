@@ -22,31 +22,17 @@ type Store struct {
 
 // New opens (or creates) a SQLite-backed event store at the given path.
 func New(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	// Pragmas ride the DSN so EVERY pooled connection gets them. busy_timeout
+	// and synchronous are per-connection settings — a one-off db.Exec only
+	// reaches whichever pooled connection happens to serve it, leaving the
+	// rest at busy_timeout=0, which fails instantly with SQLITE_BUSY on lock
+	// contention. 5000 ms makes contended writers wait instead of erroring
+	// (without it events were dropped: delivered to SSE but never persisted,
+	// so the event query silently missed tool replies).
+	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: open: %w", err)
-	}
-	// WAL mode for concurrent reads + writes.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("sqlite: enable WAL: %w", err)
-	}
-	// busy_timeout makes SQLite block (up to N ms) when the write lock is
-	// contended instead of immediately returning SQLITE_BUSY. Without it
-	// (the default is 0) concurrent appends — multiple workers writing plus
-	// history queries reading — fail instantly with "database is locked (5)",
-	// and the event is dropped (delivered to SSE but never persisted, so the
-	// event query silently misses tool replies). 5000 ms covers our 5 s Append
-	// transaction timeout; WAL still serializes writers, but now they wait.
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("sqlite: set busy_timeout: %w", err)
-	}
-	// synchronous=NORMAL keeps WAL durability while allowing group commits,
-	// which pairs with the busy_timeout wait above to absorb write bursts.
-	if _, err := db.Exec("PRAGMA synchronous=NORMAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("sqlite: set synchronous: %w", err)
 	}
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
