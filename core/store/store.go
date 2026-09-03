@@ -28,6 +28,14 @@ type AppendStore interface {
 	Append(ctx context.Context, events ...event.Event) error
 }
 
+// Worker traffic roles, used by QueryOpts.WorkerRoles (and the API layer's
+// filter). A worker both sends events and receives them (as target or
+// broadcast recipient); the role says which side the worker filter matches.
+const (
+	RoleSent     = "sent"     // the worker is the event's source (worker_id)
+	RoleReceived = "received" // the worker is the target or a recipient
+)
+
 // QueryOpts controls the results returned by [EventStore.List].
 type QueryOpts struct {
 	Limit     int      // max events to return; 0 means unlimited
@@ -35,6 +43,9 @@ type QueryOpts struct {
 	AfterID   string   // only events after this event ID (for replay / rebuild)
 	BeforeID  string   // only events before this event ID (for pagination)
 	WorkerIDs []string // filter by worker ID set (overrides List's workerID arg)
-	TraceID   string   // filter by trace ID
-	Desc      bool     // true = newest first (display), false = oldest first (replay)
+	// WorkerRoles restricts which side of the worker's traffic WorkerIDs
+	// matches (RoleSent / RoleReceived). Empty means both.
+	WorkerRoles []string
+	TraceID     string // filter by trace ID
+	Desc        bool   // true = newest first (display), false = oldest first (replay)
 }

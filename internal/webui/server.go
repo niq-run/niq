@@ -15,6 +15,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -24,6 +26,7 @@ import (
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/store"
 	"github.com/niq-run/niq/pkg/eventbus"
 	eventbusapi "github.com/niq-run/niq/pkg/eventbus/api"
 	reasonBase "github.com/niq-run/niq/pkg/reason"
@@ -320,9 +323,10 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter := eventbusapi.Filter{
-		WorkerIDs: r.URL.Query()["worker"],
-		TraceID:   r.URL.Query().Get("trace"),
-		Type:      event.EventType(r.URL.Query().Get("type")),
+		WorkerIDs:   r.URL.Query()["worker"],
+		WorkerRoles: parseWorkerRoles(r.URL.Query()),
+		TraceID:     r.URL.Query().Get("trace"),
+		Type:        event.EventType(r.URL.Query().Get("type")),
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -809,14 +813,28 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// parseWorkerRoles reads the ?role= multi values into worker-traffic roles
+// (store.RoleSent / store.RoleReceived). Unknown values are dropped; an empty
+// result means both roles match.
+func parseWorkerRoles(q url.Values) []string {
+	var roles []string
+	for _, r := range q["role"] {
+		if (r == store.RoleSent || r == store.RoleReceived) && !slices.Contains(roles, r) {
+			roles = append(roles, r)
+		}
+	}
+	return roles
+}
+
 func (s *Server) handleLoadBefore(w http.ResponseWriter, r *http.Request) {
 	anchor := r.PathValue("id")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
 	filter := eventbusapi.Filter{
-		WorkerIDs: r.URL.Query()["worker"],
-		TraceID:   r.URL.Query().Get("trace"),
-		Type:      event.EventType(r.URL.Query().Get("type")),
+		WorkerIDs:   r.URL.Query()["worker"],
+		WorkerRoles: parseWorkerRoles(r.URL.Query()),
+		TraceID:     r.URL.Query().Get("trace"),
+		Type:        event.EventType(r.URL.Query().Get("type")),
 	}
 
 	events, err := s.eventLog.LoadBefore(r.Context(), filter, anchor, limit)

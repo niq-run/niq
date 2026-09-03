@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,8 +68,23 @@ func (s *Store) migrate() error {
 	-- Bare timestamp index: serves chronological pagination of "all history"
 	-- (no worker filter), which the worker-scoped indexes can't be used for at scale.
 	CREATE INDEX IF NOT EXISTS idx_events_time ON events(timestamp DESC);
+
+	-- Recipients, normalized: one row per (event, delivered-to worker). The
+	-- recipients JSON column stays as the display source of truth, but queries
+	-- match through this table — exact equality on an indexed column, where
+	-- LIKE on the JSON string both full-scanned AND false-matched substring
+	-- ids (niq matching niq-workspace).
+	CREATE TABLE IF NOT EXISTS event_recipients (
+		event_rowid INTEGER NOT NULL,
+		worker_id   TEXT NOT NULL,
+		PRIMARY KEY (event_rowid, worker_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_event_recipients_worker ON event_recipients(worker_id, event_rowid);
 	`
 	if _, err := s.db.Exec(query); err != nil {
+		return err
+	}
+	if err := s.backfillRecipients(); err != nil {
 		return err
 	}
 	// Older databases predate the request_id column: add it so request →
@@ -101,6 +117,61 @@ func (s *Store) migrate() error {
 	return nil
 }
 
+// backfillRecipients copies the recipients JSON of every existing event into
+// the normalized event_recipients table. Runs on every open; INSERT OR IGNORE
+// makes it idempotent, so after the first run it only costs one scan.
+func (s *Store) backfillRecipients() error {
+	rows, err := s.db.Query(`SELECT rowid, recipients FROM events WHERE recipients IS NOT NULL AND recipients != ''`)
+	if err != nil {
+		return err
+	}
+	type pair struct {
+		rowid int64
+		wid   string
+	}
+	var pairs []pair
+	for rows.Next() {
+		var rowid int64
+		var raw string
+		if err := rows.Scan(&rowid, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var ids []string
+		if json.Unmarshal([]byte(raw), &ids) != nil {
+			continue // not a JSON array — nothing to normalize
+		}
+		for _, id := range ids {
+			if id != "" {
+				pairs = append(pairs, pair{rowid, id})
+			}
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO event_recipients (event_rowid, worker_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, p := range pairs {
+		if _, err := stmt.Exec(p.rowid, p.wid); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Append implements [store.AppendStore].
 func (s *Store) Append(ctx context.Context, events ...event.Event) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -124,8 +195,38 @@ func (s *Store) Append(ctx context.Context, events ...event.Event) error {
 		if err != nil {
 			return fmt.Errorf("sqlite: append event %s: %w", evt.ID, err)
 		}
+		if err := insertRecipients(ctx, tx, evt); err != nil {
+			return fmt.Errorf("sqlite: append recipients %s: %w", evt.ID, err)
+		}
 	}
 	return tx.Commit()
+}
+
+// insertRecipients records the event's recipient workers in the normalized
+// table (exact-match query side). The event row may already exist (INSERT OR
+// IGNORE above), so the rowid is looked up by the event's id.
+func insertRecipients(ctx context.Context, tx *sql.Tx, evt event.Event) error {
+	if len(evt.Recipients) == 0 {
+		return nil
+	}
+	var rowid int64
+	if err := tx.QueryRowContext(ctx, `SELECT rowid FROM events WHERE id = ?`, evt.ID).Scan(&rowid); err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO event_recipients (event_rowid, worker_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, id := range evt.Recipients {
+		if id == "" {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, rowid, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ByWorker implements [store.EventStore].
@@ -139,10 +240,27 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 	var args []any
 
 	if len(opts.WorkerIDs) > 0 {
+		// Which side of the worker's traffic the filter matches. Empty means
+		// both. Recipient matching goes through the normalized table — exact
+		// and indexed (the old LIKE '%id%' on the JSON column full-scanned AND
+		// false-matched substring ids like niq vs niq-workspace).
+		sent := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, store.RoleSent)
+		received := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, store.RoleReceived)
+		const recvMatch = `target_worker_id = ? OR EXISTS (
+			SELECT 1 FROM event_recipients er WHERE er.event_rowid = events.rowid AND er.worker_id = ?)`
 		var conds []string
 		for _, wid := range opts.WorkerIDs {
-			conds = append(conds, "(worker_id = ? OR target_worker_id = ? OR recipients LIKE ?)")
-			args = append(args, wid, wid, "%"+wid+"%")
+			switch {
+			case sent && received:
+				conds = append(conds, "(worker_id = ? OR ("+recvMatch+"))")
+				args = append(args, wid, wid, wid)
+			case sent:
+				conds = append(conds, "worker_id = ?")
+				args = append(args, wid)
+			default: // received only
+				conds = append(conds, "("+recvMatch+")")
+				args = append(args, wid, wid)
+			}
 		}
 		query += " AND (" + strings.Join(conds, " OR ") + ")"
 	} else if workerID != "*" && workerID != "" {

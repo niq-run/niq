@@ -9,6 +9,7 @@ package api
 import (
 	"context"
 	"log"
+	"slices"
 	"sync"
 
 	"github.com/niq-run/niq/core/event"
@@ -19,14 +20,18 @@ import (
 // Filter controls which events a subscriber receives.
 type Filter struct {
 	WorkerIDs []string        // filter by source, target, or recipient worker
-	TraceID   string          // filter by trace ID
-	Type      event.EventType // filter by event type (exact match)
+	// WorkerRoles narrows which side of the worker's traffic WorkerIDs
+	// matches: store.RoleSent (source) / store.RoleReceived (target or
+	// recipient). Empty means both.
+	WorkerRoles []string
+	TraceID     string          // filter by trace ID
+	Type        event.EventType // filter by event type (exact match)
 }
 
 // matchesFilter checks whether an event satisfies the filter.
 // An empty filter field matches everything.
 func matchesFilter(evt event.Event, f Filter) bool {
-	if len(f.WorkerIDs) > 0 && !workerMatchesAny(evt, f.WorkerIDs) {
+	if len(f.WorkerIDs) > 0 && !workerMatchesAny(evt, f.WorkerIDs, f.WorkerRoles) {
 		return false
 	}
 	if f.TraceID != "" && evt.TraceID != f.TraceID {
@@ -39,16 +44,17 @@ func matchesFilter(evt event.Event, f Filter) bool {
 }
 
 // workerMatchesAny reports whether the event involves any of the given worker
-// IDs, as source, target, or recipient.
-func workerMatchesAny(evt event.Event, ids []string) bool {
+// IDs on at least one of the requested roles (sent = source, received =
+// target or recipient; empty roles means both).
+func workerMatchesAny(evt event.Event, ids, roles []string) bool {
+	sent := len(roles) == 0 || slices.Contains(roles, store.RoleSent)
+	received := len(roles) == 0 || slices.Contains(roles, store.RoleReceived)
 	for _, id := range ids {
-		if evt.WorkerId == id || evt.TargetWorkerID == id {
+		if sent && evt.WorkerId == id {
 			return true
 		}
-		for _, r := range evt.Recipients {
-			if r == id {
-				return true
-			}
+		if received && (evt.TargetWorkerID == id || slices.Contains(evt.Recipients, id)) {
+			return true
 		}
 	}
 	return false
@@ -189,10 +195,11 @@ func (l *EventLog) LoadBefore(ctx context.Context, filter Filter, anchor string,
 		limit = 50
 	}
 	return l.store.List(ctx, "*", store.QueryOpts{
-		BeforeID:  anchor,
-		Limit:     limit,
-		Desc:      true,
-		WorkerIDs: filter.WorkerIDs,
-		TraceID:   filter.TraceID,
+		BeforeID:    anchor,
+		Limit:       limit,
+		Desc:        true,
+		WorkerIDs:   filter.WorkerIDs,
+		WorkerRoles: filter.WorkerRoles,
+		TraceID:     filter.TraceID,
 	})
 }

@@ -29,6 +29,8 @@ export const en = {
   'app.menu': 'menu',
   'app.clear': 'Clear',
   'app.scrollToBottom': 'Scroll to bottom',
+  'events.role.sent': 'Sent',
+  'events.role.received': 'Received',
 
   // ── Events view ──
   'events.filtering': 'filtering',
@@ -54,16 +56,20 @@ export const en = {
   'talk.tool.cancelled': 'tool call cancelled',
   'talk.reasoning.interrupted': 'reasoning interrupted',
   'talk.call': 'Tool Call',
+  'talk.arguments': 'Arguments',
   'talk.result': 'Tool Result',
   'talk.failed': 'Tool Failed',
   'talk.rejected': 'Tool Rejected',
   'talk.trace': 'trace',
   'talk.trace.tooltip': 'View all events in this trace',
-  'talk.wrap.tooltip': 'toggle soft wrap',
+  'talk.wrap.tooltip': 'toggle soft-wrapping of the code body',
   'talk.watching': 'watching',
   'talk.charsPreserved': '{n} chars preserved',
-  'talk.wrap': 'wrap',
-  'talk.nowrap': 'no-wrap',
+  'talk.wrap.toggle': 'toggle wrap',
+  'talk.code.expand': 'expand all',
+  'talk.code.expand.tooltip': 'show full content',
+  'talk.code.collapse': 'collapse',
+  'talk.code.collapse.tooltip': 'fold content',
   'badge.mention.tip': 'click to mention',
 
   // ── System reminder ──
@@ -107,13 +113,13 @@ export const en = {
   'picker.header.mode': 'mode',
 
   // ── Input mode options (TalkInput) ──
-  'mode.interrupt': 'interrupt',
+  'mode.interrupt': 'interrupt mode',
   'mode.interrupt.desc': 'cancel in-flight reasoning and handle now',
   'mode.interrupt.hint': 'interrupt in-flight reasoning and handle now (level 3)',
-  'mode.schedule': 'schedule',
+  'mode.schedule': 'schedule mode',
   'mode.schedule.desc': 'no interrupt; respond promptly next round',
   'mode.schedule.hint': "wake gently; don't interrupt in-flight reasoning (level 2)",
-  'mode.append': 'append',
+  'mode.append': 'append mode',
   'mode.append.desc': 'only when idle; least intrusive',
   'mode.append.hint': 'only when idle (no reasoning, no pending tools) (level 1)',
 

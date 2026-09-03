@@ -113,6 +113,10 @@ export default function App() {
     })
   }
   const [traceFilter, setTraceFilter] = useState('')
+  // Which side of the filtered workers' traffic to show: sent (they are the
+  // source) / received (they are target or recipient). Both by default, which
+  // matches the unfiltered-by-role behavior.
+  const [filterRoles, setFilterRoles] = useState<Set<string>>(new Set(['sent', 'received']))
 
   const eventsRef = useRef<EventPayload[]>([])
   const seenRef = useRef<Set<string>>(new Set())
@@ -194,7 +198,7 @@ export default function App() {
   // previous view's SSE simply stays alive. `view` is intentionally excluded
   // from the effect deps for this reason.
   const streamKey = view === 'events'
-    ? 'events-' + [...filterWorkers].sort().join(',') + '-' + traceFilter
+    ? 'events-' + [...filterWorkers].sort().join(',') + '-' + [...filterRoles].sort().join(',') + '-' + traceFilter
     : 'all'
 
   useEffect(() => {
@@ -207,6 +211,7 @@ export default function App() {
     const params = new URLSearchParams()
     if (view === 'events') {
       for (const id of filterWorkers) params.append('worker', id)
+      for (const role of filterRoles) params.append('role', role)
       if (traceFilter) params.set('trace', traceFilter)
     }
     const url = projectBase + `/api/stream?${params}`
@@ -233,6 +238,7 @@ export default function App() {
       noMoreRef.current = false
       const limit = 30
       const workers = view === 'events' ? [...filterWorkers] : []
+      const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
       setReloading(true)
       try {
@@ -240,7 +246,7 @@ export default function App() {
         seenRef.current.clear()
         deliveriesRef.current = {}
         setDeliveries({})
-        const older = (await loadEventsBefore(watermark, limit, workers, trace)) as EventPayload[]
+        const older = (await loadEventsBefore(watermark, limit, workers, trace, roles)) as EventPayload[]
         const filtered = older.filter((e) => e.type !== 'event.delivered')
         const merged = mergeEvents(eventsRef.current, filtered)
         eventsRef.current = merged
@@ -406,6 +412,17 @@ export default function App() {
     setView('events')
   }, [])
 
+  // Toggle one traffic role (sent/received) in the events filter. Both roles
+  // checked is the default and matches the unfiltered-by-role behavior.
+  const toggleFilterRole = useCallback((role: string) => {
+    setFilterRoles(prev => {
+      const next = new Set(prev)
+      if (next.has(role)) next.delete(role)
+      else next.add(role)
+      return next
+    })
+  }, [])
+
   // ── Load more older events ──
   // Guards that keep the top sentinel from re-triggering in a loop: an
   // in-flight lock (the observer fires again while a fetch is pending) and an
@@ -426,8 +443,9 @@ export default function App() {
       const anchorEl = listRef.current
       const anchor = anchorEl ? { top: anchorEl.scrollTop, height: anchorEl.scrollHeight } : null
       const workers = view === 'events' ? [...filterWorkers] : []
+      const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
-      const older = (await loadEventsBefore(events[0].id, 30, workers, trace)) as EventPayload[]
+      const older = (await loadEventsBefore(events[0].id, 30, workers, trace, roles)) as EventPayload[]
       // Fewer than a full page means the store has nothing older that matches.
       if (older.length < 30) noMoreRef.current = true
       const filtered = older.filter((e) => e.type !== 'event.delivered')
@@ -439,7 +457,7 @@ export default function App() {
     } catch {} finally {
       loadingMoreRef.current = false
     }
-  }, [events, view, filterWorkers, traceFilter])
+  }, [events, view, filterWorkers, filterRoles, traceFilter])
 
   // ── Events list auto-scroll ──
   // Layout effect (before paint) so the initial load lands directly at the
@@ -468,7 +486,7 @@ export default function App() {
   // set by a previous history walk.
   useEffect(() => {
     noMoreRef.current = false
-  }, [view, filterWorkers, traceFilter])
+  }, [view, filterWorkers, filterRoles, traceFilter])
 
   // Auto-load more events when scrolling to top.
   useEffect(() => {
@@ -508,7 +526,7 @@ export default function App() {
 
   // ── Render ──
   return (
-    <div data-theme={dark ? 'dark' : 'light'} style={{ display: 'flex', height: '100vh', fontFamily: 'monospace', color: colors.text, background: colors.bg }}>
+    <div data-theme={dark ? 'dark' : 'light'} style={{ display: 'flex', height: '100vh', color: colors.text, background: colors.bg }}>
       <Sidebar
         view={view}
         setView={selectView}
@@ -654,6 +672,14 @@ export default function App() {
                   {filterWorkers.size > 0 && (
                     <>
                       {t('events.filtering')} <strong style={{ color: colors.textDim }}>[{[...filterWorkers].join(', ')}]</strong>
+                      {/* Traffic direction: which side of the filtered
+                          workers' events to show. Both checked = default. */}
+                      {(['sent', 'received'] as const).map(role => (
+                        <label key={role} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 12, cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm }}>
+                          <input type="checkbox" checked={filterRoles.has(role)} onChange={() => toggleFilterRole(role)} />
+                          {t(role === 'sent' ? 'events.role.sent' : 'events.role.received')}
+                        </label>
+                      ))}
                       {traceFilter && ' · '}
                     </>
                   )}

@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"github.com/niq-run/niq/core/event"
@@ -62,7 +63,7 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 	for idx, e := range s.events {
 		idOK := allWorkers || e.WorkerId == workerID || e.TargetWorkerID == workerID || workerInRecipients(e, workerID)
 		if len(opts.WorkerIDs) > 0 {
-			idOK = workerMatchesAny(e, opts.WorkerIDs)
+			idOK = workerMatchesAny(e, opts.WorkerIDs, opts.WorkerRoles)
 		}
 		if !idOK {
 			continue
@@ -108,10 +109,17 @@ func workerInRecipients(e event.Event, id string) bool {
 }
 
 // workerMatchesAny reports whether the event involves any of the given worker
-// IDs, as source, target, or recipient.
-func workerMatchesAny(e event.Event, ids []string) bool {
+// IDs on at least one of the requested roles. Roles are store.RoleSent
+// (the event's source) / store.RoleReceived (target or recipient); empty
+// means both.
+func workerMatchesAny(e event.Event, ids, roles []string) bool {
+	sent := len(roles) == 0 || slices.Contains(roles, store.RoleSent)
+	received := len(roles) == 0 || slices.Contains(roles, store.RoleReceived)
 	for _, id := range ids {
-		if e.WorkerId == id || e.TargetWorkerID == id || workerInRecipients(e, id) {
+		if sent && e.WorkerId == id {
+			return true
+		}
+		if received && (e.TargetWorkerID == id || workerInRecipients(e, id)) {
 			return true
 		}
 	}

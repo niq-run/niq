@@ -207,10 +207,11 @@ export async function switchWorkerProvider(id: string, provider: string, model: 
   return res.json()
 }
 
-export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = ''): Promise<any[]> {
+export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = '', roles: string[] = []): Promise<any[]> {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
   for (const w of workers) params.append('worker', w)
+  for (const role of roles) params.append('role', role)
   if (trace) params.set('trace', trace)
   const res = await fetch(p(`/api/events/before/${anchorId}?${params}`))
   return res.json()
