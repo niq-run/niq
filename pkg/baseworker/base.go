@@ -1,7 +1,8 @@
 // Package baseworker provides the shared base implementation every built-in
 // Go worker embeds: identity, subscriptions, the worker-side bus channel,
-// tool-request reply plumbing, and the extension registry — the uniform way
-// for a worker to declare what it responds to and how.
+// tool-request reply plumbing, the extension registry — the uniform way for a
+// worker to declare what it responds to and how — and durable-change
+// signalling, the way a worker tells its owner to persist it.
 //
 // It is deliberately an implementation package. The contracts it partially
 // implements (Worker / ManagedWorker) stay in core/worker, as do the shared
@@ -10,6 +11,7 @@ package baseworker
 
 import (
 	"context"
+	"log"
 
 	corebus "github.com/niq-run/niq/core/bus"
 
@@ -30,6 +32,10 @@ type BaseWorker struct {
 	// BaseWorker stays copyable by value. Registration is safe at any time,
 	// including at runtime from within a handler.
 	extensions *extensionRegistry
+
+	// durability is the durable-change signal (see durable.go). Behind a
+	// pointer for the same reason as extensions: copies share one channel.
+	durability *durability
 }
 
 // NewBaseWorker creates a BaseWorker with the given id, subscriptions and
@@ -40,6 +46,7 @@ func NewBaseWorker(id string, subs []event.EventPattern, ch corebus.WorkerSideCh
 		subs:       subs,
 		Channel:    ch,
 		extensions: &extensionRegistry{regs: make(map[string]registeredExtension)},
+		durability: &durability{ch: make(chan struct{}, 1)},
 	}
 }
 
@@ -98,6 +105,8 @@ func (w *BaseWorker) ReplyCompleted(callerID, callID, result, traceID string) {
 	})
 	evt.RequestId = callID
 	evt.TraceID = traceID
+	log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s result_len=%d",
+		w.ID(), callerID, callID, len(result))
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
@@ -109,6 +118,8 @@ func (w *BaseWorker) ReplyFailed(callerID, callID, errMsg, traceID string) {
 	})
 	evt.RequestId = callID
 	evt.TraceID = traceID
+	log.Printf("[baseworker] reply EMIT type=request.failed worker=%s caller=%s request_id=%s err_len=%d",
+		w.ID(), callerID, callID, len(errMsg))
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 
@@ -122,6 +133,8 @@ func (w *BaseWorker) ReplyRejected(callerID, callID, reason, traceID string) {
 	})
 	evt.RequestId = callID
 	evt.TraceID = traceID
+	log.Printf("[baseworker] reply EMIT type=request.rejected worker=%s caller=%s request_id=%s reason_len=%d",
+		w.ID(), callerID, callID, len(reason))
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 

@@ -31,6 +31,23 @@ func New(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("sqlite: enable WAL: %w", err)
 	}
+	// busy_timeout makes SQLite block (up to N ms) when the write lock is
+	// contended instead of immediately returning SQLITE_BUSY. Without it
+	// (the default is 0) concurrent appends — multiple workers writing plus
+	// history queries reading — fail instantly with "database is locked (5)",
+	// and the event is dropped (delivered to SSE but never persisted, so the
+	// event query silently misses tool replies). 5000 ms covers our 5 s Append
+	// transaction timeout; WAL still serializes writers, but now they wait.
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite: set busy_timeout: %w", err)
+	}
+	// synchronous=NORMAL keeps WAL durability while allowing group commits,
+	// which pairs with the busy_timeout wait above to absorb write bursts.
+	if _, err := db.Exec("PRAGMA synchronous=NORMAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite: set synchronous: %w", err)
+	}
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		db.Close()
