@@ -24,6 +24,10 @@ type Config struct {
 	Bus             corebus.WorkerSideChannel
 	ReasoningEffort *string
 
+	// OnDurableChange is called after a runtime provider switch so the
+	// embedding layer can persist it (see reasonBase.Config). nil disables it.
+	OnDurableChange func()
+
 	// Transcript is the worker's context construction core. nil uses the
 	// default accumulate implementation.
 	Transcript transcript.Transcript
@@ -109,6 +113,7 @@ func NewWorker(cfg Config) *Worker {
 		EventConverters: cfg.EventConverters,
 		Transcript:      cfg.Transcript,
 		ReasoningEffort: cfg.ReasoningEffort,
+		OnDurableChange: cfg.OnDurableChange,
 		ContextWindow:   cfg.ContextWindow,
 		BudgetSoft:      cfg.BudgetSoft,
 		BudgetHard:      cfg.BudgetHard,

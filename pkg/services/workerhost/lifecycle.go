@@ -277,6 +277,53 @@ func (s *WorkerService) ResumeWorker(ctx context.Context, id string) error {
 	return nil
 }
 
+// Checkpoint snapshots a running worker and persists it, so a state change
+// made at runtime (e.g. a reason worker switching its LLM provider) reaches
+// disk without waiting for a suspend or a clean shutdown. It is the worker's
+// own "durable state changed" signal, delivered by whatever layer wired the
+// callback. Errors from the store are returned; the caller decides what they
+// mean (the assembly layer logs them).
+//
+// Safe to call from the worker's own goroutine: it holds the service lock only
+// to look the entry up, and takes the snapshot outside it — the snapshot
+// itself takes the worker's lock, so the caller must not hold it.
+func (s *WorkerService) Checkpoint(id string) error {
+	s.mu.Lock()
+	e := s.findLocked(id)
+	if e == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("workerhost: worker %s not found", id)
+	}
+	if e.worker == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("workerhost: worker %s is not running (nothing to snapshot)", id)
+	}
+	w := e.worker
+	store := s.store
+	s.mu.Unlock()
+
+	if store == nil {
+		return nil
+	}
+	snap, err := w.Snapshot()
+	if err != nil {
+		return fmt.Errorf("workerhost: snapshot %s: %w", id, err)
+	}
+
+	// Keep the entry's cached snapshot in step: it is what a later
+	// ResumeWorker replays, and the snapshot just taken is at least as new.
+	s.mu.Lock()
+	if e := s.findLocked(id); e != nil {
+		e.snapshot = snap
+	}
+	s.mu.Unlock()
+
+	if err := store.SaveState(id, worker.StateRunning, snap); err != nil {
+		return fmt.Errorf("workerhost: persist state %s: %w", id, err)
+	}
+	return nil
+}
+
 // DestroyWorker stops a worker, removes it from the registry and deletes its
 // persisted store. The worker's identity remains registered on the bus.
 func (s *WorkerService) DestroyWorker(id string) error {
