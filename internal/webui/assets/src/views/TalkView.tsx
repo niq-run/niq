@@ -149,6 +149,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   }
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
+  // Mirrors autoScrollRef for rendering: the scroll-to-bottom button shows
+  // while the conversation isn't pinned to the bottom.
+  const [atBottom, setAtBottom] = useState(true)
   const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set())
   const [wrapCode, setWrapCode] = useState(true) // soft-wrap tool JSON
   const prevEventCount = useRef(0)
@@ -223,28 +226,28 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   }, [events])
 
   // Streaming content (reason.*_delta and request.progressed) is recomputed
-  // on a 2s tick rather than per SSE event, so rapid delta bursts coalesce
-  // into a single repaint instead of re-rendering on every event.
+  // whenever events change (see the effect below) — no client-side coalescing
+  // tick; the backend throttles delta bursts.
   const eventsRef = useRef(events)
   eventsRef.current = events
   const [streamingTraces, setStreamingTraces] = useState<StreamTrace[]>([])
   const [toolPartials, setToolPartials] = useState<Record<string, string>>({})
 
+  // Recompute streaming content whenever events change. The backend throttles
+  // delta bursts, so there is no client-side coalescing interval: the live
+  // streaming block tracks the latest deltas in real time and disappears the
+  // instant its terminal reason.* / request.* event lands (computeStreamingTraces
+  // already drops finalized traces), so it never lingers beside the full block.
   useEffect(() => {
-    const compute = () => {
-      if (!streamingMode) {
-        setStreamingTraces([])
-        setToolPartials({})
-        return
-      }
-      const evs = eventsRef.current
-      setStreamingTraces(computeStreamingTraces(evs, talkWorkers, deliveries))
-      setToolPartials(computeToolPartials(evs, talkWorkers, deliveries))
+    if (!streamingMode) {
+      setStreamingTraces([])
+      setToolPartials({})
+      return
     }
-    compute()
-    const t = setInterval(compute, 2000)
-    return () => clearInterval(t)
-  }, [streamingMode, talkWorkers, deliveries])
+    const evs = eventsRef.current
+    setStreamingTraces(computeStreamingTraces(evs, talkWorkers, deliveries))
+    setToolPartials(computeToolPartials(evs, talkWorkers, deliveries))
+  }, [events, streamingMode, talkWorkers, deliveries])
 
 
   useEffect(() => {
@@ -283,6 +286,15 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   		if (!el) return
   		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
   		autoScrollRef.current = atBottom
+  		// Drives the scroll-to-bottom button; React bails out when unchanged.
+  		setAtBottom(atBottom)
+  	}, [])
+
+  	const scrollToBottom = useCallback(() => {
+  		autoScrollRef.current = true
+  		setAtBottom(true)
+  		const el = scrollRef.current
+  		if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   	}, [])
 
 	// Scroll to an event node if it is present in the current list; no-op when
@@ -977,18 +989,21 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   return (
     <>
       {header}
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        onClick={(e) => {
-          // Clicking blank space (the container itself) collapses any expanded
-          // tool call/result blocks.
-          if (e.target === scrollRef.current && expandedContent.size > 0) {
-            setExpandedContent(new Set())
-          }
-        }}
-        style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px' }}
-      >
+      {/* Relative wrapper hosts the floating scroll-to-bottom button just
+          above the input box (the input is the next sibling in App's column). */}
+      <div style={{ flex: 1, position: 'relative', display: 'flex', minHeight: 0, minWidth: 0 }}>
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          onClick={(e) => {
+            // Clicking blank space (the container itself) collapses any expanded
+            // tool call/result blocks.
+            if (e.target === scrollRef.current && expandedContent.size > 0) {
+              setExpandedContent(new Set())
+            }
+          }}
+          style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px' }}
+        >
         {nodes}
         {!responseOnly && streamingTraces.map(({ traceId, thinking, text, workerId, lastTs }) => {
           if (!thinking && !text) return null
@@ -1016,6 +1031,27 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             </div>
           )
         })}
+        </div>
+        {/* Floating jump-to-bottom: shown while the conversation isn't pinned
+            to the bottom. Clicking re-pins so live updates follow again. */}
+        {!atBottom && (
+          <button
+            onClick={scrollToBottom}
+            title={t('app.scrollToBottom')}
+            style={{
+              position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
+              width: 36, height: 36, borderRadius: '50%', padding: 0,
+              border: '1px solid ' + colors.border, background: colors.bg, color: colors.textDim,
+              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.25)', zIndex: 5,
+            }}
+          >
+            {/* Drawn arrow — glyph baselines sit off-center in the mono font. */}
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M7 2v9M3.2 7.6 7 11.4 10.8 7.6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
       </div>
     </>
   )
