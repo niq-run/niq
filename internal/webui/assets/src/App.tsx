@@ -120,6 +120,9 @@ export default function App() {
   const listRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
   const sentinelRef = useRef<HTMLDivElement>(null)
+  // Mirrors autoScrollRef for rendering: the scroll-to-bottom button shows
+  // while the list isn't pinned to the bottom.
+  const [eventsAtBottom, setEventsAtBottom] = useState(true)
   // When the events view (re)mounts / reconnects, the initial population should
   // land at the bottom instantly; only later live updates smooth-scroll.
   const eventsMountedAt = useRef(0)
@@ -227,6 +230,7 @@ export default function App() {
     // clean, correctly-ordered timeline — no merge-across-caches gymnastics.
     const loadInitialHistory = async (watermark: string) => {
       if (!watermark) return
+      noMoreRef.current = false
       const limit = 30
       const workers = view === 'events' ? [...filterWorkers] : []
       const trace = view === 'events' ? traceFilter : ''
@@ -403,20 +407,38 @@ export default function App() {
   }, [])
 
   // ── Load more older events ──
+  // Guards that keep the top sentinel from re-triggering in a loop: an
+  // in-flight lock (the observer fires again while a fetch is pending) and an
+  // exhausted flag (the store returned fewer than a full page — nothing older
+  // matches the current filter, so stop asking).
+  const loadingMoreRef = useRef(false)
+  const noMoreRef = useRef(false)
+  // Viewport anchor for the prepend: captured before setEvents, applied by the
+  // layout effect below so the visible frame doesn't jump and the sentinel
+  // moves out of view instead of staying pinned at the top.
+  const pendingAnchorRef = useRef<{ top: number; height: number } | null>(null)
+
   const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current || noMoreRef.current) return
     if (events.length === 0) return
-    const oldestId = events[0].id
-    const workers = view === 'events' ? [...filterWorkers] : []
-    const trace = view === 'events' ? traceFilter : ''
+    loadingMoreRef.current = true
     try {
-      const older = (await loadEventsBefore(oldestId, 30, workers, trace)) as EventPayload[]
-      if (older.length === 0) return
+      const anchorEl = listRef.current
+      const anchor = anchorEl ? { top: anchorEl.scrollTop, height: anchorEl.scrollHeight } : null
+      const workers = view === 'events' ? [...filterWorkers] : []
+      const trace = view === 'events' ? traceFilter : ''
+      const older = (await loadEventsBefore(events[0].id, 30, workers, trace)) as EventPayload[]
+      // Fewer than a full page means the store has nothing older that matches.
+      if (older.length < 30) noMoreRef.current = true
       const filtered = older.filter((e) => e.type !== 'event.delivered')
       if (filtered.length === 0) return
       const merged = mergeEvents(eventsRef.current, filtered)
       eventsRef.current = merged
       setEvents(merged)
-    } catch {}
+      pendingAnchorRef.current = anchor
+    } catch {} finally {
+      loadingMoreRef.current = false
+    }
   }, [events, view, filterWorkers, traceFilter])
 
   // ── Events list auto-scroll ──
@@ -429,6 +451,24 @@ export default function App() {
       listRef.current.scrollTo({ top: listRef.current.scrollHeight, behavior: animated ? 'smooth' : 'auto' })
     }
   }, [events])
+
+  // Anchor the viewport across a load-more prepend: without this the content
+  // grows above the viewport, the view appears to jump, and the top sentinel
+  // stays visible — re-triggering the loader in a loop.
+  useLayoutEffect(() => {
+    const a = pendingAnchorRef.current
+    pendingAnchorRef.current = null
+    const el = listRef.current
+    if (!a || !el) return
+    const grew = el.scrollHeight - a.height
+    if (grew > 0) el.scrollTop = a.top + grew
+  }, [events])
+
+  // A new filter scope may have older events again — clear the exhausted flag
+  // set by a previous history walk.
+  useEffect(() => {
+    noMoreRef.current = false
+  }, [view, filterWorkers, traceFilter])
 
   // Auto-load more events when scrolling to top.
   useEffect(() => {
@@ -449,6 +489,8 @@ export default function App() {
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
     autoScrollRef.current = atBottom
+    // Drives the scroll-to-bottom button; React bails out when unchanged.
+    setEventsAtBottom(atBottom)
   }, [])
 
   const workerTypes = useMemo(() => {
@@ -657,6 +699,30 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+              {/* Floating jump-to-bottom: shown while the list isn't pinned to
+                  the bottom. Clicking re-pins so live updates follow again. */}
+              {!eventsAtBottom && (
+                <button
+                  onClick={() => {
+                    autoScrollRef.current = true
+                    setEventsAtBottom(true)
+                    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
+                  }}
+                  title={t('app.scrollToBottom')}
+                  style={{
+                    position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+                    width: 36, height: 36, borderRadius: '50%', padding: 0,
+                    border: '1px solid ' + colors.border, background: colors.bg, color: colors.textDim,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.25)', zIndex: 5,
+                  }}
+                >
+                  {/* Drawn arrow — glyph baselines sit off-center in the mono font. */}
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                    <path d="M7 2v9M3.2 7.6 7 11.4 10.8 7.6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              )}
             </div>
             {/* Detail panel anchored to the page-level column, so it spans the
                 full height including the Events title — same as the workers view. */}

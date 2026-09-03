@@ -28,6 +28,7 @@ export const en = {
   'app.loading': 'Loading…',
   'app.menu': 'menu',
   'app.clear': 'Clear',
+  'app.scrollToBottom': 'Scroll to bottom',
 
   // ── Events view ──
   'events.filtering': 'filtering',

@@ -23,11 +23,12 @@ export const zh: Record<StringKey, string> = {
   'theme.light': '浅色',
   'theme.dark': '深色',
   'lang.zh': '中文',
-  'lang.en': 'en',
+  'lang.en': 'EN',
 
   'app.loading': '加载中…',
   'app.menu': '菜单',
   'app.clear': '清除',
+  'app.scrollToBottom': '滚动到底部',
 
   'events.filtering': '筛选',
   'events.trace': '调用链',
