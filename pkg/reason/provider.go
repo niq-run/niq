@@ -14,7 +14,7 @@
 package reason
 
 import (
-	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -161,11 +161,14 @@ func (w *BaseReasonWorker) resolveContextWindow() {
 // model are required — an empty model is rejected rather than silently
 // defaulting. The switch takes effect from the next reasoning round. Answers
 // with request.completed / request.failed echoing the request's id.
+//
+// A successful switch is a durable change: it must outlive this process, so
+// the worker notifies its persistence callback. A failed one changes nothing
+// and stays silent — the request.failed reply already reports it.
 func (w *BaseReasonWorker) handleSetLLMProvider(evt event.Event) {
 	name, _ := evt.Payload["provider"].(string)
 	model, _ := evt.Payload["model"].(string)
 
-	payload := map[string]any{"provider": name, "model": model}
 	var err error
 	switch {
 	case name == "":
@@ -176,47 +179,48 @@ func (w *BaseReasonWorker) handleSetLLMProvider(evt event.Event) {
 		err = w.setActiveProvider(name, model)
 	}
 	log.Printf("[reason %s] set provider=%s model=%s err=%v", w.ID(), name, model, err)
-	w.replyMeta(evt, payload, err)
-}
 
-// replyMeta answers a meta invocation with request.completed (nil err) or
-// request.failed (err), echoing the request's id and trace. Broadcast like the
-// worker.updated / worker.status completions it replaces, so bus subscribers
-// (e.g. the webui) still observe them.
-func (w *BaseReasonWorker) replyMeta(evt event.Event, payload map[string]any, err error) {
-	typ := event.TypeRequestCompleted
 	if err != nil {
-		typ = event.TypeRequestFailed
-		payload["error"] = err.Error()
+		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
+		return
 	}
-	done := event.New(typ, w.ID(), payload)
-	done.RequestId = evt.RequestId
-	done.TraceID = evt.TraceID
-	_ = w.Channel.Broadcast(context.Background(), done)
+	w.NotifyDurableChange()
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId,
+		fmt.Sprintf("switched to provider %s model %s", name, model), evt.TraceID)
 }
 
 // handleStatusQuery serves a provider.list / provider.current request: the
 // former returns the configured providers (and their models) plus the current
 // choice, the latter just the current choice. Both reply with
-// request.completed echoing the request's id. Async — the requester observes
-// the reply on the bus.
+// request.completed whose "result" carries the snapshot as JSON — the same
+// {"result"} / {"error"} shape every tool reply on the bus uses.
 func (w *BaseReasonWorker) handleStatusQuery(evt event.Event) {
-	payload := map[string]any{}
+	var snapshot any
 	switch evt.Type {
 	case TypeProviderList:
-		payload["providers"] = w.availableProviders()
-		payload["current"] = map[string]any{
+		snapshot = map[string]any{
+			"providers": w.availableProviders(),
+			"current": map[string]any{
+				"provider": w.providerName,
+				"model":    w.providerModel,
+			},
+		}
+	case TypeProviderCurrent:
+		snapshot = map[string]any{
 			"provider": w.providerName,
 			"model":    w.providerModel,
 		}
-	case TypeProviderCurrent:
-		payload["provider"] = w.providerName
-		payload["model"] = w.providerModel
 	default:
-		w.replyMeta(evt, payload, fmt.Errorf("unknown provider query event: %q", evt.Type))
+		w.ReplyFailed(evt.WorkerId, evt.RequestId,
+			fmt.Sprintf("unknown provider query event: %q", evt.Type), evt.TraceID)
 		return
 	}
-	w.replyMeta(evt, payload, nil)
+	b, err := json.Marshal(snapshot)
+	if err != nil {
+		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
+		return
+	}
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, string(b), evt.TraceID)
 	log.Printf("[reason %s] provider query %s", w.ID(), evt.Type)
 }
 

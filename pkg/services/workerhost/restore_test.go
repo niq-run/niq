@@ -24,13 +24,14 @@ type fakeWorker struct {
 	id       string
 	restored []byte
 	started  bool
+	snap     []byte // what Snapshot() returns, so a test can see a fresh read
 }
 
 func (f *fakeWorker) ID() string                          { return f.id }
 func (f *fakeWorker) Start(context.Context) error         { f.started = true; return nil }
 func (f *fakeWorker) Subscriptions() []event.EventPattern { return nil }
 func (f *fakeWorker) Stop() error                         { return nil }
-func (f *fakeWorker) Snapshot() ([]byte, error)           { return []byte("snap"), nil }
+func (f *fakeWorker) Snapshot() ([]byte, error)           { return f.snap, nil }
 func (f *fakeWorker) Restore(state []byte) error          { f.restored = state; return nil }
 
 // memoryStore is an in-memory WorkerStore for tests.
@@ -79,7 +80,7 @@ func newServiceWithStore(t *testing.T, _ string) *WorkerService {
 func registerFakeBuilder(svc *WorkerService) *[]*fakeWorker {
 	built := []*fakeWorker{}
 	svc.RegisterBuilder("fake", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
-		w := &fakeWorker{id: cfg.ID}
+		w := &fakeWorker{id: cfg.ID, snap: []byte("snap")}
 		built = append(built, w)
 		return worker.SpawnSpec{
 			Config:  cfg,
@@ -276,5 +277,58 @@ func TestRestoreSuspendedKeepsSnapshot(t *testing.T) {
 		if w.id == "w" && string(w.restored) != "snap-w" {
 			t.Fatalf("resumed worker restored = %q, want snap-w", w.restored)
 		}
+	}
+}
+
+// TestCheckpointPersistsRunningState verifies Checkpoint writes the worker's
+// current state to the store — the path a runtime provider switch takes so it
+// survives a crash rather than waiting for suspend/shutdown.
+func TestCheckpointPersistsRunningState(t *testing.T) {
+	svc := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(svc)
+
+	cfg := worker.WorkerConfig{ID: "reason-worker", Type: "fake"}
+	if err := svc.CreateWorker(context.Background(), cfg); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+	// The worker's state changed after it was created (e.g. a provider switch).
+	(*built)[0].snap = []byte("after-switch")
+
+	if err := svc.Checkpoint("reason-worker"); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	recs, err := svc.LoadAllWorkers()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("persisted = %+v, want 1 record", recs)
+	}
+	if string(recs[0].Snapshot) != "after-switch" {
+		t.Fatalf("snapshot = %q, want after-switch", recs[0].Snapshot)
+	}
+	if recs[0].State != worker.StateRunning {
+		t.Fatalf("state = %s, want running", recs[0].State)
+	}
+}
+
+// TestCheckpointRejectsNonRunning verifies Checkpoint refuses workers it cannot
+// snapshot: unknown ids and suspended ones (whose state is already persisted).
+func TestCheckpointRejectsNonRunning(t *testing.T) {
+	svc := newServiceWithStore(t, t.TempDir())
+	registerFakeBuilder(svc)
+
+	if err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+	if err := svc.SuspendWorker("w"); err != nil {
+		t.Fatalf("SuspendWorker: %v", err)
+	}
+	if err := svc.Checkpoint("w"); err == nil {
+		t.Fatal("Checkpoint on a suspended worker should fail")
+	}
+	if err := svc.Checkpoint("nope"); err == nil {
+		t.Fatal("Checkpoint on an unknown worker should fail")
 	}
 }

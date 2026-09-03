@@ -3,6 +3,7 @@ package project
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,6 +165,16 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 			// configurable through worker params.
 			MaxPayloadBytes: 20 * 1024,
 			SeedMessages:    seedBrief,
+			// A runtime provider switch (worker.update provider.switch) must
+			// outlive this process, so the worker signals it and the assembly
+			// layer checkpoints it. The worker builds its provider from
+			// provider.json, which it knows nothing about — persistence is
+			// the host's job, not the mechanism's.
+			OnDurableChange: func() {
+				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+					log.Printf("[project] checkpoint %s: %v", id, err)
+				}
+			},
 		})
 		return w
 	}

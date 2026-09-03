@@ -82,6 +82,13 @@ type Config struct {
 	ProviderModel   string
 	ReasoningEffort *string
 
+	// OnDurableChange, when set, is called after the worker changes state it
+	// must survive a restart (a runtime provider switch), so the embedding
+	// layer can persist it — the mechanism itself has no store. Signalling is
+	// baseworker's: coalesced, and delivered off the event loop so the
+	// callback is free to Snapshot() (see baseworker's durable.go).
+	OnDurableChange func()
+
 	ContextWindow int
 	BudgetSoft    float64
 	BudgetHard    float64
@@ -146,6 +153,9 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		keepTail:             cfg.KeepTail,
 		reasoningEffort:      cfg.ReasoningEffort,
 	}
+	// Durable-change signalling is the base's machinery (baseworker); the
+	// mechanism only decides when to raise it (see handleSetLLMProvider).
+	w.SetOnDurableChange(cfg.OnDurableChange)
 	if len(cfg.SeedMessages) > 0 {
 		w.transcript.Apply(transcript.InputPatch{Messages: cfg.SeedMessages})
 	}
@@ -239,6 +249,9 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 
 	busCh, _ := w.Channel.Receive(runCtx)
 	go w.watch(runCtx, busCh)
+	// The durable-change signal (baseworker) delivers the persistence
+	// callback off the event loop; no goroutine when nothing is installed.
+	w.StartDurableLoop(runCtx)
 
 	w.BroadcastReady()
 	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerDiscover, w.ID(), map[string]any{

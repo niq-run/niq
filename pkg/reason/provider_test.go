@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/niq-run/niq/core/event"
 	llm "github.com/niq-run/niq/core/llm"
@@ -55,6 +57,74 @@ func newSwitchableWorker(ch *testChannel) (*BaseReasonWorker, *staticProvider, *
 		Bus:             ch,
 	})
 	return w, pa, pb
+}
+
+// newSwitchableWorkerWithHook builds a started switchable worker whose
+// durable-change callback counts its invocations, and returns a reader.
+func newSwitchableWorkerWithHook(t *testing.T) (*BaseReasonWorker, *testChannel, func() int) {
+	t.Helper()
+	pa := &staticProvider{}
+	pb := &staticProvider{}
+	fake := &fakeSources{
+		infos: []ProviderInfo{
+			{Name: "a", Default: "m1", Models: []string{"m1", "m2"}},
+			{Name: "b", Default: "m3", Models: []string{"m3", "m4"}},
+		},
+		provs: map[string]llm.LLMProvider{"a": pa, "b": pb},
+	}
+	var calls atomic.Int32
+	ch := newTestChannel()
+	w := NewBaseReasonWorker(Config{
+		ID:              "r1",
+		ProviderSources: fake,
+		Subscriptions:   []event.EventPattern{event.NewPattern("*")},
+		Bus:             ch,
+		OnDurableChange: func() { calls.Add(1) },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { w.Stop(); cancel() })
+	return w, ch, func() int { return int(calls.Load()) }
+}
+
+// TestProviderSwitchPersists verifies a successful provider.switch notifies the
+// durable-change callback, so the embedding layer can checkpoint the choice
+// instead of leaving it in memory until suspend/shutdown.
+func TestProviderSwitchPersists(t *testing.T) {
+	w, ch, calls := newSwitchableWorkerWithHook(t)
+
+	ch.in <- event.New(TypeProviderSwitch, w.ID(), map[string]any{
+		"provider": "b", "model": "m3",
+	})
+	waitCond(t, testTimeout, func() bool { return calls() > 0 }, "durable-change callback")
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.providerName != "b" || w.providerModel != "m3" {
+		t.Fatalf("selection = %s/%s, want b/m3", w.providerName, w.providerModel)
+	}
+}
+
+// TestFailedProviderSwitchDoesNotPersist verifies a rejected switch (missing
+// model) leaves the callback alone — nothing durable changed, and the switch
+// itself is already reported through the request.failed reply.
+func TestFailedProviderSwitchDoesNotPersist(t *testing.T) {
+	w, ch, calls := newSwitchableWorkerWithHook(t)
+
+	ch.in <- event.New(TypeProviderSwitch, w.ID(), map[string]any{
+		"provider": "b",
+	})
+	waitCond(t, testTimeout, func() bool {
+		return len(ch.eventsOf(event.TypeRequestFailed)) > 0
+	}, "request.failed reply")
+
+	// Give a would-be callback time to arrive before declaring it absent.
+	time.Sleep(50 * time.Millisecond)
+	if n := calls(); n != 0 {
+		t.Fatalf("callback invoked %d time(s) after a rejected switch", n)
+	}
 }
 
 // TestSnapshotRoundTripPreservesProvider verifies a runtime provider switch
@@ -176,11 +246,8 @@ func TestUpdateRequestedSetProviderEvent(t *testing.T) {
 	if u.TraceID != "trace-switch" {
 		t.Fatalf("completion trace = %q, want trace-switch", u.TraceID)
 	}
-	if p := u.Payload["provider"]; p != "b" {
-		t.Fatalf("completion provider = %v, want b", p)
-	}
-	if m := u.Payload["model"]; m != "m3" {
-		t.Fatalf("completion model = %v, want m3", m)
+	if res, _ := u.Payload["result"].(string); res != "switched to provider b model m3" {
+		t.Fatalf("completion result = %q, want switched to provider b model m3", res)
 	}
 }
 
@@ -254,13 +321,21 @@ func TestStatusQueryProviders(t *testing.T) {
 	if s.TraceID != "trace-status" {
 		t.Fatalf("status trace = %q, want trace-status", s.TraceID)
 	}
-	b, _ := json.Marshal(s.Payload["providers"])
+	// The snapshot travels as a JSON string in the reply's "result" field.
+	var snapshot struct {
+		Providers []map[string]any `json:"providers"`
+		Current   map[string]any   `json:"current"`
+	}
+	res, _ := s.Payload["result"].(string)
+	if err := json.Unmarshal([]byte(res), &snapshot); err != nil {
+		t.Fatalf("status result is not valid JSON: %v (result=%q)", err, res)
+	}
+	b, _ := json.Marshal(snapshot.Providers)
 	if !strings.Contains(string(b), `"name":"a"`) || !strings.Contains(string(b), `"name":"b"`) {
 		t.Fatalf("status providers did not include both providers: %s", b)
 	}
-	current, _ := s.Payload["current"].(map[string]any)
-	if current["provider"] != "" {
-		t.Fatalf("initial current provider = %v, want empty", current["provider"])
+	if snapshot.Current["provider"] != "" {
+		t.Fatalf("initial current provider = %v, want empty", snapshot.Current["provider"])
 	}
 }
 
@@ -282,7 +357,16 @@ func TestStatusQueryCurrent(t *testing.T) {
 		t.Fatal("expected a request.completed snapshot")
 	}
 	s := statuses[len(statuses)-1]
-	if s.Payload["provider"] != "b" || s.Payload["model"] != "m3" {
-		t.Fatalf("current = %v/%v, want b/m3", s.Payload["provider"], s.Payload["model"])
+	// The snapshot travels as a JSON string in the reply's "result" field.
+	var current struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	res, _ := s.Payload["result"].(string)
+	if err := json.Unmarshal([]byte(res), &current); err != nil {
+		t.Fatalf("current result is not valid JSON: %v (result=%q)", err, res)
+	}
+	if current.Provider != "b" || current.Model != "m3" {
+		t.Fatalf("current = %v/%v, want b/m3", current.Provider, current.Model)
 	}
 }
