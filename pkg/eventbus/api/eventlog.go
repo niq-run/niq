@@ -139,12 +139,11 @@ func (l *EventLog) Hook() func(event.Event) {
 // store at the moment of subscription. The caller is expected to page backwards
 // from that watermark (via LoadBefore) to fetch history.
 //
-// Forwarded live events are filtered to those strictly newer than the watermark,
-// so the history window and the live stream never overlap. The client can then
-// merge them by timestamp without dedupe races or ordering gaps — switching
-// views (which tears down and re-opens the stream) no longer scrambles the
-// timeline, because the watermark cleanly partitions "already persisted" from
-// "still live".
+// LoadBefore is strictly-before, so the watermark event itself would fall
+// through the crack — in no history page and not newer than the watermark.
+// It is therefore forwarded on the live channel: events strictly older than
+// the watermark are skipped (they are in the store and page in via history),
+// while the watermark event arrives exactly once via live.
 func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.Event, string, error) {
 	// Subscription boundary: the newest event ID currently in the store.
 	// Event IDs are time-ordered UUIDv7, so this is a safe monotonic watermark
@@ -166,11 +165,12 @@ func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.
 			if !matchesFilter(evt, filter) {
 				continue
 			}
-			// Only forward events strictly newer than the watermark. Events
-			// already in the store at subscribe time (including any delivered
-			// late) stay in history and are paged in separately, so they are
-			// never duplicated here.
-			if watermark != "" && evt.ID <= watermark {
+			// Skip events already covered by history paging (LoadBefore is
+			// strictly-before the watermark, so everything older than it is
+			// (or will be) paged in by the client. The watermark event itself
+			// is NOT in any history page — forward it, this is its only
+			// delivery path.
+			if watermark != "" && evt.ID < watermark {
 				continue
 			}
 			select {
