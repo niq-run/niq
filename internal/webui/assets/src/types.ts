@@ -10,6 +10,15 @@ export interface EventPayload {
   payload: Record<string, any>
 }
 
+// WatchEntry is one capability a worker declares it responds to in its
+// worker.ready "watch": the event type (its identity) plus an optional
+// parameter schema (JSON Schema object form) and a description.
+export interface WatchEntry {
+  event: string
+  desc?: string
+  parameters?: Record<string, any>
+}
+
 export interface EventPattern {
   type: string
   source?: string

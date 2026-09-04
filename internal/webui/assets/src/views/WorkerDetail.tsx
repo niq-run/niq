@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { type WorkerInfo, type ProviderOption, type ProviderSelection } from '../types'
+import { type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
+import SendEventForm from '../components/SendEventForm'
 import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, updateWorkerAllow } from '../services/api'
 
 interface WorkerDetailProps {
   worker: WorkerInfo
   allWorkers: WorkerInfo[]
+  // Capabilities this worker announced in its worker.ready "watch". Used to
+  // render the "send event" form.
+  watch: WatchEntry[]
   onClose: () => void
   archived: Set<string>
   onToggleArchived: (id: string) => void
   onDeleted: (id: string) => void
 }
 
-export default function WorkerDetail({ worker, allWorkers, onClose, archived, onToggleArchived, onDeleted }: WorkerDetailProps) {
+export default function WorkerDetail({ worker, allWorkers, watch, onClose, archived, onToggleArchived, onDeleted }: WorkerDetailProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const suspended = worker.managed && worker.state === 'suspended'
@@ -123,7 +127,7 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
             <DetailRow label={t('wd.connection')} value={connection} colors={colors} />
             <DetailRow label={t('wd.lifecycle')} value={lifecycle} colors={colors} />
             <DetailRow label={t('wd.managed')} value={worker.managed ? t('wd.yes') : t('wd.no')} colors={colors} />
-            <DetailRow label={t('wd.credential')} value={worker.credential || '(none)'} colors={colors} />
+            <DetailRow label={t('wd.credential')} value={worker.credential || '\u2014'} colors={colors} />
           </div>
 
           <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
@@ -269,16 +273,25 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
             						className="btn-hover"
             						style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
             					>
-            						{t('wd.delete')}
-            					</span>
-            				)}
-            			</div>
-            		  </div>
+									{t('wd.confirmDelete')}
+						</span>
+						)}
+					</div>
+					</div>
 
-            		  {/* Model / Provider — only reason workers carry ProviderSources.
-            			  Keyed by worker id so switching workers cannot leak one worker's
-              provider state into another. */}
-          {worker.type === 'reason' && <ProviderSection key={worker.id} workerId={worker.id} />}
+					{/* Send the worker an event from its announced watch contract —
+							 drive its behaviour/state from the UI. */}
+					<div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
+						<div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+							{t('wd.sendEvent')}
+						</div>
+						<SendEventForm workerId={worker.id} watch={watch} />
+					</div>
+
+					{/* Model / Provider — only reason workers carry ProviderSources.
+							 Keyed by worker id so switching workers cannot leak one worker's
+								 provider state into another. */}
+					{worker.type === 'reason' && <ProviderSection key={worker.id} workerId={worker.id} />}
         </div>
       </div>
     </div>

@@ -14,7 +14,7 @@ import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived } from './services/api'
-import type { ContextInfo, EventPayload, ViewMode, ViewSettings, ViewSettingKey, WorkerInfo } from './types'
+import type { ContextInfo, EventPayload, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
 
 // Talk view settings are persisted to localStorage so toggles survive reloads.
 const VIEW_SETTINGS_KEY = 'niq.view-settings'
@@ -519,6 +519,28 @@ export default function App() {
     return map
   }, [workers])
 
+  // Latest worker.ready "watch" per worker: every announced capability
+  // (event type + parameter schema) the human UI can drive. Largely derived by
+  // taking the most recent worker.ready broadcast for each worker id.
+  const workerWatch = useMemo(() => {
+    const map: Record<string, WatchEntry[]> = {}
+    for (const evt of events) {
+      if (evt.type !== 'worker.ready') continue
+      const wid = evt.worker_id || (evt.payload?.worker_id as string | undefined)
+      if (!wid) continue
+      const raw = evt.payload?.watch
+      if (!Array.isArray(raw)) continue
+      const entries = raw
+        .map((e: any): WatchEntry | null => {
+          if (!e || typeof e.event !== 'string') return null
+          return { event: e.event, desc: e.desc, parameters: e.parameters }
+        })
+        .filter((e): e is WatchEntry => e !== null)
+      map[wid] = entries
+    }
+    return map
+  }, [events])
+
   // Event currently shown in the right-hand detail panel (events view only).
   const selectedEvent = view === 'events' ? events.find(e => e.id === selectedEventId) : undefined
   // Worker currently shown in the right-hand detail panel (workers view only).
@@ -638,21 +660,23 @@ export default function App() {
             {selectedWorker && (
               isMobile ? (
                 <MobileDetailPanel>
-                  					<WorkerDetail
-                  						worker={selectedWorker}
-                  						allWorkers={workers}
-                  						onClose={() => setSelectedWorkerId(null)}
+                  <WorkerDetail
+                    worker={selectedWorker}
+                    allWorkers={workers}
+                    watch={workerWatch[selectedWorker.id] ?? []}
+                    onClose={() => setSelectedWorkerId(null)}
                   						archived={archived}
                   						onToggleArchived={toggleArchived}
                   						onDeleted={(id) => { setSelectedWorkerId(null); refreshWorkers() }}
                   					/>
                   				</MobileDetailPanel>
                   			  ) : (
-                  				<ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
-                  					<WorkerDetail
-                  						worker={selectedWorker}
-                  						allWorkers={workers}
-                  						onClose={() => setSelectedWorkerId(null)}
+				                <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
+				                  <WorkerDetail
+				                    worker={selectedWorker}
+				                    allWorkers={workers}
+				                    watch={workerWatch[selectedWorker.id] ?? []}
+				                    onClose={() => setSelectedWorkerId(null)}
                   						archived={archived}
                   						onToggleArchived={toggleArchived}
                   						onDeleted={(id) => { setSelectedWorkerId(null); refreshWorkers() }}

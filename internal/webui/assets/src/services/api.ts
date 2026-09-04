@@ -186,6 +186,21 @@ export async function updateWorkerAllow(
   if (!res.ok) throw new Error((await res.text()).trim() || 'update allow failed: ' + res.status)
 }
 
+// sendWorkerEvent sends an event (from the worker's watch contract) to a
+// worker as HIW, with a client-supplied top-level payload.
+export async function sendWorkerEvent(
+  id: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/event`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, payload }),
+  })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'send event failed: ' + res.status)
+}
+
 // fetchWorkerProviders asks a reason worker for its selectable providers and
 // its current choice. It is answered by the worker over the bus, so it can take
 // several seconds when a provider's model-list endpoint is slow.
