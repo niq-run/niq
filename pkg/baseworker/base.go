@@ -19,12 +19,18 @@ import (
 )
 
 // BaseWorker provides a partial implementation of the worker contract
-// (core/worker.Worker) that other workers embed. It stores an id, a
-// subscription list and the extension registry; Start is an intentional
-// no-op that callers are expected to override.
+// (core/worker.Worker) that other workers embed. It stores an id and the
+// extension registry; Start is an intentional no-op that callers are expected
+// to override.
+//
+// Note on subscriptions: what a worker receives over broadcast is the
+// identity's SubscribeAllow — a control-plane attribute declared in the
+// worker's spec (and manageable via the control plane), registered before the
+// worker process exists. It is deliberately NOT declared on the worker object:
+// a worker able to grant itself subscriptions could bypass bus-level
+// distribution authorization.
 type BaseWorker struct {
 	id      string
-	subs    []event.EventPattern
 	Channel corebus.WorkerSideChannel
 
 	// extensions is the registry filled by Register. Held behind a pointer
@@ -38,12 +44,11 @@ type BaseWorker struct {
 	durability *durability
 }
 
-// NewBaseWorker creates a BaseWorker with the given id, subscriptions and
-// worker-side channel to the event bus.
-func NewBaseWorker(id string, subs []event.EventPattern, ch corebus.WorkerSideChannel) BaseWorker {
+// NewBaseWorker creates a BaseWorker with the given id and worker-side
+// channel to the event bus.
+func NewBaseWorker(id string, ch corebus.WorkerSideChannel) BaseWorker {
 	return BaseWorker{
 		id:         id,
-		subs:       subs,
 		Channel:    ch,
 		extensions: &extensionRegistry{regs: make(map[string]registeredExtension)},
 		durability: &durability{ch: make(chan struct{}, 1)},
@@ -51,12 +56,6 @@ func NewBaseWorker(id string, subs []event.EventPattern, ch corebus.WorkerSideCh
 }
 
 func (w *BaseWorker) ID() string { return w.id }
-
-// Subscriptions returns the event patterns this worker is interested in.
-// Implements the Worker contract.
-func (w *BaseWorker) Subscriptions() []event.EventPattern {
-	return w.subs
-}
 
 // Start is a no-op stub. Embedding workers should override.
 func (w *BaseWorker) Start(ctx context.Context) error {

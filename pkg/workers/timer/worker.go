@@ -43,13 +43,7 @@ func New(cfg Config) *Worker {
 		id = "timer"
 	}
 	w := &Worker{
-		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern(TypeTimeout),
-			event.NewPattern(TypeElapse),
-			event.NewPattern(TypeCancelTimer),
-			event.NewPattern(event.TypeWorkerDiscover),
-			event.NewPattern(event.TypeRequestCancel),
-		}, cfg.Bus),
+		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		timers: make(map[string]*Entry),
 	}
 	w.registerExtensions()

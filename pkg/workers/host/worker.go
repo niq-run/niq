@@ -46,13 +46,7 @@ func New(cfg Config) *HostWorker {
 		id = "host"
 	}
 	w := &HostWorker{
-		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern(TypeSpawn),
-			event.NewPattern(TypeSuspend),
-			event.NewPattern(TypeResume),
-			event.NewPattern(event.TypeRequestCancel),
-			event.NewPattern(event.TypeWorkerDiscover),
-		}, cfg.Bus),
+		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		engine: cfg.Engine,
 	}
 	w.registerExtensions()

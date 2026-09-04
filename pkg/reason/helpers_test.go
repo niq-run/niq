@@ -85,10 +85,9 @@ func newTestWorker(provider llm.LLMProvider, ch *testChannel) *BaseReasonWorker 
 		ch = newTestChannel()
 	}
 	return NewBaseReasonWorker(Config{
-		ID:            "r1",
-		Provider:      provider,
-		Subscriptions: []event.EventPattern{event.NewPattern("*")},
-		Bus:           ch,
+		ID:       "r1",
+		Provider: provider,
+		Bus:      ch,
 	})
 }
 

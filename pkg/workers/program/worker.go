@@ -55,14 +55,7 @@ func New(cfg Config) *Worker {
 		id = "program"
 	}
 	w := &Worker{
-		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern(TypeSearch),
-			event.NewPattern(TypeLoad),
-			event.NewPattern(TypeEdit),
-			event.NewPattern(TypeRegister),
-			event.NewPattern(TypeDelete),
-			event.NewPattern(event.TypeWorkerDiscover),
-		}, cfg.Bus),
+		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		backend:  cfg.Backend,
 		programs: make(map[string]*program.Program),
 	}

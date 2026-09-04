@@ -4,7 +4,6 @@ import (
 	"context"
 
 	corebus "github.com/niq-run/niq/core/bus"
-	"github.com/niq-run/niq/core/event"
 )
 
 // Worker is the contract for built-in Go workers running inside
@@ -16,9 +15,6 @@ type Worker interface {
 
 	// Start enters the Worker's idle loop, waiting for events.
 	Start(ctx context.Context) error
-
-	// Subscriptions returns the event patterns this Worker subscribes to.
-	Subscriptions() []event.EventPattern
 }
 
 // ManagedWorker extends Worker with Snapshot / Restore to support

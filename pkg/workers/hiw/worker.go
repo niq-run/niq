@@ -37,9 +37,7 @@ func New(cfg Config) *Worker {
 		id = "webui-hiw"
 	}
 	return &Worker{
-		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern("*"),
-		}, cfg.Bus),
+		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		cancelCh: make(chan struct{}),
 	}
 }

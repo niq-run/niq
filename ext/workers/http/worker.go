@@ -53,12 +53,8 @@ func New(cfg Config) *Worker {
 	if c == nil {
 		c = &http.Client{Timeout: 30 * time.Second}
 	}
-	// HTTP tools are static (webfetch) plus whatever MCP servers later add, so
-	// the worker subscribes to everything and routes via the extension registry.
 	w := &Worker{
-		BaseWorker: baseworker.NewBaseWorker(id, []event.EventPattern{
-			event.NewPattern("*"),
-		}, cfg.Bus),
+		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		client:    c,
 		mcpConfig: cfg.MCPConfig,
 	}

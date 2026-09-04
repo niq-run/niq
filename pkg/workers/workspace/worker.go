@@ -43,13 +43,8 @@ type WorkspaceWorker struct {
 }
 
 func New(cfg Config) *WorkspaceWorker {
-	// Workspace tools are dynamic (mode/backend dependent), so the worker
-	// subscribes to everything and routes via the extension registry.
-	subs := []event.EventPattern{
-		event.NewPattern("*"),
-	}
 	return &WorkspaceWorker{
-		BaseWorker: baseworker.NewBaseWorker(cfg.ID, subs, cfg.Bus),
+		BaseWorker: baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
 		backend:    cfg.Backend,
 		mode:       cfg.Mode,
 	}
