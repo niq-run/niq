@@ -17,7 +17,7 @@ import (
 // per worker:
 //
 //	<root>/<workerID>/config.json   — definition (authoritative)
-//	<root>/<workerID>/state.json    — {"state": "...", "snapshot": "<raw text>"}
+//	<root>/<workerID>/state.json    — {"state": "...", "snapshot": {…}}
 //
 // The root is the project's workers/ dir, so config.json doubles as the
 // authoritative per-worker definition read by the assembly layer.
@@ -57,9 +57,16 @@ func (s *FileWorkerStore) SaveState(id string, state worker.WorkerState, snapsho
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("workerhost: mkdir %s: %w", dir, err)
 	}
-	// The snapshot is stored as a raw string, not base64: every worker snapshot
-	// is text (JSON transcripts) and staying raw keeps state.json readable.
-	rec := stateFile{State: state, Snapshot: string(snapshot)}
+	// The snapshot is stored as raw JSON (json.RawMessage inlines it verbatim),
+	// not as a string: a string field re-escapes every quote of the inner JSON
+	// (~25% size overhead on transcript-heavy snapshots) and makes state.json
+	// unreadable. Worker snapshots are JSON by contract — a non-empty snapshot
+	// that isn't valid JSON is a bug and fails loudly here. Nil/empty is
+	// legitimate ("no state to persist") and simply omits the field.
+	if len(snapshot) > 0 && !json.Valid(snapshot) {
+		return fmt.Errorf("workerhost: snapshot %s is not valid JSON", id)
+	}
+	rec := stateFile{State: state, Snapshot: json.RawMessage(snapshot)}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("workerhost: marshal state %s: %w", id, err)
@@ -104,7 +111,7 @@ func (s *FileWorkerStore) Delete(id string) error {
 
 type stateFile struct {
 	State    worker.WorkerState `json:"state"`
-	Snapshot string             `json:"snapshot,omitempty"`
+	Snapshot json.RawMessage    `json:"snapshot,omitempty"`
 }
 
 func readConfigFile(path string) (worker.WorkerConfig, error) {

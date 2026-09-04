@@ -72,6 +72,12 @@ func (w *BaseReasonWorker) DiscoveredWorkers() []DiscoveredWorker {
 			info = &DiscoveredWorker{WorkerID: tool.Provider, Publishes: w.publishMap[tool.Provider]}
 			providers[tool.Provider] = info
 		}
+		// Slim the listing: drop the full parameter schemas. The LLM already
+		// receives each peer tool's schema in its own tool defs (from the
+		// worker.ready announcements); list_workers only needs identity and
+		// description to pick a target. Full schemas made every call return
+		// 10+ KB per worker, permanently inflating the persisted transcript.
+		tool.Parameters = nil
 		info.Tools = append(info.Tools, tool)
 	}
 	for provider, events := range w.publishMap {
