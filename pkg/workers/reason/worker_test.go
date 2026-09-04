@@ -171,18 +171,26 @@ func TestNewWorkerDefaults(t *testing.T) {
 	if w.ID() != "r1" {
 		t.Fatalf("ID = %q, want r1", w.ID())
 	}
-	// Built-in subscriptions (tool lifecycle, worker presence, timer) must be present.
+	// Subscriptions gate only broadcast delivery: the worker presence
+	// lifecycle plus the broadcast forms of worker.input / worker.abort.
+	// Everything else — tool calls, request.* replies, management requests,
+	// timer fires — is directed and reaches the worker without a listing.
 	subs := w.Subscriptions()
 	got := map[string]bool{}
 	for _, s := range subs {
 		got[string(s.Type)] = true
 	}
-	for _, want := range []string{"request.completed", "request.failed", "request.rejected",
-		"send_message", "list_workers", "context.compress", "context.rotate", "provider.switch",
-		"worker.ready", "worker.gone", "worker.discover", "worker.input", "worker.abort",
-		"timer.timeout", "timer.reminder"} {
+	for _, want := range []string{"worker.ready", "worker.gone", "worker.discover",
+		"worker.input", "worker.abort"} {
 		if !got[want] {
-			t.Errorf("missing built-in subscription %q", want)
+			t.Errorf("missing broadcast subscription %q", want)
+		}
+	}
+	for _, banned := range []string{"send_message", "list_workers", "get_worker_info",
+		"context.compress", "context.rotate", "provider.switch", "request.completed",
+		"timer.timeout"} {
+		if got[banned] {
+			t.Errorf("directed event %q must not be a subscription", banned)
 		}
 	}
 }

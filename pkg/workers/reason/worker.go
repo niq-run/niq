@@ -75,33 +75,22 @@ var DefaultConverter = reasonBase.DefaultConverter
 // NewWorker creates a generic reason Worker from the given configuration.
 func NewWorker(cfg Config) *Worker {
 	// Built-in subscriptions plus the custom converters' patterns.
-	subs := make([]event.EventPattern, 0, len(cfg.EventConverters)+12)
+	// Subscriptions gate only BROADCAST delivery (the identity's
+	// SubscribeAllow): directed events — tool invocations, request.* replies,
+	// management requests, timer fires — reach this worker without any
+	// listing. So this list names the broadcast lifecycle traffic only; tool
+	// and meta extensions (send_message, provider.*, context ops, ...) are
+	// invoked directed and deliberately absent.
+	subs := make([]event.EventPattern, 0, len(cfg.EventConverters)+5)
 	for _, h := range cfg.EventConverters {
 		subs = append(subs, h.Pattern)
 	}
 	subs = append(subs,
-		event.NewPattern(reasonBase.TypeContextCompress),
-		event.NewPattern(reasonBase.TypeProviderSwitch),
-		event.NewPattern(reasonBase.TypeProviderList),
-		event.NewPattern(reasonBase.TypeProviderCurrent),
-		event.NewPattern(TypeSendMessage),
-		event.NewPattern(TypeListWorkers),
-		event.NewPattern(TypeWorkerInfo),
-		event.NewPattern(TypeContextRotate),
-		event.NewPattern(TypeProgramQuery),
-		event.NewPattern(TypeProgramUpdate),
-		event.NewPattern(event.TypeRequestCompleted),
-		event.NewPattern(event.TypeRequestFailed),
-		event.NewPattern(event.TypeRequestRejected),
 		event.NewPattern(event.TypeWorkerReady),
 		event.NewPattern(event.TypeWorkerGone),
 		event.NewPattern(event.TypeWorkerDiscover),
 		event.NewPattern(event.TypeWorkerInput),
 		event.NewPattern(event.TypeWorkerAbort),
-		event.NewPattern(event.TypeWorkerUpdate),
-		event.NewPattern(event.TypeWorkerQuery),
-		event.NewPattern("timer.timeout"),
-		event.NewPattern("timer.reminder"),
 	)
 
 	base := reasonBase.NewBaseReasonWorker(reasonBase.Config{
