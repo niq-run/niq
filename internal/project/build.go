@@ -101,13 +101,12 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	model, _ := p["model"].(string)
 
 	// SubscribeAllow: only broadcast delivery needs listing. Directed events
-	// (tool calls, their request.* results, timer.timeout/reminder) reach the
-	// worker regardless; broadcast traffic to a reason worker is the worker
-	// presence lifecycle, worker.input (hiw broadcasts when untargeted) and
-	// the request.* completions the worker itself broadcasts (context ops,
-	// provider meta). Template subscriptions override this default.
+	// (tool calls, their request.* replies, timer.timeout/reminder, management
+	// requests) reach the worker regardless; broadcast traffic to a reason
+	// worker is just the worker presence lifecycle and worker.input (hiw
+	// broadcasts when untargeted). Template subscriptions override this
+	// default; a configured subscriptions list REPLACES it entirely.
 	subAllow := subAllowFromParams(p, []string{
-		"request.completed", "request.failed", "request.rejected",
 		"worker.ready", "worker.gone", "worker.discover", "worker.abort",
 		"worker.input",
 	})
