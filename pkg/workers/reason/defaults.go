@@ -17,6 +17,7 @@ import (
 	"log"
 
 	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/program"
 	"github.com/niq-run/niq/pkg/baseworker"
 	reasonBase "github.com/niq-run/niq/pkg/reason"
 )
@@ -89,6 +90,42 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	// BaseReasonWorker.RegisterTranscriptEditEvent).
 	w.RegisterTranscriptEditEvent(reasonBase.TypeContextCompress)
 	w.RegisterTranscriptEditEvent(TypeContextRotate)
+
+	// Program management: query or mutate this worker's instruction/playbook
+	// list. Deliberately NOT SelfOnly — the list is meant to be edited by other
+	// authorized workers (e.g. webui-hiw); bus permissions gate who may send
+	// the directed events. These are ordinary meta-extensions (no transcript
+	// edit), so handleToolCalls dispatches them normally and the
+	// request.completed reply schedules the next round.
+	w.Register(baseworker.Extension{
+		Event:       TypeProgramQuery,
+		Description: "List this worker's instruction and playbook programs (name, type, description, tags, locked).",
+		Parameters:  obj(map[string]any{}),
+	}, func(evt event.Event) {
+		handleProgramQuery(w, evt)
+	})
+
+	w.Register(baseworker.Extension{
+		Event: TypeProgramUpdate,
+		Description: "Add or remove one of this worker's programs. This manages only the metadata reference registered " +
+			"on THIS worker: a program's actual content lives in the program worker, so it must already exist there — " +
+			"if it does not, create it in the program worker first (e.g. via its register tool), then add the reference here. " +
+			"Instructions are inlined into the system prompt; playbooks are referenced by metadata only (name/description/tags).",
+		Parameters: obj(map[string]any{
+			"op": map[string]any{"type": "string", "enum": []string{"add", "remove"},
+				"description": "add a new program, or remove an existing one by name"},
+			"name":        map[string]any{"type": "string", "description": "program name (required for both ops)"},
+			"content_type": map[string]any{"type": "string", "enum": []string{"instruction", "playbook"},
+				"description": "required for add: instruction is inlined, playbook is a metadata reference"},
+			"content": map[string]any{"type": "string",
+				"description": "instruction text; required for content_type=instruction, ignored for playbook"},
+			"description": map[string]any{"type": "string", "description": "human description (playbooks surface this in the prompt)"},
+			"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"locked":      map[string]any{"type": "boolean", "description": "if true, the program cannot be removed via this tool"},
+		}),
+	}, func(evt event.Event) {
+		handleProgramUpdate(w, evt)
+	})
 }
 
 // TypeContextRotate is the default worker's context-rotate event — its own
@@ -100,6 +137,15 @@ const TypeContextRotate event.EventType = "context.rotate"
 const (
 	TypeSendMessage event.EventType = "send_message"
 	TypeListWorkers event.EventType = "list_workers"
+)
+
+// TypeProgramQuery / TypeProgramUpdate are the program-management extensions:
+// read this worker's instruction/playbook list, or add/remove one entry. They
+// are NOT SelfOnly so other authorized workers (e.g. webui-hiw) can manage
+// them; bus permissions control who may address the directed events.
+const (
+	TypeProgramQuery  event.EventType = "program.query"
+	TypeProgramUpdate event.EventType = "program.update"
 )
 
 // handleSendMessage serves the send_message tool: forwards the text to the
@@ -179,4 +225,119 @@ func handleContextOp(w *reasonBase.BaseReasonWorker, evt event.Event, overrideDi
 		_ = w.Channel.Broadcast(context.Background(), done)
 		w.TryReason(context.Background())
 	}()
+}
+
+// handleProgramQuery serves the program.query tool: it returns the worker's
+// current instruction/playbook list as a request.completed whose "result" is
+// the JSON-encoded list. The next reasoning round re-renders the system prompt
+// from this same list via buildInstruction.
+//
+// Extension handlers are invoked from process(), which holds w.mu for the
+// whole dispatch — use the *Locked accessors and never take w.mu here
+// (sync.Mutex is not reentrant; locking would self-deadlock the event loop).
+func handleProgramQuery(w *reasonBase.BaseReasonWorker, evt event.Event) {
+	tc := baseworker.ParseToolCall(evt)
+	b, err := json.Marshal(w.ProgramsLocked())
+	if err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID,
+			fmt.Sprintf("program.query could not serialize the program list: %v", err), tc.TraceID)
+		return
+	}
+	w.ReplyCompleted(tc.CallerID, tc.CallID, string(b), tc.TraceID)
+}
+
+// handleProgramUpdate serves the program.update tool: add or remove a single
+// program entry. "add" appends a new program (error if the name exists);
+// "remove" deletes by name (error if absent or Locked). On success it raises
+// the durable-change signal so the worker snapshots the new list, and replies
+// with request.completed / request.failed echoing the request's id — the
+// normal reply path schedules the next reasoning round.
+//
+// Runs inside process() with w.mu held (see handleProgramQuery).
+func handleProgramUpdate(w *reasonBase.BaseReasonWorker, evt event.Event) {
+	tc := baseworker.ParseToolCall(evt)
+	op, _ := tc.Args["op"].(string)
+
+	var result string
+	var err error
+	switch op {
+	case "add":
+		var p program.Program
+		p, err = programFromArgs(tc.Args)
+		if err == nil {
+			err = w.AddProgramLocked(p)
+		}
+		if err == nil {
+			result = "added program " + p.Name
+		}
+	case "remove":
+		name, _ := tc.Args["name"].(string)
+		if name == "" {
+			err = fmt.Errorf("name is required for remove")
+		} else {
+			err = w.RemoveProgramLocked(name)
+		}
+		if err == nil {
+			result = "removed program " + name
+		}
+	default:
+		err = fmt.Errorf("unknown op %q (want add or remove)", op)
+	}
+
+	if err == nil {
+		w.NotifyDurableChange()
+		w.ReplyCompleted(tc.CallerID, tc.CallID, result, tc.TraceID)
+		return
+	}
+	w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
+}
+
+// programFromArgs builds a program.Program from a tool-call argument map. The
+// convention mirrors program.Meta / ProgramContent: name and content_type are
+// required; content_type=instruction requires content (it is inlined into the
+// prompt), while playbook is a metadata reference and ignores content.
+func programFromArgs(args map[string]any) (program.Program, error) {
+	name, _ := args["name"].(string)
+	if name == "" {
+		return program.Program{}, fmt.Errorf("name is required")
+	}
+	ct, _ := args["content_type"].(string)
+	if ct != "instruction" && ct != "playbook" {
+		return program.Program{}, fmt.Errorf("content_type must be 'instruction' or 'playbook'")
+	}
+	content, _ := args["content"].(string)
+	if ct == "instruction" && content == "" {
+		return program.Program{}, fmt.Errorf("content is required for content_type=instruction")
+	}
+	desc, _ := args["description"].(string)
+	locked, _ := args["locked"].(bool)
+	return program.Program{
+		Meta: program.Meta{
+			Name:        name,
+			ContentType: program.ContentType(ct),
+			Description: desc,
+			Tags:        toStringSlice(args["tags"]),
+			Locked:      locked,
+		},
+		EntryContent: program.ProgramContent{
+			FormType: program.FormTypePrompt,
+			Content:  content,
+		},
+	}, nil
+}
+
+// toStringSlice coerces a JSON-decoded []any into []string, dropping non-string
+// entries. A nil/absent value yields nil.
+func toStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, x := range arr {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
