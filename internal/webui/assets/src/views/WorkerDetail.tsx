@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo, type ProviderOption, type ProviderSelection } from '../types'
@@ -24,6 +24,8 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
   const typeColor = worker.type ? getWorkerTypeColor(worker.type, colors) : colors.textDimmed
   const [editingSub, setEditingSub] = useState(false)
   const [subNote, setSubNote] = useState('')
+  const [editingPub, setEditingPub] = useState(false)
+  const [pubNote, setPubNote] = useState('')
   const [umBusy, setUmBusy] = useState('')
   const [umNote, setUmNote] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
@@ -127,8 +129,21 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
           <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.publishAllow')}
+              <span
+                onClick={() => { setEditingPub((v) => !v); setPubNote('') }}
+                style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, textTransform: 'none', letterSpacing: 0, marginLeft: 10, userSelect: 'none' }}
+              >
+                {editingPub ? t('wd.close') : t('wd.edit')}
+              </span>
             </div>
-            <AllowTags items={(worker.publish_allow || []).map((p) => ({ label: p.type + (p.target_worker_id ? ' → ' + p.target_worker_id : ''), title: p.type + (p.target_worker_id ? ' → ' + p.target_worker_id : '') }))} colors={colors} />
+            {editingPub ? (
+              <PublishAllowEditor worker={worker} allWorkers={allWorkers} onDone={(note) => { setEditingPub(false); setPubNote(note) }} />
+            ) : (
+              <PublishAllowEditor worker={worker} allWorkers={allWorkers} readOnly />
+            )}
+            {pubNote && (
+              <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{pubNote}</div>
+            )}
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, margin: '16px 0 8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.subscribeAllow')}
               <span
@@ -465,7 +480,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
   const { colors } = useTheme()
   const { t } = useI18n()
   const [draft, setDraft] = useState<{ type: string; source: string }[]>(() =>
-    (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source_id || '' })),
+    (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source || '' })),
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -473,7 +488,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
   // Read-only view tracks the worker prop directly (the draft would go stale
   // as the list polls); edit mode drafts on its own state.
   const rows = readOnly
-    ? (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source_id || '' }))
+    ? (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source || '' }))
     : draft
 
   const inputStyle: React.CSSProperties = {
@@ -499,7 +514,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
     try {
       await updateWorkerAllow(worker.id, {
         subscribe_allow: valid.map((r) =>
-          r.source.trim() ? { type: r.type.trim(), source_id: r.source.trim() } : { type: r.type.trim() },
+          r.source.trim() ? { type: r.type.trim(), source: r.source.trim() } : { type: r.type.trim() },
         ),
       })
       onDone?.(t('wd.saved'))
@@ -575,34 +590,125 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
   )
 }
 
-// AllowTags renders the publish/subscribe allow lists as a wrapping row of
-// low-contrast chips. Both lists can be long, so they read as rows of labels
-// rather than competing with the worker's identity and type badges above.
-function AllowTags({ items, colors }: { items: { label: string; title: string }[]; colors: import('../theme').Palette }) {
-  if (items.length === 0) {
-    return <span style={{ color: colors.detailValue, fontSize: fontSizes.base }}>{'\u2014'}</span>
+// PublishAllowEditor edits/views the worker's publish grants. Symmetric to
+// SubscribeAllowEditor: each row is an event type plus an optional target
+// restriction. An empty target means "any target" (*) — a broadcast/Directed
+// to any worker.
+function PublishAllowEditor({ worker, allWorkers = [], readOnly = false, onDone }: { worker: WorkerInfo; allWorkers?: WorkerInfo[]; readOnly?: boolean; onDone?: (note: string) => void }) {
+  const { colors } = useTheme()
+  const { t } = useI18n()
+  const toDraft = () =>
+    (worker.publish_allow || []).map((p) => ({ type: p.type, target: p.target === '*' || !p.target ? '' : p.target }))
+  const [draft, setDraft] = useState<{ type: string; target: string }[]>(toDraft)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const prevReadOnly = useRef(readOnly)
+  // Re-baseline the draft when *entering* edit mode (or the worker changes):
+  // start exactly from the current persisted grants, so toggling edit never
+  // carries stale rows forward or accumulates fresh ones.
+  useEffect(() => {
+    if (readOnly) return
+    if (prevReadOnly.current !== readOnly) setDraft(toDraft())
+    prevReadOnly.current = readOnly
+  }, [readOnly, worker])
+
+  const rows = readOnly
+    ? (worker.publish_allow || []).map((p) => ({ type: p.type, target: p.target === '*' || !p.target ? '' : p.target }))
+    : draft
+
+  const inputStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    padding: '5px 8px',
+    fontSize: fontSizes.sm,
+    background: colors.bgLight,
+    color: colors.text,
+    border: '1px solid ' + colors.border,
+    borderRadius: 4,
+    opacity: readOnly ? 0.75 : 1,
   }
+
+  const save = async () => {
+    const valid = draft.filter((r) => r.type.trim() !== '')
+    if (valid.length === 0 && draft.length > 0) {
+      setError(t('wd.rowNeedsType'))
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await updateWorkerAllow(worker.id, {
+        publish_allow: valid.map((r) => ({ type: r.type.trim(), target: r.target.trim() || '*' })),
+      })
+      onDone?.(t('wd.saved'))
+    } catch (e) {
+      setError((e as Error)?.message || 'save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, lineHeight: 1.7 }}>
-      {items.map((it, i) => (
-        <span
-          key={i}
-          title={it.title}
-          style={{
-            display: 'inline-block',
-            padding: '0 5px',
-            borderRadius: 3,
-            fontSize: fontSizes.xs,
-            lineHeight: '20px',
-            whiteSpace: 'nowrap',
-            color: colors.textDim,
-            background: colors.bg,
-            border: '1px solid ' + colors.detailBorder,
-          }}
-        >
-          {it.label}
-        </span>
+    <div style={{ marginTop: 6 }}>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+          <input
+            value={r.type}
+            placeholder={readOnly ? undefined : t('wd.pubPlaceholder')}
+            disabled={readOnly}
+            onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], type: e.target.value }; setDraft(n) }}
+            style={inputStyle}
+          />
+          <select
+            value={r.target}
+            disabled={readOnly}
+            onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], target: e.target.value }; setDraft(n) }}
+            style={{ ...inputStyle, flex: '0 1 170px', appearance: 'none' }}
+          >
+            <option value="" style={{ background: colors.bgLight, color: colors.text }}>{t('wd.anyTarget')}</option>
+            {r.target !== '' && !allWorkers.some((w) => w.id === r.target) && (
+              <option value={r.target} style={{ background: colors.bgLight, color: colors.text }}>{r.target}</option>
+            )}
+            {allWorkers.map((w) => (
+              <option key={w.id} value={w.id} style={{ background: colors.bgLight, color: colors.text }}>{w.id}</option>
+            ))}
+          </select>
+          {!readOnly && (
+            <span
+              onClick={() => setDraft(draft.filter((_, j) => j !== i))}
+              className="btn-hover"
+              title={t('wd.remove')}
+              style={{ cursor: 'pointer', color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none', padding: '0 4px' }}
+            >
+              {'\u2715'}
+            </span>
+          )}
+        </div>
       ))}
+      {!readOnly && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+          <span
+            onClick={() => setDraft([...draft, { type: '', target: '' }])}
+            className="btn-hover"
+            style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+          >
+            {t('wd.add')}
+          </span>
+          <span
+            onClick={save}
+            className="btn-hover"
+            style={{ cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+          >
+            {saving ? t('wd.saving') : t('wd.save')}
+          </span>
+          {error && <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</span>}
+        </div>
+      )}
+      {rows.length === 0 && (
+        <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 8, lineHeight: 1.5 }}>
+          {t('wd.noPublish')}
+        </div>
+      )}
     </div>
   )
 }

@@ -61,7 +61,30 @@ type EventPattern struct {
 	Type EventType `json:"type"`
 	// SourceID optionally restricts the subscription to events published by
 	// this source worker. Empty means "any source".
-	SourceID string `json:"source_id,omitempty"`
+	SourceID string `json:"source,omitempty"`
+}
+
+// UnmarshalJSON accepts the canonical "source" spelling and the legacy
+// "source_id" (the pre-unification tag, still present in persisted registry
+// files). Without this, an old source restriction would silently drop — a
+// silent WIDENING of what the worker receives.
+func (p *EventPattern) UnmarshalJSON(b []byte) error {
+	type alias EventPattern
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	*p = EventPattern(a)
+	var legacy struct {
+		SourceID *string `json:"source_id"`
+	}
+	if err := json.Unmarshal(b, &legacy); err != nil {
+		return err
+	}
+	if legacy.SourceID != nil {
+		p.SourceID = *legacy.SourceID
+	}
+	return nil
 }
 
 // Matches reports whether a fully-routed event satisfies this subscription.
@@ -96,7 +119,7 @@ type PublishPattern struct {
 	// target (the default, also permitting a broadcast of the type). A specific
 	// target grants directed sends to that worker only — it does NOT permit
 	// broadcasting the type.
-	Target string `json:"target_worker_id,omitempty"`
+	Target string `json:"target,omitempty"`
 }
 
 // UnrestrictedTarget reports whether this grant's target rule is "any target";
@@ -156,14 +179,18 @@ func (p *PublishPattern) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*p = PublishPattern(a)
-	var short struct {
-		Target *string `json:"target"`
+	var spellings struct {
+		Target         *string `json:"target"`
+		TargetWorkerID *string `json:"target_worker_id"`
 	}
-	if err := json.Unmarshal(b, &short); err != nil {
+	if err := json.Unmarshal(b, &spellings); err != nil {
 		return err
 	}
-	if short.Target != nil {
-		p.Target = *short.Target
+	switch {
+	case spellings.Target != nil:
+		p.Target = *spellings.Target
+	case spellings.TargetWorkerID != nil:
+		p.Target = *spellings.TargetWorkerID
 	}
 	return nil
 }
