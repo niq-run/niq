@@ -2,7 +2,6 @@ package reason
 
 import (
 	corebus "github.com/niq-run/niq/core/bus"
-	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/llm"
 	"github.com/niq-run/niq/core/program"
 	reasonBase "github.com/niq-run/niq/pkg/reason"
@@ -75,28 +74,10 @@ var DefaultConverter = reasonBase.DefaultConverter
 // NewWorker creates a generic reason Worker from the given configuration.
 func NewWorker(cfg Config) *Worker {
 	// Built-in subscriptions plus the custom converters' patterns.
-	// Subscriptions gate only BROADCAST delivery (the identity's
-	// SubscribeAllow): directed events — tool invocations, request.* replies,
-	// management requests, timer fires — reach this worker without any
-	// listing. So this list names the broadcast lifecycle traffic only; tool
-	// and meta extensions (send_message, provider.*, context ops, ...) are
-	// invoked directed and deliberately absent.
-	subs := make([]event.EventPattern, 0, len(cfg.EventConverters)+5)
-	for _, h := range cfg.EventConverters {
-		subs = append(subs, h.Pattern)
-	}
-	subs = append(subs,
-		event.NewPattern(event.TypeWorkerReady),
-		event.NewPattern(event.TypeWorkerGone),
-		event.NewPattern(event.TypeWorkerDiscover),
-		event.NewPattern(event.TypeWorkerInput),
-		event.NewPattern(event.TypeWorkerAbort),
-	)
 
 	base := reasonBase.NewBaseReasonWorker(reasonBase.Config{
 		ID:              cfg.ID,
 		Bus:             cfg.Bus,
-		Subscriptions:   subs,
 		Provider:        cfg.Provider,
 		ProviderSources: cfg.ProviderSources,
 		ProviderName:    cfg.ProviderName,

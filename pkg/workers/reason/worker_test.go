@@ -165,33 +165,13 @@ func startWorker(t *testing.T, prov llm.LLMProvider) (*Worker, *mockChannel, con
 // ── NewWorker assembly & lifecycle ──────────────────────────────────────────
 
 // TestNewWorkerDefaults verifies a worker built with a minimal Config gets a
-// sensible ID and the built-in subscriptions.
+// sensible ID. Subscriptions are not a worker-side declaration: what the
+// worker receives over broadcast is the identity's SubscribeAllow, a
+// control-plane attribute from its spec.
 func TestNewWorkerDefaults(t *testing.T) {
 	w := NewWorker(Config{ID: "r1", Bus: newMockChannel()})
 	if w.ID() != "r1" {
 		t.Fatalf("ID = %q, want r1", w.ID())
-	}
-	// Subscriptions gate only broadcast delivery: the worker presence
-	// lifecycle plus the broadcast forms of worker.input / worker.abort.
-	// Everything else — tool calls, request.* replies, management requests,
-	// timer fires — is directed and reaches the worker without a listing.
-	subs := w.Subscriptions()
-	got := map[string]bool{}
-	for _, s := range subs {
-		got[string(s.Type)] = true
-	}
-	for _, want := range []string{"worker.ready", "worker.gone", "worker.discover",
-		"worker.input", "worker.abort"} {
-		if !got[want] {
-			t.Errorf("missing broadcast subscription %q", want)
-		}
-	}
-	for _, banned := range []string{"send_message", "list_workers", "get_worker_info",
-		"context.compress", "context.rotate", "provider.switch", "request.completed",
-		"timer.timeout"} {
-		if got[banned] {
-			t.Errorf("directed event %q must not be a subscription", banned)
-		}
 	}
 }
 

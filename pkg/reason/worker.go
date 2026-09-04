@@ -68,7 +68,6 @@ const (
 type Config struct {
 	ID              string
 	Bus             corebus.WorkerSideChannel
-	Subscriptions   []event.EventPattern
 	Programs        []program.Program
 	EventConverters []EventConverter
 	Transcript      transcript.Transcript
@@ -134,7 +133,7 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	}
 
 	w := &BaseReasonWorker{
-		BaseWorker:           baseworker.NewBaseWorker(cfg.ID, cfg.Subscriptions, cfg.Bus),
+		BaseWorker:           baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
 		llmProvider:          initialProvider,
 		providerSources:      cfg.ProviderSources,
 		providerName:         cfg.ProviderName,

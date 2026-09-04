@@ -12,7 +12,7 @@ import (
 // mechanism exists for: persisting means Snapshot(), which takes the lock the
 // notifier holds. So the callback must never run on the caller's goroutine.
 func TestDurableChangeDeliveredOffCallerGoroutine(t *testing.T) {
-	w := NewBaseWorker("w", nil, nil)
+	w := NewBaseWorker("w", nil)
 
 	// Stand in for the embedding worker's lock: the notifier holds it while
 	// raising the signal, and the callback takes it — the same pairing that
@@ -51,7 +51,7 @@ func TestDurableChangeDeliveredOffCallerGoroutine(t *testing.T) {
 // queue. The single callback that follows still observes the latest state,
 // because it runs after all of them.
 func TestDurableChangeCoalesced(t *testing.T) {
-	w := NewBaseWorker("w", nil, nil)
+	w := NewBaseWorker("w", nil)
 
 	var calls atomic.Int32
 	w.SetOnDurableChange(func() { calls.Add(1) })
@@ -86,7 +86,7 @@ func TestDurableChangeCoalesced(t *testing.T) {
 // TestDurableChangeOffByDefault verifies a worker with no callback installed
 // neither panics nor starts a goroutine — signalling is opt-in.
 func TestDurableChangeOffByDefault(t *testing.T) {
-	w := NewBaseWorker("w", nil, nil)
+	w := NewBaseWorker("w", nil)
 	w.NotifyDurableChange() // no callback: must be a no-op
 	w.StartDurableLoop(context.Background())
 	w.NotifyDurableChange()
@@ -99,7 +99,7 @@ func TestDurableChangeOffByDefault(t *testing.T) {
 // trick: a BaseWorker copied into an embedding struct shares one channel, so
 // registering on either the original or the copy is the same registration.
 func TestDurableChangeCopiesShareSignalling(t *testing.T) {
-	base := NewBaseWorker("w", nil, nil)
+	base := NewBaseWorker("w", nil)
 	copyOf := base // what an embedding literal does
 
 	copyOf.SetOnDurableChange(func() {})

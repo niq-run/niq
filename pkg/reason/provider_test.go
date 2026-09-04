@@ -53,7 +53,6 @@ func newSwitchableWorker(ch *testChannel) (*BaseReasonWorker, *staticProvider, *
 	w := NewBaseReasonWorker(Config{
 		ID:              "r1",
 		ProviderSources: fake,
-		Subscriptions:   []event.EventPattern{event.NewPattern("*")},
 		Bus:             ch,
 	})
 	return w, pa, pb
@@ -77,7 +76,6 @@ func newSwitchableWorkerWithHook(t *testing.T) (*BaseReasonWorker, *testChannel,
 	w := NewBaseReasonWorker(Config{
 		ID:              "r1",
 		ProviderSources: fake,
-		Subscriptions:   []event.EventPattern{event.NewPattern("*")},
 		Bus:             ch,
 		OnDurableChange: func() { calls.Add(1) },
 	})
