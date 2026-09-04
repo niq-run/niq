@@ -12,14 +12,14 @@ export interface EventPayload {
 
 export interface EventPattern {
   type: string
-  source_id?: string
+  source?: string
 }
 
 // PublishPattern is a worker's publish grant: an event type, optionally
 // restricted to a directed target worker.
 export interface PublishPattern {
   type: string
-  target_worker_id?: string
+  target?: string
 }
 
 export interface WorkerInfo {

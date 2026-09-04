@@ -6,6 +6,8 @@ import (
 )
 
 func TestEventPatternJSONObjectForm(t *testing.T) {
+	// The legacy spelling (pre-unification tag, still in persisted files)
+	// parses; the source restriction must not silently drop.
 	in := `{"type":"pr.ready","source_id":"gh"}`
 	var p EventPattern
 	if err := json.Unmarshal([]byte(in), &p); err != nil {
@@ -14,13 +16,13 @@ func TestEventPatternJSONObjectForm(t *testing.T) {
 	if p.Type != "pr.ready" || p.SourceID != "gh" {
 		t.Fatalf("got %+v", p)
 	}
-	// Round-trip.
+	// Round-trip emits the canonical tag.
 	out, err := json.Marshal(p)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if string(out) != in {
-		t.Fatalf("round-trip = %s, want %s", out, in)
+	if want := `{"type":"pr.ready","source":"gh"}`; string(out) != want {
+		t.Fatalf("round-trip = %s, want %s", out, want)
 	}
 }
 
