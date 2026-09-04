@@ -40,7 +40,6 @@ func TestHandleWorkerReadyAndGone(t *testing.T) {
 	w := newTestWorker(nil, newTestChannel())
 
 	ready := event.New(event.TypeWorkerReady, "workspace", map[string]any{
-		"worker_id": "workspace",
 		"watch": []map[string]any{
 			{"event": "bash", "desc": "run a command", "parameters": map[string]any{"type": "object"}},
 		},
@@ -89,9 +88,8 @@ func keys(m map[string]worker.Tool) []string {
 func TestProviderToolsExposedToLLM(t *testing.T) {
 	w := newTestWorker(nil, nil)
 	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "reason",
-		"watch":     w.ExtensionEntries(),
+		"type":  "reason",
+		"watch": w.ExtensionEntries(),
 	}))
 
 	names := map[string]bool{}

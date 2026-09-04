@@ -39,17 +39,10 @@ type ToolListBuilder func(w *BaseReasonWorker, caps []DiscoveredCapability) []ll
 func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []llm.ToolDef {
 	defs := make([]llm.ToolDef, 0, len(caps))
 	for _, cap := range caps {
-		params := cap.Parameters
-		// Watch-derived entries fold the discriminator (op/subject) into the
-		// parameters; it must not leak into the LLM tool schema.
-		if cap.KeyField != "" {
-			params = cloneParams(params)
-			delete(params, cap.KeyField)
-		}
 		defs = append(defs, llm.ToolDef{
 			Name:        toolNameFor(w, cap),
 			Description: cap.Description,
-			Parameters:  params,
+			Parameters:  cap.Parameters,
 		})
 	}
 	return defs
@@ -63,15 +56,12 @@ func (w *BaseReasonWorker) LLMToolDefs() []llm.ToolDef {
 }
 
 // toolNameFor is the LLM-facing name of a discovered capability: an own
-// capability is its identifier (event type, or discriminator Key for a shared
-// event) with dots → underscores; a peer capability is provider__identifier.
-// It is the single naming used by both the tool-list builder and the reverse
-// lookup (capabilityByToolName), so routing always agrees with the list.
+// capability is its event type with dots → underscores; a peer capability is
+// provider__eventtype. It is the single naming used by both the tool-list
+// builder and the reverse lookup (capabilityByToolName), so routing always
+// agrees with the list.
 func toolNameFor(w *BaseReasonWorker, cap DiscoveredCapability) string {
 	id := string(cap.Event)
-	if cap.KeyField != "" {
-		id = cap.Key
-	}
 	if cap.Source == w.ID() {
 		return strings.ReplaceAll(id, ".", "_")
 	}
@@ -92,18 +82,12 @@ func (w *BaseReasonWorker) capabilityByToolName(name string) (DiscoveredCapabili
 }
 
 // extensionToolName is the default LLM-facing name for an own extension: its
-// identifier with dots → underscores (context.compress → context_compress).
-// The identifier is the discriminator Key when the extension is multiplexed on
-// a shared event, or the event type itself when the extension is identified by
-// its own event. Used to reverse-map LLM tool calls back to registered
-// extensions for meta (self-editing) detection; the routing itself reads the
-// discovered universe via capabilityByToolName.
+// event type with dots → underscores (context.compress → context_compress).
+// Used to reverse-map LLM tool calls back to registered extensions for meta
+// (self-editing) detection; the routing itself reads the discovered universe
+// via capabilityByToolName.
 func extensionToolName(ext baseworker.Extension) string {
-	id := ext.Key
-	if ext.KeyField == "" {
-		id = string(ext.Event)
-	}
-	return strings.ReplaceAll(id, ".", "_")
+	return strings.ReplaceAll(string(ext.Event), ".", "_")
 }
 
 // ExtensionByToolName finds a registered own extension by its default
@@ -128,30 +112,13 @@ func (w *BaseReasonWorker) sendToolRequests(target, callerID string, calls []llm
 		if !ok {
 			continue
 		}
-		var argsMap map[string]any
+		argsMap := map[string]any{}
 		if tc.ToolArguments != "" {
 			json.Unmarshal([]byte(tc.ToolArguments), &argsMap)
 		}
-		if cap.KeyField != "" {
-			argsMap[cap.KeyField] = cap.Key
-		}
-		evt := event.New(cap.Event, callerID, map[string]any{
-			"worker_id": callerID,
-			"arguments": argsMap,
-		})
+		evt := event.New(cap.Event, callerID, argsMap)
 		evt.RequestId = tc.ToolCallID
 		evt.TraceID = traceID
 		_ = w.Channel.Send(context.Background(), evt, target)
 	}
-}
-
-// cloneParams returns a shallow copy of a parameter map, so a caller can add
-// or delete a key (e.g. folding in / stripping out a discriminator) without
-// mutating the original schema it clones.
-func cloneParams(p map[string]any) map[string]any {
-	out := make(map[string]any, len(p))
-	for k, v := range p {
-		out[k] = v
-	}
-	return out
 }

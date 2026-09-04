@@ -523,9 +523,6 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 		if metaCall.ToolArguments != "" {
 			json.Unmarshal([]byte(metaCall.ToolArguments), &argsMap)
 		}
-		if metaCap.KeyField != "" {
-			argsMap[metaCap.KeyField] = metaCap.Key
-		}
 		evt := event.New(metaCap.Event, w.ID(), argsMap)
 		evt.TraceID = w.currentTraceID
 		_ = w.Channel.Send(ctx, evt, w.ID())

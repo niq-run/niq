@@ -82,12 +82,10 @@ func TestProgramUpdateViaBus(t *testing.T) {
 	t.Cleanup(func() { w.Stop() })
 
 	ch.in <- event.New(TypeProgramUpdate, "tester", map[string]any{
-		"arguments": map[string]any{
-			"op":           "add",
-			"name":         "p1",
-			"content_type": "playbook",
-			"description":  "test playbook",
-		},
+		"op":           "add",
+		"name":         "p1",
+		"content_type": "playbook",
+		"description":  "test playbook",
 	})
 	waitCond(t, progTestTimeout, func() bool {
 		for _, e := range ch.eventsOf(event.TypeRequestCompleted) {
@@ -115,9 +113,7 @@ func TestProgramUpdateViaBus(t *testing.T) {
 	}
 
 	// Removing the same program succeeds and is visible.
-	ch.in <- event.New(TypeProgramUpdate, "tester", map[string]any{
-		"arguments": map[string]any{"op": "remove", "name": "p1"},
-	})
+	ch.in <- event.New(TypeProgramUpdate, "tester", map[string]any{"op": "remove", "name": "p1"})
 	waitCond(t, progTestTimeout, func() bool {
 		for _, e := range ch.eventsOf(event.TypeRequestCompleted) {
 			if r, _ := e.Payload["result"].(string); r == "removed program p1" {

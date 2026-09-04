@@ -29,18 +29,13 @@ import (
 )
 
 // Extension describes an event a worker responds to. It is how a worker is
-// extended: each registration teaches the base to recognize one more
-// (event, discriminator) pair and answer it with a handler.
+// extended: each registration teaches the base to recognize one more event
+// and answer it with a handler. The event type IS the extension's identity —
+// there is no separate discriminator; distinct things are distinct events.
 type Extension struct {
 	// Event is the event type the extension responds to — its identity. Any
 	// event type is allowed; invoking the extension means sending this event.
 	Event event.EventType
-	// KeyField is the payload field holding the discriminator when several
-	// extensions multiplex on one event type. Empty means the extension is
-	// identified by the event type alone.
-	KeyField string
-	// Key is the value KeyField must equal. Empty when KeyField is empty.
-	Key string
 	// SelfOnly marks an extension that only the declaring worker itself serves
 	// (e.g. send_message, list_workers — operations on that worker's own view
 	// of the bus). Such extensions are left out of the peer-facing
@@ -64,13 +59,12 @@ type registeredExtension struct {
 	handler ExtensionHandler
 }
 
-// The registry key is built by extensionKey, which joins the three fields
-// with the NUL byte (\x00, ASCII 0). NUL is chosen as the separator because it
-// never occurs in event type / field / key identifiers, so two distinct
-// extensions can never collide — and it is an internal-only key, never
-// surfaced to logs or the user, so its invisibility is harmless.
+// The registry key is built by extensionKey from the event type with a NUL
+// byte suffix (\x00, ASCII 0). NUL is chosen because it never occurs in an
+// event-type identifier, so two distinct extensions can never collide — and it
+// is an internal-only key, never surfaced to logs or the user.
 func extensionKey(ext Extension) string {
-	return string(ext.Event) + "\x00" + ext.KeyField + "\x00" + ext.Key
+	return string(ext.Event) + "\x00"
 }
 
 // extensionRegistry is the synchronized store behind BaseWorker. It is held
@@ -81,9 +75,9 @@ type extensionRegistry struct {
 	regs map[string]registeredExtension
 }
 
-// Register binds an extension to a handler. Registering the same
-// (Event, KeyField, Key) replaces the previous registration. Safe at any
-// time — before Start (in a worker's constructor) or at runtime.
+// Register binds an extension to a handler. Registering the same event type
+// replaces the previous registration. Safe at any time — before Start (in a
+// worker's constructor) or at runtime.
 func (w *BaseWorker) Register(ext Extension, h ExtensionHandler) {
 	if w.extensions == nil {
 		w.extensions = &extensionRegistry{regs: make(map[string]registeredExtension)}
@@ -94,28 +88,15 @@ func (w *BaseWorker) Register(ext Extension, h ExtensionHandler) {
 }
 
 // DispatchExtension routes an event to the registered extension matching its
-// event type and discriminator (KeyField == Key). Returns whether a handler
-// ran. The handler is looked up under the registry lock but invoked outside
-// it, so a handler may register further extensions.
+// event type. Returns whether a handler ran. The handler is looked up under the
+// registry lock but invoked outside it, so a handler may register further
+// extensions.
 func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 	if w.extensions == nil {
 		return false
 	}
 	w.extensions.mu.RLock()
-	var h ExtensionHandler
-	for _, r := range w.extensions.regs {
-		if r.ext.Event != evt.Type {
-			continue
-		}
-		if r.ext.KeyField != "" {
-			v, _ := evt.Payload[r.ext.KeyField].(string)
-			if v != r.ext.Key {
-				continue
-			}
-		}
-		h = r.handler
-		break
-	}
+	h := w.extensions.regs[string(evt.Type)+"\x00"].handler
 	w.extensions.mu.RUnlock()
 	if h == nil {
 		return false
@@ -140,18 +121,13 @@ func (w *BaseWorker) Extensions() []Extension {
 	return out
 }
 
-// watchEntry renders one extension into the worker.ready "watch" wire entry:
-// its event type identifies the capability; a KeyField, when present, folds
-// the discriminator into the parameters (a shared event multiplexing several
-// capabilities). The wire field is literally "watch" — see announce.go in
+// watchEntry renders one extension into the worker.ready "watch" wire entry.
+// The event type identifies the capability; parameters (when declared) are the
+// argument schema. The wire field is literally "watch" — see announce.go in
 // pkg/reason for the naming note.
 func (w *BaseWorker) watchEntry(ext Extension) map[string]any {
 	entry := map[string]any{"event": string(ext.Event), "desc": ext.Description}
-	if ext.KeyField != "" {
-		params := cloneMap(ext.Parameters)
-		params[ext.KeyField] = ext.Key
-		entry["parameters"] = params
-	} else if len(ext.Parameters) > 0 {
+	if len(ext.Parameters) > 0 {
 		entry["parameters"] = ext.Parameters
 	}
 	return entry
@@ -184,9 +160,8 @@ func (w *BaseWorker) WatchEntries(includeSelfOnly bool) []map[string]any {
 // not part of this helper.
 func (w *BaseWorker) AnnounceReady(workerType string, publishes []map[string]any) {
 	payload := map[string]any{
-		"worker_id": w.ID(),
-		"type":      workerType,
-		"watch":     w.WatchEntries(false),
+		"type":  workerType,
+		"watch": w.WatchEntries(false),
 	}
 	if len(publishes) > 0 {
 		payload["publishes"] = publishes
@@ -194,12 +169,4 @@ func (w *BaseWorker) AnnounceReady(workerType string, publishes []map[string]any
 	presence := event.New(event.TypeWorkerReady, w.ID(), payload)
 	presence.ExcludeWorkerID = w.ID()
 	_ = w.Channel.Broadcast(context.Background(), presence)
-}
-
-func cloneMap(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }

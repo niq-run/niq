@@ -24,13 +24,6 @@ const (
 	TypeWorkerInput    EventType = "worker.input"
 	TypeWorkerAbort    EventType = "worker.abort"
 
-	// Worker meta invocation channels: worker.update / worker.query remain as
-	// the event types some extensions register (their op/subject payloads still
-	// discriminate), but reason's own meta capabilities now use dedicated event
-	// types (see pkg/reason), so these are no longer the only meta channel.
-	TypeWorkerUpdate EventType = "worker.update"
-	TypeWorkerQuery  EventType = "worker.query"
-
 	// The request-response pairing convention: any invocation of a capability
 	// is answered with one of these, echoing the Event.RequestId of the
 	// request. request.completed carries the result; request.failed /

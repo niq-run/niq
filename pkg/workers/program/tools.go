@@ -46,7 +46,6 @@ func (w *Worker) registerExtensions() {
 		},
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		tc.Name = string(evt.Type)
 		w.handleSearch(ctx, tc)
 	})
 
@@ -69,7 +68,6 @@ func (w *Worker) registerExtensions() {
 		},
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		tc.Name = string(evt.Type)
 		w.handleLoad(ctx, tc)
 	})
 
@@ -100,7 +98,6 @@ func (w *Worker) registerExtensions() {
 		},
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		tc.Name = string(evt.Type)
 		w.handleEdit(ctx, tc)
 	})
 
@@ -137,7 +134,6 @@ func (w *Worker) registerExtensions() {
 		},
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		tc.Name = string(evt.Type)
 		w.handleRegister(ctx, tc)
 	})
 
@@ -156,7 +152,6 @@ func (w *Worker) registerExtensions() {
 		},
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		tc.Name = string(evt.Type)
 		w.handleDelete(ctx, tc)
 	})
 }

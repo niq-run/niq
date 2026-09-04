@@ -257,7 +257,6 @@ func (w *WorkspaceWorker) registerExtensions() {
 		name := name
 		w.Register(baseworker.Extension{Event: event.EventType(name), Description: sp.desc, Parameters: sp.params}, func(evt event.Event) {
 			tc := baseworker.ParseToolCall(evt)
-			tc.Name = name
 			w.dispatchHandler(ctx, tc)
 		})
 	}

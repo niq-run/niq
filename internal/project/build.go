@@ -308,14 +308,12 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	if id == "" {
 		id = "webui-hiw"
 	}
-	// PublishAllow: worker.input / worker.abort (broadcast when untargeted,
-	// directed otherwise), presence, discovery. Subscribes to nothing.
+	// PublishAllow: a `*` grant so the human UI (acting as HIW) can send a
+	// worker any event in its "watch" contract, driving its behaviour/state on
+	// the bus through the normal ACL path. Subscribes to nothing.
 	connect := specConnect(ctx, id, "hiw",
 		[]event.PublishPattern{
-			event.NewPublishPattern("worker.input"),
-			event.NewPublishPattern("worker.abort"),
-			event.NewPublishPattern("worker.discover"),
-			event.NewPublishPattern("worker.ready"),
+			event.NewPublishPattern("*"),
 		},
 		nil)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {

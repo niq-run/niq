@@ -55,8 +55,8 @@ func New(cfg Config) *Worker {
 	}
 	w := &Worker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
-		client:    c,
-		mcpConfig: cfg.MCPConfig,
+		client:     c,
+		mcpConfig:  cfg.MCPConfig,
 	}
 	w.registerExtensions()
 	return w
@@ -139,7 +139,7 @@ func (w *Worker) registerExtensions() {
 		callID := evt.RequestId
 		name := string(evt.Type)
 		callerID := evt.WorkerId
-		args, _ := evt.Payload["arguments"].(map[string]any)
+		args := evt.Payload
 		result, err := w.handleWebfetch(args)
 		if err != nil {
 			w.publishFailed(callerID, callID, name, err)

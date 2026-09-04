@@ -33,9 +33,7 @@ import (
 // (Extension / Register) lives in pkg/baseworker.
 type DiscoveredCapability struct {
 	Source      string          // declaring worker ID (own ID for self)
-	Event       event.EventType // the extension's own event type (send_message, context.compress, ...) or worker.update / worker.query
-	KeyField    string
-	Key         string
+	Event       event.EventType // the extension's own event type (send_message, context.compress, ...)
 	Description string
 	Parameters  map[string]any
 }
@@ -111,9 +109,6 @@ func (w *BaseReasonWorker) WorkerInfo(id string) (DiscoveredWorker, bool) {
 				continue
 			}
 			name := string(cap.Event)
-			if cap.KeyField != "" {
-				name = cap.Key
-			}
 			info.Tools = append(info.Tools, worker.Tool{
 				Name: name, Description: cap.Description,
 				Parameters: cap.Parameters, Provider: id,
@@ -143,7 +138,7 @@ func (w *BaseReasonWorker) WorkerInfo(id string) (DiscoveredWorker, bool) {
 // previous view is replaced wholesale — which is also what lets a
 // re-announcement update a worker's capabilities.
 func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
-	workerID, _ := evt.Payload["worker_id"].(string)
+	workerID := evt.WorkerId
 	if workerID == "" {
 		return
 	}
@@ -182,9 +177,9 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 	w.rebuildDispatchTable()
 }
 
-// discoveredFromWatch parses a worker.ready "watch" entry into a DiscoveredCapability.
-// Tool-capability entries carry the tool name top-level; worker.update /
-// worker.query entries fold the discriminator (op / subject) into parameters.
+// discoveredFromWatch parses a worker.ready "watch" entry into a
+// DiscoveredCapability. The event type is the capability's identity; the entry
+// carries an optional description and parameter schema.
 func discoveredFromWatch(source string, e map[string]any) (DiscoveredCapability, bool) {
 	typ, _ := e["event"].(string)
 	if typ == "" {
@@ -196,15 +191,6 @@ func discoveredFromWatch(source string, e map[string]any) (DiscoveredCapability,
 	}
 	dc.Description, _ = e["desc"].(string)
 	dc.Parameters, _ = e["parameters"].(map[string]any)
-	if name, ok := e["name"].(string); ok && name != "" {
-		dc.KeyField, dc.Key = "name", name
-	} else if dc.Parameters != nil {
-		if op, ok := dc.Parameters["op"].(string); ok && op != "" {
-			dc.KeyField, dc.Key = "op", op
-		} else if subj, ok := dc.Parameters["subject"].(string); ok && subj != "" {
-			dc.KeyField, dc.Key = "subject", subj
-		}
-	}
 	return dc, true
 }
 
@@ -223,6 +209,9 @@ func removeDiscoveredCapabilitys(caps []DiscoveredCapability, source string) []D
 // published events.
 func (w *BaseReasonWorker) handleWorkerGone(evt event.Event) {
 	workerID, _ := evt.Payload["worker_id"].(string)
+	if workerID == "" {
+		return
+	}
 
 	w.discovered = removeDiscoveredCapabilitys(w.discovered, workerID)
 	delete(w.publishMap, workerID)
@@ -247,9 +236,6 @@ func (w *BaseReasonWorker) rebuildDispatchTable() {
 			continue // own capabilities dispatch through the registry
 		}
 		id := string(cap.Event)
-		if cap.KeyField != "" {
-			id = cap.Key
-		}
 		t := worker.Tool{Name: id, Description: cap.Description,
 			Parameters: cap.Parameters, Provider: cap.Source}
 		t.Name = encodeToolName(w, t)
