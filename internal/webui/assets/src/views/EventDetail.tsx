@@ -1,13 +1,12 @@
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { vscDarkPlus, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { type EventPayload } from '../types'
 import { getTypeColor, formatTime } from '../components/talk-utils'
 import { makeMdComponents } from '../components/MarkdownComponents'
 import PayloadGate from '../components/PayloadGate'
+import CollapsibleCode from '../components/CollapsibleCode'
 
 interface EventDetailProps {
   evt: EventPayload;
@@ -119,26 +118,11 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
             {recipients && <DetailRow label={t('detail.delivered')} value={recipients.join(", ")} colors={colors} />}
           </div>
           <div style={{ marginTop: 8, borderTop: "1px solid " + colors.detailBorder, paddingTop: 8 }}>
-            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px", fontFamily: "monospace" }}>
+            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>
               {t('detail.payload')}
             </div>
             <PayloadGate json={payloadJSON}>
-              <SyntaxHighlighter
-                language="json"
-                style={dark ? vscDarkPlus : oneLight}
-                customStyle={{
-                  margin: 0,
-                  padding: 0,
-                  background: "transparent",
-                  fontSize: fontSizes.base,
-                  lineHeight: 1.5,
-                  fontFamily: "monospace",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all",
-                }}
-              >
-                {payloadJSON}
-              </SyntaxHighlighter>
+              <CollapsibleCode code={payloadJSON} language="json" />
             </PayloadGate>
           </div>
         </div>

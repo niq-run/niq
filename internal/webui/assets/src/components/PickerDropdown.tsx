@@ -52,7 +52,6 @@ export default function PickerDropdown({
     display: 'flex',
     alignItems: 'center',
     gap: 8,
-    fontFamily: 'monospace',
   }
 
   // Rows rely on the CSS :hover for their hover background. We must NOT paint
@@ -138,7 +137,7 @@ export default function PickerDropdown({
                 textAlign: 'left',
               }}
             >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'monospace', minWidth: 0, textAlign: 'left' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, textAlign: 'left' }}>
                 <span style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {opt.label}
                 </span>

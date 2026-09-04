@@ -6,6 +6,7 @@ import type {
   ProjectStartResult,
   ProviderListResult,
   ProviderSwitchResult,
+  PublishPattern,
   WorkerInfo,
 } from '../types'
 
@@ -175,7 +176,7 @@ export async function deleteWorker(id: string): Promise<void> {
 // carry the optional source restriction ({type, source_id}).
 export async function updateWorkerAllow(
   id: string,
-  allow: { publish_allow?: string[]; subscribe_allow?: EventPattern[] },
+  allow: { publish_allow?: PublishPattern[]; subscribe_allow?: EventPattern[] },
 ): Promise<void> {
   const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/allow`), {
     method: 'PUT',

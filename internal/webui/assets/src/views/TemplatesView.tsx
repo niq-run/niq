@@ -130,11 +130,11 @@ export default function TemplatesView() {
                 {detail.workers.map((w: any, i: number) => (
                   <div key={i} style={{ border: '1px solid ' + colors.border, borderRadius: 6, padding: '10px 14px', marginBottom: 8 }}>
                     <div style={{ color: colors.text, fontSize: fontSizes.md }}>
-                      <span style={{ color: colors.accent, fontFamily: 'monospace' }}>{w.type}</span>
+                      <span style={{ color: colors.accent }}>{w.type}</span>
                       <span style={{ color: colors.textDim }}> · {w.id}</span>
                     </div>
                     {(w.subscriptions && w.subscriptions.length > 0) && (
-                      <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginTop: 4, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                      <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginTop: 4, wordBreak: 'break-all' }}>
                         {w.subscriptions.map((s: any) => (typeof s === 'string' ? s : (s.source ? `${s.type} ← ${s.source}` : s.type))).join(', ')}
                       </div>
                     )}

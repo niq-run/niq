@@ -228,7 +228,6 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           outline: 'none',
           padding: '8px 0',
           fontSize: 14,
-          fontFamily: 'monospace',
           resize: 'none',
           lineHeight: 1.5,
           boxSizing: 'border-box',
@@ -240,9 +239,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             onClick={(e) => { e.stopPropagation(); setModeOpen(v => !v) }}
             title={modeOptions.find(m => m.id === inputMode)?.hint}
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: isMobile ? 15 : fontSizes.base, lineHeight: isMobile ? '22px' : '18px',
+              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: isMobile ? 15 : fontSizes.base, lineHeight: isMobile ? '22px' : '20px',
               color: colors.textDim,
-              border: '1px solid ' + colors.border, borderRadius: 4, padding: isMobile ? '5px 10px' : '1px 8px',
+              border: '1px solid ' + colors.border, borderRadius: 4, padding: isMobile ? '6px 10px' : '4px 12px',
               cursor: 'pointer', userSelect: 'none',
             }}
           >
@@ -262,39 +261,37 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           )}
         </div>
         <button
-          onClick={onAbort}
-          className="btn-stop"
-          style={{
-            background: 'none',
-            color: colors.textDim,
-            border: isMobile ? '1px solid ' + colors.border : 'none',
-            padding: isMobile ? '6px 14px' : '4px 12px',
-            borderRadius: 4,
-            cursor: 'pointer',
-            fontSize: isMobile ? 15 : 13,
-            lineHeight: '20px',
-            fontFamily: 'monospace',
-          }}
-        >
-          {t('talk.input.stop')}
-        </button>
-        <button
           onClick={onSend}
           className="btn-send"
           style={{
             background: 'none',
             color: colors.accent,
-            border: isMobile ? '1px solid ' + colors.accentBorder : 'none',
+            border: '1px solid ' + colors.accentBorder,
             padding: isMobile ? '6px 14px' : '4px 12px',
             borderRadius: 4,
             cursor: 'pointer',
             fontSize: isMobile ? 15 : 13,
             fontWeight: 'bold',
             lineHeight: '20px',
-            fontFamily: 'monospace',
           }}
         >
           {t('talk.input.send')}
+        </button>
+        <button
+          onClick={onAbort}
+          className="btn-stop"
+          style={{
+            background: 'none',
+            color: colors.textDim,
+            border: '1px solid ' + colors.border,
+            padding: isMobile ? '6px 14px' : '4px 12px',
+            borderRadius: 4,
+            cursor: 'pointer',
+            fontSize: isMobile ? 15 : 13,
+            lineHeight: '20px',
+          }}
+        >
+          {t('talk.input.stop')}
         </button>
       </div>
     </div>
