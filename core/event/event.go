@@ -137,6 +137,12 @@ func NewPublishPattern(typ EventType) PublishPattern {
 // UnmarshalJSON accepts a bare event-type string or a {"type","target"} object,
 // so existing string-only configs and registry entries keep loading. A bare
 // string grants the type with no target restriction (Target "*").
+//
+// The object form accepts BOTH spellings of the target field: the canonical
+// "target_worker_id" (the struct tag, used by registry/config persistence) and
+// the natural shorthand "target". Only the canonical tag would leave the
+// shorthand silently ignored — and an empty target denies everything, so the
+// mistake must not pass unnoticed.
 func (p *PublishPattern) UnmarshalJSON(b []byte) error {
 	var typeOnly string
 	if err := json.Unmarshal(b, &typeOnly); err == nil {
@@ -150,6 +156,15 @@ func (p *PublishPattern) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*p = PublishPattern(a)
+	var short struct {
+		Target *string `json:"target"`
+	}
+	if err := json.Unmarshal(b, &short); err != nil {
+		return err
+	}
+	if short.Target != nil {
+		p.Target = *short.Target
+	}
 	return nil
 }
 
