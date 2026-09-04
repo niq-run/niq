@@ -88,12 +88,12 @@ export default function EventRow({
         >
           {evt.worker_id}
         </span>
-        {workerType && <span style={workerTypeChip}>{workerType}</span>}
+        {workerType && <span style={workerTypeChip}>[{workerType}]</span>}
       </td>
-      <td style={{ ...cell, color: colors.text, fontSize: fontSizes.md }} title={reception}>
-        {reception || ""}
+      <td style={{ ...cell, color: colors.textDimmed, fontSize: fontSizes.md }} title={reception}>
+        {reception || '\u2014'}
       </td>
-      <td style={{ ...cell, color: colors.textDim, fontSize: fontSizes.md }} title={content}>{content}</td>
+      <td style={{ ...cell, color: colors.textDimmed, fontSize: fontSizes.md }} title={content}>{content || '\u2014'}</td>
     </tr>
   )
 }

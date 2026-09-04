@@ -131,7 +131,7 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
             onClick={() => { setSelected(w.event); setForm({}); setError(''); setDone('') }}
             title={w.desc}
             style={{
-              cursor: 'pointer', display: 'inline-block', padding: '2px 9px', borderRadius: 4, fontSize: fontSizes.sm,
+              cursor: 'pointer', display: 'inline-block', padding: '4px 10px', borderRadius: 4, fontSize: fontSizes.sm, lineHeight: '18px',
               color: selected === w.event ? colors.accent : colors.textDim,
               background: selected === w.event ? colors.accentBg : colors.bgLight,
               border: '1px solid ' + (selected === w.event ? colors.accentBorder : colors.border),
@@ -143,8 +143,8 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
         ))}
       </div>
       {entry && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {entry.desc && <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed }}>{entry.desc}</div>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {entry.desc && <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 4 }}>{entry.desc}</div>}
           {Object.keys(properties).length === 0 ? (
             <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed }}>{t('wd.eventNoParams')}</div>
           ) : (
@@ -156,7 +156,7 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
             <span
               onClick={submit}
               className="btn-hover"
-              style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.accentBorder, borderRadius: 4, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+              style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.accentBorder, borderRadius: 4, padding: '4px 12px', color: colors.accent, fontSize: fontSizes.md, userSelect: 'none' }}
             >
               {busy ? t('wd.sending') : t('wd.send')}
             </span>

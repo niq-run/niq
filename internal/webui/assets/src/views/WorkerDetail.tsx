@@ -118,19 +118,22 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
         </span>
       </div>
 
-      {/* Scrollable content */}
+      {/* Scrollable content: a column of independent cards, each a bg block
+          with a gap of bare page background between them (no separators). */}
       <div style={{ padding: 14 }}>
-        <div style={{ padding: '10px 12px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 16px', alignItems: 'baseline' }}>
-            <DetailRow label={t('wd.id')} value={worker.id} colors={colors} />
-            <DetailRow label={t('wd.type')} value={worker.type || '(none)'} colors={colors} />
-            <DetailRow label={t('wd.connection')} value={connection} colors={colors} />
-            <DetailRow label={t('wd.lifecycle')} value={lifecycle} colors={colors} />
-            <DetailRow label={t('wd.managed')} value={worker.managed ? t('wd.yes') : t('wd.no')} colors={colors} />
-            <DetailRow label={t('wd.credential')} value={worker.credential || '\u2014'} colors={colors} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '5px 16px', alignItems: 'baseline' }}>
+              <DetailRow label={t('wd.id')} value={worker.id} colors={colors} />
+              <DetailRow label={t('wd.type')} value={worker.type || '(none)'} colors={colors} />
+              <DetailRow label={t('wd.connection')} value={connection} colors={colors} />
+              <DetailRow label={t('wd.lifecycle')} value={lifecycle} colors={colors} />
+              <DetailRow label={t('wd.managed')} value={worker.managed ? t('wd.yes') : t('wd.no')} colors={colors} />
+              <DetailRow label={t('wd.credential')} value={worker.credential || '\u2014'} colors={colors} />
+            </div>
           </div>
 
-          <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.publishAllow')}
               <span
@@ -167,8 +170,8 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
             )}
           </div>
 
-          {/* Action area, separated by a horizontal line */}
-          <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 18 }}>
+          {/* Action area — its own card. */}
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.actions')}
             </div>
@@ -240,15 +243,15 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                   <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{umNote}</div>
                 )}
               </div>
-            			) : (
-            				<span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.notManaged')}</span>
-            			)}
+			        ) : (
+			        	<span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.notManaged')}</span>
+			        )}
 
-            			{/* Danger: permanently remove this worker. */}
-            			<div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
-				<div style={{ color: colors.detailLabel, fontSize: fontSizes.sm, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-					{t('wd.delete')}
-				</div>
+					{/* Danger: permanently remove this worker. — within the actions card */}
+					<div style={{ marginTop: 18 }}>
+						<div style={{ color: colors.detailLabel, fontSize: fontSizes.sm, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+							{t('wd.delete')}
+						</div>
             				{confirmDel ? (
             					<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             						<span style={{ color: colors.textDim, fontSize: fontSizes.sm }}>{t('wd.delete.confirm', { id: worker.id })}</span>
@@ -267,21 +270,24 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
             							{t('wd.cancel')}
             						</span>
             					</div>
-            				) : (
-            					<span
-            						onClick={() => { setConfirmDel(true); setUmNote('') }}
-            						className="btn-hover"
-            						style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
-            					>
-									{t('wd.confirmDelete')}
-						</span>
-						)}
-					</div>
-					</div>
+				      ) : (
+				        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+				          <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, lineHeight: 1.4, minWidth: 0, flex: '1 1 auto' }}>{t('wd.delete.desc')}</span>
+				          <span
+				            onClick={() => { setConfirmDel(true); setUmNote('') }}
+				            className="btn-hover"
+				            style={{ cursor: 'pointer', flexShrink: 0, display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
+				          >
+				            {t('wd.delete')}
+				          </span>
+				        </div>
+				      )}
+				      </div>
+          </div>
 
 					{/* Send the worker an event from its announced watch contract —
-							 drive its behaviour/state from the UI. */}
-					<div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
+						 drive its behaviour/state from the UI. */}
+					<div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
 						<div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
 							{t('wd.sendEvent')}
 						</div>
@@ -392,7 +398,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
   const unchanged = selProvider === current.provider && selModel === current.model
 
   return (
-    <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 18 }}>
+    <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
       <div
         onClick={() => setExpanded((v) => !v)}
         style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', gap: 8, userSelect: 'none' }}
@@ -730,7 +736,7 @@ function DetailRow({ label, value, colors }: { label: string; value: string; col
   return (
     <>
       <span style={{ color: colors.detailLabel, fontSize: fontSizes.base }}>{label}</span>
-      <span style={{ color: colors.detailValue, fontSize: fontSizes.base, wordBreak: 'break-all' }}>{value}</span>
+      <span style={{ color: colors.textDimmed, fontSize: fontSizes.base, wordBreak: 'break-all' }}>{value}</span>
     </>
   )
 }

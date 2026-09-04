@@ -11,15 +11,23 @@ interface CollapsibleCodeProps {
   foldThreshold?: number
   // Height of the clipped preview when folded (px). Default 200.
   foldHeight?: number
+  // When false the built-in soft-wrap toolbar (top-right row) is hidden — the
+  // caller renders its own wrap toggle elsewhere. Default true.
+  showWrapToggle?: boolean
+  // Optional controlled soft-wrap state; when provided, overrides internal state.
+  wrap?: boolean
+  onWrapChange?: (v: boolean) => void
 }
 
 // A code block with the same affordances as the tool bodies in the Talk view:
 // a soft-wrap toggle and — for long bodies — a clipped preview with an
 // expand/collapse control. Self-contained so any detail panel can drop it in.
-export default function CollapsibleCode({ code, language = 'json', foldThreshold = 260, foldHeight = 200 }: CollapsibleCodeProps) {
+export default function CollapsibleCode({ code, language = 'json', foldThreshold = 260, foldHeight = 200, showWrapToggle = true, wrap: wrapProp, onWrapChange }: CollapsibleCodeProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
-  const [wrap, setWrap] = useState(true)
+  const [wrapState, setWrapState] = useState(true)
+  const wrap = wrapProp ?? wrapState
+  const setWrap = onWrapChange ?? setWrapState
   const [expanded, setExpanded] = useState(false)
 
   const foldable = code.length > foldThreshold
@@ -31,17 +39,17 @@ export default function CollapsibleCode({ code, language = 'json', foldThreshold
 
   return (
     <div style={{ minWidth: 0 }}>
-      {/* Toolbar: soft-wrap toggle, right-aligned. Always present so the
-          affordance is discoverable; it matches the Talk view's label. */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
-        <span
-          onClick={() => setWrap(v => !v)}
-          title={t('talk.wrap.tooltip')}
-          style={{ cursor: 'pointer', color: colors.accentDim, fontSize: fontSizes.sm, textDecoration: 'underline dotted', userSelect: 'none' }}
-        >
-          {t('talk.wrap.toggle')}
-        </span>
-      </div>
+      {showWrapToggle && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+          <span
+            onClick={() => setWrap(!wrap)}
+            title={t('talk.wrap.tooltip')}
+            style={{ cursor: 'pointer', color: colors.accentDim, fontSize: fontSizes.sm, textDecoration: 'underline dotted', userSelect: 'none' }}
+          >
+            {t('talk.wrap.toggle')}
+          </span>
+        </div>
+      )}
       {/* Body: clipped preview when folded, full height otherwise. */}
       <div style={{ position: 'relative', maxHeight: folded ? foldHeight : undefined, overflow: folded ? 'hidden' : 'visible' }}>
         <SyntaxHighlighter
