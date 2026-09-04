@@ -86,6 +86,7 @@ func NewWorker(cfg Config) *Worker {
 		event.NewPattern(reasonBase.TypeProviderCurrent),
 		event.NewPattern(TypeSendMessage),
 		event.NewPattern(TypeListWorkers),
+		event.NewPattern(TypeWorkerInfo),
 		event.NewPattern(TypeContextRotate),
 		event.NewPattern(TypeProgramQuery),
 		event.NewPattern(TypeProgramUpdate),
