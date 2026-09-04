@@ -320,6 +320,11 @@ func (w *BaseReasonWorker) Stop() error {
 type reasonState struct {
 	Transcript json.RawMessage    `json:"transcript"`
 	Provider   *providerSelection `json:"provider,omitempty"`
+	// Programs is the worker's instruction/playbook list. It is a single
+	// attribute: config seeds it at construction, runtime edits mutate the same
+	// slice. Snapshot always persists the current value, so restore
+	// unconditionally overrides config — there is no "edited" flag.
+	Programs []program.Program `json:"programs"`
 }
 
 type providerSelection struct {
@@ -342,6 +347,12 @@ func (w *BaseReasonWorker) Snapshot() ([]byte, error) {
 	if w.providerName != "" && w.providerModel != "" {
 		state.Provider = &providerSelection{Name: w.providerName, Model: w.providerModel}
 	}
+	// Programs: a single attribute (config seeds it; runtime edits mutate it).
+	// Always persist the current value so restore unconditionally overrides
+	// config — no "edited" flag, unlike Provider.
+	cp := make([]program.Program, len(w.programs))
+	copy(cp, w.programs)
+	state.Programs = cp
 	return json.Marshal(state)
 }
 
@@ -358,6 +369,13 @@ func (w *BaseReasonWorker) Restore(state []byte) error {
 	}
 	if err := w.transcript.Restore(s.Transcript); err != nil {
 		return err
+	}
+	// Programs override config whenever the snapshot actually carries them.
+	// Field-absent snapshots (taken before Programs existed) leave s.Programs
+	// nil, in which case config stands — a backward-compat guard, not a
+	// "managed" flag.
+	if s.Programs != nil {
+		w.programs = s.Programs
 	}
 	// Re-applying the selection rebuilds the provider, so the worker really
 	// uses it rather than only reporting it. A stale selection (the provider or

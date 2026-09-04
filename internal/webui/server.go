@@ -625,16 +625,19 @@ func (s *Server) handleWorkerProviders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The payload is built by the worker, so read it defensively rather than
-	// unmarshalling into a struct: a shape change there must not 500 the UI.
+	// The reply's "result" is the JSON snapshot the worker marshaled (see
+	// handleStatusQuery). Parse defensively: a shape change there must not
+	// 500 the UI.
 	out := providerListResult{}
-	current := providerSelection{}
-	if cur, ok := reply.Payload["current"].(map[string]any); ok {
-		current.Provider, _ = cur["provider"].(string)
-		current.Model, _ = cur["model"].(string)
+	if res, _ := reply.Payload["result"].(string); res != "" {
+		var structured providerListResult
+		if err := json.Unmarshal([]byte(res), &structured); err == nil {
+			out = structured
+		}
 	}
-	out.Providers = providersFromPayload(reply.Payload["providers"])
-	out.Current = current
+	if out.Providers == nil {
+		out.Providers = []providerOption{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
 }
@@ -684,33 +687,6 @@ func (s *Server) handleWorkerSetProvider(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
-}
-
-// providersFromPayload reads the providers list out of a request.completed payload.
-//
-// The value is re-encoded through JSON rather than type-asserted: a managed
-// worker runs in this same process, so the event never crosses a serialization
-// boundary and the payload still holds the worker's own Go type
-// ([]reason.ProviderInfo), not the []any of maps a JSON decode would produce.
-// Going through JSON accepts either shape — and any future one — as long as the
-// field names match the tags on providerOption.
-func providersFromPayload(v any) []providerOption {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return []providerOption{}
-	}
-	var out []providerOption
-	// A null/missing value unmarshals to a nil slice; the UI only shows its
-	// empty state for a zero-length list, so normalise it.
-	if err := json.Unmarshal(b, &out); err != nil || out == nil {
-		return []providerOption{}
-	}
-	for i := range out {
-		if out[i].Models == nil {
-			out[i].Models = []string{}
-		}
-	}
-	return out
 }
 
 // handleUnmanagedStart/Stop/Restart control external (unmanaged) workers via
