@@ -110,6 +110,13 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 		"worker.ready", "worker.gone", "worker.discover", "worker.abort",
 		"worker.input",
 	})
+	// PublishAllow default stays "*": the reason worker forwards tool
+	// invocations to whichever peers it discovers, under the peers' own event
+	// types (ls, timer.timeout, program.query, user extensions...) — a set
+	// that is inherently dynamic and cannot be enumerated statically. This is
+	// a control-plane grant, not a worker-side declaration: it can be
+	// narrowed at runtime via the control plane's allow editing, or
+	// statically via params.publish in the worker spec.
 	pubAllow := publishPatterns(p["publish"])
 	if len(pubAllow) == 0 {
 		pubAllow = []event.PublishPattern{event.NewPublishPattern("*")}
@@ -211,10 +218,16 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	cfg.ID = id
 	cfg.Params = params
 
-	// The workspace subscribes to everything and routes via its extension
-	// registry (see workspace.New), so the registry subscription is "*" too —
-	// not driven by stale params.subscriptions (e.g. an old tool.requested).
-	connect := specConnect(ctx, id, "workspace", []event.PublishPattern{event.NewPublishPattern("*")}, []event.EventPattern{{Type: "*"}})
+	// PublishAllow: the workspace replies to tool calls (request.*) and
+	// announces presence. SubscribeAllow: empty — tool calls arrive directed;
+	// the workspace consumes no broadcasts. Not driven by stale
+	// params.subscriptions (e.g. an old tool.requested).
+	connect := specConnect(ctx, id, "workspace",
+		[]event.PublishPattern{
+			event.NewPublishPattern("request.*"),
+			event.NewPublishPattern("worker.ready"),
+		},
+		nil)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return workspace.New(workspace.Config{
 			ID:      id,
@@ -233,17 +246,20 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 // ── host ──
 
 func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
-	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
 		id = "host"
 	}
-	// SubscribeAllow: host's tool events (spawn/suspend/resume) are directed
-	// calls — no listing needed. request.cancel is directed too (sent to the
-	// target worker), so the default grant is just worker.discover.
-	connect := specConnect(ctx, id, "host", []event.PublishPattern{event.NewPublishPattern("*")}, subAllowFromParams(p, []string{
-		"worker.discover",
-	}))
+	// PublishAllow: lifecycle replies (request.*) and presence. Its tool
+	// events (spawn/suspend/resume) are directed calls — no subscription
+	// needed; request.cancel is directed too (sent to the target worker).
+	connect := specConnect(ctx, id, "host",
+		[]event.PublishPattern{
+			event.NewPublishPattern("request.*"),
+			event.NewPublishPattern("worker.ready"),
+			event.NewPublishPattern("worker.discover"),
+		},
+		nil)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerSvc})
 	}
@@ -259,14 +275,20 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 // ── timer ──
 
 func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
-	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
 		id = "timer"
 	}
-	connect := specConnect(ctx, id, "timer", []event.PublishPattern{event.NewPublishPattern("*")}, subAllowFromParams(p, []string{
-		"worker.discover",
-	}))
+	// PublishAllow: replies, the directed fires back to the caller, presence.
+	// Subscribes to nothing — everything it receives is directed.
+	connect := specConnect(ctx, id, "timer",
+		[]event.PublishPattern{
+			event.NewPublishPattern("request.*"),
+			event.NewPublishPattern("timer.timeout"),
+			event.NewPublishPattern("timer.reminder"),
+			event.NewPublishPattern("worker.ready"),
+		},
+		nil)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return timer.New(timer.Config{ID: id, Bus: ch})
 	}
@@ -286,7 +308,16 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	if id == "" {
 		id = "webui-hiw"
 	}
-	connect := specConnect(ctx, id, "hiw", []event.PublishPattern{event.NewPublishPattern("*")}, []event.EventPattern{event.NewPattern("*")})
+	// PublishAllow: worker.input / worker.abort (broadcast when untargeted,
+	// directed otherwise), presence, discovery. Subscribes to nothing.
+	connect := specConnect(ctx, id, "hiw",
+		[]event.PublishPattern{
+			event.NewPublishPattern("worker.input"),
+			event.NewPublishPattern("worker.abort"),
+			event.NewPublishPattern("worker.discover"),
+			event.NewPublishPattern("worker.ready"),
+		},
+		nil)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return hiw.New(hiw.Config{ID: id, Bus: ch})
 	}
@@ -302,7 +333,6 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 // ── program ──
 
 func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
-	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
 		id = "program"
@@ -321,9 +351,14 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}
 	os.MkdirAll(abs, 0755)
 
-	connect := specConnect(ctx, id, "program", []event.PublishPattern{event.NewPublishPattern("*")}, subAllowFromParams(p, []string{
-		"worker.discover",
-	}))
+	// PublishAllow: replies and presence. Subscribes to nothing — program
+	// query/update arrive directed.
+	connect := specConnect(ctx, id, "program",
+		[]event.PublishPattern{
+			event.NewPublishPattern("request.*"),
+			event.NewPublishPattern("worker.ready"),
+		},
+		nil)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return programworker.New(programworker.Config{
 			ID:      id,
