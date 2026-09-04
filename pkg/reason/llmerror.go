@@ -120,12 +120,9 @@ func (w *BaseReasonWorker) scheduleRateLimitBackoff(traceID string, callErr erro
 func (w *BaseReasonWorker) dispatchElapseReminder(traceID string, attempt int) {
 	callID := fmt.Sprintf("niq_rl_%d_%d", time.Now().UnixNano(), attempt)
 	evt := event.New("elapse", w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"arguments": map[string]any{
-			"duration_ms": rateLimitBackoffDuration.Milliseconds(),
-			"purpose": fmt.Sprintf("API rate limit (HTTP 429) hit; retrying after %s, attempt %d/%d",
-				rateLimitBackoffDuration, attempt, maxRateLimitRetries),
-		},
+		"duration_ms": rateLimitBackoffDuration.Milliseconds(),
+		"purpose": fmt.Sprintf("API rate limit (HTTP 429) hit; retrying after %s, attempt %d/%d",
+			rateLimitBackoffDuration, attempt, maxRateLimitRetries),
 	})
 	evt.RequestId = callID
 	evt.TraceID = traceID

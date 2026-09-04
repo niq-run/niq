@@ -80,16 +80,18 @@ type ToolCall struct {
 	TraceID  string
 }
 
-// ParseToolCall extracts the common fields from a tool-invocation event.
+// ParseToolCall extracts the common fields from a tool-invocation event. The
+// event type IS the tool, so Name comes from evt.Type; Args is the event's
+// top-level payload (there is no wrapper — payload is the argument object).
 // Args is always a non-nil map so handlers can write into it safely.
 func ParseToolCall(evt event.Event) ToolCall {
-	args, _ := evt.Payload["arguments"].(map[string]any)
+	args := evt.Payload
 	if args == nil {
 		args = map[string]any{}
 	}
 	return ToolCall{
 		CallID:   evt.RequestId,
-		Name:     ArgString(evt.Payload, "name"),
+		Name:     string(evt.Type),
 		CallerID: evt.WorkerId,
 		Args:     args,
 		TraceID:  evt.TraceID,

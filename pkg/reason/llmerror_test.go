@@ -57,14 +57,10 @@ func TestScheduleRateLimitBackoff(t *testing.T) {
 		if evt.Type != "elapse" {
 			t.Fatalf("req %d: want type=elapse, got %q", i, evt.Type)
 		}
-		args, _ := evt.Payload["arguments"].(map[string]any)
-		if args == nil {
-			t.Fatalf("req %d: missing arguments", i)
-		}
-		if d := args["duration_ms"]; d != int64(rateLimitBackoffDuration.Milliseconds()) {
+		if d := evt.Payload["duration_ms"]; d != int64(rateLimitBackoffDuration.Milliseconds()) {
 			t.Fatalf("req %d: duration_ms=%v, want %d", i, d, rateLimitBackoffDuration.Milliseconds())
 		}
-		if p, _ := args["purpose"].(string); !strings.Contains(p, "429") {
+		if p, _ := evt.Payload["purpose"].(string); !strings.Contains(p, "429") {
 			t.Fatalf("req %d: purpose %q must describe the 429", i, p)
 		}
 	}

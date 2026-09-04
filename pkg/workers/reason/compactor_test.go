@@ -114,7 +114,7 @@ func TestCompactionUpdateMode(t *testing.T) {
 	}
 	w := newReasonBase(t, prov, 1, seed)
 
-	handleContextOp(w, event.New(event.TypeWorkerUpdate, "me", map[string]any{"op": "context.compress"}), "")
+	handleContextOp(w, event.New(reasonBase.TypeContextCompress, "me", nil), "")
 
 	waitCond(t, 2*time.Second, func() bool {
 		return strings.Contains(prov.prompt(), "v1: goal=fix bug")
@@ -155,7 +155,7 @@ func TestCompactionAppendsNote(t *testing.T) {
 	}
 	w := newReasonBase(t, prov, 1, seed)
 
-	handleContextOp(w, event.New(event.TypeWorkerUpdate, "me", map[string]any{"op": "context.compress"}), "")
+	handleContextOp(w, event.New(reasonBase.TypeContextCompress, "me", nil), "")
 
 	waitCond(t, 2*time.Second, func() bool {
 		msgs := w.Messages()
@@ -181,7 +181,7 @@ func TestMetaCompressViaUpdateRequested(t *testing.T) {
 	}
 	w := newReasonBase(t, prov, 2, seed)
 
-	handleContextOp(w, event.New(event.TypeWorkerUpdate, "me", map[string]any{"op": "context.compress"}), "")
+	handleContextOp(w, event.New(reasonBase.TypeContextCompress, "me", nil), "")
 
 	waitCond(t, 2*time.Second, func() bool {
 		msgs := w.Messages()
@@ -210,7 +210,7 @@ func TestMetaRotateViaUpdateRequested(t *testing.T) {
 		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "[pending]"}}})
 	w := newReasonBase(t, prov, 2, seed)
 
-	handleContextOp(w, event.New(event.TypeWorkerUpdate, "me", map[string]any{"op": "context.rotate"}), "")
+	handleContextOp(w, event.New(TypeContextRotate, "me", nil), "")
 
 	waitCond(t, 2*time.Second, func() bool {
 		msgs := w.Messages()

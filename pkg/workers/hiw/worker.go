@@ -38,7 +38,7 @@ func New(cfg Config) *Worker {
 	}
 	return &Worker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
-		cancelCh: make(chan struct{}),
+		cancelCh:   make(chan struct{}),
 	}
 }
 
@@ -101,6 +101,17 @@ func (w *Worker) SendInput(ctx context.Context, text string, target string, mode
 		return w.Channel.Send(context.Background(), evt, target)
 	}
 	return w.Channel.Broadcast(context.Background(), evt)
+}
+
+// SendEvent publishes an arbitrary event on the bus as HIW — the human's
+// voice sending a worker one of the events it declared it responds to (per its
+// worker.ready "watch"). The event payload is the argument object (top level);
+// the human UI uses this to drive a worker's behaviour or state. The bus ACL
+// still gates it: HIW may only publish event types its identity grants.
+func (w *Worker) SendEvent(ctx context.Context, evtType event.EventType, target string, payload map[string]any) error {
+	evt := event.New(evtType, w.ID(), payload)
+	evt.TraceID = evt.ID
+	return w.Channel.Send(context.Background(), evt, target)
 }
 
 // publishReady announces HIW on the bus.

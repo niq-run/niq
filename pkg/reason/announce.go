@@ -45,9 +45,8 @@ func (w *BaseReasonWorker) BroadcastReady() {
 	// treats it like any peer's announcement, so this worker's own capabilities
 	// flow through the same unified discovery pipeline as everyone else's.
 	_ = w.Channel.Send(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "reason",
-		"watch":     w.ExtensionEntries(),
+		"type":  "reason",
+		"watch": w.ExtensionEntries(),
 	}), w.ID())
 }
 
