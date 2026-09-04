@@ -81,6 +81,30 @@ func keys(m map[string]worker.Tool) []string {
 // send_message / list_workers / context.compress / context.rotate toolkit (and
 // its SelfOnly announcement behavior) lives in the default worker now, not in
 // the shared reason mechanism.
+
+// TestProviderToolsExposedToLLM verifies the worker's own provider.* domain is
+// LLM-callable: the self-directed ready contract feeds discovery, and the tool
+// list exposes provider_list / provider_current / provider_switch, so the model
+// can inspect (and switch) its own model supplier in conversation.
+func TestProviderToolsExposedToLLM(t *testing.T) {
+	w := newTestWorker(nil, nil)
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+		"worker_id": w.ID(),
+		"type":      "reason",
+		"watch":     w.ExtensionEntries(),
+	}))
+
+	names := map[string]bool{}
+	for _, d := range w.LLMToolDefs() {
+		names[d.Name] = true
+	}
+	for _, want := range []string{"provider_list", "provider_current", "provider_switch"} {
+		if !names[want] {
+			t.Fatalf("own tool %s not exposed to the LLM; have %v", want, names)
+		}
+	}
+}
+
 // TestPeerDottedToolDispatches verifies a peer's dotted event type
 // (program.search) is exposed to the LLM as provider__program_search and a
 // call routes back to the peer as the event type itself.

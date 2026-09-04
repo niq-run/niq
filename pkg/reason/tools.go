@@ -31,18 +31,14 @@ import (
 type ToolListBuilder func(w *BaseReasonWorker, caps []DiscoveredCapability) []llm.ToolDef
 
 // defaultToolListBuilder is the default policy producing the LLM tool list from
-// the discovered capability universe: every own capability outside the
-// provider.* management domain is exposed under its event-type name, and every
-// peer capability under provider__name. Any capability is invoked by its own
-// event type — the builder's policy decides what the LLM sees. Custom
-// builders replace this.
+// the discovered capability universe: every own capability is exposed under its
+// event-type name (provider.* included — the worker may know and manage its own
+// model supplier), and every peer capability under provider__name. Any
+// capability is invoked by its own event type — the builder's policy decides
+// what the LLM sees. Custom builders replace this.
 func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []llm.ToolDef {
 	defs := make([]llm.ToolDef, 0, len(caps))
 	for _, cap := range caps {
-		if cap.Source == w.ID() && strings.HasPrefix(string(cap.Event), "provider.") {
-			// The provider.* management domain is not LLM-callable.
-			continue
-		}
 		params := cap.Parameters
 		// Watch-derived entries fold the discriminator (op/subject) into the
 		// parameters; it must not leak into the LLM tool schema.
