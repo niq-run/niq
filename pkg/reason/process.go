@@ -375,23 +375,39 @@ func DefaultConverter(evt event.Event) []llm.Message {
 
 // resultOutcome extracts the human-readable outcome text and error flag from a
 // tool result event. Used by both the normal-resolution and late-result paths.
+//
+// The bus does not constrain a reply's payload shape — external workers answer
+// in their own vocabulary — so the recognized summary fields ("result" /
+// "error" / "reason") are a preference, not a requirement: when none is
+// present, the FULL payload is serialized as the tool's result text instead of
+// being dropped. This mirrors DefaultConverter's philosophy for input events:
+// a recognized field reads cleanly, and anything else still reaches the LLM
+// losslessly.
 func resultOutcome(evt event.Event) (string, bool) {
+	var text string
+	isErr := false
 	switch evt.Type {
 	case event.TypeRequestCompleted:
 		if r, ok := evt.Payload["result"]; ok {
-			return fmt.Sprintf("%v", r), false
+			text = fmt.Sprintf("%v", r)
 		}
 	case event.TypeRequestFailed:
+		isErr = true
 		if e, ok := evt.Payload["error"]; ok {
-			return "Tool call failed: " + fmt.Sprintf("%v", e), true
+			text = "Tool call failed: " + fmt.Sprintf("%v", e)
 		}
 	case event.TypeRequestRejected:
+		isErr = true
 		if r, ok := evt.Payload["reason"]; ok {
-			return "Tool call rejected: " + fmt.Sprintf("%v", r), true
+			text = "Tool call rejected: " + fmt.Sprintf("%v", r)
+		}
+	default:
+		return "", false
+	}
+	if text == "" && len(evt.Payload) > 0 {
+		if b, err := json.Marshal(evt.Payload); err == nil {
+			text = string(b)
 		}
 	}
-	return "", false
+	return text, isErr
 }
-
-// resultOutcome extracts the human-readable outcome text and error flag from a
-// tool result event. Used by both the normal-resolution and late-result paths.
