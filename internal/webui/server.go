@@ -375,16 +375,16 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 // the bus registry), its connection status, and — if host-managed — its
 // lifecycle state, or if external — its supervision state.
 type WorkerView struct {
-	ID             string               `json:"id"`
-	Type           string               `json:"type"`
-	Credential     string               `json:"credential,omitempty"`
-	PublishAllow   []string             `json:"publish_allow,omitempty"`
-	SubscribeAllow []event.EventPattern `json:"subscribe_allow,omitempty"`
-	Online         bool                 `json:"online"`
-	Managed        bool                 `json:"managed"`
-	State          string               `json:"state,omitempty"` // "running" | "suspended" (managed only)
-	Unmanaged      bool                 `json:"unmanaged,omitempty"`
-	UnmanagedState string               `json:"unmanaged_state,omitempty"` // "running" | "stopped"
+	ID             string                 `json:"id"`
+	Type           string                 `json:"type"`
+	Credential     string                 `json:"credential,omitempty"`
+	PublishAllow   []event.PublishPattern `json:"publish_allow,omitempty"`
+	SubscribeAllow []event.EventPattern   `json:"subscribe_allow,omitempty"`
+	Online         bool                   `json:"online"`
+	Managed        bool                   `json:"managed"`
+	State          string                 `json:"state,omitempty"` // "running" | "suspended" (managed only)
+	Unmanaged      bool                   `json:"unmanaged,omitempty"`
+	UnmanagedState string                 `json:"unmanaged_state,omitempty"` // "running" | "stopped"
 }
 
 // handleWorkers returns every registered worker identity merged with its
@@ -464,8 +464,8 @@ func (s *Server) handleUpdateAllow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		PublishAllow   []string             `json:"publish_allow"`
-		SubscribeAllow []event.EventPattern `json:"subscribe_allow"`
+		PublishAllow   []event.PublishPattern `json:"publish_allow"`
+		SubscribeAllow []event.EventPattern   `json:"subscribe_allow"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)

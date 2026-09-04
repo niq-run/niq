@@ -238,10 +238,10 @@ func (s *Server) handleListIdentities(w stdhttp.ResponseWriter, r *stdhttp.Reque
 }
 
 type registerRequest struct {
-	WorkerID       string               `json:"worker_id"`
-	Credential     string               `json:"credential"`
-	PublishAllow   []string             `json:"publish_allow"`
-	SubscribeAllow []event.EventPattern `json:"subscribe_allow"`
+	WorkerID       string                 `json:"worker_id"`
+	Credential     string                 `json:"credential"`
+	PublishAllow   []event.PublishPattern `json:"publish_allow"`
+	SubscribeAllow []event.EventPattern   `json:"subscribe_allow"`
 }
 
 func (s *Server) handleRegisterIdentity(w stdhttp.ResponseWriter, r *stdhttp.Request) {
@@ -266,7 +266,7 @@ func (s *Server) handleRegisterIdentity(w stdhttp.ResponseWriter, r *stdhttp.Req
 		SubscribeAllow: req.SubscribeAllow,
 	}
 	if id.PublishAllow == nil {
-		id.PublishAllow = []string{"*"}
+		id.PublishAllow = []event.PublishPattern{event.NewPublishPattern("*")}
 	}
 	if id.SubscribeAllow == nil {
 		id.SubscribeAllow = []event.EventPattern{{Type: "*"}}

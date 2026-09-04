@@ -31,7 +31,7 @@ func TestEventsHeadersFlushWithoutTraffic(t *testing.T) {
 		WorkerID:       "w1",
 		Type:           "lark",
 		Credential:     "cred",
-		PublishAllow:   []string{"*"},
+		PublishAllow:   []event.PublishPattern{event.NewPublishPattern("*")},
 		SubscribeAllow: []event.EventPattern{{Type: "*"}},
 	}); err != nil {
 		t.Fatalf("register: %v", err)

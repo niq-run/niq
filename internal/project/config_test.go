@@ -143,3 +143,33 @@ func TestSubAllowFromParams(t *testing.T) {
 		t.Fatalf("defaults not used: %+v", got)
 	}
 }
+
+// TestPublishSpecs verifies publish config entries parse and normalize: a bare
+// string grant is unrestricted (target "*"), and an object may add a target
+// restriction.
+func TestPublishSpecs(t *testing.T) {
+	cfg, err := parseConfig([]byte(`{"workers":[{"type":"reason","id":"r","publish":["request.completed",{"type":"worker.discover","target":"ws-1"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	specs := cfg.Workers[0].Publish
+	if len(specs) != 2 {
+		t.Fatalf("publish = %+v, want 2", specs)
+	}
+	if specs[0].Type != "request.completed" || !specs[0].ToPublishPattern().BroadcastAllowed("request.completed") {
+		t.Fatalf("bare publish spec not unrestricted: %+v", specs[0])
+	}
+	if specs[1].Type != "worker.discover" || specs[1].Target != "ws-1" {
+		t.Fatalf("targeted publish spec wrong: %+v", specs[1])
+	}
+	if specs[1].ToPublishPattern().BroadcastAllowed("worker.discover") {
+		t.Fatalf("targeted publish spec must not broadcast: %+v", specs[1])
+	}
+
+	// Build path honors the config through publishPatterns.
+	src := workerConfigParams(cfg.Workers[0])
+	got := publishPatterns(src["publish"])
+	if len(got) != 2 || got[0].Target != "*" || got[1].Target != "ws-1" {
+		t.Fatalf("publishPatterns = %+v, want [* @ws-1]", got)
+	}
+}

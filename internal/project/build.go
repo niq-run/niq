@@ -62,7 +62,7 @@ func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
 
 // specConnect builds a Connect closure: registers the identity idempotently and
 // creates a fresh, connected in-process worker-side channel.
-func specConnect(ctx BuildContext, id, typ string, pubAllow []string, subAllow []event.EventPattern) func() (corebus.WorkerSideChannel, error) {
+func specConnect(ctx BuildContext, id, typ string, pubAllow []event.PublishPattern, subAllow []event.EventPattern) func() (corebus.WorkerSideChannel, error) {
 	return func() (corebus.WorkerSideChannel, error) {
 		if err := ctx.Registry.Register(corebus.Identity{
 			WorkerID:       id,
@@ -111,9 +111,9 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 		"worker.ready", "worker.gone", "worker.discover", "worker.abort",
 		"worker.input",
 	})
-	pubAllow := stringSlice(p["publish"])
+	pubAllow := publishPatterns(p["publish"])
 	if len(pubAllow) == 0 {
-		pubAllow = []string{"*"}
+		pubAllow = []event.PublishPattern{event.NewPublishPattern("*")}
 	}
 	programs := parsePrograms(p, id)
 	events := parseEvents(p)
@@ -215,7 +215,7 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	// The workspace subscribes to everything and routes via its extension
 	// registry (see workspace.New), so the registry subscription is "*" too —
 	// not driven by stale params.subscriptions (e.g. an old tool.requested).
-	connect := specConnect(ctx, id, "workspace", []string{"*"}, []event.EventPattern{{Type: "*"}})
+	connect := specConnect(ctx, id, "workspace", []event.PublishPattern{event.NewPublishPattern("*")}, []event.EventPattern{{Type: "*"}})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return workspace.New(workspace.Config{
 			ID:      id,
@@ -242,7 +242,7 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 	// SubscribeAllow: host's tool events (spawn/suspend/resume) are directed
 	// calls — no listing needed. request.cancel is directed too (sent to the
 	// target worker), so the default grant is just worker.discover.
-	connect := specConnect(ctx, id, "host", []string{"*"}, subAllowFromParams(p, []string{
+	connect := specConnect(ctx, id, "host", []event.PublishPattern{event.NewPublishPattern("*")}, subAllowFromParams(p, []string{
 		"worker.discover",
 	}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
@@ -265,7 +265,7 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 	if id == "" {
 		id = "timer"
 	}
-	connect := specConnect(ctx, id, "timer", []string{"*"}, subAllowFromParams(p, []string{
+	connect := specConnect(ctx, id, "timer", []event.PublishPattern{event.NewPublishPattern("*")}, subAllowFromParams(p, []string{
 		"worker.discover",
 	}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
@@ -287,7 +287,7 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	if id == "" {
 		id = "webui-hiw"
 	}
-	connect := specConnect(ctx, id, "hiw", []string{"*"}, []event.EventPattern{event.NewPattern("*")})
+	connect := specConnect(ctx, id, "hiw", []event.PublishPattern{event.NewPublishPattern("*")}, []event.EventPattern{event.NewPattern("*")})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return hiw.New(hiw.Config{ID: id, Bus: ch})
 	}
@@ -322,7 +322,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}
 	os.MkdirAll(abs, 0755)
 
-	connect := specConnect(ctx, id, "program", []string{"*"}, subAllowFromParams(p, []string{
+	connect := specConnect(ctx, id, "program", []event.PublishPattern{event.NewPublishPattern("*")}, subAllowFromParams(p, []string{
 		"worker.discover",
 	}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
@@ -442,21 +442,6 @@ func parseEvents(p map[string]any) []reason.EventConverter {
 	return handlers
 }
 
-func stringSlice(v any) []string {
-	raw, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, r := range raw {
-		if s, ok := r.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// eventPatternsFromStrings converts type-only subscription strings to patterns.
 func eventPatternsFromStrings(types []string) []event.EventPattern {
 	out := make([]event.EventPattern, 0, len(types))
 	for _, t := range types {
@@ -485,6 +470,31 @@ func subscriptionPatterns(v any) []event.EventPattern {
 			}
 			s, _ := e["source"].(string)
 			out = append(out, event.EventPattern{Type: event.EventType(t), SourceID: s})
+		}
+	}
+	return out
+}
+
+// publishPatterns parses config publish entries into bus publish grants.
+// Each entry is a bare event-type string or a {"type","target"} object (see
+// PublishSpec); both spell the same PublishPattern.
+func publishPatterns(v any) []event.PublishPattern {
+	raw, _ := v.([]any)
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]event.PublishPattern, 0, len(raw))
+	for _, r := range raw {
+		switch e := r.(type) {
+		case string:
+			out = append(out, event.NewPublishPattern(event.EventType(e)))
+		case map[string]any:
+			t, _ := e["type"].(string)
+			if t == "" {
+				continue
+			}
+			tgt, _ := e["target"].(string)
+			out = append(out, event.PublishPattern{Type: event.EventType(t), Target: tgt})
 		}
 	}
 	return out

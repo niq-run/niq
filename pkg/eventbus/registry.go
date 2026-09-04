@@ -86,7 +86,7 @@ func (r *FileIdentityRegistry) Register(id corebus.Identity) error {
 }
 
 // Update implements corebus.IdentityRegistry.
-func (r *FileIdentityRegistry) Update(workerID string, pubAllow []string, subAllow []event.EventPattern) error {
+func (r *FileIdentityRegistry) Update(workerID string, pubAllow []event.PublishPattern, subAllow []event.EventPattern) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

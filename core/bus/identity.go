@@ -36,9 +36,10 @@ type Identity struct {
 	// peer credential for loopback).
 	Credential string
 
-	// PublishAllow lists event types this worker may publish.
-	// Supports "*" (all), "Prefix.*" (prefix), and exact match.
-	PublishAllow []string
+	// PublishAllow lists what this worker may publish: event types, each
+	// optionally restricted to a specific target worker for directed sends.
+	// Supports "*" (all), "Prefix.*" (prefix), and exact match on type.
+	PublishAllow []event.PublishPattern
 
 	// SubscribeAllow lists the event patterns this worker subscribes to.
 	// Each pattern may restrict by type ("*", "Prefix.*", exact) and by
@@ -57,7 +58,7 @@ type IdentityRegistry interface {
 
 	// Update replaces the allow lists for an existing identity.
 	// Returns an error if the identity is not found.
-	Update(workerID string, pubAllow []string, subAllow []event.EventPattern) error
+	Update(workerID string, pubAllow []event.PublishPattern, subAllow []event.EventPattern) error
 
 	// Revoke removes an identity. Returns an error if not found.
 	// Future connection attempts with this worker ID will fail

@@ -369,9 +369,12 @@ func provisionUnmanaged(registry corebus.IdentityRegistry, projectID string, spe
 	if len(subAllow) == 0 {
 		subAllow = []event.EventPattern{{Type: "*"}}
 	}
-	pubAllow := spec.Publish
+	pubAllow := make([]event.PublishPattern, 0, len(spec.Publish))
+	for _, s := range spec.Publish {
+		pubAllow = append(pubAllow, s.ToPublishPattern())
+	}
 	if len(pubAllow) == 0 {
-		pubAllow = []string{"*"}
+		pubAllow = []event.PublishPattern{event.NewPublishPattern("*")}
 	}
 	identity := corebus.Identity{
 		WorkerID:       spec.ID,
