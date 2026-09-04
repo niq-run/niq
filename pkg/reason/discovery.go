@@ -92,6 +92,49 @@ func (w *BaseReasonWorker) DiscoveredWorkers() []DiscoveredWorker {
 	return out
 }
 
+// WorkerInfo returns the full contract of one discovered worker: its tools
+// with COMPLETE parameter schemas and its published events. It backs the
+// get_worker_info tool — the detail view behind list_workers, which
+// deliberately carries only names and descriptions. Peer tool names match
+// list_workers (the encoded LLM-facing names); the worker's own capabilities
+// render from the self-directed discovery view under their event types.
+// ok=false when the worker is unknown (nothing announced or published).
+func (w *BaseReasonWorker) WorkerInfo(id string) (DiscoveredWorker, bool) {
+	var info DiscoveredWorker
+	info.WorkerID = id
+	if id == w.ID() {
+		// Own capabilities are not in the dispatch table (they dispatch
+		// through the registry); the self-directed ready already put them
+		// into the discovered universe.
+		for _, cap := range w.discovered {
+			if cap.Source != id {
+				continue
+			}
+			name := string(cap.Event)
+			if cap.KeyField != "" {
+				name = cap.Key
+			}
+			info.Tools = append(info.Tools, worker.Tool{
+				Name: name, Description: cap.Description,
+				Parameters: cap.Parameters, Provider: id,
+			})
+		}
+	} else {
+		for _, t := range w.tools {
+			if t.Provider == id {
+				info.Tools = append(info.Tools, t)
+			}
+		}
+	}
+	if events, ok := w.publishMap[id]; ok {
+		info.Publishes = events
+	}
+	if len(info.Tools) == 0 && len(info.Publishes) == 0 {
+		return DiscoveredWorker{}, false
+	}
+	return info, true
+}
+
 // HandleWorkerReady learns a worker's capabilities and published events from
 // its worker.ready announcement, feeding the unified discovery universe
 // (discovered) and the tool table used for dispatch. Each ready event carries

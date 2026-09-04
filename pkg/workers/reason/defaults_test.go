@@ -1,6 +1,7 @@
 package reason
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/niq-run/niq/core/event"
@@ -20,6 +21,9 @@ func TestCoreExtensionsRegistered(t *testing.T) {
 	}
 	if cap, ok := w.ExtensionByToolName("context_compress"); !ok || cap.Event != reasonBase.TypeContextCompress {
 		t.Fatalf("context_compress not registered as context.compress extension: %+v ok=%v", cap, ok)
+	}
+	if cap, ok := w.ExtensionByToolName("get_worker_info"); !ok || cap.Event != TypeWorkerInfo {
+		t.Fatalf("get_worker_info not registered under its own event type: %+v ok=%v", cap, ok)
 	}
 }
 
@@ -47,9 +51,12 @@ func TestCoreExtensionsExposedToLLM(t *testing.T) {
 			t.Fatalf("expected %q in LLM tool list, got %v", want, keysOf(got))
 		}
 	}
-	for _, banned := range []string{"provider.switch", "provider.list", "provider.current"} {
-		if got[banned] {
-			t.Fatalf("provider capability %q must not be exposed to the LLM", banned)
+	// The provider.* domain is LLM-callable since the exclusion was dropped:
+	// the model may inspect (and switch) its own model supplier. Tool names
+	// are the event types with dots → underscores.
+	for _, want := range []string{"provider_switch", "provider_list", "provider_current"} {
+		if !got[want] {
+			t.Fatalf("provider tool %q should be exposed to the LLM, got %v", want, keysOf(got))
 		}
 	}
 }
@@ -60,6 +67,50 @@ func keysOf(m map[string]bool) []string {
 		ks = append(ks, k)
 	}
 	return ks
+}
+
+// TestGetWorkerInfoReturnsFullSchemas verifies the detail view behind the
+// slimmed list_workers: a known worker comes back with its COMPLETE tool
+// parameter schemas (the part list_workers omits), and an unknown worker
+// fails with the self-correcting hint to call list_workers.
+func TestGetWorkerInfoReturnsFullSchemas(t *testing.T) {
+	ch := newMockChannel()
+	w := NewWorker(Config{ID: "w1", Bus: ch})
+
+	// A peer announces a tool carrying a parameter schema.
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "timer", map[string]any{
+		"worker_id": "timer",
+		"watch": []map[string]any{{
+			"event":      "timer.timeout",
+			"desc":       "set a timeout",
+			"parameters": map[string]any{"duration_ms": map[string]any{"type": "integer"}},
+		}},
+	}))
+
+	handleWorkerInfo(w.BaseReasonWorker, "call-1", "get_worker_info", "webui", "trace-1", map[string]any{"worker": "timer"})
+	done := ch.eventsOf(event.TypeRequestCompleted)
+	if len(done) != 1 {
+		t.Fatalf("expected 1 completed reply, got %d", len(done))
+	}
+	if res, _ := done[0].Payload["result"].(string); !strings.Contains(res, `"duration_ms"`) {
+		t.Fatalf("result must carry the full parameter schema, got %s", res)
+	}
+
+	// Missing parameter → failed reply.
+	handleWorkerInfo(w.BaseReasonWorker, "call-2", "get_worker_info", "webui", "trace-1", map[string]any{})
+	if failed := ch.eventsOf(event.TypeRequestFailed); len(failed) != 1 {
+		t.Fatalf("expected 1 failed reply for the missing parameter, got %d", len(failed))
+	}
+
+	// Unknown worker → failed reply pointing back at list_workers.
+	handleWorkerInfo(w.BaseReasonWorker, "call-3", "get_worker_info", "webui", "trace-1", map[string]any{"worker": "ghost"})
+	failed := ch.eventsOf(event.TypeRequestFailed)
+	if len(failed) != 2 {
+		t.Fatalf("expected 2 failed replies total, got %d", len(failed))
+	}
+	if msg, _ := failed[1].Payload["error"].(string); !strings.Contains(msg, "list_workers") {
+		t.Fatalf("unknown-worker error should point at list_workers, got %q", msg)
+	}
 }
 
 // TestBroadcastReadyExcludesSelfOnly verifies the two-part announcement: the
