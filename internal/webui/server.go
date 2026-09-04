@@ -151,6 +151,11 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// Abort: interrupt a worker's current reasoning.
 	mux.HandleFunc("POST /api/abort", s.handleAbort)
 
+	// Send worker an event: publish one of the events the worker declared it
+	// responds to (its worker.ready "watch"), as HIW with a client-supplied
+	// payload. The bus ACL still applies (HIW must be granted the type).
+	mux.HandleFunc("POST /api/workers/{id}/event", s.handleWorkerEvent)
+
 	// ── Static assets ──
 	if devMode {
 		log.Println("[webui] dev mode: static assets served by Vite on :5173")
@@ -494,7 +499,7 @@ func (s *Server) handleUpdateAllow(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	evt := event.New("suspend", "webui-hiw", map[string]any{
-		"arguments": map[string]any{"worker_id": id},
+		"worker_id": id,
 	})
 	evt.RequestId = "webui-suspend-" + id
 	_ = s.hiw.Channel.Send(r.Context(), evt, "host")
@@ -506,7 +511,7 @@ func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	evt := event.New("resume", "webui-hiw", map[string]any{
-		"arguments": map[string]any{"worker_id": id},
+		"worker_id": id,
 	})
 	evt.RequestId = "webui-resume-" + id
 	_ = s.hiw.Channel.Send(r.Context(), evt, "host")
@@ -785,6 +790,36 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 		_ = s.hiw.Channel.Send(r.Context(), evt, body.Target)
 	} else {
 		_ = s.hiw.Channel.Broadcast(r.Context(), evt)
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleWorkerEvent sends one event to a worker on its behalf — the human UI
+// driving a worker's behaviour/state by publishing an event from the worker's
+// "watch" contract. The payload is the argument object (top-level). The event
+// is sent through the normal bus: HIW's publish_allow must grant the type, and
+// the target worker must be online.
+func (s *Server) handleWorkerEvent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Type    string         `json:"type"`
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Type == "" {
+		http.Error(w, "event type is required", http.StatusBadRequest)
+		return
+	}
+	if s.engine.Channel(id) == nil {
+		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.hiw.SendEvent(r.Context(), event.EventType(body.Type), id, body.Payload); err != nil {
+		http.Error(w, "send event: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusAccepted)
 }

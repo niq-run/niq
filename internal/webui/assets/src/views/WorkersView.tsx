@@ -44,6 +44,10 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
     background: colors.bgLight,
     border: '1px solid ' + colors.detailBorder,
     whiteSpace: 'nowrap',
+    // A shared min-width keeps every type badge the same width regardless of
+    // the label's length; a wider label still grows as needed.
+    minWidth: 88,
+    textAlign: 'center',
   }
 
   return (

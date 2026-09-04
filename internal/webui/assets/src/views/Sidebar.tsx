@@ -418,7 +418,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   onMouseLeave={() => setHoverId(null)}
                   style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, minWidth: 0, padding: optPad }}
                 >
-                  <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} />
+                  <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                   <span
                     title={w.id}
                     style={{ color: isActive || hovered ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0, transition: 'color 0.12s' }}
@@ -441,7 +441,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   onMouseLeave={() => setHoverId(null)}
                   style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: optPad }}
                 >
-                  <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} />
+                  <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                   <span style={{ display: 'flex', alignItems: 'baseline', gap: 12, flex: 1, minWidth: 0 }}>
                     <span
                       title={w.id}
