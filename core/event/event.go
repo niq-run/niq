@@ -1,6 +1,7 @@
 package event
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -35,11 +36,11 @@ const (
 	// request. request.completed carries the result; request.failed /
 	// request.rejected carry the error; request.progressed streams partial
 	// results; request.cancel is sent by the caller to cancel a pending one.
-	TypeRequestCompleted EventType = "request.completed"
-	TypeRequestFailed    EventType = "request.failed"
-	TypeRequestRejected  EventType = "request.rejected"
+	TypeRequestCompleted  EventType = "request.completed"
+	TypeRequestFailed     EventType = "request.failed"
+	TypeRequestRejected   EventType = "request.rejected"
 	TypeRequestProgressed EventType = "request.progressed"
-	TypeRequestCancel    EventType = "request.cancel"
+	TypeRequestCancel     EventType = "request.cancel"
 )
 
 // EventStatus represents an event's lifecycle stage.
@@ -81,6 +82,77 @@ func NewPattern(typ EventType) EventPattern {
 	return EventPattern{Type: typ}
 }
 
+// PublishPattern is a publish grant: an event type a worker may publish,
+// optionally restricted to directed targets it may send to. It is the shape of
+// every PublishAllow entry.
+//
+// A bare event-type string is accepted (via UnmarshalJSON) and is equivalent to
+// a pattern with no target restriction (Target "*").
+type PublishPattern struct {
+	// Type matches the event type this worker may publish.
+	// Supports "*" (any), "Prefix.*" (prefix), and exact match.
+	Type EventType `json:"type"`
+	// Target restricts directed (Send) delivery to a worker. Use "*" for any
+	// target (the default, also permitting a broadcast of the type). A specific
+	// target grants directed sends to that worker only — it does NOT permit
+	// broadcasting the type.
+	Target string `json:"target_worker_id,omitempty"`
+}
+
+// UnrestrictedTarget reports whether this grant's target rule is "any target";
+// only the canonical "*" value is unrestricted.
+func (p PublishPattern) UnrestrictedTarget() bool {
+	return p.Target == "*"
+}
+
+// MatchesType reports whether a published event type satisfies this grant's
+// type rule (target-agnostic).
+func (p PublishPattern) MatchesType(typ EventType) bool {
+	return PatternMatches(string(p.Type), typ)
+}
+
+// BroadcastAllowed reports whether this grant permits broadcasting typ. Only an
+// unrestricted grant authorizes a broadcast, since a broadcast addresses every
+// matching subscriber, not one target.
+func (p PublishPattern) BroadcastAllowed(typ EventType) bool {
+	return p.UnrestrictedTarget() && p.MatchesType(typ)
+}
+
+// SendAllowed reports whether this grant permits a directed send of typ to the
+// given target. An unrestricted grant allows any target; a targeted grant only
+// that worker.
+func (p PublishPattern) SendAllowed(typ EventType, target string) bool {
+	if !p.MatchesType(typ) {
+		return false
+	}
+	return p.UnrestrictedTarget() || p.Target == target
+}
+
+// NewPublishPattern builds an unrestricted publish grant (Target "*") for an
+// event type.
+func NewPublishPattern(typ EventType) PublishPattern {
+	return PublishPattern{Type: typ, Target: "*"}
+}
+
+// UnmarshalJSON accepts a bare event-type string or a {"type","target"} object,
+// so existing string-only configs and registry entries keep loading. A bare
+// string grants the type with no target restriction (Target "*").
+func (p *PublishPattern) UnmarshalJSON(b []byte) error {
+	var typeOnly string
+	if err := json.Unmarshal(b, &typeOnly); err == nil {
+		p.Type = EventType(typeOnly)
+		p.Target = "*"
+		return nil
+	}
+	type alias PublishPattern
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	*p = PublishPattern(a)
+	return nil
+}
+
 // PatternMatches reports whether an event type matches a subscription pattern.
 // Supports:
 //   - "*"            — matches any event type
@@ -119,12 +191,12 @@ type Event struct {
 	// the response echoes it back (JSON-RPC id semantics). Empty means the
 	// event is a notification — no response is expected. Distinct from ID
 	// (this event's own identity) and TraceID (the reasoning trace).
-	RequestId string `json:"request_id,omitempty"`
-	TraceID   string `json:"trace_id,omitempty"`
-	SpecVersion    string         `json:"specversion,omitempty"`
-	DataSchema     string         `json:"dataschema,omitempty"`
-	Timestamp      int64          `json:"timestamp"`
-	Recipients     []string       `json:"recipients,omitempty"` // populated by engine during routing
+	RequestId   string   `json:"request_id,omitempty"`
+	TraceID     string   `json:"trace_id,omitempty"`
+	SpecVersion string   `json:"specversion,omitempty"`
+	DataSchema  string   `json:"dataschema,omitempty"`
+	Timestamp   int64    `json:"timestamp"`
+	Recipients  []string `json:"recipients,omitempty"` // populated by engine during routing
 
 	// ExcludeWorkerID names a worker the sender does not want to receive this
 	// event even if it matches the broadcast subscription. The engine skips it

@@ -62,6 +62,42 @@ func (s *SubscriptionSpec) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// PublishSpec is one PublishAllow entry. It accepts either a bare event-type
+// string ("request.completed") or an object adding a target restriction:
+// {"type": "request.completed", "target": "ws-1"}. The target field limits
+// directed sends to that target worker; use "*" (or a bare type string) for
+// "any target", which also permits broadcasting the type. It is the
+// config-level spelling of event.PublishPattern.
+type PublishSpec struct {
+	Type   event.EventType `json:"type"`
+	Target string          `json:"target,omitempty"`
+}
+
+// ToPublishPattern converts the spec into the bus-level PublishPattern it
+// stands for.
+func (p PublishSpec) ToPublishPattern() event.PublishPattern {
+	return event.PublishPattern{Type: p.Type, Target: p.Target}
+}
+
+// UnmarshalJSON accepts a bare type string or a {"type","target"} object, so
+// existing string-only configs keep parsing. A bare string is an unrestricted
+// grant (target "*").
+func (p *PublishSpec) UnmarshalJSON(b []byte) error {
+	var typeOnly string
+	if err := json.Unmarshal(b, &typeOnly); err == nil {
+		p.Type = event.EventType(typeOnly)
+		p.Target = "*"
+		return nil
+	}
+	type alias PublishSpec
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return fmt.Errorf("project: bad publish entry %s: %w", b, err)
+	}
+	*p = PublishSpec(a)
+	return nil
+}
+
 // WorkerConfig describes a single worker instance declaration.
 type WorkerConfig struct {
 	Type          string             `json:"type"` // reason / workspace / host / timer / hiw / program
@@ -72,7 +108,7 @@ type WorkerConfig struct {
 	BaseURL       string             `json:"base_url,omitempty"`
 	Model         string             `json:"model,omitempty"`
 	Subscriptions []SubscriptionSpec `json:"subscriptions,omitempty"`
-	Publish       []string           `json:"publish,omitempty"`
+	Publish       []PublishSpec      `json:"publish,omitempty"`
 	RootDir       string             `json:"root_dir,omitempty"`
 	Archived      bool               `json:"archived,omitempty"`
 	// Managed marks the worker as host-managed (in-process, worker dir is the
@@ -230,7 +266,11 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 	if len(wc.Publish) > 0 {
 		arr := make([]any, len(wc.Publish))
 		for i, s := range wc.Publish {
-			arr[i] = s
+			m := map[string]any{"type": string(s.Type)}
+			if s.Target != "" {
+				m["target"] = s.Target
+			}
+			arr[i] = m
 		}
 		p["publish"] = arr
 	}

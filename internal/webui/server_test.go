@@ -52,7 +52,7 @@ func TestHandleUpdateAllow(t *testing.T) {
 	if err := registry.Register(corebus.Identity{
 		WorkerID:       "w1",
 		Type:           "timer",
-		PublishAllow:   []string{"*"},
+		PublishAllow:   []event.PublishPattern{event.NewPublishPattern("*")},
 		SubscribeAllow: []event.EventPattern{{Type: "worker.discover"}},
 	}); err != nil {
 		t.Fatalf("register: %v", err)
@@ -95,7 +95,7 @@ func TestHandleUpdateAllow(t *testing.T) {
 		idt.SubscribeAllow[1].Type != "worker.ready" || idt.SubscribeAllow[1].SourceID != "" {
 		t.Fatalf("subscribe_allow = %+v, want [request.completed@timer, worker.ready]", idt.SubscribeAllow)
 	}
-	if len(idt.PublishAllow) != 1 || idt.PublishAllow[0] != "*" {
+	if len(idt.PublishAllow) != 1 || idt.PublishAllow[0].Type != "*" {
 		t.Fatalf("publish_allow clobbered = %+v, want [*]", idt.PublishAllow)
 	}
 

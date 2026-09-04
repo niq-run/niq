@@ -90,8 +90,8 @@ func (e *Engine) Disconnect(workerID string) {
 
 // broadcastGone advertises a worker's departure as a worker.gone broadcast.
 // from is the departed worker; the payload names it so reason's discovery can
-// age it out. Best-effort. Routing reuses HandleRequest so subscription
-// matching, persistence and onEvent observers all apply.
+// age it out. Best-effort. It bypasses the publisher ACL because it is a
+// bus-authored presence event, not a publish by the worker (see below).
 func (e *Engine) broadcastGone(ctx context.Context, workerID string) {
 	evt := event.New(event.TypeWorkerGone, workerID, map[string]any{
 		"worker_id": workerID,
@@ -100,7 +100,13 @@ func (e *Engine) broadcastGone(ctx context.Context, workerID string) {
 	// receive anyway — it is offline), but set it so a straggler reconnecting
 	// under the same id does not observe its own gone event.
 	evt.ExcludeWorkerID = workerID
-	e.HandleRequest(ctx, corebus.Request{Type: corebus.RequestBroadcast, Events: []event.Event{evt}}, workerID)
+
+	// This is a bus-authored presence event on the departing worker's behalf,
+	// not a publish by the worker — the bus must be able to announce departure
+	// even when the worker's PublishAllow would not grant worker.gone.
+	e.mu.RLock()
+	e.broadcastLocked(ctx, evt, workerID)
+	e.mu.RUnlock()
 }
 
 // HandleRequest processes a delivery request from a worker.
@@ -136,7 +142,12 @@ func (e *Engine) handleSend(ctx context.Context, req corebus.Request, from strin
 			evt.TargetWorkerID = req.Targets[0]
 		}
 
+		delivered := 0
 		for _, target := range req.Targets {
+			if !e.publishSendAllowed(from, evt.Type, target) {
+				log.Printf("[eventbus] send: %s denied publish %s to %s", from, evt.Type, target)
+				continue
+			}
 			ch, ok := e.channels[target]
 			if !ok {
 				log.Printf("[eventbus] send: target %s not online (from %s)", target, from)
@@ -144,11 +155,17 @@ func (e *Engine) handleSend(ctx context.Context, req corebus.Request, from strin
 			}
 			if err := ch.Send(ctx, evt); err != nil {
 				log.Printf("[eventbus] send: deliver to %s failed: %v", target, err)
+				continue
 			}
+			delivered++
 		}
 
-		evt.Recipients = req.Targets
-		e.persistEvent(ctx, evt)
+		// Persist only events that were actually delivered; a fully denied
+		// publish is not a real bus event and does not reach the audit log.
+		if delivered > 0 {
+			evt.Recipients = req.Targets
+			e.persistEvent(ctx, evt)
+		}
 	}
 }
 
@@ -161,35 +178,46 @@ func (e *Engine) handleBroadcast(ctx context.Context, req corebus.Request, from 
 
 	for _, evt := range req.Events {
 		evt.WorkerId = from
+		if !e.publishBroadcastAllowed(from, evt.Type) {
+			log.Printf("[eventbus] broadcast: %s denied publish %s", from, evt.Type)
+			continue
+		}
 		// Preserve the trace_id the sender stamped on the event when the request
 		// carries none (the in-process transport never sets req.TraceID).
 		if req.TraceID != "" {
 			evt.TraceID = req.TraceID
 		}
 
-		// Find all targets: online workers whose SubscribeAllow matches.
-		var targets []string
-		for workerID, ch := range e.channels {
-			if evt.ExcludeWorkerID == workerID {
-				continue
-			}
-			identity, ok := e.registry.Lookup(workerID)
-			if !ok {
-				continue
-			}
-			if !patternMatchesAny(evt, identity.SubscribeAllow) {
-				continue
-			}
-			targets = append(targets, workerID)
-			if err := ch.Send(ctx, evt); err != nil {
-				log.Printf("[eventbus] broadcast: deliver to %s failed: %v", workerID, err)
-			}
-		}
-
-		evt.Recipients = targets
-		log.Printf("[eventbus] broadcast: %s from %s to %d worker(s)", evt.Type, from, len(targets))
-		e.persistEvent(ctx, evt)
+		e.broadcastLocked(ctx, evt, from)
 	}
+}
+
+// broadcastLocked delivers a broadcast to every matching online subscriber. It
+// must be called with e.mu held (RLock). The publisher ACL has already been
+// checked by the caller.
+func (e *Engine) broadcastLocked(ctx context.Context, evt event.Event, from string) {
+	// Find all targets: online workers whose SubscribeAllow matches.
+	var targets []string
+	for workerID, ch := range e.channels {
+		if evt.ExcludeWorkerID == workerID {
+			continue
+		}
+		identity, ok := e.registry.Lookup(workerID)
+		if !ok {
+			continue
+		}
+		if !patternMatchesAny(evt, identity.SubscribeAllow) {
+			continue
+		}
+		targets = append(targets, workerID)
+		if err := ch.Send(ctx, evt); err != nil {
+			log.Printf("[eventbus] broadcast: deliver to %s failed: %v", workerID, err)
+		}
+	}
+
+	evt.Recipients = targets
+	log.Printf("[eventbus] broadcast: %s from %s to %d worker(s)", evt.Type, from, len(targets))
+	e.persistEvent(ctx, evt)
 }
 
 // OnEvent registers a callback invoked for every event routed via
@@ -260,6 +288,36 @@ func (e *Engine) OnlineWorkers() []string {
 // Lookup returns the identity for a worker ID, or false if not found.
 func (e *Engine) Lookup(workerID string) (corebus.Identity, bool) {
 	return e.registry.Lookup(workerID)
+}
+
+// publishSendAllowed reports whether from may directed-send an event of typ to
+// the given target worker, per its PublishAllow grants.
+func (e *Engine) publishSendAllowed(from string, typ event.EventType, target string) bool {
+	id, ok := e.registry.Lookup(from)
+	if !ok {
+		return false
+	}
+	for _, p := range id.PublishAllow {
+		if p.SendAllowed(typ, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// publishBroadcastAllowed reports whether from may broadcast an event of typ,
+// per its PublishAllow grants.
+func (e *Engine) publishBroadcastAllowed(from string, typ event.EventType) bool {
+	id, ok := e.registry.Lookup(from)
+	if !ok {
+		return false
+	}
+	for _, p := range id.PublishAllow {
+		if p.BroadcastAllowed(typ) {
+			return true
+		}
+	}
+	return false
 }
 
 // patternMatchesAny reports whether a routed event matches any of a worker's

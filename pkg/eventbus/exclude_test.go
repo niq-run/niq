@@ -39,6 +39,7 @@ func TestBroadcastExcludesWorker(t *testing.T) {
 	for _, id := range []string{"a", "b", "c"} {
 		if err := registry.Register(corebus.Identity{
 			WorkerID:       id,
+			PublishAllow:   []event.PublishPattern{event.NewPublishPattern("*")},
 			SubscribeAllow: []event.EventPattern{event.NewPattern("worker.ready")},
 		}); err != nil {
 			t.Fatalf("register %s: %v", id, err)
