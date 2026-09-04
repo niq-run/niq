@@ -168,7 +168,7 @@ func (w *BaseReasonWorker) consumeStream(reasonCtx context.Context, stream *llm.
 		partialText     string
 	)
 
-	const batchInterval = 5 * time.Second
+	const batchInterval = time.Second
 	ticker := time.NewTicker(batchInterval)
 	defer ticker.Stop()
 
