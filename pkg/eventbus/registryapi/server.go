@@ -265,6 +265,10 @@ func (s *Server) handleRegisterIdentity(w stdhttp.ResponseWriter, r *stdhttp.Req
 		PublishAllow:   req.PublishAllow,
 		SubscribeAllow: req.SubscribeAllow,
 	}
+	// Omitted allow lists default to "*": external workers declare their own
+	// event vocabularies (unknown to this repo), the registration is
+	// credential-authenticated, and the control plane can narrow the grants
+	// afterwards via allow editing. An explicit list in the request wins.
 	if id.PublishAllow == nil {
 		id.PublishAllow = []event.PublishPattern{event.NewPublishPattern("*")}
 	}
