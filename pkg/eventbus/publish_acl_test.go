@@ -162,3 +162,92 @@ func TestPublishPatternBackwardCompat(t *testing.T) {
 		t.Fatalf("unmarshal string -> %+v, want {type:* target:*}", pp)
 	}
 }
+
+// TestPublishTypeWildcardTargetNarrowing verifies the narrowing path for a
+// worker that starts at {type: "*", target: "*"} and is tightened to
+// {type: "*", target: X} grants: any event type may still be sent, but only
+// to the named targets, broadcasting is denied, and multiple targeted grants
+// union. This is the reason-worker shape — its tool invocations use whatever
+// event types the peers announced, so the type dimension stays "*" while the
+// target dimension narrows.
+func TestPublishTypeWildcardTargetNarrowing(t *testing.T) {
+	registry, err := NewFileIdentityRegistry(filepath.Join(t.TempDir(), "identities.json"))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	// Narrowed grants: any event type, but only to niq / timer.
+	if err := registry.Register(corebus.Identity{
+		WorkerID: "orchestrator",
+		PublishAllow: []event.PublishPattern{
+			{Type: "*", Target: "niq"},
+			{Type: "*", Target: "timer"},
+		},
+	}); err != nil {
+		t.Fatalf("register orchestrator: %v", err)
+	}
+	for _, id := range []string{"niq", "timer", "workspace"} {
+		if err := registry.Register(corebus.Identity{
+			WorkerID:       id,
+			SubscribeAllow: []event.EventPattern{event.NewPattern("*")},
+		}); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+	}
+
+	engine := NewEngine(registry, nil)
+	chans := map[string]*recvChannel{}
+	for _, id := range []string{"niq", "timer", "workspace"} {
+		c := &recvChannel{id: id, worker: id}
+		chans[id] = c
+		if err := engine.Connect(id, c); err != nil {
+			t.Fatalf("connect %s: %v", id, err)
+		}
+	}
+
+	send := func(typ event.EventType, target string) {
+		engine.HandleRequest(context.Background(), corebus.Request{
+			Type:    corebus.RequestSend,
+			Events:  []event.Event{event.New(typ, "orchestrator", nil)},
+			Targets: []string{target},
+		}, "orchestrator")
+	}
+
+	// Any type reaches the named targets.
+	send("ls", "niq")
+	send("worker.input", "timer")
+	if len(chans["niq"].got) != 1 || len(chans["timer"].got) != 1 {
+		t.Fatalf("named targets: niq=%d timer=%d, want 1/1", len(chans["niq"].got), len(chans["timer"].got))
+	}
+
+	// An unnamed target is denied even though the type is "*".
+	send("ls", "workspace")
+	if len(chans["workspace"].got) != 0 {
+		t.Fatalf("workspace got %d events, want 0 (denied)", len(chans["workspace"].got))
+	}
+
+	// A broadcast is denied: targeted grants do not authorize broadcasts.
+	engine.HandleRequest(context.Background(), corebus.Request{
+		Type:   corebus.RequestBroadcast,
+		Events: []event.Event{event.New("ls", "orchestrator", nil)},
+	}, "orchestrator")
+	if len(chans["niq"].got) != 1 || len(chans["timer"].got) != 1 {
+		t.Fatalf("broadcast leaked: niq=%d timer=%d, want 1/1", len(chans["niq"].got), len(chans["timer"].got))
+	}
+
+	// The narrowed JSON form parses in both object spellings: the shorthand
+	// "target" and the canonical persistence tag "target_worker_id".
+	for _, spelling := range []string{"target", "target_worker_id"} {
+		var pp event.PublishPattern
+		obj := `{"type":"*","` + spelling + `":"niq"}`
+		if err := json.Unmarshal([]byte(obj), &pp); err != nil {
+			t.Fatalf("unmarshal object: %v", err)
+		}
+		if pp.Type != "*" || pp.Target != "niq" {
+			t.Fatalf("unmarshal object -> %+v, want {type:* target:niq}", pp)
+		}
+		if !pp.SendAllowed("anything", "niq") || pp.SendAllowed("anything", "workspace") {
+			t.Fatal("parsed grant should allow only its named target")
+		}
+	}
+}
