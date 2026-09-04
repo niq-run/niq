@@ -405,48 +405,52 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             const isActive = view === 'talk'
               ? talkWorkers.has(w.id)
               : filterWorkers.has(w.id)
-            const connection = w.online === false ? 'offline' : 'online'
+            const connection = w.online === false ? t('worker.offline') : t('worker.online')
             if (view === 'talk') {
               // Single line: every entry here is a reason worker, so the type
               // is redundant — just name + connection status.
+              const hovered = hoverId === w.id
               return (
                 <div
                   key={w.id}
                   onClick={() => handleWorkerClick(w.id)}
+                  onMouseEnter={() => setHoverId(w.id)}
+                  onMouseLeave={() => setHoverId(null)}
                   style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, minWidth: 0, padding: optPad }}
                 >
                   <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} />
                   <span
                     title={w.id}
-                    style={{ color: isActive ? colors.accent : colors.text, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 }}
+                    style={{ color: isActive || hovered ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0, transition: 'color 0.12s' }}
                   >
                     {w.id}
                   </span>
-                  <span style={{ color: connection === 'offline' ? colors.textDimmed : colors.toolCompleted, fontSize: fontSizes.sm, flexShrink: 0 }}>
+                  <span style={{ color: w.online === false ? colors.textDimmed : colors.toolCompleted, fontSize: fontSizes.sm, flexShrink: 0 }}>
                     {connection}
                   </span>
                 </div>
               )
             }
-            // Events view: two lines, type + connection status.
+            // Events view: single line — id with its type in brackets.
+            const hovered = hoverId === w.id
             return (
               <div key={w.id} style={{ marginBottom: 6 }}>
-                <div onClick={() => handleWorkerClick(w.id)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: 6, padding: optPad }}>
-                  {/* marginTop centers the box against the first text line,
-                      whose glyph sits mid-way in its (tall) line box. */}
-                  <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: (optLineNum - checkSize) / 2 }} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div
+                <div
+                  onClick={() => handleWorkerClick(w.id)}
+                  onMouseEnter={() => setHoverId(w.id)}
+                  onMouseLeave={() => setHoverId(null)}
+                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: optPad }}
+                >
+                  <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} />
+                  <span style={{ display: 'flex', alignItems: 'baseline', gap: 12, flex: 1, minWidth: 0 }}>
+                    <span
                       title={w.id}
-                      style={{ color: isActive ? colors.accent : colors.text, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                      style={{ color: isActive || hovered ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
                     >
                       {w.id}
-                    </div>
-                    <div style={{ fontSize: fontSizes.sm, lineHeight: '16px', color: colors.textDimmed, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      {w.type ? <span style={{ fontStyle: 'italic' }}>{w.type}</span> : null}
-                      <span style={{ color: connection === 'offline' ? colors.textDimmed : colors.toolCompleted }}>{connection}</span>
-                    </div>
-                  </div>
+                    </span>
+                    {w.type ? <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, flexShrink: 0 }}>[{w.type}]</span> : null}
+                  </span>
                 </div>
               </div>
             )
@@ -456,7 +460,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           {view === 'talk' && (
             <>
               <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
-              <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>View Settings</strong>
+              <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.viewSettings')}</strong>
               <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} mobile={isMobile} size={optSize} />
               <ToggleRow label={t('view.toggle.compactMode')} on={viewSettings.compactMode} onToggle={() => onToggleViewSetting('compactMode')} colors={colors} mobile={isMobile} size={optSize} />
               <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} mobile={isMobile} size={optSize} />

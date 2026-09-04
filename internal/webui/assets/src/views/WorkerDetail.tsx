@@ -125,11 +125,11 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
           </div>
 
           <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
-            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
+            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.publishAllow')}
             </div>
-            <AllowTags items={(worker.publish_allow || []).map((t) => ({ label: t, title: t }))} colors={colors} />
-            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, margin: '16px 0 8px', textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
+            <AllowTags items={(worker.publish_allow || []).map((p) => ({ label: p.type + (p.target_worker_id ? ' → ' + p.target_worker_id : ''), title: p.type + (p.target_worker_id ? ' → ' + p.target_worker_id : '') }))} colors={colors} />
+            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, margin: '16px 0 8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.subscribeAllow')}
               <span
                 onClick={() => { setEditingSub((v) => !v); setSubNote('') }}
@@ -150,7 +150,7 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
 
           {/* Action area, separated by a horizontal line */}
           <div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 18 }}>
-            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
+            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.actions')}
             </div>
             {worker.managed ? (
@@ -227,9 +227,9 @@ export default function WorkerDetail({ worker, allWorkers, onClose, archived, on
 
             			{/* Danger: permanently remove this worker. */}
             			<div style={{ marginTop: 18, borderTop: '1px solid ' + colors.detailBorder, paddingTop: 16 }}>
-            				<div style={{ color: colors.detailLabel, fontSize: fontSizes.sm, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
-            					{t('wd.delete')}
-            				</div>
+				<div style={{ color: colors.detailLabel, fontSize: fontSizes.sm, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+					{t('wd.delete')}
+				</div>
             				{confirmDel ? (
             					<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             						<span style={{ color: colors.textDim, fontSize: fontSizes.sm }}>{t('wd.delete.confirm', { id: worker.id })}</span>
@@ -369,7 +369,7 @@ function ProviderSection({ workerId }: { workerId: string }) {
         onClick={() => setExpanded((v) => !v)}
         style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', gap: 8, userSelect: 'none' }}
       >
-        <span style={{ color: colors.detailLabel, fontSize: fontSizes.base, textTransform: 'uppercase', letterSpacing: '0.5px', fontFamily: 'monospace' }}>
+        <span style={{ color: colors.detailLabel, fontSize: fontSizes.base, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           {t('wd.modelProvider')}
         </span>
         <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{expanded ? '−' : '+'}</span>
@@ -481,7 +481,6 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
     minWidth: 0,
     padding: '5px 8px',
     fontSize: fontSizes.sm,
-    fontFamily: 'monospace',
     background: colors.bgLight,
     color: colors.text,
     border: '1px solid ' + colors.border,

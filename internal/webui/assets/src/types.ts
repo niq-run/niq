@@ -15,11 +15,18 @@ export interface EventPattern {
   source_id?: string
 }
 
+// PublishPattern is a worker's publish grant: an event type, optionally
+// restricted to a directed target worker.
+export interface PublishPattern {
+  type: string
+  target_worker_id?: string
+}
+
 export interface WorkerInfo {
   id: string
   type: string
   credential?: string
-  publish_allow?: string[]
+  publish_allow?: PublishPattern[]
   subscribe_allow?: EventPattern[]
   online?: boolean
   // managed = an in-process worker the host supervises ("协程托管").
