@@ -83,8 +83,6 @@ export default function App() {
 
   // ── State ──
   const [events, setEvents] = useState<EventPayload[]>([])
-  // True while (re)subscribing and loading history after a disconnect/reconnect.
-  const [reloading, setReloading] = useState(false)
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>('talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
@@ -240,7 +238,6 @@ export default function App() {
       const workers = view === 'events' ? [...filterWorkers] : []
       const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
-      setReloading(true)
       try {
         eventsRef.current = []
         seenRef.current.clear()
@@ -252,7 +249,6 @@ export default function App() {
         eventsRef.current = merged
         setEvents(merged)
       } catch {}
-      setReloading(false)
     }
 
     const es = new EventSource(url)
@@ -599,13 +595,6 @@ export default function App() {
             </strong>
           </div>
         )}
-        {reloading && (
-          <div style={{ position: 'fixed', top: 60, left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 50 }}>
-              <div style={{ background: colors.accentDim, color: colors.text, fontSize: fontSizes.sm, padding: '4px 14px', borderRadius: 4, opacity: 0.95, boxShadow: '0 2px 8px rgba(0,0,0,0.25)' }}>
-              {t('app.loading')}
-            </div>
-          </div>
-        )}
         {mode !== 'project' ? (
           panel === 'templates' ? <TemplatesView /> : <ProjectsView />
         ) : panel === 'templates' ? (
@@ -613,7 +602,7 @@ export default function App() {
         ) : panel === 'projects' ? (
           <ProjectsView />
         ) : view === 'talk' ? (
-          <>
+          <div key="talk" className="fade-in" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <TalkView
               events={events}
               talkWorkers={talkWorkers}
@@ -645,9 +634,9 @@ export default function App() {
               onSelectTarget={(id) => setMentionTarget(id)}
               isMobile={isMobile}
             />
-          </>
+          </div>
         ) : view === 'workers' ? (
-          <div style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
+          <div key="workers" className="fade-in" style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
             <WorkersView
               workers={workers}
               archived={archived}
@@ -690,9 +679,9 @@ export default function App() {
             {/* On mobile the app-level top bar heads the page, so the in-view
                 header is skipped (same as the talk view). */}
             {!isMobile && (
-              <div style={{ marginTop: 24, marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16 }}>
+              <div style={{ marginTop: 24, marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'center', gap: 16 }}>
                 <strong>{t('nav.events')}</strong>
-                <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
+                <span style={{ fontSize: fontSizes.sm, color: colors.textMuted, display: 'flex', alignItems: 'center', gap: 8 }}>
                   {filterWorkers.size > 0 && (
                     <>
                       {t('events.filtering')} <strong style={{ color: colors.textDim }}>[{[...filterWorkers].join(', ')}]</strong>
@@ -700,7 +689,7 @@ export default function App() {
                           workers' events to show. Both checked = default. */}
                       {(['sent', 'received'] as const).map(role => (
                         <label key={role} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 12, cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm }}>
-                          <input type="checkbox" checked={filterRoles.has(role)} onChange={() => toggleFilterRole(role)} />
+                          <input type="checkbox" checked={filterRoles.has(role)} onChange={() => toggleFilterRole(role)} style={{ margin: 0, accentColor: colors.accent }} />
                           {t(role === 'sent' ? 'events.role.sent' : 'events.role.received')}
                         </label>
                       ))}
@@ -727,8 +716,8 @@ export default function App() {
               </div>
             )}
 
-            <div style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
-              <div ref={listRef} onScroll={handleScroll} style={{ flex: 1, minWidth: 0, overflow: 'auto', fontSize: fontSizes.md, padding: '0 24px 16px 24px' }}>
+            <div key="events" className="fade-in" style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
+              <div key={streamKey} ref={listRef} onScroll={handleScroll} className="fade-in" style={{ flex: 1, minWidth: 0, overflow: 'auto', fontSize: fontSizes.md, padding: '0 24px 16px 24px' }}>
                 {events.length > 0 && <div ref={sentinelRef} style={{ height: 1 }} />}
                 {/* min-width lets the wide fixed columns scroll horizontally on
                     narrow (phone) viewports instead of collapsing. */}

@@ -177,8 +177,9 @@ export const zh: Record<StringKey, string> = {
   'detail.target': '目标',
   'detail.delivered': '投递',
   'detail.payload': '载荷',
-  'detail.none': '（无）',
-  'detail.broadcast': '（广播）',
+  'detail.none': '无',
+  'detail.broadcast': '广播',
+  'wd.noPayload': '无载荷',
 
   // ── 工作单元详情 ──
   'wd.id': 'ID',
@@ -212,6 +213,7 @@ export const zh: Record<StringKey, string> = {
   'wd.restart': '重启',
   'wd.notManaged': '非宿主托管',
   'wd.delete': '删除',
+  'wd.delete.desc': '停止并永久移除该工作单元。此操作不可撤销。',
   'wd.delete.confirm': '停止并删除 {id}？此操作不可撤销。',
   'wd.deleting': '删除中…',
   'wd.confirmDelete': '确认删除',

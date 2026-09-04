@@ -189,8 +189,9 @@ export const en = {
   'detail.target': 'Target',
   'detail.delivered': 'Delivered',
   'detail.payload': 'Payload',
-  'detail.none': '(none)',
-  'detail.broadcast': '(broadcast)',
+  'detail.none': 'none',
+  'detail.broadcast': 'broadcast',
+  'wd.noPayload': 'no payload',
 
   // ── Worker detail ──
   'wd.id': 'ID',
@@ -224,6 +225,7 @@ export const en = {
   'wd.restart': 'restart',
   'wd.notManaged': 'not host-managed',
   'wd.delete': 'Delete',
+  'wd.delete.desc': 'Stop & permanently remove this worker. Cannot be undone.',
   'wd.delete.confirm': 'Stop & delete {id}? This cannot be undone.',
   'wd.deleting': 'Deleting…',
   'wd.confirmDelete': 'confirm delete',

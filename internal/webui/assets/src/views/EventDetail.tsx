@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
@@ -19,9 +20,13 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
   const { t } = useI18n()
   const time = formatTime(evt.timestamp)
   const typeColor = getTypeColor(evt.type, colors)
+  const [wrap, setWrap] = useState(true)
   // Serialised once and handed to the size gate, which decides whether the
   // (possibly very large) payload is rendered at all.
   const payloadJSON = JSON.stringify(evt.payload, null, 2)
+  // Payload is "present" when the event carries any payload field (a non-empty
+  // object). No payload → show a grey "no payload" note and hide the wrap toggle.
+  const hasPayload = !!evt.payload && typeof evt.payload === 'object' && Object.keys(evt.payload).length > 0
   const isContentEvent =
     evt.type === "reason.thinking" ||
     evt.type === "reason.response" ||
@@ -113,17 +118,32 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
           <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 16px", alignItems: "baseline" }}>
             <DetailRow label={t('detail.id')} value={evt.id} colors={colors} />
             <DetailRow label={t('detail.traceId')} value={evt.trace_id || t('detail.none')} colors={colors} />
-            <DetailRow label={t('detail.time')} value={`${time} (${evt.timestamp})`} colors={colors} />
+            <DetailRow label={t('detail.time')} value={`${time} · ${evt.timestamp}`} colors={colors} />
             <DetailRow label={t('detail.target')} value={evt.target_worker_id || t('detail.broadcast')} colors={colors} />
             {recipients && <DetailRow label={t('detail.delivered')} value={recipients.join(", ")} colors={colors} />}
           </div>
           <div style={{ marginTop: 8, borderTop: "1px solid " + colors.detailBorder, paddingTop: 8 }}>
-            <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-              {t('detail.payload')}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                {t('detail.payload')}
+              </div>
+              {hasPayload && (
+                <span
+                  onClick={() => setWrap(v => !v)}
+                  title={t('talk.wrap.tooltip')}
+                  style={{ marginLeft: 'auto', cursor: 'pointer', color: colors.accentDim, fontSize: fontSizes.sm, textDecoration: 'underline dotted', userSelect: 'none' }}
+                >
+                  {t('talk.wrap.toggle')}
+                </span>
+              )}
             </div>
-            <PayloadGate json={payloadJSON}>
-              <CollapsibleCode code={payloadJSON} language="json" />
-            </PayloadGate>
+            {hasPayload ? (
+              <PayloadGate json={payloadJSON}>
+                <CollapsibleCode code={payloadJSON} language="json" showWrapToggle={false} wrap={wrap} onWrapChange={setWrap} />
+              </PayloadGate>
+            ) : (
+              <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.noPayload')}</div>
+            )}
           </div>
         </div>
       </div>

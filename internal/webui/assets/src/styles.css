@@ -126,3 +126,13 @@
    reads as an affordance, not a message. ── */
 [data-theme="dark"] .talk-input::placeholder { color: #555; }
 [data-theme="light"] .talk-input::placeholder { color: #bbb; }
+
+/* ── Fade-in for view/list content transitions (e.g. switching event-view
+   filters re-mounts the list with a new key and fades it in). ── */
+@keyframes niq-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.fade-in {
+  animation: niq-fade-in 0.18s ease-out;
+}
