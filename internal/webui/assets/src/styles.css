@@ -116,11 +116,11 @@
 }
 /* ── Event table row hover / selected ──
    Mirror the palette: dark bgLighter #2a2a2a, light bgLighter #eee;
-   accentBg dark rgba(60,120,180,0.15), light rgba(40,90,150,0.1). */
+   accentBg dark rgba(60,120,180,0.15), light rgba(60,120,180,0.1). */
 [data-theme="dark"] .event-row:hover td { background: #2a2a2a; }
 [data-theme="light"] .event-row:hover td { background: #eeeeee; }
 [data-theme="dark"] .event-row.selected td { background: rgba(60,120,180,0.15); }
-[data-theme="light"] .event-row.selected td { background: rgba(40,90,150,0.1); }
+[data-theme="light"] .event-row.selected td { background: rgba(60,120,180,0.1); }
 
 /* ── Talk input placeholder: dimmer than the palette's dimmest text, so it
    reads as an affordance, not a message. ── */

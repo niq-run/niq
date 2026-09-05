@@ -785,7 +785,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               lineHeight: 1.5,
               color: colors.textDim,
               background: isExpanded
-                ? (dark ? 'rgba(60,120,180,0.06)' : 'rgba(40,90,150,0.04)')
+                ? (dark ? 'rgba(60,120,180,0.06)' : 'rgba(60,120,180,0.04)')
                 : undefined,
             }}
           >
