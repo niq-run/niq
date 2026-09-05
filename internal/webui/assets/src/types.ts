@@ -42,9 +42,18 @@ export interface WorkerInfo {
   // unmanaged = an OS process the swarm launched and supervises ("子进程").
   // Neither = a third-party worker that connected on its own ("三方 worker").
   managed?: boolean
-  state?: string // "running" | "suspended" (managed only)
+  // managed: "running" | "suspended" | "stopped" — stopped means declared in
+  // project.json but not instantiated; start spawns it via the host worker.
+  state?: string
   unmanaged?: boolean
   unmanaged_state?: string // "running" | "stopped" (unmanaged only)
+}
+
+// CreateWorkerResult is what POST /api/workers/create returns.
+export interface CreateWorkerResult {
+  id: string
+  type: string
+  managed: boolean
 }
 
 // ProviderOption is one selectable LLM provider of a reason worker, as

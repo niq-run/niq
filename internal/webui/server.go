@@ -11,6 +11,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,12 +56,40 @@ type ArchivedStore interface {
 	SetArchived(id string, v bool) error
 }
 
-// UnmanagedStatus is a read-only view of an external (unmanaged) worker.
+// UnmanagedStatus is a read-only view of a worker declared in project.json.
+// Managed flags host-managed declarations; the state of a managed declaration
+// is always "stopped" — only the worker service knows a live lifecycle.
 type UnmanagedStatus struct {
-	ID    string `json:"id"`
-	Type  string `json:"type"`
-	State string `json:"state"` // "running" | "stopped"
-	Alive bool   `json:"alive"`
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Managed bool   `json:"managed"`
+	State   string `json:"state"` // "running" | "stopped"
+	Alive   bool   `json:"alive"`
+}
+
+// WorkerCreated is the effective result of creating a worker declaration: the
+// persisted identity plus, for a managed worker, the bus "spawn" event payload
+// the server sends to the host worker (external workers are started by the
+// creator itself before it returns).
+type WorkerCreated struct {
+	ID      string         `json:"id"`
+	Type    string         `json:"type"`
+	Managed bool           `json:"managed"`
+	Spawn   map[string]any `json:"-"`
+}
+
+// WorkerDeclCreator creates a worker declaration on the spot from a
+// project.WorkerConfig-shaped JSON body: it persists the declaration into
+// project.json (seeding a managed worker's authoritative config.json) and
+// launches it — external workers directly, managed ones via the returned
+// Spawn payload. Implemented by the assembly layer; nil disables
+// POST /api/workers/create.
+type WorkerDeclCreator interface {
+	Create(body json.RawMessage) (WorkerCreated, error)
+	// ManagedSpawn returns the spawn-event payload for a declared managed
+	// worker (read from its config.json). managed is false when the id is not
+	// a declared managed worker.
+	ManagedSpawn(id string) (spawn map[string]any, managed bool, err error)
 }
 
 // UnmanagedController controls external (unmanaged) workers. Implemented by
@@ -100,6 +130,7 @@ type Server struct {
 	context     ContextInfo
 	archived    ArchivedStore
 	unmngd      UnmanagedController
+	declCreator WorkerDeclCreator
 	declRemover WorkerDeclRemover
 }
 
@@ -136,10 +167,17 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	mux.HandleFunc("GET /api/workers/{id}/providers", s.handleWorkerProviders)
 	mux.HandleFunc("POST /api/workers/{id}/provider", s.handleWorkerSetProvider)
 
-	// Start / stop / restart an external (unmanaged) worker.
+	// Start / stop / restart an external (unmanaged) worker. Start also covers
+	// declared-but-absent managed workers: they are spawned via the host
+	// worker's spawn event.
 	mux.HandleFunc("POST /api/workers/{id}/start", s.handleUnmanagedStart)
 	mux.HandleFunc("POST /api/workers/{id}/stop", s.handleUnmanagedStop)
 	mux.HandleFunc("POST /api/workers/{id}/restart", s.handleUnmanagedRestart)
+
+	// Create a worker on the spot: persist a declaration into project.json
+	// (seeding a managed worker's config.json) and launch it — external
+	// workers directly, managed ones via the host worker's spawn event.
+	mux.HandleFunc("POST /api/workers/create", s.handleWorkerCreate)
 
 	// Delete a worker: stop it, revoke its bus identity, remove its persisted
 	// state, and drop its project.json declaration (unmanaged only).
@@ -246,6 +284,12 @@ type WorkerDeclRemover interface {
 // deleting a managed worker.
 func (s *Server) SetWorkerDeclRemover(r WorkerDeclRemover) {
 	s.declRemover = r
+}
+
+// SetWorkerDeclCreator attaches the declaration creator (nil disables
+// POST /api/workers/create and the managed branch of the start endpoint).
+func (s *Server) SetWorkerDeclCreator(c WorkerDeclCreator) {
+	s.declCreator = c
 }
 
 // SetContext records the mode context the single SPA should render in. Safe to
@@ -387,7 +431,7 @@ type WorkerView struct {
 	SubscribeAllow []event.EventPattern   `json:"subscribe_allow,omitempty"`
 	Online         bool                   `json:"online"`
 	Managed        bool                   `json:"managed"`
-	State          string                 `json:"state,omitempty"` // "running" | "suspended" (managed only)
+	State          string                 `json:"state,omitempty"` // managed: "running" | "suspended" | "stopped" (stopped = declared but not instantiated)
 	Unmanaged      bool                   `json:"unmanaged,omitempty"`
 	UnmanagedState string                 `json:"unmanaged_state,omitempty"` // "running" | "stopped"
 }
@@ -421,7 +465,10 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 			v.Managed = true
 			v.State = state
 		}
-		if st, ok := unmngd[id.WorkerID]; ok {
+		// Only external declarations tag a worker as unmanaged: since the
+		// creator also lists managed declarations, a managed worker known to
+		// the registry must not pick up a stray unmanaged badge.
+		if st, ok := unmngd[id.WorkerID]; ok && !st.Managed {
 			v.Unmanaged = true
 			v.UnmanagedState = st.State
 		}
@@ -437,15 +484,26 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Include external (unmanaged) workers declared in project.json whose
-	// identity is not yet registered — i.e. declared but never started. The
-	// UI offers a start button for these.
+	// Include workers declared in project.json that exist nowhere else —
+	// never-started externals (the UI offers a start button) and managed
+	// declarations with no live worker-service entry (declared but not
+	// instantiated; start spawns them via the host worker).
 	for _, st := range unmngd {
-		if _, ok := s.registry.Lookup(st.ID); !ok {
-			views = append(views, WorkerView{
-				ID: st.ID, Type: st.Type, Unmanaged: true, UnmanagedState: st.State,
-			})
+		if _, ok := s.registry.Lookup(st.ID); ok {
+			continue
 		}
+		if st.Managed {
+			if _, ok := managed[st.ID]; ok {
+				continue // the worker service owns it (running/suspended)
+			}
+			views = append(views, WorkerView{
+				ID: st.ID, Type: st.Type, Managed: true, State: "stopped",
+			})
+			continue
+		}
+		views = append(views, WorkerView{
+			ID: st.ID, Type: st.Type, Unmanaged: true, UnmanagedState: st.State,
+		})
 	}
 
 	// The registry's List is already ID-sorted; sort the merged view too, so
@@ -695,13 +753,32 @@ func (s *Server) handleWorkerSetProvider(w http.ResponseWriter, r *http.Request)
 }
 
 // handleUnmanagedStart/Stop/Restart control external (unmanaged) workers via
-// the assembly-provided UnmanagedController.
+// the assembly-provided UnmanagedController. Start additionally covers
+// declared-but-absent managed workers: a managed worker already known to the
+// worker service is a 409 (suspend/resume own its lifecycle), otherwise a
+// declaration in project.json is spawned via the host worker's spawn event.
 func (s *Server) handleUnmanagedStart(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.workerSvc.HasWorker(id) {
+		http.Error(w, "worker "+id+" already exists", http.StatusConflict)
+		return
+	}
+	if s.declCreator != nil {
+		payload, managed, err := s.declCreator.ManagedSpawn(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if managed {
+			s.spawnManaged(w, r, payload)
+			return
+		}
+	}
 	if s.unmngd == nil {
 		http.Error(w, "unmanaged control unavailable", 404)
 		return
 	}
-	if err := s.unmngd.Start(r.PathValue("id")); err != nil {
+	if err := s.unmngd.Start(id); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -730,6 +807,66 @@ func (s *Server) handleUnmanagedRestart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleWorkerCreate persists a worker declaration from the UI's form body and
+// launches it. External workers are started by the creator itself; managed
+// workers come back with a spawn payload that is sent to the host worker as
+// the auditable bus "spawn" event, and the request resolves on the host's
+// request.completed / request.failed reply. A spawn failure after the
+// declaration is persisted is not rolled back — the worker then shows as
+// declared-but-stopped and the start endpoint retries.
+func (s *Server) handleWorkerCreate(w http.ResponseWriter, r *http.Request) {
+	if s.declCreator == nil {
+		http.Error(w, "worker creation unavailable", 404)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	created, err := s.declCreator.Create(body)
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if created.Managed {
+		s.spawnManaged(w, r, created.Spawn)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(created)
+}
+
+// spawnManaged sends the host worker's spawn event with the given payload and
+// waits for its terminal reply. The declaration (if any) is already persisted
+// when this runs: a failure leaves the worker declared-but-stopped, retryable
+// through the start endpoint.
+func (s *Server) spawnManaged(w http.ResponseWriter, r *http.Request, payload map[string]any) {
+	if s.engine == nil || s.engine.Channel("host") == nil {
+		http.Error(w, "host worker is offline; the declaration is persisted — press start once it is back", http.StatusServiceUnavailable)
+		return
+	}
+	reply, err := s.ask(r.Context(), "host", event.New("spawn", "webui-hiw", payload),
+		event.TypeRequestCompleted, event.TypeRequestFailed)
+	if err != nil {
+		// ask distinguishes timeouts / closed streams; either way the worker
+		// may or may not exist now — the stopped row's start button retries.
+		http.Error(w, "spawn: "+err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	if reply.Type == event.TypeRequestFailed {
+		msg, _ := reply.Payload["error"].(string)
+		http.Error(w, "spawn failed: "+msg, http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(reply.Payload)
 }
 
 // handleDeleteWorker permanently removes a worker: it stops the live process

@@ -22,9 +22,12 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
   const { colors } = useTheme()
   const { t } = useI18n()
   const suspended = worker.managed && worker.state === 'suspended'
+  const declStopped = worker.managed && worker.state === 'stopped'
   const isArchived = archived.has(worker.id)
   const connection = worker.online === false ? t('worker.offline') : t('worker.online')
-  const lifecycle = worker.managed ? (suspended ? t('worker.suspended') : t('worker.running')) : '\u2014'
+  const lifecycle = worker.managed
+    ? (declStopped ? t('worker.stopped') : suspended ? t('worker.suspended') : t('worker.running'))
+    : '\u2014'
   const typeColor = worker.type ? getWorkerTypeColor(worker.type, colors) : colors.textDimmed
   const [editingSub, setEditingSub] = useState(false)
   const [subNote, setSubNote] = useState('')
@@ -175,7 +178,25 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.actions')}
             </div>
-            {worker.managed ? (
+            {worker.managed && declStopped ? (
+              /* Declared but not instantiated: start spawns it via the host
+                 worker (same endpoint as an external worker's start). */
+              <div>
+                <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
+                  {t('wd.managedStart.desc')}
+                </div>
+                <span
+                  onClick={() => unmanagedAction('start')}
+                  className="btn-hover"
+                  style={{ cursor: umBusy ? 'default' : 'pointer', opacity: umBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                >
+                  {umBusy === 'start' ? t('wd.starting') : t('wd.start')}
+                </span>
+                {umNote && (
+                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{umNote}</div>
+                )}
+              </div>
+            ) : worker.managed ? (
               <>
                 <div style={{ marginBottom: 22 }}>
                   <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>

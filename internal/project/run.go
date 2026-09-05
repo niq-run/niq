@@ -251,9 +251,11 @@ func runAssembly(opts assemblyOptions) error {
 	}
 
 	// Launch unmanaged (external) workers now that the bus is up: provision
-	// each one (credential + identity) and hand it to the supervisor.
+	// each one (credential + identity) and hand it to the supervisor. The
+	// supervisor exists for the whole bus lifetime — the WebUI's create form
+	// starts new external workers through it at runtime, not just startup.
 	var supervisor *UnmanagedSupervisor
-	if busAddr != "" && len(opts.Unmanaged) > 0 {
+	if busAddr != "" {
 		supervisor = NewUnmanagedSupervisor(LocalhostURL(busAddr), opts.StateDir, log.Printf)
 		for _, spec := range opts.Unmanaged {
 			s := spec
@@ -286,11 +288,18 @@ func runAssembly(opts assemblyOptions) error {
 						s.SetUnmanagedController(&webuiUnmanagedAdapter{
 							supervisor: supervisor,
 							registry:   registry,
+							workerSvc:  workerSvc,
 							projectID:  opts.ContextInfo.Project,
 						})
 					}
 					if opts.ContextInfo.Project != "" {
 						s.SetWorkerDeclRemover(webuiDeclRemover{projectID: opts.ContextInfo.Project})
+						s.SetWorkerDeclCreator(&webuiDeclCreator{
+							supervisor: supervisor,
+							registry:   registry,
+							workerSvc:  workerSvc,
+							projectID:  opts.ContextInfo.Project,
+						})
 					}
 					b, err := s.Bind()
 					if err != nil {
@@ -452,6 +461,7 @@ func (r webuiDeclRemover) RemoveDecl(id string) error {
 type webuiUnmanagedAdapter struct {
 	supervisor *UnmanagedSupervisor
 	registry   corebus.IdentityRegistry
+	workerSvc  *workerhost.WorkerService // optional; identifies live managed workers
 	projectID  string
 }
 
@@ -500,9 +510,12 @@ func (a *webuiUnmanagedAdapter) List() []webui.UnmanagedStatus {
 	return out
 }
 
-// Declared returns every worker project.json declares as external (unmanaged),
-// merging the supervisor's live state so declared-but-not-started workers show
-// as stopped. These drive the UI's "start" button for idle external workers.
+// Declared returns every worker project.json declares, merging the
+// supervisor's live state so declared-but-not-started externals show as
+// stopped. Managed declarations always report "stopped" — a live managed
+// worker's state belongs to the worker service, and the WebUI filters these
+// out via the registry / workerSvc before rendering. They drive the UI's
+// start buttons for declared-but-idle workers of both kinds.
 func (a *webuiUnmanagedAdapter) Declared() []webui.UnmanagedStatus {
 	if a.projectID == "" {
 		return nil
@@ -517,11 +530,8 @@ func (a *webuiUnmanagedAdapter) Declared() []webui.UnmanagedStatus {
 	}
 	var out []webui.UnmanagedStatus
 	for _, spec := range p.Workers {
-		if spec.Managed {
-			continue
-		}
-		st := webui.UnmanagedStatus{ID: spec.ID, Type: spec.Type, State: "stopped"}
-		if running[spec.ID] {
+		st := webui.UnmanagedStatus{ID: spec.ID, Type: spec.Type, Managed: spec.Managed, State: "stopped"}
+		if !spec.Managed && running[spec.ID] {
 			st.State = "running"
 			st.Alive = true
 		}

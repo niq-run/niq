@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
+import CreateWorkerDialog from './CreateWorkerDialog'
 
 interface WorkersViewProps {
   workers: WorkerInfo[]
@@ -16,6 +18,7 @@ interface WorkersViewProps {
 export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived, isMobile, onRefresh }: WorkersViewProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
+  const [showCreate, setShowCreate] = useState(false)
 
   // Single-line cells with ellipsis (same as the events table), with a taller
   // row: the worker list is less dense than the event stream. Mobile rows are
@@ -53,21 +56,41 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
   return (
     <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '24px 24px 16px 24px' }}>
       {/* On mobile the app-level top bar heads the page, so the in-view header
-          is skipped (same as the talk/events views). */}
-      {!isMobile && (
+          is skipped (same as the talk/events views); the action pills then
+          live in a slim bar above the table. */}
+      {!isMobile ? (
         <div style={{ marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, display: 'flex', alignItems: 'baseline', gap: 10 }}>
           {t('workers.title')}{' '}
           <span style={{ color: colors.textMuted, fontSize: fontSizes.md }}>({workers.length})</span>
-          {onRefresh && (
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
             <span
-              onClick={onRefresh}
+              onClick={() => setShowCreate(true)}
               className="btn-hover"
-              title={t('workers.refresh.tooltip')}
-              style={{ marginLeft: 'auto', cursor: 'pointer', fontSize: fontSizes.sm, color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', userSelect: 'none' }}
+              style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 4, padding: '3px 10px', userSelect: 'none' }}
             >
-              {t('workers.refresh')}
+              {t('workers.create')}
             </span>
-          )}
+            {onRefresh && (
+              <span
+                onClick={onRefresh}
+                className="btn-hover"
+                title={t('workers.refresh.tooltip')}
+                style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', userSelect: 'none' }}
+              >
+                {t('workers.refresh')}
+              </span>
+            )}
+          </span>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <span
+            onClick={() => setShowCreate(true)}
+            className="btn-hover"
+            style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 4, padding: '6px 14px', userSelect: 'none' }}
+          >
+            {t('workers.create')}
+          </span>
         </div>
       )}
 
@@ -122,10 +145,13 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                 <td style={{ ...cell, color: isOffline ? colors.textDimmed : colors.toolCompleted }}>
                   {connection}
                 </td>
-                {/* Host status: archived dominates; otherwise running/suspended */}
+                {/* Host status: archived dominates; otherwise stopped (declared
+                    but not instantiated) / running / suspended */}
                 <td style={cell}>
                   {w.managed && isArchived ? (
                     <span style={{ color: colors.textDimmed }}>{t('worker.archived')}</span>
+                  ) : w.managed && w.state === 'stopped' ? (
+                    <span style={{ color: colors.textDimmed }}>{t('worker.stopped')}</span>
                   ) : w.managed ? (
                     <span style={{ color: suspended ? colors.textDimmed : colors.toolCompleted }}>
                       {suspended ? t('worker.suspended') : t('worker.running')}
@@ -150,6 +176,12 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
           })}
         </tbody>
       </table>
+
+      <CreateWorkerDialog
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        onCreated={() => { setShowCreate(false); onRefresh?.() }}
+      />
     </div>
   )
 }

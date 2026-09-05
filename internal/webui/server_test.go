@@ -11,7 +11,9 @@ import (
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/worker"
 	"github.com/niq-run/niq/pkg/eventbus"
+	"github.com/niq-run/niq/pkg/services/workerhost"
 )
 
 // New only dereferences its dependencies inside route handlers, so a bare
@@ -171,5 +173,137 @@ func TestWebUIServeOnBoundListener(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Start returned %v", err)
+	}
+}
+
+// stubUnmanagedController drives handleWorkers's declaration merge with
+// in-memory statuses.
+type stubUnmanagedController struct {
+	declared []UnmanagedStatus
+}
+
+func (c *stubUnmanagedController) Start(id string) error         { return nil }
+func (c *stubUnmanagedController) Stop(id string) error          { return nil }
+func (c *stubUnmanagedController) Restart(id string) error       { return nil }
+func (c *stubUnmanagedController) List() []UnmanagedStatus       { return nil }
+func (c *stubUnmanagedController) Declared() []UnmanagedStatus   { return c.declared }
+func (c *stubUnmanagedController) Remove(id string) error        { return nil }
+
+// fakeBuilderSpec returns a SpawnSpec whose closures are never called by the
+// code paths under test (RestoreSuspended builds the spec without connecting).
+func fakeBuilderSpec(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	return worker.SpawnSpec{Config: cfg}, nil
+}
+
+// TestHandleWorkersDeclaredMerge verifies how project.json declarations merge
+// into GET /api/workers: never-started externals carry the unmanaged badge,
+// managed declarations known to the worker service do not, and managed
+// declarations absent from both the registry and the worker service surface as
+// managed rows in the "stopped" state (start spawns them via the host worker).
+func TestHandleWorkersDeclaredMerge(t *testing.T) {
+	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(t.TempDir(), "identities.json"))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	for _, id := range []string{"live-ext", "susp-managed"} {
+		if err := registry.Register(corebus.Identity{WorkerID: id, Type: "mcp"}); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+	}
+	workerSvc := workerhost.New()
+	workerSvc.RegisterBuilder("reason", fakeBuilderSpec)
+	if err := workerSvc.RestoreSuspended(worker.WorkerConfig{ID: "susp-managed", Type: "reason"}, nil); err != nil {
+		t.Fatalf("restore suspended: %v", err)
+	}
+
+	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
+	s := New(nil, nil, engine, workerSvc, registry, ":0", false)
+	s.SetUnmanagedController(&stubUnmanagedController{declared: []UnmanagedStatus{
+		{ID: "live-ext", Type: "mcp", State: "running", Alive: true},
+		{ID: "idle-ext", Type: "mcp", State: "stopped"},
+		{ID: "susp-managed", Type: "reason", Managed: true, State: "stopped"},
+		{ID: "ghost-managed", Type: "timer", Managed: true, State: "stopped"},
+	}})
+	addr, err := s.Bind()
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	resp, err := http.Get("http://" + addr + "/api/workers")
+	if err != nil {
+		t.Fatalf("GET workers: %v", err)
+	}
+	defer resp.Body.Close()
+	var views []WorkerView
+	if err := json.NewDecoder(resp.Body).Decode(&views); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := map[string]WorkerView{}
+	for _, v := range views {
+		byID[v.ID] = v
+	}
+
+	if v := byID["live-ext"]; !v.Unmanaged || v.UnmanagedState != "running" || v.Managed {
+		t.Fatalf("live-ext = %+v, want unmanaged/running", v)
+	}
+	if v := byID["idle-ext"]; !v.Unmanaged || v.UnmanagedState != "stopped" || v.Managed {
+		t.Fatalf("idle-ext = %+v, want unmanaged/stopped", v)
+	}
+	// The suspended managed worker is known to the worker service: its live
+	// state wins and the managed declaration must not badge it unmanaged.
+	if v := byID["susp-managed"]; !v.Managed || v.State != "suspended" || v.Unmanaged {
+		t.Fatalf("susp-managed = %+v, want managed/suspended without unmanaged badge", v)
+	}
+	// Declared but instantiated nowhere: surfaced for the start button.
+	if v := byID["ghost-managed"]; !v.Managed || v.State != "stopped" || v.Unmanaged {
+		t.Fatalf("ghost-managed = %+v, want managed/stopped", v)
+	}
+}
+
+// TestHandleUnmanagedStartConflict verifies start refuses a worker the worker
+// service already owns (suspend/resume own that lifecycle), and that worker
+// creation is 404 without an assembly-provided creator.
+func TestHandleUnmanagedStartConflict(t *testing.T) {
+	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(t.TempDir(), "identities.json"))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	workerSvc := workerhost.New()
+	workerSvc.RegisterBuilder("reason", fakeBuilderSpec)
+	if err := workerSvc.RestoreSuspended(worker.WorkerConfig{ID: "susp-managed", Type: "reason"}, nil); err != nil {
+		t.Fatalf("restore suspended: %v", err)
+	}
+
+	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
+	s := New(nil, nil, engine, workerSvc, registry, ":0", false)
+	addr, err := s.Bind()
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	resp, err := http.Post("http://"+addr+"/api/workers/susp-managed/start", "", nil)
+	if err != nil {
+		t.Fatalf("POST start: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("start status = %d, want 409", resp.StatusCode)
+	}
+
+	resp, err = http.Post("http://"+addr+"/api/workers/create", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("POST create: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("create status = %d, want 404 without a creator", resp.StatusCode)
 	}
 }

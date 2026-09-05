@@ -1,6 +1,7 @@
 // API service — all backend HTTP calls
 import type {
   ContextInfo,
+  CreateWorkerResult,
   EventPattern,
   ProjectInfo,
   ProjectStartResult,
@@ -169,6 +170,20 @@ export async function restartWorker(id: string): Promise<void> {
 export async function deleteWorker(id: string): Promise<void> {
   const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}`), { method: 'DELETE' })
   if (!res.ok) throw new Error((await res.text()).trim() || 'delete failed: ' + res.status)
+}
+
+// createWorker persists a worker declaration (project.WorkerConfig-shaped
+// body) and launches it. External workers start before the call resolves; a
+// managed worker is spawned via the host worker, so the call waits for the
+// host's terminal reply.
+export async function createWorker(body: Record<string, unknown>): Promise<CreateWorkerResult> {
+  const res = await fetch(p('/api/workers/create'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'create failed: ' + res.status)
+  return res.json()
 }
 
 // updateWorkerAllow edits a worker's allow lists on the bus registry. Either
