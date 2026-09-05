@@ -232,11 +232,17 @@ export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateW
 
         <div style={field}>
           <label style={label}>{t('workers.create.subscriptions')}</label>
-          <input style={input} value={subscriptions} onChange={e => setSubscriptions(e.target.value)} placeholder="worker.input, timer.timeout" />
+          <input style={input} value={subscriptions} onChange={e => setSubscriptions(e.target.value)} placeholder={t('workers.create.emptyDefault')} />
+          <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+            {t('workers.create.subscriptions.default')}
+          </div>
         </div>
         <div style={field}>
           <label style={label}>{t('workers.create.publish')}</label>
-          <input style={input} value={publish} onChange={e => setPublish(e.target.value)} placeholder="request.*" />
+          <input style={input} value={publish} onChange={e => setPublish(e.target.value)} placeholder={t('workers.create.emptyDefault')} />
+          <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+            {t('workers.create.publish.default')}
+          </div>
         </div>
 
         {note && (
