@@ -219,15 +219,15 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	cfg.Params = params
 
 	// PublishAllow: the workspace replies to tool calls (request.*) and
-	// announces presence. SubscribeAllow: empty — tool calls arrive directed;
-	// the workspace consumes no broadcasts. Not driven by stale
-	// params.subscriptions (e.g. an old tool.requested).
+	// announces presence. SubscribeAllow: worker.discover, so the workspace
+	// re-announces its tools to joiners. Tool calls arrive directed; the
+	// workspace consumes no other broadcasts.
 	connect := specConnect(ctx, id, "workspace",
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
 		},
-		nil)
+		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return workspace.New(workspace.Config{
 			ID:      id,
@@ -246,6 +246,7 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 // ── host ──
 
 func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
 		id = "host"
@@ -253,13 +254,15 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 	// PublishAllow: lifecycle replies (request.*) and presence. Its tool
 	// events (spawn/suspend/resume) are directed calls — no subscription
 	// needed; request.cancel is directed too (sent to the target worker).
+	// SubscribeAllow: worker.discover, so the host re-announces its tools to
+	// any worker that asks (late joiners, list_workers refresh).
 	connect := specConnect(ctx, id, "host",
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
 			event.NewPublishPattern("worker.discover"),
 		},
-		nil)
+		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerSvc})
 	}
@@ -275,12 +278,14 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 // ── timer ──
 
 func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
 		id = "timer"
 	}
 	// PublishAllow: replies, the directed fires back to the caller, presence.
-	// Subscribes to nothing — everything it receives is directed.
+	// SubscribeAllow: worker.discover, so the timer re-announces its tools to
+	// joiners. Everything else it receives is directed.
 	connect := specConnect(ctx, id, "timer",
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
@@ -288,7 +293,7 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 			event.NewPublishPattern("timer.reminder"),
 			event.NewPublishPattern("worker.ready"),
 		},
-		nil)
+		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return timer.New(timer.Config{ID: id, Bus: ch})
 	}
@@ -331,6 +336,7 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 // ── program ──
 
 func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
 		id = "program"
@@ -349,14 +355,15 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}
 	os.MkdirAll(abs, 0755)
 
-	// PublishAllow: replies and presence. Subscribes to nothing — program
+	// PublishAllow: replies and presence. SubscribeAllow: worker.discover, so
+	// the program worker re-announces its tools to joiners. Program
 	// query/update arrive directed.
 	connect := specConnect(ctx, id, "program",
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
 		},
-		nil)
+		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return programworker.New(programworker.Config{
 			ID:      id,
