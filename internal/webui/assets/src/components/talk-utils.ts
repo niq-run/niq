@@ -39,12 +39,12 @@ export function isToolEvent(type: string): boolean {
   return type === 'request.completed' || type === 'request.failed' || type === 'request.rejected' || type === 'request.progressed' || type === 'request.cancel'
 }
 
-// isToolInvocation reports whether an event is a tool call: with tool.request
-// retired, invocations arrive as their own event type, distinguished by the
-// "arguments" payload (only tool calls carry it). Pairs with its result via
-// the shared request_id.
-export function isToolInvocation(evt: EventPayload): boolean {
-  return !!(evt.payload && evt.payload.arguments)
+// isToolResult reports whether a type is a terminal answer to an invocation —
+// the only events that carry the request_id of the call they answer. It is the
+// pairing half of the request protocol: request.cancel / request.progressed
+// are lifecycle events, not answers.
+export function isToolResult(type: string): boolean {
+  return type === 'request.completed' || type === 'request.failed' || type === 'request.rejected'
 }
 
 export function isReasonBoundary(type: string): boolean {
@@ -53,18 +53,11 @@ export function isReasonBoundary(type: string): boolean {
 
 // ── Tool helpers ──
 
+// toolSummary is the card title: the event type, in brackets. Every event is
+// rendered as a card, so there is nothing to classify — a capability is invoked
+// under its own event type and the payload is the argument object itself.
 export function toolSummary(evt: EventPayload): string {
-  // For a tool invocation the payload carries no name — the event type IS the
-  // tool (each capability is invoked under its own event type). Results no
-  // longer carry a name either (they pair to their invocation by request_id),
-  // so a standalone result falls back to a generic label. The failure is
-  // already signalled by the "Tool Failed" label, and the full error lives in
-  // the expandable body (toolContent) — surfacing it here made the single-line
-  // title wrap.
-  const name =
-    (evt.payload?.name as string) ||
-    (isToolInvocation(evt) ? evt.type : evt.type.startsWith('request.') ? 'result' : '')
-  return `[${name}]`
+  return `[${evt.type}]`
 }
 
 export function toolCallId(evt: EventPayload): string {
@@ -74,11 +67,6 @@ export function toolCallId(evt: EventPayload): string {
 export function toolContent(evt: EventPayload, formatted: boolean): string {
   const format = (v: any): string =>
     formatted ? JSON.stringify(v, null, 2) : JSON.stringify(v)
-  if (isToolInvocation(evt)) {
-    const args = evt.payload?.arguments
-    if (args) return format(args)
-    return ''
-  }
   if (evt.type === 'request.progressed') {
     const partial = evt.payload?.partial
     if (typeof partial === 'string') return partial
@@ -108,7 +96,11 @@ export function toolContent(evt: EventPayload, formatted: boolean): string {
     if (reason) return String(reason)
     return ''
   }
-  return ''
+  // Any other event: the payload IS the argument object — there is no wrapper
+  // to unwrap.
+  const args = evt.payload
+  if (!args || Object.keys(args).length === 0) return ''
+  return format(args)
 }
 
 // ── Event type → color ──
@@ -134,10 +126,7 @@ export function summaryText(evt: EventPayload): string {
   if (p.result)
     return typeof p.result === 'string' ? ellipsis(p.result, 120) : ''
   if (p.name) {
-    const args = p.arguments ? ' ' + JSON.stringify(p.arguments) : ''
-    return (
-      String(p.name) + ellipsis(args, 120) + (p.status ? ` [${p.status}]` : '')
-    )
+    return String(p.name) + (p.status ? ` [${p.status}]` : '')
   }
   if (p.error) return `error: ${ellipsis(String(p.error), 80)}`
   if (p.summary) return ellipsis(p.summary, 120)
@@ -202,10 +191,6 @@ export function oneLine(s: string, n: number): string {
 // Use with CSS text-overflow:ellipsis for a trailing ellipsis at the edge.
 export { ellipsis }
 
-export function truncate(s: string, n: number): string {
-  return ellipsis(s, n)
-}
-
 // ── Find referenced input event by trace_id ──
 
 /**
@@ -232,28 +217,4 @@ export function formatTime(ts: number): string {
     second: "2-digit",
     hour12: false,
   })
-}
-
-// ── Event payload formatting ──
-
-export function formatEventPayload(evt: EventPayload): string {
-  const p = evt.payload
-  if (!p) return ''
-  const parts: string[] = []
-  if (p.text) parts.push(`text=${truncate(String(p.text), 80)}`)
-  if (p.name) parts.push(`name=${p.name}`)
-  if (p.result) parts.push(`result=${truncate(String(p.result), 60)}`)
-  if (p.error) parts.push(`error=${truncate(String(p.error), 60)}`)
-  if (p.summary) parts.push(`summary=${truncate(p.summary, 60)}`)
-  if (parts.length === 0) {
-    for (const [k, v] of Object.entries(p)) {
-      if (k === 'worker_id' || k === 'call_id' || k === 'content') continue
-      const vs = typeof v === 'string' ? v : JSON.stringify(v)
-      if (vs && vs.length > 0 && vs !== '{}' && vs !== '[]') {
-        parts.push(`${k}=${truncate(vs, 60)}`)
-        if (parts.length >= 2) break
-      }
-    }
-  }
-  return parts.join(', ') || '(empty)'
 }

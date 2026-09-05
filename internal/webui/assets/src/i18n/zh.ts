@@ -53,7 +53,7 @@ export const zh: Record<StringKey, string> = {
   'talk.timeout': '超时',
   'talk.tool.cancelled': '已取消工具调用',
   'talk.reasoning.interrupted': '推理被中断',
-  'talk.call': '工具调用',
+  'talk.call': '请求',
   'talk.arguments': '参数',
   'talk.result': '工具结果',
   'talk.failed': '工具失败',

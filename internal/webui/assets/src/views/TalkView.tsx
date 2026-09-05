@@ -10,9 +10,9 @@ import ResponseBlock from '../components/ResponseBlock'
 import TimerElapsedBlock from '../components/TimerElapsedBlock'
 import SystemReminderBlock from '../components/SystemReminderBlock'
 import {
-  getInputText, isToolEvent, isToolInvocation, isReasonBoundary,
+  getInputText, isToolEvent, isToolResult, isReasonBoundary,
   toolContent, toolSummary, toolCallId,
-  formatEventPayload, formatTime, truncate, findReferencedInput, splitSystemReminder,
+  formatTime, findReferencedInput, splitSystemReminder,
 } from '../components/talk-utils'
 import type { EventPayload } from '../types'
 
@@ -203,11 +203,11 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // animate from top to bottom. Real-time pushes after that smooth-scroll.
   const mountedAt = useRef(Date.now())
 
-  const toggleToolContent = (callId: string) => {
+  const toggleExpanded = (key: string) => {
     setExpandedContent(prev => {
       const next = new Set(prev)
-      if (next.has(callId)) next.delete(callId)
-      else next.add(callId)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
@@ -232,12 +232,13 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       // streaming mode is on they're consumed to build the streaming UI;
       // when off they're dropped entirely.
       if (evt.type === 'reason.thinking_delta' || evt.type === 'reason.text_delta' || evt.type === 'request.progressed') return false
-      // Tool events belong to the reasoning conversation only when a reason
-      // worker is a party (caller or target). Host lifecycle calls (hiw->host
-      // suspend/resume), which involve no reason worker, stay out of talk.
-      // The hasAnyReason guard defers filtering until we know the worker types,
-      // so a not-yet-loaded list doesn't hide everything on first paint.
-      if ((isToolEvent(evt.type) || isToolInvocation(evt)) && hasAnyReason && !involvesReason(evt)) return false
+      // A tool result belongs to the reasoning conversation only when a reason
+      // worker is a party (caller or target). The hasAnyReason guard defers
+      // filtering until we know the worker types, so a not-yet-loaded list
+      // doesn't hide everything on first paint. Invocations are not filtered
+      // here: any event that is not routed to a dedicated renderer below is
+      // rendered as a card.
+      if (isToolResult(evt.type) && hasAnyReason && !involvesReason(evt)) return false
       if (talkWorkers.size === 0) return true // show all when none selected
       const recipients = deliveries[evt.id] || evt.recipients
       if (evt.type === 'worker.input') {
@@ -253,13 +254,13 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     })
   }, [events, talkWorkers, deliveries, workerTypes])
 
-  // request_id → terminal result event. A tool invocation is rendered with its
-  // matched result merged into the same card (the result row is then skipped),
-  // so the result's identity comes from the invocation, not from a name field.
+  // request_id → terminal result event: the only pairing in the request
+  // protocol. A card picks up its answer from here (the result row itself is
+  // then skipped), so whether an event was answered is a lookup, not a guess.
   const resultByRequestId = useMemo(() => {
     const m: Record<string, EventPayload> = {}
     for (const evt of events) {
-      if ((evt.type === 'request.completed' || evt.type === 'request.failed' || evt.type === 'request.rejected') && evt.request_id) {
+      if (isToolResult(evt.type) && evt.request_id) {
         m[evt.request_id] = evt
       }
     }
@@ -410,12 +411,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     // including cancels).
     if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || isToolEvent(evt.type))) continue
 
-    // A terminal result whose invocation is in the stream is merged into that
+    // A terminal result answers an invocation: it is merged into that
     // invocation's card and never rendered as its own row. Skip it before the
     // avatar bookkeeping below: its worker_id is the callee (lark, host, ...)
     // and letting it advance the streak would break it invisibly, making the
     // real speaker's next event re-show the avatar.
-    if (!isToolInvocation(evt) && isToolEvent(evt.type) && resultByRequestId[toolCallId(evt)] === evt) continue
+    if (isToolResult(evt.type) && evt.request_id) continue
 
     // System events (timer/abort) always render their sender avatar, so they
     // must also advance the avatar streak — otherwise the next reason worker
@@ -698,44 +699,75 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       continue
     }
 
-    // Tool events: render individually in natural order
-    if (isToolEvent(evt.type) || isToolInvocation(evt)) {
-      const callId = toolCallId(evt)
-      const isInvocation = isToolInvocation(evt)
-      const resultEvt = isInvocation ? resultByRequestId[callId] : undefined
+    // Left-side events
+    if (evt.type === 'reason.thinking') {
+      nodes.push(
+        <div key={evt.id + '-thinking-' + thinkingExpanded} style={{ maxWidth: bubbleMax }}>
+          {showBadge && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+            </div>
+          )}
+          <ThinkingBlock evt={evt} defaultExpanded={thinkingExpanded} compact={compactMode} />
+        </div>
+      )
+      continue
+    }
+    if (evt.type === 'reason.response') {
+      const ref = findReferencedInput(events, evt)
+      nodes.push(
+        <div key={evt.id} data-evt-id={evt.id} style={{ maxWidth: bubbleMax }}>
+          {showBadge && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+            </div>
+          )}
+          <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} quotedEvtId={ref?.evtId} onQuoteClick={scrollToEvent} />
+        </div>
+      )
+      continue
+    }
 
-      const isExpanded = expandedContent.has(callId)
+    // Every other event renders as a card: the event type is the title and the
+    // payload is the body. request_id is only a pairing key — when a
+    // request.completed / failed / rejected answers this one, its body is
+    // merged in below the arguments.
+    {
+      const callId = toolCallId(evt)
+      const resultEvt = resultByRequestId[callId]
+
+      const isExpanded = expandedContent.has(evt.id)
       const content = toolContent(evt, isExpanded)
       const mergedResult = resultEvt ? toolContent(resultEvt, isExpanded) : ''
-      // Invocation card shows the arguments plus, when answered, the merged
-      // result body below it.
-      const displayContent = isInvocation && mergedResult
+      // The card shows the payload plus, when answered, the result body below.
+      const displayContent = mergedResult
         ? (content ? content + '\n\n—— result ——\n\n' + mergedResult : mergedResult)
         : content
-      const contentLen = (isInvocation && mergedResult
-        ? content + '\n\n—— result ——\n\n' + mergedResult
-        : toolContent(evt, false)).length
+      const contentLen = toolContent(evt, false).length +
+        (resultEvt ? toolContent(resultEvt, false).length : 0)
       const summary = toolSummary(evt)
-      // Status colour: an answered invocation takes the outcome colour
-      // (completed/failed/rejected); an in-flight one stays toolRequested.
-      const statusColor = isInvocation
-        ? resultEvt
-          ? resultEvt.type === 'request.completed' ? colors.toolCompleted
-          : resultEvt.type === 'request.failed' ? colors.toolFailed
-          : colors.textDim
-          : colors.toolRequested
+      // Status colour: an answered card takes the outcome colour of its
+      // result; one that carries a request_id is still awaiting its answer
+      // (toolRequested); anything else was never a request.
+      const statusColor = resultEvt
+        ? resultEvt.type === 'request.completed' ? colors.toolCompleted
+        : resultEvt.type === 'request.failed' ? colors.toolFailed
+        : colors.textDim
         : evt.type === 'request.completed' ? colors.toolCompleted
         : evt.type === 'request.failed' ? colors.toolFailed
-        : colors.textDim
+        : evt.type === 'request.rejected' ? colors.textDim
+        : evt.request_id ? colors.toolRequested
+        : colors.textDimmed
 
-      const toolLabel = isInvocation ? t('talk.call')
-        : evt.type === 'request.completed' ? t('talk.result')
+      const toolLabel = isToolResult(evt.type)
+        ? evt.type === 'request.completed' ? t('talk.result')
         : evt.type === 'request.failed' ? t('talk.failed')
         : t('talk.rejected')
+        : t('talk.call')
 
       // Streaming: accumulated request.progressed output shown live in the
-      // invocation card while the call is in flight (only before it resolves).
-      const partialText = isInvocation && !resultEvt ? (toolPartials[callId] || '') : ''
+      // card while the call is in flight (only before it resolves).
+      const partialText = !resultEvt ? (toolPartials[callId] || '') : ''
 
       nodes.push(
         <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
@@ -758,7 +790,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             }}
           >
             <div
-              onClick={() => toggleToolContent(callId)}
+              onClick={() => toggleExpanded(evt.id)}
               style={{ cursor: 'pointer', userSelect: 'none' }}
             >
               {isMobile ? (
@@ -780,7 +812,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                     <span style={{ width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0, opacity: 0.5 }} />
                     <span style={{ color: colors.textDim, fontSize: tFontSize }}>{toolLabel} {summary}</span>
                   </span>
-                  {(evt.type === 'request.completed' || isToolInvocation(evt)) && contentLen > 0 && (
+                  {contentLen > 0 && (
                     <>
                       <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
                       <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('thinking.chars', { n: contentLen })}</span>
@@ -812,7 +844,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             )}
             {isExpanded && displayContent && (
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
-                {isInvocation && resultEvt ? (
+                {resultEvt ? (
                   <>
                     <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                       {t('talk.arguments')}
@@ -836,48 +868,6 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               </div>
             )}
           </div>
-        </div>
-      )
-      continue
-    }
-
-    // Left-side events
-    if (evt.type === 'reason.thinking') {
-      nodes.push(
-        <div key={evt.id + '-thinking-' + thinkingExpanded} style={{ maxWidth: bubbleMax }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
-            </div>
-          )}
-          <ThinkingBlock evt={evt} defaultExpanded={thinkingExpanded} compact={compactMode} />
-        </div>
-      )
-    } else if (evt.type === 'reason.response') {
-      const ref = findReferencedInput(events, evt)
-    		  nodes.push(
-  			<div key={evt.id} data-evt-id={evt.id} style={{ maxWidth: bubbleMax }}>
-    			  {showBadge && (
-    				<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
-    				  <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
-    				</div>
-    			  )}
-    			  <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} quotedEvtId={ref?.evtId} onQuoteClick={scrollToEvent} />
-    			</div>
-    		  )
-    } else {
-      nodes.push(
-        <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: 12, fontSize: fontSizes.sm, color: colors.textDimmed }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
-            </div>
-          )}
-          <div style={{ color: colors.textDimmed, fontSize: fontSizes.xs }}>
-            {evt.type}
-            {directionOf(evt) && <span> {directionOf(evt)}</span>}
-          </div>
-          {formatEventPayload(evt)}
         </div>
       )
     }
@@ -986,6 +976,3 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     </>
   )
 }
-
-// Also re-export helpers for consumers that may need them
-export { formatTime, truncate }

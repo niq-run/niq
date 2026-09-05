@@ -55,7 +55,7 @@ export const en = {
   'talk.timeout': 'timeout',
   'talk.tool.cancelled': 'tool call cancelled',
   'talk.reasoning.interrupted': 'reasoning interrupted',
-  'talk.call': 'Tool Call',
+  'talk.call': 'Request',
   'talk.arguments': 'Arguments',
   'talk.result': 'Tool Result',
   'talk.failed': 'Tool Failed',
