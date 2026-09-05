@@ -252,36 +252,38 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 						<div style={{ color: colors.detailLabel, fontSize: fontSizes.sm, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
 							{t('wd.delete')}
 						</div>
-            				{confirmDel ? (
-            					<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            						<span style={{ color: colors.textDim, fontSize: fontSizes.sm }}>{t('wd.delete.confirm', { id: worker.id })}</span>
-            						<span
-            							onClick={doDelete}
-            							className="btn-hover"
-            							style={{ cursor: delBusy ? 'default' : 'pointer', opacity: delBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
-            						>
-            							{delBusy ? t('wd.deleting') : t('wd.confirmDelete')}
-            						</span>
-            						<span
-            							onClick={() => setConfirmDel(false)}
-            							className="btn-hover"
-            							style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
-            						>
-            							{t('wd.cancel')}
-            						</span>
-            					</div>
-				      ) : (
-				        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-				          <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, lineHeight: 1.4, minWidth: 0, flex: '1 1 auto' }}>{t('wd.delete.desc')}</span>
-				          <span
-				            onClick={() => { setConfirmDel(true); setUmNote('') }}
-				            className="btn-hover"
-				            style={{ cursor: 'pointer', flexShrink: 0, display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
-				          >
-				            {t('wd.delete')}
-				          </span>
-				        </div>
-				      )}
+				                {confirmDel ? (
+				                  <>
+				                    <div style={{ color: colors.textDim, fontSize: fontSizes.sm, marginBottom: 8 }}>{t('wd.delete.confirm', { id: worker.id })}</div>
+				                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+				                      <span
+				                        onClick={doDelete}
+				                        className="btn-hover"
+				                        style={{ cursor: delBusy ? 'default' : 'pointer', opacity: delBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
+				                      >
+				                        {delBusy ? t('wd.deleting') : t('wd.confirmDelete')}
+				                      </span>
+				                      <span
+				                        onClick={() => setConfirmDel(false)}
+				                        className="btn-hover"
+				                        style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+				                      >
+				                        {t('wd.cancel')}
+				                      </span>
+				                    </div>
+				                  </>
+				                ) : (
+				                <>
+				                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 8, lineHeight: 1.5 }}>{t('wd.delete.desc')}</div>
+				                  <span
+				                    onClick={() => { setConfirmDel(true); setUmNote('') }}
+				                    className="btn-hover"
+				                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
+				                  >
+				                    {t('wd.delete')}
+				                  </span>
+				                </>
+				              )}
 				      </div>
           </div>
 
