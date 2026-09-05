@@ -89,7 +89,7 @@ func (w *Worker) Stop() error {
 
 // SendInput publishes a user message to the bus as a worker.input event.
 // If target is non-empty, the message is directed to that worker.
-// mode controls input handling ("default", "append", "interrupt").
+// mode controls input handling ("default", "schedule", "append").
 func (w *Worker) SendInput(ctx context.Context, text string, target string, mode string) error {
 	payload := map[string]any{"text": text}
 	if mode != "" && mode != "default" {

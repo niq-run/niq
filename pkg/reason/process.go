@@ -6,8 +6,8 @@
 //
 // Input modes form a spectrum of increasing intrusion:
 //
-//	append (level 1):    append message, schedule if idle, no park
-//	remind (level 2):    append message, schedule, park on next round
+//	schedule (level 1):  append message, schedule only if idle, no park
+//	append (level 2):    append message, schedule, park on next round
 //	interrupt (level 3): interrupt in-flight reasoning, schedule, park
 //
 // None of the three is a default; each caller picks one per input by setting
@@ -138,7 +138,7 @@ func (w *BaseReasonWorker) handleTimeout(evt event.Event) {
 			Role:    llm.RoleUser,
 			Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "[system] tool call timeout"}},
 		}
-		w.scheduleInput([]llm.Message{msg}, requesttracker.PreemptCauseTimeout)
+		w.appendInput([]llm.Message{msg}, requesttracker.PreemptCauseTimeout)
 	}
 }
 
@@ -149,7 +149,7 @@ func (w *BaseReasonWorker) handleTimeout(evt event.Event) {
 func (w *BaseReasonWorker) handleReminder(evt event.Event) {
 	w.captureTraceID(evt)
 	msgs := w.convertEvent(evt)
-	w.scheduleInput(msgs, requesttracker.PreemptCauseReminder)
+	w.appendInput(msgs, requesttracker.PreemptCauseReminder)
 }
 
 // handleToolResult processes a request.completed/failed/rejected event.
@@ -192,12 +192,13 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 // handleInput processes an input event. The input_mode field in the payload
 // picks one of the three levels (see package comment):
 //
-//	"append" — level 1: append the message and schedule a new round, but only
+//	"schedule" — level 1: append the message and schedule a round, but only
 //	            when the system is idle (no in-flight reasoning, no pending
 //	            tool calls). Does not interrupt or park anything.
-//	"schedule" — level 2: append the message and schedule a fresh round, parking
-//	            pending tools when it starts, without interrupting an in-flight
-//	            call (a gentle wake-up, like a reminder).
+//	"append" — level 2: append the message as a supplement to the ongoing
+//	            thought and schedule a fresh round, parking pending tools when
+//	            it starts, without interrupting an in-flight call (a gentle
+//	            wake-up, like a reminder).
 //	else (incl. hiw's usual "default") — level 3 interrupt: cancel the
 //	            in-flight reasoning call and schedule a fresh round; pending
 //	            tools are parked when reason() starts (using the stored cause).
@@ -208,10 +209,10 @@ func (w *BaseReasonWorker) handleInput(evt event.Event) {
 
 	mode, _ := evt.Payload["input_mode"].(string)
 	switch mode {
-	case "append":
-		w.appendInput(msgs)
 	case "schedule":
-		w.scheduleInput(msgs, requesttracker.PreemptCauseInput)
+		w.scheduleInput(msgs)
+	case "append":
+		w.appendInput(msgs, requesttracker.PreemptCauseInput)
 	default:
 		w.interruptInput(msgs, requesttracker.PreemptCauseInput)
 	}
@@ -237,10 +238,12 @@ func (w *BaseReasonWorker) recallToolCalls(tcs []*requesttracker.TrackedRequest)
 	}
 }
 
-// appendInput appends messages and schedules a new round only when the system
-// is idle - no in-flight reasoning and no pending tool calls. Does not
-// interrupt or park anything. This is the least intrusive input mode (level 1).
-func (w *BaseReasonWorker) appendInput(msgs []llm.Message) {
+// scheduleInput appends messages and schedules a new round only when the
+// system is idle - no in-flight reasoning and no pending tool calls. Does not
+// interrupt or park anything; when busy, the message waits in the transcript
+// until the current work finishes. This is the least intrusive input mode
+// (level 1).
+func (w *BaseReasonWorker) scheduleInput(msgs []llm.Message) {
 	w.transcript.Apply(transcript.InputPatch{Messages: msgs})
 
 	if !w.isReasoning && w.requestTracker.Resolved() {
@@ -248,11 +251,12 @@ func (w *BaseReasonWorker) appendInput(msgs []llm.Message) {
 	}
 }
 
-// scheduleInput appends messages, records the cause, and schedules a fresh
-// reasoning round. The pending tools are parked when reason() starts, not
-// here. This is the moderate input mode (level 2) — it does not interrupt
-// an in-flight reasoning call, but ensures the next round responds promptly.
-func (w *BaseReasonWorker) scheduleInput(msgs []llm.Message, cause requesttracker.PreemptCause) {
+// appendInput appends messages, records the cause, and schedules a fresh
+// reasoning round. The message supplements the ongoing thought: an in-flight
+// reasoning call is not interrupted, but pending tools are parked when the
+// next round starts so it responds promptly. This is the moderate input mode
+// (level 2).
+func (w *BaseReasonWorker) appendInput(msgs []llm.Message, cause requesttracker.PreemptCause) {
 	w.transcript.Apply(transcript.InputPatch{Messages: msgs})
 	w.immediateReasoningCause = cause
 	w.needReason = true

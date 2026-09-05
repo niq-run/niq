@@ -117,11 +117,11 @@ export const en = {
   'mode.interrupt.desc': 'cancel in-flight reasoning and handle now',
   'mode.interrupt.hint': 'interrupt in-flight reasoning and handle now (level 3)',
   'mode.schedule': 'schedule mode',
-  'mode.schedule.desc': 'no interrupt; respond promptly next round',
-  'mode.schedule.hint': "wake gently; don't interrupt in-flight reasoning (level 2)",
+  'mode.schedule.desc': 'only when idle; least intrusive',
+  'mode.schedule.hint': 'only when idle (no reasoning, no pending tools) (level 1)',
   'mode.append': 'append mode',
-  'mode.append.desc': 'only when idle; least intrusive',
-  'mode.append.hint': 'only when idle (no reasoning, no pending tools) (level 1)',
+  'mode.append.desc': 'no interrupt; respond promptly next round',
+  'mode.append.hint': "wake gently; supplement the ongoing thought, don't interrupt in-flight reasoning (level 2)",
 
   // ── Workers view ──
   'workers.title': 'Workers',
