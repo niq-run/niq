@@ -143,6 +143,16 @@ func (s *Server) handleEvents(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	s.sessions.Store(workerID, bs)
 	defer s.sessions.Delete(workerID)
 
+	// Close the channel when this SSE stream ends (connection drop, restart,
+	// shutdown) so the watch goroutine's Receive loop unblocks and the engine
+	// detaches the worker. Without this, a dead network worker's stale channel
+	// stays registered as "online" forever and blocks a reconnecting process.
+	defer func() {
+		if err := bs.Close(); err != nil {
+			log.Printf("[httptrans] close %s: %v", workerID, err)
+		}
+	}()
+
 	// Attach to engine — starts the watch goroutine.
 	eventbus.Attach(r.Context(), s.engine, workerID, bs)
 

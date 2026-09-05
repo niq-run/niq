@@ -30,12 +30,12 @@ func watch(ctx context.Context, engine *Engine, workerID string, ch corebus.BusS
 	reqCh, err := ch.Receive(ctx)
 	if err != nil {
 		log.Printf("[eventbus] watch %s: receive failed: %v", workerID, err)
-		engine.Disconnect(workerID)
+		engine.DisconnectChannel(workerID, ch)
 		return
 	}
 	for req := range reqCh {
 		engine.HandleRequest(ctx, req, workerID)
 	}
-	engine.Disconnect(workerID)
+	engine.DisconnectChannel(workerID, ch)
 	log.Printf("[eventbus] watch %s: channel closed, disconnected", workerID)
 }

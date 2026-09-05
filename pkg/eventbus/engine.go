@@ -57,6 +57,13 @@ func NewEngine(registry corebus.IdentityRegistry, store store.AppendStore) *Engi
 
 // Connect registers a worker as online by associating its channel.
 // The worker must have a registered identity.
+//
+// A reconnect for the same worker id replaces any existing (now stale)
+// connection: a network worker process (e.g. a supervisor-restarted one)
+// reconnects before the bus finishes tearing down the old channel, and
+// rejecting that would leave the fresh worker dead on the bus. The old
+// channel is closed so its watch goroutine exits; DisconnectChannel is
+// what actually removes it, and only if it is still the live connection.
 func (e *Engine) Connect(workerID string, ch corebus.BusSideChannel) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -64,8 +71,16 @@ func (e *Engine) Connect(workerID string, ch corebus.BusSideChannel) error {
 	if _, ok := e.registry.Lookup(workerID); !ok {
 		return fmt.Errorf("eventbus: cannot connect %s: identity not registered", workerID)
 	}
-	if _, ok := e.channels[workerID]; ok {
-		return fmt.Errorf("eventbus: worker %s already connected", workerID)
+	if old, ok := e.channels[workerID]; ok {
+		if old == ch {
+			return fmt.Errorf("eventbus: worker %s already connected", workerID)
+		}
+		e.channels[workerID] = ch
+		if closer, _ := old.(interface{ Close() error }); closer != nil {
+			_ = closer.Close()
+		}
+		log.Printf("[eventbus] worker %s reconnected (replaced stale connection)", workerID)
+		return nil
 	}
 	e.channels[workerID] = ch
 	log.Printf("[eventbus] worker %s connected", workerID)
@@ -84,6 +99,23 @@ func (e *Engine) Disconnect(workerID string) {
 	delete(e.channels, workerID)
 	e.mu.Unlock()
 	log.Printf("[eventbus] worker %s disconnected", workerID)
+
+	e.broadcastGone(context.Background(), workerID)
+}
+
+// DisconnectChannel removes a worker's connection only if it is the given
+// channel instance. A watch goroutine (or SSE teardown) owns one connection;
+// when that connection has already been replaced by a reconnect, removing its
+// own stale handle must not knock out the newer live connection.
+func (e *Engine) DisconnectChannel(workerID string, ch corebus.BusSideChannel) {
+	e.mu.Lock()
+	if cur, ok := e.channels[workerID]; !ok || cur != ch {
+		e.mu.Unlock()
+		return
+	}
+	delete(e.channels, workerID)
+	e.mu.Unlock()
+	log.Printf("[eventbus] worker %s channel closed, disconnected", workerID)
 
 	e.broadcastGone(context.Background(), workerID)
 }
