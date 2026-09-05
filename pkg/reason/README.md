@@ -102,8 +102,8 @@ spectrum of increasing intrusion, not a "default vs non-default":
 
 | level | behavior | sets needReason? |
 |---|---|---|
-| append (level 1) | leave a message; only trigger a round when idle | when idle |
-| schedule (level 2) | record cause + schedule next round, don't interrupt in-flight | yes |
+| schedule (level 1) | leave a message; only trigger a round when idle | when idle |
+| append (level 2) | record cause + schedule next round, don't interrupt in-flight | yes |
 | interrupt (level 3) | interrupt in-flight + schedule + park (hiw usually takes this) | yes |
 
 Other events are dispatched by `process`:

@@ -153,10 +153,10 @@ func TestLateToolResult(t *testing.T) {
 	}
 }
 
-// TestInputScheduleIsGentle verifies the "schedule" input_mode (level 2) does
+// TestInputAppendIsGentle verifies the "append" input_mode (level 2) does
 // not interrupt an in-flight reasoning call, but schedules the next round and
 // records the cause for parking.
-func TestInputScheduleIsGentle(t *testing.T) {
+func TestInputAppendIsGentle(t *testing.T) {
 	prov := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
 	w, ch, _ := startWorker(t, prov)
 
@@ -171,24 +171,24 @@ func TestInputScheduleIsGentle(t *testing.T) {
 		}
 	}, "reasoning to start")
 
-	// A schedule-mode input must not interrupt the in-flight call.
-	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "note", "input_mode": "schedule"})
+	// An append-mode input must not interrupt the in-flight call.
+	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "note", "input_mode": "append"})
 	time.Sleep(50 * time.Millisecond)
 	if ch.hasInterrupted() {
-		t.Fatal("schedule-mode input must not interrupt in-flight reasoning")
+		t.Fatal("append-mode input must not interrupt in-flight reasoning")
 	}
 
-	// The schedule input records the cause for the next round's parking.
+	// The append input records the cause for the next round's parking.
 	waitCond(t, testTimeout, func() bool {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		return w.immediateReasoningCause == requesttracker.PreemptCauseInput
-	}, "schedule input to record cause")
+	}, "append input to record cause")
 	w.mu.Lock()
 	cause := w.immediateReasoningCause
 	w.mu.Unlock()
 	if cause != requesttracker.PreemptCauseInput {
-		t.Fatalf("schedule input should set immediateReasoningCause, got %q", cause)
+		t.Fatalf("append input should set immediateReasoningCause, got %q", cause)
 	}
 
 	close(prov.release)
