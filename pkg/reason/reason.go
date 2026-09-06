@@ -518,12 +518,15 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 		// Convert the tool call back into the extension's own event (e.g.
 		// context_compress → context.compress) and send it to self, routed via
 		// the bus for audit; the meta operation completes asynchronously and
-		// schedules the next round.
+		// schedules the next round. The tool call id rides along as the
+		// RequestId so the handler's request.* echo pairs with it (the talk
+		// view pairs request and completion by that id).
 		argsMap := map[string]any{}
 		if metaCall.ToolArguments != "" {
 			json.Unmarshal([]byte(metaCall.ToolArguments), &argsMap)
 		}
 		evt := event.New(metaCap.Event, w.ID(), argsMap)
+		evt.RequestId = metaCall.ToolCallID
 		evt.TraceID = w.currentTraceID
 		_ = w.Channel.Send(ctx, evt, w.ID())
 

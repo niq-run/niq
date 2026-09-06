@@ -1,8 +1,11 @@
 package reason
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/niq-run/niq/core/event"
 	llm "github.com/niq-run/niq/core/llm"
@@ -196,3 +199,77 @@ func TestTranscriptEditCallAndStripToolCalls(t *testing.T) {
 		t.Fatal("TranscriptEditCall must be false without a transcript-edit call")
 	}
 }
+
+// rotateFlowProvider serves the three LLM touchpoints of a rotate round: the
+// reasoning stream returns the meta tool call, the summarizer (Complete)
+// returns the digest text, and the follow-up round returns a plain reply.
+type rotateFlowProvider struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *rotateFlowProvider) Complete(context.Context, *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	return &llm.CompletionResponse{Message: llm.Message{Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "DIGEST carried summary"}}}}, nil
+}
+
+func (p *rotateFlowProvider) CompleteStream(_ context.Context, _ *llm.CompletionRequest) (*llm.EventStream, error) {
+	p.mu.Lock()
+	p.calls++
+	n := p.calls
+	p.mu.Unlock()
+	var msg llm.Message
+	if n == 1 {
+		msg = llm.Message{Role: llm.RoleAssistant, StopReason: "tool_calls",
+			Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolName: "context_rotate"}}}
+	} else {
+		msg = llm.Message{Role: llm.RoleAssistant, StopReason: "stop",
+			Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "rotated"}}}
+	}
+	es := llm.NewEventStream()
+	es.Push(llm.EventTextStart{})
+	es.Push(llm.EventTextEnd{})
+	es.End(msg)
+	return es, nil
+}
+
+// TestMetaRotateEchoesToolCallID verifies the meta dispatch carries the tool
+// call id as its RequestId and the async completion echoes it back — the
+// pairing the talk view relies on to merge a meta request with its result.
+func TestMetaRotateEchoesToolCallID(t *testing.T) {
+	prov := &rotateFlowProvider{}
+	_, ch, cancel := startWorker(t, prov)
+	defer cancel()
+
+	ch.in <- event.New(event.TypeWorkerInput, "webui-hiw", map[string]any{"text": "rotate please"})
+
+	var rotateEvt event.Event
+	waitCond(t, 2*time.Second, func() bool {
+		for _, e := range ch.eventsOf(TypeContextRotate) {
+			rotateEvt = e
+			return true
+		}
+		return false
+	}, "context.rotate dispatch")
+	if rotateEvt.RequestId == "" {
+		t.Fatal("meta dispatch must carry the tool call id as RequestId")
+	}
+
+	// The mock channel logs self-directed sends without delivering them, so
+	// feed the dispatched event back the way the real bus would.
+	ch.in <- rotateEvt
+
+	waitCond(t, 2*time.Second, func() bool {
+		for _, e := range ch.eventsOf(event.TypeRequestCompleted) {
+			if e.RequestId == rotateEvt.RequestId {
+				return true
+			}
+		}
+		return false
+	}, "request.completed echoing the meta request id")
+}
+
+func (p *rotateFlowProvider) ListModels(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
