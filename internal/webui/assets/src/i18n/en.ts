@@ -52,8 +52,8 @@ export const en = {
   'talk.empty': 'No messages yet. Watching {label}.',
   'talk.broadcast': 'broadcast',
   'talk.allWorkers': 'all workers',
-  'talk.abort': 'abort',
   'talk.timeout': 'timeout',
+  'talk.abort': 'abort',
   'talk.tool.cancelled': 'request cancelled',
   'talk.reasoning.interrupted': 'reasoning interrupted',
   'talk.call': 'Request',
@@ -88,8 +88,6 @@ export const en = {
   // ── Thinking / timer ──
   'thinking.label': 'Thinking',
   'thinking.chars': '{n} chars',
-  'timer.elapsed': 'Timer "{label}" elapsed after {duration}ms',
-  'timer.elapsedUnnamed': 'Timer elapsed after {duration}ms',
 
   // ── Response block ──
   'response.jump.tooltip': 'jump to original message',

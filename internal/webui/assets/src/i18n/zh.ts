@@ -50,8 +50,8 @@ export const zh: Record<StringKey, string> = {
   'talk.empty': '还没有消息。正在监听 {label}。',
   'talk.broadcast': '广播',
   'talk.allWorkers': '全部工作单元',
-  'talk.abort': '已取消',
   'talk.timeout': '超时',
+  'talk.abort': '已取消',
   'talk.tool.cancelled': '请求已取消',
   'talk.reasoning.interrupted': '推理被中断',
   'talk.call': '请求',
@@ -84,8 +84,6 @@ export const zh: Record<StringKey, string> = {
 
   'thinking.label': '思考',
   'thinking.chars': '{n} 字',
-  'timer.elapsed': '定时器 “{label}” 在 {duration}ms 后触发',
-  'timer.elapsedUnnamed': '定时器在 {duration}ms 后触发',
 
   'response.jump.tooltip': '跳转到原消息',
 

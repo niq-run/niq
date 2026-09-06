@@ -7,7 +7,6 @@ import { makeMdComponents } from '../components/MarkdownComponents'
 import CollapsibleCode from '../components/CollapsibleCode'
 import ThinkingBlock from '../components/ThinkingBlock'
 import ResponseBlock from '../components/ResponseBlock'
-import TimerElapsedBlock from '../components/TimerElapsedBlock'
 import SystemReminderBlock from '../components/SystemReminderBlock'
 import {
   getInputText, isToolEvent, isToolResult, isReasonBoundary,
@@ -149,10 +148,6 @@ function WorkerBadge({ id, show, humanId, isReason, onMention, displayName }: {
       {mentionable && <span className="badge-tip">{t('badge.mention.tip')}</span>}
     </span>
   )
-}
-
-const inputRenderers: Record<string, React.FC<{evt: EventPayload; onTraceClick: (id: string) => void}>> = {
-  'timer.elapsed': TimerElapsedBlock,
 }
 
 export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide }: TalkViewProps) {
@@ -433,24 +428,22 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     // real speaker's next event re-show the avatar.
     if (isToolResult(evt.type) && evt.request_id) continue
 
-    // System events (timer/abort) always render their sender avatar, so they
-    // must also advance the avatar streak — otherwise the next reason worker
-    // event after a timer would wrongly see the same speaker and skip its avatar.
-    	const alwaysAvatar = evt.type === 'timer.reminder' || evt.type === 'timer.timeout' || evt.type === 'worker.abort'
-    	// Show a worker-name avatar for reason workers, the human, system events,
-    	// and any right-aligned message (e.g. an external worker like the lark
-    	// bridge speaking to a reason worker) so its identity is visible.
-    	const shouldShowAvatar = alwaysAvatar || isReason(evt.worker_id) || evt.worker_id === humanId || isRightAligned(evt)
-    // Notice rows that render without an avatar (interrupted / cancelled /
-    // timer-elapsed) must not consume the streak either: nothing identifying
-    // the speaker is displayed, so a streak they set would be invisible.
+    // Placement: one rule for every block (isRightAligned). A dedicated
+    // renderer may style an event its own way but never picks its own side.
+    const alignRight = isRightAligned(evt)
+    // Show a worker-name avatar for reason workers, the human, and any
+    // right-aligned message (e.g. an external worker like the lark bridge
+    // speaking to a reason worker) so its identity is visible.
+    const shouldShowAvatar = isReason(evt.worker_id) || evt.worker_id === humanId || alignRight
+    // Notice rows that render without an avatar (interrupted / cancelled) must
+    // not consume the streak either: nothing identifying the speaker is
+    // displayed, so a streak they set would be invisible.
     const showBadge = shouldShowAvatar && evt.worker_id !== lastAvatarId &&
-      evt.type !== 'reason.interrupted' && evt.type !== 'request.cancel' && evt.type !== 'timer.elapsed'
+      evt.type !== 'reason.interrupted' && evt.type !== 'request.cancel'
     if (showBadge) lastAvatarId = evt.worker_id
 
     // worker.input
     if (evt.type === 'worker.input') {
-      const alignRight = isRightAligned(evt)
       const { reminder, content } = splitSystemReminder(getInputText(evt))
       // The sending UI selects one of three input levels (interrupt / schedule /
       // append). The event stores it as payload.input_mode; the web UI's own
@@ -534,10 +527,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       continue
     }
 
-    // worker.abort — the human cancelled; a bubble shown right (if addressed
-    // to the selected reason worker) or left
+    // worker.abort — the human cancelled. Placement comes from the shared rule
+    // (alignRight); only the look is its own: a dashed notice, not a card.
     if (evt.type === 'worker.abort') {
-      const alignRight = isRightAligned(evt)
       nodes.push(
         <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
@@ -566,10 +558,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       continue
     }
 
-    // timer.reminder — a notice bubble shown right (if addressed to the
-    // selected reason worker) or left
+    // timer.reminder — a dedicated look for the timer's tick (⏰ purpose text),
+    // placement from the shared rule like every other block.
     if (evt.type === 'timer.reminder') {
-      const alignRight = isRightAligned(evt)
       let reminderText = (evt.payload?.text as string) || (evt.payload?.purpose as string) || ''
       if (!reminderText && evt.payload?.result) {
         const result = evt.payload.result
@@ -586,14 +577,17 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       }
       nodes.push(
         <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-            <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
-          </div>
+          {showBadge && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+            </div>
+          )}
           <div
             style={{
               maxWidth: alignRight ? '70%' : bubbleMax,
               display: alignRight ? 'inline-block' : undefined,
               textAlign: 'left',
+              boxSizing: 'border-box',
               background: colors.bgLight,
               border: '1px solid ' + colors.border,
               padding: '10px 14px',
@@ -602,7 +596,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               color: colors.text,
             }}
           >
-            <div style={{ fontSize: fontSizes.sm, color: colors.textDim, marginBottom: 4, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
               {evt.target_worker_id && <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>to: {displayName(evt.target_worker_id)}</span>}
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs }}>{formatTime(evt.timestamp)}</span>
             </div>
@@ -624,21 +618,22 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       continue
     }
 
-    // timer.timeout — notice that a tool call timed out; right if addressed to
-    // the selected reason worker, otherwise left
+    // timer.timeout — the timer reports a tool call timed out; same dedicated
+    // look, shared placement rule.
     if (evt.type === 'timer.timeout') {
-      const alignRight = isRightAligned(evt)
       nodes.push(
         <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
-          {/* Sender avatar: always show the timer worker for this system event */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-            <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
-          </div>
+          {showBadge && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+            </div>
+          )}
           <div
             style={{
               maxWidth: alignRight ? '70%' : bubbleMax,
               display: alignRight ? 'inline-block' : undefined,
               textAlign: 'left',
+              boxSizing: 'border-box',
               background: colors.bgLight,
               border: '1px solid ' + colors.border,
               padding: '8px 12px',
@@ -707,13 +702,6 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       continue
     }
 
-    // Input renderers (right-side events)
-    const InputRenderer = inputRenderers[evt.type]
-    if (InputRenderer) {
-      nodes.push(<InputRenderer key={evt.id} evt={evt} onTraceClick={onTraceClick} />)
-      continue
-    }
-
     // Left-side events
     if (evt.type === 'reason.thinking') {
       nodes.push(
@@ -757,13 +745,13 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         ? approved ? colors.toolCompleted : colors.toolFailed
         : colors.toolRequested
       nodes.push(
-        <div key={evt.id} data-evt-id={evt.id} style={{ maxWidth: bubbleMax, marginTop: 16, marginBottom: compactMode ? 8 : 12 }}>
+        <div key={evt.id} data-evt-id={evt.id} style={{ marginTop: 16, marginBottom: compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
           {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
               <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
             </div>
           )}
-          <div className={!isExpanded ? 'block-card' : undefined} style={{ border: '1px solid ' + colors.accent, padding: compactMode ? '4px 8px' : '6px 12px', fontSize: compactMode ? fontSizes.xs : fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
+          <div className={!isExpanded ? 'block-card' : undefined} style={{ maxWidth: alignRight ? '70%' : bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', border: '1px solid ' + colors.accent, padding: compactMode ? '4px 8px' : '6px 12px', fontSize: compactMode ? fontSizes.xs : fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
             <div onClick={() => toggleExpanded(evt.id)} style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0, opacity: 0.5 }} />
               <span style={{ color: colors.text, fontWeight: 600 }}>{t('talk.approval.title')}</span>
@@ -860,15 +848,23 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const partialText = !resultEvt ? (toolPartials[callId] || '') : ''
 
       nodes.push(
-        <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
+        <div key={evt.id} style={{ marginBottom: compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
           {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
               <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
             </div>
           )}
           <div
             className={!isExpanded ? 'block-card' : undefined}
             style={{
+              // Width lives on the card, not the wrapper: the wrapper stays
+              // full-width so a right-aligned card hugs the true right edge,
+              // while a left-aligned one keeps the plain block look. inline-
+              // block only on the right, so the card shrink-wraps its content.
+              maxWidth: alignRight ? '70%' : bubbleMax,
+              display: alignRight ? 'inline-block' : undefined,
+              textAlign: 'left',
+              boxSizing: 'border-box',
               border: '1px solid ' + (isExpanded ? colors.accent : colors.border),
               padding: tPad,
               fontSize: tFontSize,
