@@ -34,6 +34,7 @@ import (
 	reasonBase "github.com/niq-run/niq/pkg/reason"
 	"github.com/niq-run/niq/pkg/services/workerhost"
 	"github.com/niq-run/niq/pkg/workers/hiw"
+	workspaceBase "github.com/niq-run/niq/pkg/workers/workspace"
 )
 
 //go:embed assets/dist/*
@@ -166,6 +167,13 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// worker's worker.status / worker.updated reply.
 	mux.HandleFunc("GET /api/workers/{id}/providers", s.handleWorkerProviders)
 	mux.HandleFunc("POST /api/workers/{id}/provider", s.handleWorkerSetProvider)
+
+	// Mounts: read and mutate a workspace worker's mounted directories over
+	// the bus (mount.list / mount.add / mount.remove), same ask-reply pattern
+	// as the provider endpoints.
+	mux.HandleFunc("GET /api/workers/{id}/mounts", s.handleWorkerMounts)
+	mux.HandleFunc("POST /api/workers/{id}/mounts/add", s.handleWorkerMountAdd)
+	mux.HandleFunc("POST /api/workers/{id}/mounts/remove", s.handleWorkerMountRemove)
 
 	// Start / stop / restart an external (unmanaged) worker. Start also covers
 	// declared-but-absent managed workers: they are spawned via the host
@@ -663,16 +671,16 @@ func (s *Server) ask(ctx context.Context, target string, evt event.Event, want .
 }
 
 // workerOnline reports whether a worker currently holds a bus channel, and
-// whether it is a reason worker — the only family wired with ProviderSources,
-// so it is the only one that can answer a provider query.
-func (s *Server) workerOnline(id string) (online bool, isReason bool) {
+// its registered type — callers gate on the family they need (reason for
+// provider.*, workspace for mount.*).
+func (s *Server) workerOnline(id string) (online bool, wtype string) {
 	if s.engine.Channel(id) == nil {
-		return false, false
+		return false, ""
 	}
 	if idt, ok := s.registry.Lookup(id); ok {
-		return true, idt.Type == "reason"
+		return true, idt.Type
 	}
-	return true, false
+	return true, ""
 }
 
 // providerListResult is the worker.query provider.list answer, reshaped for the
@@ -697,12 +705,12 @@ type providerSelection struct {
 // its current provider/model, by asking the worker itself over the bus.
 func (s *Server) handleWorkerProviders(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	online, isReason := s.workerOnline(id)
+	online, wtype := s.workerOnline(id)
 	if !online {
 		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
 		return
 	}
-	if !isReason {
+	if wtype != "reason" {
 		http.Error(w, "worker "+id+" has no switchable providers (only reason workers do)", http.StatusNotFound)
 		return
 	}
@@ -754,12 +762,12 @@ func (s *Server) handleWorkerSetProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	online, isReason := s.workerOnline(id)
+	online, wtype := s.workerOnline(id)
 	if !online {
 		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
 		return
 	}
-	if !isReason {
+	if wtype != "reason" {
 		http.Error(w, "worker "+id+" has no switchable providers (only reason workers do)", http.StatusNotFound)
 		return
 	}
@@ -779,6 +787,121 @@ func (s *Server) handleWorkerSetProvider(w http.ResponseWriter, r *http.Request)
 	if msg, _ := reply.Payload["error"].(string); msg != "" && msg != "<nil>" {
 		out["error"] = msg
 	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// mountListResult is the mount.list answer, reshaped for the UI: the mounted
+// directories (the first is the primary mount).
+type mountListResult struct {
+	Mounts  []string `json:"mounts"`
+	Primary string   `json:"primary,omitempty"`
+}
+
+// mountListResult parses a reply payload's "result" JSON (the snapshot the
+// workspace worker marshals) into out. Parse defensively: a shape change in
+// the worker must not 500 the UI.
+func parseMountResult(reply event.Event, out *mountListResult) {
+	if res, _ := reply.Payload["result"].(string); res != "" {
+		var structured mountListResult
+		if err := json.Unmarshal([]byte(res), &structured); err == nil {
+			*out = structured
+		}
+	}
+	if out.Mounts == nil {
+		out.Mounts = []string{}
+	}
+}
+
+// requireFamily gates a bus-ask endpoint on the worker being online and of
+// the given type (the family that serves the event).
+func (s *Server) requireFamily(w http.ResponseWriter, id, family string) bool {
+	online, wtype := s.workerOnline(id)
+	if !online {
+		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
+		return false
+	}
+	if wtype != family {
+		http.Error(w, "worker "+id+" is a "+wtype+" worker, not a "+family+" worker", http.StatusNotFound)
+		return false
+	}
+	return true
+}
+
+// handleWorkerMounts answers with a workspace worker's mounted directories by
+// asking the worker itself over the bus (mount.list).
+func (s *Server) handleWorkerMounts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.requireFamily(w, id, "workspace") {
+		return
+	}
+
+	reply, err := s.ask(r.Context(), id,
+		event.New(workspaceBase.TypeMountList, "webui-hiw", nil),
+		event.TypeRequestCompleted, event.TypeRequestFailed)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	if reply.Type == event.TypeRequestFailed {
+		http.Error(w, "mount.list rejected", http.StatusBadGateway)
+		return
+	}
+
+	out := mountListResult{}
+	parseMountResult(reply, &out)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// handleWorkerMountAdd / handleWorkerMountRemove ask a workspace worker to
+// mount / unmount a directory. add is approval-gated worker-side: the
+// workspace's default approver is this UI's HIW (webui-hiw), so a UI request
+// applies directly; a project with a different approver parks it behind an
+// approval and ask() times out — surfaced as a gateway timeout.
+func (s *Server) handleWorkerMountAdd(w http.ResponseWriter, r *http.Request) {
+	s.workerMountMutate(w, r, workspaceBase.TypeMountAdd)
+}
+
+func (s *Server) handleWorkerMountRemove(w http.ResponseWriter, r *http.Request) {
+	s.workerMountMutate(w, r, workspaceBase.TypeMountRemove)
+}
+
+func (s *Server) workerMountMutate(w http.ResponseWriter, r *http.Request, evtType event.EventType) {
+	id := r.PathValue("id")
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(body.Path) == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	if !s.requireFamily(w, id, "workspace") {
+		return
+	}
+
+	reply, err := s.ask(r.Context(), id,
+		event.New(evtType, "webui-hiw", map[string]any{"path": body.Path}),
+		event.TypeRequestCompleted, event.TypeRequestFailed)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+
+	out := map[string]any{"done": reply.Type == event.TypeRequestCompleted, "path": body.Path}
+	if msg, _ := reply.Payload["error"].(string); msg != "" && msg != "<nil>" {
+		out["error"] = msg
+	}
+	// A successful mutate replies with the fresh mount snapshot — pass it on
+	// so the UI re-renders without a second round trip.
+	mounts := mountListResult{}
+	parseMountResult(reply, &mounts)
+	out["mounts"] = mounts.Mounts
+	out["primary"] = mounts.Primary
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
 }

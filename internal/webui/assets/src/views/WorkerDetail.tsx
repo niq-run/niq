@@ -4,7 +4,7 @@ import { useI18n } from '../i18n'
 import { type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
 import SendEventForm from '../components/SendEventForm'
-import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, updateWorkerAllow } from '../services/api'
+import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, updateWorkerAllow } from '../services/api'
 
 interface WorkerDetailProps {
   worker: WorkerInfo
@@ -321,6 +321,11 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 							 Keyed by worker id so switching workers cannot leak one worker's
 								 provider state into another. */}
 					{worker.type === 'reason' && <ProviderSection key={worker.id} workerId={worker.id} />}
+
+					{/* Mounts — the workspace counterpart: the worker's mounted
+							 directories are its read/write boundary; list, mount and
+								 unmount them here. */}
+					{worker.type === 'workspace' && <MountsSection key={worker.id} workerId={worker.id} />}
         </div>
       </div>
     </div>
@@ -506,6 +511,192 @@ function ProviderSection({ workerId }: { workerId: string }) {
               </div>
             </>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// MountsSection is the workspace counterpart of ProviderSection: it asks the
+// worker for its mounted directories (mount.list) and mounts / unmounts
+// directories (mount.add / mount.remove) over the bus. A UI add applies
+// directly — the workspace's default approver is this UI's HIW; with another
+// approver configured the request parks behind an approval and times out.
+function MountsSection({ workerId }: { workerId: string }) {
+  const { colors } = useTheme()
+  const { t } = useI18n()
+  const [expanded, setExpanded] = useState(false)
+  const [mounts, setMounts] = useState<string[]>([])
+  const [primary, setPrimary] = useState('')
+  const [path, setPath] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState<'' | 'add' | 'remove'>('')
+  const [busyPath, setBusyPath] = useState('')
+  const [error, setError] = useState('')
+
+  const load = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetchWorkerMounts(workerId, signal)
+      setMounts(res.mounts || [])
+      setPrimary(res.primary || (res.mounts || [])[0] || '')
+    } catch (e) {
+      if ((e as Error)?.name === 'AbortError') return
+      setError((e as Error)?.message || 'failed to load mounts')
+    } finally {
+      setLoading(false)
+    }
+  }, [workerId])
+
+  // Fetched lazily on first expand, not on mount: the answer comes from the
+  // worker over the bus, so it must not fire for every worker selection (the
+  // worker list also re-polls every few seconds).
+  useEffect(() => {
+    if (!expanded) return
+    const ac = new AbortController()
+    load(ac.signal)
+    return () => ac.abort()
+  }, [expanded, load])
+
+  // applyMount runs an add or remove; a successful reply carries the fresh
+  // mount snapshot, so the list updates without a second round trip.
+  const applyMount = async (action: 'add' | 'remove', p: string) => {
+    setBusy(action)
+    setBusyPath(p)
+    setError('')
+    try {
+      const res = await mutateWorkerMount(workerId, action, p)
+      if (!res.done) {
+        setError(res.error || 'the worker refused the change')
+        return
+      }
+      if (res.mounts) {
+        setMounts(res.mounts)
+        setPrimary(res.primary || res.mounts[0] || '')
+      } else {
+        await load()
+      }
+      if (action === 'add') setPath('')
+    } catch (e) {
+      setError((e as Error)?.message || 'mount update failed')
+    } finally {
+      setBusy('')
+      setBusyPath('')
+    }
+  }
+
+  const submit = () => {
+    if (path.trim() !== '' && busy === '') applyMount('add', path.trim())
+  }
+
+  const inputStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    padding: '5px 8px',
+    fontSize: fontSizes.sm,
+    background: colors.bgLight,
+    color: colors.text,
+    border: '1px solid ' + colors.border,
+    borderRadius: 4,
+  }
+
+  return (
+    <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+      <div
+        onClick={() => setExpanded((v) => !v)}
+        style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', gap: 8, userSelect: 'none' }}
+      >
+        <span style={{ color: colors.detailLabel, fontSize: fontSizes.base, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          {t('wd.mounts')}
+        </span>
+        <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{expanded ? '−' : '+'}</span>
+        {!expanded && mounts.length > 0 && (
+          <span style={{ color: colors.detailValue, fontSize: fontSizes.sm, marginLeft: 'auto' }}>
+            {mounts.length} · {primary}
+          </span>
+        )}
+      </div>
+
+      {expanded && (
+        <div style={{ marginTop: 12 }}>
+          {loading && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: colors.textDimmed, fontSize: fontSizes.sm }}>
+              <span className="niq-spinner" style={{ width: 13, height: 13, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
+              {t('wd.askingMounts')}
+            </div>
+          )}
+
+          {!loading && error && (
+            <div style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</div>
+          )}
+
+          {!loading && !error && mounts.length === 0 && (
+            <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.noMounts')}</div>
+          )}
+
+          {!loading && mounts.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {mounts.map((m) => (
+                <div key={m} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                  <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                    <input
+                      value={m}
+                      disabled
+                      readOnly
+                      style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', opacity: 0.75, paddingRight: m === primary ? 70 : undefined }}
+                    />
+                    {/* The primary marker lives inside the field, at its end:
+                        the first mount is what relative paths resolve against. */}
+                    {m === primary && (
+                      <span style={{ position: 'absolute', top: '50%', right: 8, transform: 'translateY(-50%)', color: colors.textDimmed, fontSize: fontSizes.xs, userSelect: 'none', pointerEvents: 'none' }}>
+                        {t('wd.mounts.primary')}
+                      </span>
+                    )}
+                  </div>
+                  <span
+                    onClick={() => { if (busy === '') applyMount('remove', m) }}
+                    className="btn-hover"
+                    title={t('wd.remove')}
+                    style={{ cursor: busy === '' ? 'pointer' : 'default', opacity: busy === 'remove' && busyPath === m ? 0.5 : 1, color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none', padding: '0 4px' }}
+                  >
+                    {'\u2715'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 8, lineHeight: 1.5 }}>
+            {t('wd.mounts.hint')}
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
+              placeholder={t('wd.mounts.pathPlaceholder')}
+              style={inputStyle}
+            />
+            <span
+              onClick={submit}
+              className="btn-hover"
+              style={{
+                cursor: path.trim() === '' || busy !== '' ? 'default' : 'pointer',
+                opacity: path.trim() === '' || busy !== '' ? 0.5 : 1,
+                display: 'inline-block',
+                border: '1px solid ' + colors.accentBorder,
+                borderRadius: 4,
+                padding: '4px 12px',
+                color: colors.accent,
+                fontSize: fontSizes.md,
+                userSelect: 'none',
+              }}
+            >
+              {busy === 'add' ? t('wd.mounts.adding') : t('wd.mounts.add')}
+            </span>
+          </div>
         </div>
       )}
     </div>

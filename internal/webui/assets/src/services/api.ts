@@ -239,6 +239,45 @@ export async function switchWorkerProvider(id: string, provider: string, model: 
   return res.json()
 }
 
+// MountListResult is what GET /api/workers/{id}/mounts returns: a workspace
+// worker's mounted directories (the first is the primary mount).
+export interface MountListResult {
+  mounts: string[]
+  primary?: string
+}
+
+// MountMutateResult is what POST .../mounts/{add|remove} returns; on success
+// it carries the fresh mount snapshot so the UI can re-render at once.
+export interface MountMutateResult {
+  done: boolean
+  path: string
+  mounts?: string[]
+  primary?: string
+  error?: string
+}
+
+// fetchWorkerMounts asks a workspace worker for its mounted directories over
+// the bus (mount.list), so it can take a moment.
+export async function fetchWorkerMounts(id: string, signal?: AbortSignal): Promise<MountListResult> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/mounts`), { signal })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'mounts failed: ' + res.status)
+  return res.json()
+}
+
+// mutateWorkerMount mounts (add) or unmounts (remove) a directory on a
+// workspace worker (mount.add / mount.remove). add applies directly when this
+// UI's HIW is the worker's approver — the default; otherwise it parks behind
+// an approval and the call times out.
+export async function mutateWorkerMount(id: string, action: 'add' | 'remove', path: string): Promise<MountMutateResult> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/mounts/${action}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'mount update failed: ' + res.status)
+  return res.json()
+}
+
 // fetchApprovals lists the approval entries the HIW tracks (pending first,
 // then the decided history).
 export async function fetchApprovals(): Promise<ApprovalListResult> {
