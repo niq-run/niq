@@ -4,7 +4,11 @@ bin/
 !npm/bin/
 .DS_Store
 /niq
-dist/
+# goreleaser output at the repo root. NOT the embedded webui dist —
+# internal/webui/assets/dist is go:embed'd and must be committed, so it
+# deliberately stays unignored (a rebuild only changes it when the UI
+# actually changed: vite bundles are content-hashed).
+/dist/
 
 # frontend dependencies / build caches
 internal/webui/assets/node_modules/
