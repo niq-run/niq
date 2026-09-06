@@ -14,7 +14,7 @@ import (
 )
 
 func TestBashUnderLimit(t *testing.T) {
-	b := NewEmbeddedBackend(t.TempDir())
+	b := NewEmbeddedBackend([]string{t.TempDir()})
 	r, err := b.Bash(context.Background(), "printf 'hello\nworld\n'", "", BashLimits{MaxBytes: 1024, MaxLines: 100})
 	if err != nil {
 		t.Fatalf("Bash: %v", err)
@@ -31,7 +31,7 @@ func TestBashUnderLimit(t *testing.T) {
 }
 
 func TestBashTruncatesOversizedOutput(t *testing.T) {
-	b := NewEmbeddedBackend(t.TempDir())
+	b := NewEmbeddedBackend([]string{t.TempDir()})
 	r, err := b.Bash(context.Background(), "seq 1 100000", "", BashLimits{MaxBytes: 1024, MaxLines: 100000})
 	if err != nil {
 		t.Fatalf("Bash: %v", err)
@@ -51,7 +51,7 @@ func TestBashTruncatesOversizedOutput(t *testing.T) {
 }
 
 func TestBashKillsOnOverflow(t *testing.T) {
-	b := NewEmbeddedBackend(t.TempDir())
+	b := NewEmbeddedBackend([]string{t.TempDir()})
 	start := time.Now()
 	r, err := b.Bash(context.Background(), "while true; do echo tick; done", "", BashLimits{MaxBytes: 256, MaxLines: 100000})
 	if err != nil {
@@ -66,7 +66,7 @@ func TestBashKillsOnOverflow(t *testing.T) {
 }
 
 func TestBashTimeoutKillsProcessGroup(t *testing.T) {
-	b := NewEmbeddedBackend(t.TempDir())
+	b := NewEmbeddedBackend([]string{t.TempDir()})
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -84,7 +84,7 @@ func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 // backgrounded grandchild: a command that spawns a background sleep and then
 // waits must not leave the backgrounded process alive after the deadline.
 func TestBashKillsBackgroundChild(t *testing.T) {
-	b := NewEmbeddedBackend(t.TempDir())
+	b := NewEmbeddedBackend([]string{t.TempDir()})
 	marker := filepath.Join(t.TempDir(), "bg.pid")
 	cmd := fmt.Sprintf("sleep 60 & echo $! > '%s'; sleep 60", marker)
 
@@ -114,7 +114,7 @@ func TestBashKillsBackgroundChild(t *testing.T) {
 }
 
 func TestBashStreamForwardsLines(t *testing.T) {
-	b := NewEmbeddedBackend(t.TempDir())
+	b := NewEmbeddedBackend([]string{t.TempDir()})
 	var mu sync.Mutex
 	var lines []string
 	r, err := b.BashStream(context.Background(), "printf 'a\nb\nc\n'", "",

@@ -66,7 +66,7 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
             <span
               onClick={() => setShowCreate(true)}
               className="btn-hover"
-              style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 4, padding: '3px 10px', userSelect: 'none' }}
+              style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 2, padding: '3px 10px', userSelect: 'none' }}
             >
               {t('workers.create')}
             </span>
@@ -75,7 +75,7 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                 onClick={onRefresh}
                 className="btn-hover"
                 title={t('workers.refresh.tooltip')}
-                style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', userSelect: 'none' }}
+                style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 10px', userSelect: 'none' }}
               >
                 {t('workers.refresh')}
               </span>
@@ -87,7 +87,7 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
           <span
             onClick={() => setShowCreate(true)}
             className="btn-hover"
-            style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 4, padding: '6px 14px', userSelect: 'none' }}
+            style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 2, padding: '6px 14px', userSelect: 'none' }}
           >
             {t('workers.create')}
           </span>

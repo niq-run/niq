@@ -37,11 +37,18 @@ func (w *HostWorker) registerExtensions() {
 			},
 			"path": map[string]any{
 				"type":        "string",
-				"description": "Workspace root directory (required when type=workspace).",
+				"description": "Workspace mount directory (required when type=workspace). Becomes the primary mount; add more at runtime via the workspace's mount.add.",
 			},
-			"root_dir": map[string]any{
+			"mounts": map[string]any{
+				"type":        "array",
+				"description": "Workspace mount directories (when type=workspace); the first is the primary mount. Overrides path.",
+				"items": map[string]any{
+					"type": "string",
+				},
+			},
+			"approver": map[string]any{
 				"type":        "string",
-				"description": "Alias for path; workspace root directory (required when type=workspace).",
+				"description": "Worker that approves boundary-expansion requests (when type=workspace). Defaults to webui-hiw; empty disables the approval flow.",
 			},
 		}),
 	}, func(evt event.Event) {

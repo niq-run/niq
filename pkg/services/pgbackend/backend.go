@@ -20,9 +20,9 @@ type Backend struct {
 	be *wsbackend.EmbeddedBackend
 }
 
-// New returns a new Backend rooted at dir.
+// New returns a new Backend rooted at dir (a single mount).
 func New(dir string) *Backend {
-	return &Backend{be: wsbackend.NewEmbeddedBackend(dir)}
+	return &Backend{be: wsbackend.NewEmbeddedBackend([]string{dir})}
 }
 
 // Read loads the full text of a ProgramContent by its path.

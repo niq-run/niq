@@ -207,7 +207,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                   <span
                     onClick={handleAction}
                     className="btn-hover"
-                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
                   >
                     {suspended ? t('wd.resume') : t('wd.suspend')}
                   </span>
@@ -221,7 +221,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                   <span
                     onClick={() => onToggleArchived(worker.id)}
                     className="btn-hover"
-                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
                   >
                     {isArchived ? t('wd.restore') : t('wd.archive')}
                   </span>
@@ -287,7 +287,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 				                      <span
 				                        onClick={() => setConfirmDel(false)}
 				                        className="btn-hover"
-				                        style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+				                        style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
 				                      >
 				                        {t('wd.cancel')}
 				                      </span>
@@ -299,7 +299,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 				                  <span
 				                    onClick={() => { setConfirmDel(true); setUmNote('') }}
 				                    className="btn-hover"
-				                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 4, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
+				                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid #' + 'c33', borderRadius: 2, padding: '4px 12px', color: '#c33', fontSize: fontSizes.md, userSelect: 'none' }}
 				                  >
 				                    {t('wd.delete')}
 				                  </span>
@@ -609,7 +609,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
           <span
             onClick={() => setDraft([...draft, { type: '', source: '' }])}
             className="btn-hover"
-            style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+            style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
           >
             {t('wd.add')}
           </span>
@@ -732,7 +732,7 @@ function PublishAllowEditor({ worker, allWorkers = [], readOnly = false, onDone 
           <span
             onClick={() => setDraft([...draft, { type: '', target: '' }])}
             className="btn-hover"
-            style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+            style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
           >
             {t('wd.add')}
           </span>

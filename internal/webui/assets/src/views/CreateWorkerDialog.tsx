@@ -66,7 +66,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateW
     cursor: 'pointer',
     userSelect: 'none',
     border: '1px solid ' + (active ? colors.accent : colors.border),
-    borderRadius: 4,
+    borderRadius: 2,
     padding: '3px 12px',
     fontSize: fontSizes.sm,
     color: active ? colors.accent : colors.textDim,
@@ -101,7 +101,9 @@ export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateW
         if (model.trim()) body.model = model.trim()
       }
       if ((effType === 'workspace' || effType === 'program') && rootDir.trim()) {
-        body.root_dir = rootDir.trim()
+        // WorkerConfig takes a mounts array (first entry = primary mount).
+        // More mounts can be added at runtime via the workspace's mount.add.
+        body.mounts = [rootDir.trim()]
       }
     } else {
       body.command = command.trim().split(/\s+/)
@@ -154,7 +156,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateW
           <span
             onClick={onClose}
             className="btn-hover"
-            style={{ cursor: 'pointer', marginLeft: 'auto', border: '1px solid ' + colors.border, borderRadius: 4, padding: '0 8px', color: colors.textDim, fontSize: fontSizes.sm, lineHeight: '20px', userSelect: 'none' }}
+            style={{ cursor: 'pointer', marginLeft: 'auto', border: '1px solid ' + colors.border, borderRadius: 2, padding: '0 8px', color: colors.textDim, fontSize: fontSizes.sm, lineHeight: '20px', userSelect: 'none' }}
           >
             {'\u2715'}
           </span>
@@ -260,7 +262,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateW
           <span
             onClick={onClose}
             className="btn-hover"
-            style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 14px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+            style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 14px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
           >
             {t('wd.cancel')}
           </span>

@@ -109,8 +109,13 @@ type WorkerConfig struct {
 	Model         string             `json:"model,omitempty"`
 	Subscriptions []SubscriptionSpec `json:"subscriptions,omitempty"`
 	Publish       []PublishSpec      `json:"publish,omitempty"`
-	RootDir       string             `json:"root_dir,omitempty"`
-	Archived      bool               `json:"archived,omitempty"`
+	// Mounts are the directories a workspace/program worker mounts. The
+	// first mount is the primary one (relative paths resolve against it).
+	Mounts []string `json:"mounts,omitempty"`
+	// Approver is the worker boundary-expansion approval requests go to
+	// (workspace workers; default webui-hiw, empty disables the flow).
+	Approver  string            `json:"approver,omitempty"`
+	Archived  bool              `json:"archived,omitempty"`
 	// Managed marks the worker as host-managed (in-process, worker dir is the
 	// config authority). nil or true = managed; false = an external process
 	// launched by the project via Command/Env/Cwd.
@@ -274,8 +279,11 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 		}
 		p["publish"] = arr
 	}
-	if wc.RootDir != "" {
-		p["root_dir"] = wc.RootDir
+	if len(wc.Mounts) > 0 {
+		p["mounts"] = wc.Mounts
+	}
+	if wc.Approver != "" {
+		p["approver"] = wc.Approver
 	}
 	return p
 }

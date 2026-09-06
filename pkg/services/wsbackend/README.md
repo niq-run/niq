@@ -33,8 +33,9 @@ Also defines `CommandResult` and `WithOnUpdate` / `OnUpdate` (streaming callback
 
 `EmbeddedBackend` implements all contracts. Key features:
 
+- **multi-mount**: the backend operates over one or more mounted directories. The first mount is the primary one — relative tool paths and the default bash cwd resolve against it; absolute paths are accepted when they fall inside any mount. `Mounts` / `AddMount` / `ReplaceMounts` list and mutate the set at runtime
 - **per-file mutex**: Write and Edit on the same file are serialised; different files proceed concurrently
-- **path safety**: `resolvePath` prevents `../` and symlink escapes from the root directory
+- **path safety**: `resolve` prevents `../` and symlink escapes from every mount boundary; escapes surface as the typed `EscapeError` so callers can react (e.g. request approval to expand the boundary)
 - **fuzzy fallback**: when an Edit `old_string` is not found, the backend retries with Unicode quote normalisation (curly quotes → straight, em-dashes → `--`)
 - **bounded streaming bash**: `BashStream`/`Bash` run each command in its own process group, capture output through a head+tail bounded buffer (never the full stream), and kill the whole group when the combined output exceeds `BashLimits` (bytes/lines) or the context is cancelled. Oversized output is truncated to head+tail with the omitted middle marked inline.
 

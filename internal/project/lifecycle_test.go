@@ -64,7 +64,7 @@ func TestWorkspaceSuspendResume(t *testing.T) {
 	ctx := context.Background()
 
 	if err := svc.CreateWorker(ctx, worker.WorkerConfig{
-		Type: "workspace", Params: map[string]any{"root_dir": t.TempDir()},
+		Type: "workspace", Params: map[string]any{"mounts": []string{t.TempDir()}},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestSpawnedWorkerSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 
 	if err := svc.CreateWorker(ctx, worker.WorkerConfig{
-		Type: "workspace", Params: map[string]any{"root_dir": t.TempDir()},
+		Type: "workspace", Params: map[string]any{"mounts": []string{t.TempDir()}},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}

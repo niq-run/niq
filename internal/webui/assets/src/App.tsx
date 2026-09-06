@@ -7,14 +7,15 @@ import WorkersView from './views/WorkersView'
 import WorkerDetail from './views/WorkerDetail'
 import ProjectsView from './views/ProjectsView'
 import TemplatesView from './views/TemplatesView'
+import ApprovalsView from './views/ApprovalsView'
 import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
 import { useTheme, fontSizes } from './theme'
 import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
-import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived } from './services/api'
-import type { ContextInfo, EventPayload, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
+import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval } from './services/api'
+import type { ApprovalEntry, ContextInfo, EventPayload, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
 
 // Talk view settings are persisted to localStorage so toggles survive reloads.
 const VIEW_SETTINGS_KEY = 'niq.view-settings'
@@ -227,10 +228,11 @@ export default function App() {
     setSelectedEventId(null)
 
     // Page backwards from the watermark to fill history. Issued once the stream
-    // advertises its watermark. This is treated as a fresh (re)subscription: we
-    // discard any cached timeline and rebuild from the watermark, so a reconnect
-    // (network drop, or entering the filtered events view) always produces a
-    // clean, correctly-ordered timeline — no merge-across-caches gymnastics.
+    // advertises its watermark. History is merged into the current timeline
+    // (dedup by id, sorted) rather than replacing it: the live stream may have
+    // already delivered events — including the watermark event itself — and a
+    // wipe would drop them. The merged result is the same clean, correctly-
+    // ordered timeline a rebuild would produce.
     const loadInitialHistory = async (watermark: string) => {
       if (!watermark) return
       noMoreRef.current = false
@@ -239,10 +241,12 @@ export default function App() {
       const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
       try {
-        eventsRef.current = []
-        seenRef.current.clear()
-        deliveriesRef.current = {}
-        setDeliveries({})
+        // Merge history into whatever the live stream has already delivered
+        // (the watermark event itself arrives this way) instead of wiping:
+        // events consumed between connect and this response are newer than
+        // the history page and would be lost to a wipe. mergeEvents dedupes
+        // by id and sorts, so the result is the clean timeline a rebuild
+        // would produce.
         const older = (await loadEventsBefore(watermark, limit, workers, trace, roles)) as EventPayload[]
         const filtered = older.filter((e) => e.type !== 'event.delivered')
         const merged = mergeEvents(eventsRef.current, filtered)
@@ -297,6 +301,32 @@ export default function App() {
       if (res.ok) setWorkers(await res.json())
     } catch { /* next poll retries */ }
   }, [workersURL])
+
+  // ── Approvals: the HIW tracks boundary-expansion approval requests; the
+  // app polls them for the nav badge and passes them to the approvals view and
+  // the talk view's inline quick-approve.
+  const [approvals, setApprovals] = useState<ApprovalEntry[]>([])
+  useEffect(() => {
+    if (mode !== 'project') { setApprovals([]); return }
+    let alive = true
+    const load = () => fetchApprovals()
+      .then(r => { if (alive) setApprovals(r.approvals ?? []) })
+      .catch(() => { /* next poll retries */ })
+    load()
+    const t = setInterval(load, 5000)
+    return () => { alive = false; clearInterval(t) }
+  }, [mode, projectBase])
+
+  const pendingApprovalCount = approvals.filter(a => !a.decision).length
+
+  // decide resolves one approval through HIW and refreshes immediately so the
+  // views reflect the decision without waiting for the next poll.
+  const handleDecide = useCallback(async (id: string, approved: boolean, note = '') => {
+    try {
+      await decideApproval(id, approved, note)
+    } catch { /* surfaced via the entry's state on next poll */ }
+    fetchApprovals().then(r => setApprovals(r.approvals ?? [])).catch(() => {})
+  }, [])
 
   // ── Callbacks ──
   const sendMessage = useCallback(() => {
@@ -560,6 +590,7 @@ export default function App() {
         panel={panel}
         onSelectPanel={setPanel}
         archived={archived}
+        pendingApprovals={pendingApprovalCount}
         isMobile={isMobile}
         open={sidebarOpen}
         onNavigate={() => setSidebarOpen(false)}
@@ -575,7 +606,7 @@ export default function App() {
             <button
               onClick={() => setSidebarOpen(true)}
               title={t('app.menu')}
-              style={{ background: 'none', border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+              style={{ background: 'none', border: '1px solid ' + colors.border, borderRadius: 2, padding: '5px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
             >
               {/* Three drawn bars — the ☰ glyph is not vertically centered in
                   the monospace font, so draw it with real lines instead. */}
@@ -591,6 +622,7 @@ export default function App() {
                 : mode !== 'project' ? t('sidebar.projects')
                 : view === 'talk' ? t('nav.talk')
                 : view === 'events' ? t('nav.events')
+                : view === 'approvals' ? t('nav.approvals')
                 : t('nav.workers')}
             </strong>
           </div>
@@ -616,6 +648,7 @@ export default function App() {
               streamingMode={viewSettings.streamingMode}
               responseOnly={viewSettings.responseOnly}
               isMobile={isMobile}
+              onDecide={handleDecide}
             />
 
             <TalkInput
@@ -634,6 +667,10 @@ export default function App() {
               onSelectTarget={(id) => setMentionTarget(id)}
               isMobile={isMobile}
             />
+          </div>
+        ) : view === 'approvals' ? (
+          <div key="approvals" className="fade-in" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <ApprovalsView approvals={approvals} onDecide={handleDecide} isMobile={isMobile} />
           </div>
         ) : view === 'workers' ? (
           <div key="workers" className="fade-in" style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>

@@ -183,8 +183,6 @@ func GetIntArg(args map[string]any, key string, defaultVal int) int {
 	return defaultVal
 }
 
-// resolvePath cleans and absolutises a path, then checks that it stays
-// within rootDir. Returns the resolved path or an error.
 // expandHome expands a leading ~ in path to the user's home directory.
 func expandHome(path string) (string, error) {
 	if path == "~" {
@@ -204,55 +202,46 @@ func expandHome(path string) (string, error) {
 	return path, nil
 }
 
-func resolvePath(rootDir, raw string) (string, error) {
+// EscapeError reports a path that falls outside every mounted directory.
+// Callers (notably the workspace worker) inspect it via errors.As to
+// distinguish a boundary violation from an ordinary I/O failure and react —
+// e.g. requesting approval to expand the boundary.
+type EscapeError struct{ Path string }
+
+func (e *EscapeError) Error() string { return "path escapes workspace: " + e.Path }
+
+// hasPathPrefix reports whether p equals prefix or lies beneath it,
+// comparing path components so /a/proj does not match /a/project2.
+func hasPathPrefix(p, prefix string) bool {
+	if p == prefix {
+		return true
+	}
+	return strings.HasPrefix(p, prefix+string(filepath.Separator))
+}
+
+// validateMount expands and canonicalises a mount path. A path that exists
+// must be a directory; a path that does not exist (yet) is accepted as-is —
+// approval grants scope, not existence, and the directory may be created
+// later. real is the symlink-resolved form used for containment checks
+// (falling back to the path itself when it does not exist).
+func validateMount(raw string) (mount, error) {
 	if raw == "" {
-		return "", fmt.Errorf("path is empty")
+		return mount{}, fmt.Errorf("mount path is empty")
 	}
-
-	// Expand leading ~ to the user home directory.
-	if raw == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home: %w", err)
-		}
-		raw = home
-	} else if strings.HasPrefix(raw, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home: %w", err)
-		}
-		raw = filepath.Join(home, raw[2:])
-	}
-
-	cleaned := filepath.Clean(raw)
-	var abs string
-	var err error
-	if filepath.IsAbs(cleaned) {
-		abs, err = filepath.Abs(cleaned)
-	} else {
-		abs, err = filepath.Abs(filepath.Join(rootDir, cleaned))
-	}
+	expanded, err := expandHome(raw)
 	if err != nil {
-		return "", fmt.Errorf("resolve path: %w", err)
+		return mount{}, err
 	}
-
-	// Symlink check: resolve symlinks and verify containment.
-	// If EvalSymlinks fails (path does not exist yet — common for
-	// writes), fall back to the basic Abs prefix check.
-	real, evalErr := filepath.EvalSymlinks(abs)
-	if evalErr != nil {
-		if !strings.HasPrefix(abs, rootDir) {
-			return "", fmt.Errorf("path escapes workspace: %s", raw)
-		}
-		return abs, nil
+	abs, err := filepath.Abs(filepath.Clean(expanded))
+	if err != nil {
+		return mount{}, fmt.Errorf("resolve mount: %w", err)
 	}
-
-	realRoot, _ := filepath.EvalSymlinks(rootDir)
-	if realRoot == "" {
-		realRoot = rootDir
+	if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+		return mount{}, fmt.Errorf("mount %s is not a directory", abs)
 	}
-	if !strings.HasPrefix(real, realRoot) {
-		return "", fmt.Errorf("path escapes workspace: %s", raw)
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil || real == "" {
+		real = abs
 	}
-	return abs, nil
+	return mount{path: abs, real: real}, nil
 }

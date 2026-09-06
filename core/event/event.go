@@ -34,6 +34,16 @@ const (
 	TypeRequestRejected   EventType = "request.rejected"
 	TypeRequestProgressed EventType = "request.progressed"
 	TypeRequestCancel     EventType = "request.cancel"
+
+	// Approval protocol: a worker requests approval from a configured approver
+	// worker before performing an operation beyond its granted boundary (e.g.
+	// mounting an additional directory). approval.request is directed to the
+	// approver — which may be any worker (a human UI worker, or an automated
+	// one); approval.decision is the approver's directed reply, echoing the
+	// request's RequestId. TraceID, when present, ties the pair to the
+	// operation context that raised it.
+	TypeApprovalRequest  EventType = "approval.request"
+	TypeApprovalDecision EventType = "approval.decision"
 )
 
 // EventStatus represents an event's lifecycle stage.

@@ -131,7 +131,7 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
             onClick={() => { setSelected(w.event); setForm({}); setError(''); setDone('') }}
             title={w.desc}
             style={{
-              cursor: 'pointer', display: 'inline-block', padding: '4px 10px', borderRadius: 4, fontSize: fontSizes.sm, lineHeight: '18px',
+              cursor: 'pointer', display: 'inline-block', padding: '4px 10px', borderRadius: 2, fontSize: fontSizes.sm, lineHeight: '18px',
               color: selected === w.event ? colors.accent : colors.textDim,
               background: selected === w.event ? colors.accentBg : colors.bgLight,
               border: '1px solid ' + (selected === w.event ? colors.accentBorder : colors.border),

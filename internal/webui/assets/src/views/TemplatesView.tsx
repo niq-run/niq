@@ -81,7 +81,7 @@ export default function TemplatesView() {
           )}
           <button
             onClick={create}
-            style={{ cursor: 'pointer', background: colors.accent, color: '#fff', border: 'none', borderRadius: 4, padding: '6px 14px', fontSize: fontSizes.sm }}
+            style={{ cursor: 'pointer', background: colors.accent, color: '#fff', border: 'none', borderRadius: 2, padding: '6px 14px', fontSize: fontSizes.sm }}
           >
             {t('templates.clone')}
           </button>
@@ -110,7 +110,7 @@ export default function TemplatesView() {
               <div style={{ flex: 1, color: selected === tmpl ? colors.accent : colors.text, fontSize: fontSizes.md }}>{tmpl}</div>
               <button
                 onClick={(e) => { e.stopPropagation(); remove(tmpl) }}
-                style={{ cursor: 'pointer', background: 'transparent', color: colors.toolFailed, border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 10px', fontSize: fontSizes.sm }}
+                style={{ cursor: 'pointer', background: 'transparent', color: colors.toolFailed, border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 10px', fontSize: fontSizes.sm }}
               >
                 {t('templates.delete')}
               </button>

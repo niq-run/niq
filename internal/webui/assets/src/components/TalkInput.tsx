@@ -187,7 +187,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, lineHeight: '16px',
             color: shownTarget ? colors.accent : colors.textDimmed,
             border: '1px solid ' + (shownTarget ? colors.accentBorder : colors.border),
-            borderRadius: 4, padding: '1px 8px', cursor: 'pointer', userSelect: 'none',
+            borderRadius: 2, padding: '1px 8px', cursor: 'pointer', userSelect: 'none',
           }}
         >
           {shownTarget ? `→ ${shownTarget}` : t('talk.input.broadcast')}
@@ -241,7 +241,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: isMobile ? 15 : fontSizes.base, lineHeight: isMobile ? '22px' : '20px',
               color: colors.textDim,
-              border: '1px solid ' + colors.border, borderRadius: 4, padding: isMobile ? '6px 10px' : '4px 12px',
+              border: '1px solid ' + colors.border, borderRadius: 2, padding: isMobile ? '6px 10px' : '4px 12px',
               cursor: 'pointer', userSelect: 'none',
             }}
           >

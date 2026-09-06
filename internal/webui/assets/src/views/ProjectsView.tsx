@@ -203,7 +203,7 @@ export default function ProjectsView() {
                     background: 'transparent',
                     color: colors.accent,
                     border: '1px solid ' + colors.border,
-                    borderRadius: 4,
+                    borderRadius: 2,
                     padding: '6px 10px',
                     fontSize: fontSizes.sm,
                   }}
@@ -217,7 +217,7 @@ export default function ProjectsView() {
                     background: 'transparent',
                     color: colors.toolFailed,
                     border: '1px solid ' + colors.border,
-                    borderRadius: 4,
+                    borderRadius: 2,
                     padding: '6px 10px',
                     fontSize: fontSizes.sm,
                   }}
@@ -233,7 +233,7 @@ export default function ProjectsView() {
                   background: colors.accent,
                   color: '#fff',
                   border: 'none',
-                  borderRadius: 4,
+                  borderRadius: 2,
                   padding: '6px 14px',
                   fontSize: fontSizes.sm,
                 }}

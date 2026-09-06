@@ -1,5 +1,6 @@
 // API service — all backend HTTP calls
 import type {
+  ApprovalListResult,
   ContextInfo,
   CreateWorkerResult,
   EventPattern,
@@ -236,6 +237,25 @@ export async function switchWorkerProvider(id: string, provider: string, model: 
   })
   if (!res.ok) throw new Error((await res.text()).trim() || 'provider switch failed: ' + res.status)
   return res.json()
+}
+
+// fetchApprovals lists the approval entries the HIW tracks (pending first,
+// then the decided history).
+export async function fetchApprovals(): Promise<ApprovalListResult> {
+  const res = await fetch(p('/api/approvals'))
+  if (!res.ok) throw new Error('approvals failed: ' + res.status)
+  return res.json()
+}
+
+// decideApproval forwards the human's verdict for one pending approval (by its
+// approval.request event id) through HIW to the requesting worker.
+export async function decideApproval(id: string, approved: boolean, note = ''): Promise<void> {
+  const res = await fetch(p(`/api/approvals/${encodeURIComponent(id)}/decision`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approved, note }),
+  })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'decision failed: ' + res.status)
 }
 
 export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = '', roles: string[] = []): Promise<any[]> {

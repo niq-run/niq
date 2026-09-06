@@ -32,6 +32,9 @@ interface TalkViewProps {
   // Mobile changes bubble widths and the tool title layout; desktop keeps the
   // original look.
   isMobile: boolean
+  // Inline quick-approve for approval.request cards: forwards the human's
+  // verdict to the HIW (App wires it to the decisions API).
+  onDecide?: (id: string, approved: boolean, note?: string) => void
 }
 
 // StreamTrace is one in-flight reason trace being accumulated from
@@ -152,7 +155,7 @@ const inputRenderers: Record<string, React.FC<{evt: EventPayload; onTraceClick: 
   'timer.elapsed': TimerElapsedBlock,
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide }: TalkViewProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   // Left-side bubbles are wider on phones (90%) and keep the original 70% on
@@ -212,45 +215,45 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     })
   }
 
-  // A reason worker is a party (caller/target/recipient) to the event.
-  const involvesReason = (evt: EventPayload): boolean => {
-    const reason = (id?: string) => (id ? workerTypes[id] === 'reason' : false)
-    return reason(evt.worker_id) || reason(evt.target_worker_id) ||
-      (evt.recipients || []).some(id => reason(id))
+  // Talk is the selected reason workers' conversation: what they sent, and
+  // what was sent to them — from HIW or any worker alike. When nothing is
+  // selected the scope is every reason worker. Events whose envelope involves
+  // no reason worker at all (the human UI driving a workspace directly, and
+  // that worker's replies to the UI) are simply outside this conversation —
+  // scope does the filtering, no blacklist needed.
+  const inReasonScope = (id?: string): boolean => {
+    if (!id) return false
+    if (talkWorkers.size > 0) return talkWorkers.has(id)
+    return workerTypes[id] === 'reason'
   }
-  const hasAnyReason = Object.values(workerTypes).some(t => t === 'reason')
+  // Defers scope filtering until the worker types are known, so the timeline
+  // doesn't start empty on first paint (the workers poll fills it instantly).
+  const workerTypesLoaded = Object.keys(workerTypes).length > 0
 
-  // Filter events by selected workers. When no workers selected, show all.
+  // Filter events by selected workers.
   const relevantEvents = useMemo(() => {
     return events.filter(evt => {
       if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort') return false
-      // Internal meta plumbing (context.compress / provider.*) is never a
-      // talk row — the LLM-facing tool card (invocation + request.*) is its
-      // user-facing representation.
-      if (evt.type === 'context.compress' || evt.type === 'context.rotate' || evt.type.startsWith('provider.')) return false
       // Delta / partial events are never rendered as standalone rows. When
       // streaming mode is on they're consumed to build the streaming UI;
-      // when off they're dropped entirely.
+      // when off they're dropped entirely — the terminal events (reason.*,
+      // request.*) carry the aggregated content.
       if (evt.type === 'reason.thinking_delta' || evt.type === 'reason.text_delta' || evt.type === 'request.progressed') return false
-      // A tool result belongs to the reasoning conversation only when a reason
-      // worker is a party (caller or target). The hasAnyReason guard defers
-      // filtering until we know the worker types, so a not-yet-loaded list
-      // doesn't hide everything on first paint. Invocations are not filtered
-      // here: any event that is not routed to a dedicated renderer below is
-      // rendered as a card.
-      if (isToolResult(evt.type) && hasAnyReason && !involvesReason(evt)) return false
-      if (talkWorkers.size === 0) return true // show all when none selected
-      const recipients = deliveries[evt.id] || evt.recipients
-      if (evt.type === 'worker.input') {
-        if (talkWorkers.has(evt.target_worker_id)) return true
-        if (talkWorkers.has(evt.worker_id)) return true
-        if (recipients && recipients.some(r => talkWorkers.has(r))) return true
-        return false
+      // Approval chains ride on the originating caller, not the envelope
+      // (workspace → approver): include when that caller is in scope. UI-
+      // initiated chains (caller = the human UI) are outside the reason
+      // conversation; the Approvals view owns them.
+      if (evt.type === 'approval.request') {
+        // origin is the current field name; worker_id is the pre-rename
+        // spelling still present in persisted history.
+        const caller = evt.payload?.origin ?? evt.payload?.worker_id
+        return typeof caller === 'string' && inReasonScope(caller)
       }
-      if (talkWorkers.has(evt.worker_id)) return true
-      if (talkWorkers.has(evt.target_worker_id)) return true
-      if (recipients && recipients.some(r => talkWorkers.has(r))) return true
-      return false
+      if (talkWorkers.size === 0 && !workerTypesLoaded) return true
+      const recipients = deliveries[evt.id] || evt.recipients
+      return inReasonScope(evt.worker_id) ||
+        inReasonScope(evt.target_worker_id) ||
+        (recipients || []).some(inReasonScope)
     })
   }, [events, talkWorkers, deliveries, workerTypes])
 
@@ -261,6 +264,18 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     const m: Record<string, EventPayload> = {}
     for (const evt of events) {
       if (isToolResult(evt.type) && evt.request_id) {
+        m[evt.request_id] = evt
+      }
+    }
+    return m
+  }, [events])
+
+  // approval.request's RequestId → its decision event, for the inline
+  // quick-approve state on the approval card.
+  const decisionByRequestId = useMemo(() => {
+    const m: Record<string, EventPayload> = {}
+    for (const evt of events) {
+      if (evt.type === 'approval.decision' && evt.request_id) {
         m[evt.request_id] = evt
       }
     }
@@ -723,6 +738,81 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             </div>
           )}
           <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} quotedEvtId={ref?.evtId} onQuoteClick={scrollToEvent} />
+        </div>
+      )
+      continue
+    }
+
+    // Approval requests get a dedicated card: the boundary-expansion request
+    // body plus, inline below it, quick approve/reject until a decision lands.
+    // Expanded by default (the detail is the point of the card); the header
+    // toggles the reason + payload panel just like the tool cards toggle
+    // their arguments. The approve/reject actions stay visible either way.
+    if (evt.type === 'approval.request') {
+      const decision = decisionByRequestId[toolCallId(evt)]
+      const approved = decision?.payload?.approved === true
+      const note = typeof decision?.payload?.note === 'string' ? decision.payload.note : ''
+      const isExpanded = !expandedContent.has(evt.id)
+      const statusColor = decision
+        ? approved ? colors.toolCompleted : colors.toolFailed
+        : colors.toolRequested
+      nodes.push(
+        <div key={evt.id} data-evt-id={evt.id} style={{ maxWidth: bubbleMax, marginTop: 16, marginBottom: compactMode ? 8 : 12 }}>
+          {showBadge && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+            </div>
+          )}
+          <div className={!isExpanded ? 'block-card' : undefined} style={{ border: '1px solid ' + colors.accent, padding: compactMode ? '4px 8px' : '6px 12px', fontSize: compactMode ? fontSizes.xs : fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
+            <div onClick={() => toggleExpanded(evt.id)} style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0, opacity: 0.5 }} />
+              <span style={{ color: colors.text, fontWeight: 600 }}>{t('talk.approval.title')}</span>
+              {/* The source worker: who is asking for the boundary expansion. */}
+              <span style={{ fontFamily: 'monospace', color: colors.text, fontSize: fontSizes.sm }}>{evt.worker_id}</span>
+              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
+              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs }}>{isExpanded ? '▾' : '▸'}</span>
+            </div>
+            {/* Why this approval exists: keyed on the action, with a generic
+                fallback so unknown future approval kinds stay explainable. */}
+            {isExpanded && (
+              <div style={{ marginTop: 6, fontSize: fontSizes.sm, color: colors.text }}>
+                {t(evt.payload?.action === 'mount.add' ? 'approval.reason.mount.add' : 'approval.reason.generic')}
+              </div>
+            )}
+            {/* The approval's data, rendered as JSON in a muted panel with the
+                same soft-wrap toggle and fold affordances as the tool bodies.
+                Hidden entirely when the payload is empty (legacy events carry
+                no payload). */}
+            {isExpanded && Object.keys(evt.payload ?? {}).length > 0 && (
+              <div style={{ background: colors.bg, border: '1px solid ' + colors.borderLight, borderRadius: 2, padding: '6px 8px', marginTop: 8 }}>
+                <CollapsibleCode code={JSON.stringify(evt.payload, null, 2)} language="json" />
+              </div>
+            )}
+            {decision ? (
+              <div style={{ marginTop: 8, fontSize: fontSizes.sm, color: approved ? colors.toolCompleted : colors.toolFailed }}>
+                {approved ? t('talk.approval.approved') : t('talk.approval.rejected')}{note ? ` · ${note}` : ''}
+              </div>
+            ) : (
+              onDecide && (
+                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                  <span
+                    onClick={() => onDecide(evt.id, true)}
+                    className="btn-hover"
+                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, color: colors.accent, borderRadius: 2, padding: '4px 12px', fontSize: fontSizes.md, userSelect: 'none' }}
+                  >
+                    {t('talk.approval.approve')}
+                  </span>
+                  <span
+                    onClick={() => onDecide(evt.id, false)}
+                    className="btn-hover"
+                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, color: colors.textDim, borderRadius: 2, padding: '4px 12px', fontSize: fontSizes.md, userSelect: 'none' }}
+                  >
+                    {t('talk.approval.reject')}
+                  </span>
+                </div>
+              )
+            )}
+          </div>
         </div>
       )
       continue

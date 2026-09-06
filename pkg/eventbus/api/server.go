@@ -90,16 +90,24 @@ func (s *Server) handleStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 
 	// Stream only events newer than the subscription watermark; history is paged
 	// in separately via /api/events/before/{id}. Advertise the watermark as a
-	// control event so a client can start its backwards pagination.
-	ch, watermark, err := s.log.FollowLive(r.Context(), filter)
+	// control event so a client can start its backwards pagination, then deliver
+	// the watermark event itself — it is in no history page (LoadBefore is
+	// strictly-before) and was routed before the subscription, so this is its
+	// only delivery path.
+	ch, watermarkEvt, err := s.log.FollowLive(r.Context(), filter)
 	if err != nil {
 		log.Printf("[eventbus api] follow error: %v", err)
 		stdhttp.Error(w, err.Error(), 500)
 		return
 	}
 
-	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermark)
+	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermarkEvt.ID)
 	flusher.Flush()
+	if watermarkEvt.ID != "" {
+		data, _ := json.Marshal(watermarkEvt)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
 
 	for evt := range ch {
 		data, _ := json.Marshal(evt)

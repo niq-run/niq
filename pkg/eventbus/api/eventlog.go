@@ -141,27 +141,30 @@ func (l *EventLog) Hook() func(event.Event) {
 // It first replays history from the store, then seamlessly switches to
 // real-time delivery via the subscriber mechanism.
 // FollowLive returns a channel of real-time events only — no history replay.
-// It also returns a watermark: the ID of the newest event persisted in the
-// store at the moment of subscription. The caller is expected to page backwards
-// from that watermark (via LoadBefore) to fetch history.
-//
-// LoadBefore is strictly-before, so the watermark event itself would fall
-// through the crack — in no history page and not newer than the watermark.
-// It is therefore forwarded on the live channel: events strictly older than
-// the watermark are skipped (they are in the store and page in via history),
-// while the watermark event arrives exactly once via live.
-func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.Event, string, error) {
+// It also returns the watermark: the newest event persisted in the store at
+// the moment of subscription, returned as the event itself. The caller is
+// expected to page backwards from that watermark (via LoadBefore) to fetch
+// history AND to deliver the watermark event to its client explicitly:
+// LoadBefore is strictly-before, so this event would otherwise fall through
+// the crack — in no history page and, being routed before the subscription,
+// on no live path either.
+func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.Event, event.Event, error) {
 	// Subscription boundary: the newest event ID currently in the store.
 	// Event IDs are time-ordered UUIDv7, so this is a safe monotonic watermark
-	// even across filter boundaries.
-	watermark := ""
+	// even across filter boundaries. The ID is filter-agnostic (history paging
+	// filters on its own); the event itself is only handed over when it
+	// matches this subscription's filter.
+	var watermarkEvt event.Event
 	if latest, err := l.store.List(ctx, "*", store.QueryOpts{Limit: 1, Desc: true}); err == nil && len(latest) > 0 {
-		watermark = latest[0].ID
+		if matchesFilter(latest[0], filter) {
+			watermarkEvt = latest[0]
+		}
 	}
+	watermark := watermarkEvt.ID
 
 	liveCh, err := l.Subscribe(ctx, filter)
 	if err != nil {
-		return nil, "", err
+		return nil, event.Event{}, err
 	}
 
 	out := make(chan event.Event, 256)
@@ -175,7 +178,8 @@ func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.
 			// strictly-before the watermark, so everything older than it is
 			// (or will be) paged in by the client. The watermark event itself
 			// is NOT in any history page — forward it, this is its only
-			// delivery path.
+			// delivery path (in the gap case it duplicates the caller's
+			// explicit watermark delivery; dedup is the client's concern).
 			if watermark != "" && evt.ID < watermark {
 				continue
 			}
@@ -186,7 +190,7 @@ func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.
 			}
 		}
 	}()
-	return out, watermark, nil
+	return out, watermarkEvt, nil
 }
 
 // LoadBefore returns events older than the given anchor event ID.

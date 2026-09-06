@@ -92,32 +92,52 @@ No prefix stripping. No string encoding of routing info in tool names.
 ## EmbeddedBackend
 
 `EmbeddedBackend` is the built-in Backend implementation using Go standard library
-for local filesystem and subprocess operations.
+for local filesystem and subprocess operations. It supports multiple mounted
+directories: the first mount is the primary one (relative paths and the default
+bash cwd resolve against it), and absolute paths are accepted when they fall
+inside any mount.
 
 ```go
+be := wsbackend.NewEmbeddedBackend([]string{"/path/to/project"})
 ws := workspace.New(workspace.Config{
-    ID: "ws-proj",
-    Bus: bus,
-    Backend: &workspace.EmbeddedBackend{RootDir: "/path/to/project"},
+    ID:      "ws-proj",
+    Bus:     bus,
+    Backend: be,
+    // Persistence callback: a runtime mount.add signals through this so the
+    // mount set survives a restart via Snapshot/Restore.
+    OnDurableChange: onCheckpoint,
 })
 ```
 
-Path safety is enforced by `resolvePath()` — all paths are cleaned via
-`filepath.Clean`, resolved absolutely, and checked against the root directory.
+Path safety is enforced by `resolve()` — all paths are cleaned via
+`filepath.Clean`, resolved absolutely, and checked against the mount
+boundaries (symlink-aware).
 
-## Usage in WorkerService
+## Runtime mount management
 
-`WorkerService.spawnWorkspace` creates workspace workers on demand:
+The worker exposes `mount.add` / `mount.list` extensions (same pattern as the
+reason worker's provider events). `mount.add` takes `{"path": "/abs/dir"}`,
+requires the directory to exist, and rejects duplicates; on success it
+notifies the durable-change callback so `Snapshot` persists the new mount
+set.
 
-```go
-s.CreateWorker(id, func() worker.ManagedWorker {
-    return workspace.New(workspace.Config{
-        ID:      id,
-        Bus:     s.Bus,
-        Backend: &workspace.EmbeddedBackend{RootDir: path},
-    })
-})
-```
+## Boundary approval and read-only mode
+
+`mount.add` is the runtime mount-update extension: requests from the
+configured approver (default `webui-hiw`) apply directly; a request from any
+other worker parks behind an approval — the worker sends `approval.request`
+and only expands the boundary once `approval.decision` grants it, then
+replies to the requester. Without a configured approver every request applies
+directly.
+
+The same approval pair covers tool escapes: when a tool path escapes every
+mount and an approver is configured, the worker parks the call, sends
+`approval.request`, and on approval mounts the path and re-dispatches the
+call. Pending approvals travel in the worker's Snapshot.
+
+`mode.set` switches between `readwrite` (default) and `readonly` at runtime.
+Tools stay registered and listening in both modes — a write/edit/bash call
+while read-only is answered with an explicit error. The mode is durable too.
 
 ## Custom Backend
 
@@ -134,9 +154,11 @@ func (b *MyBackend) Write(ctx context.Context, path, content string) error { ...
 
 | File | Responsibility |
 |---|---|
-| `backend.go` | Interface definitions (FileOperator, BashOperator) |
-| `embedded.go` | EmbeddedBackend implementation |
-| `worker.go` | WorkspaceWorker: bus protocol, route table, result formatting |
+| `worker.go` | WorkspaceWorker: bus protocol, route table, result formatting, Snapshot/Restore |
+| `mounts.go` | mount.add / mount.list extensions + MountManager probing |
+| `approval.go` | boundary-escape → approval.request flow + parked-call resolution |
+| `mode.go` | mode.set (readwrite/readonly) extension |
+| `tools.go` | tool handler assembly from backend interfaces |
 
 ## Design constraints
 

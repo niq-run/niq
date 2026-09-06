@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -195,7 +196,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 		"read": {
 			desc: "Read the contents of a file within the workspace. Returns content with line numbers. Supports offset/limit pagination for large files.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
-				"path":   map[string]any{"type": "string", "description": "Path to the file, relative to the workspace root."},
+				"path":   map[string]any{"type": "string", "description": "Path to the file. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
 				"offset": map[string]any{"type": "integer", "description": "1-indexed line number to start reading from. Defaults to 1."},
 				"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to read. Defaults to 2000."},
 			}, "required": []any{"path"}},
@@ -203,14 +204,14 @@ func (w *WorkspaceWorker) registerExtensions() {
 		"write": {
 			desc: "Write content to a file within the workspace. Overwrites the entire file. Creates parent directories if needed.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
-				"path":    map[string]any{"type": "string", "description": "Path to the file, relative to the workspace root."},
+				"path":    map[string]any{"type": "string", "description": "Path to the file. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
 				"content": map[string]any{"type": "string", "description": "Full content to write to the file."},
 			}, "required": []any{"path", "content"}},
 		},
 		"edit": {
 			desc: "Edit a file by applying one or more find-and-replace operations. Each edit specifies old_text and new_text. Uses fuzzy Unicode quote normalization as fallback.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
-				"path": map[string]any{"type": "string", "description": "Path to the file, relative to the workspace root."},
+				"path": map[string]any{"type": "string", "description": "Path to the file. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
 				"edits": map[string]any{"type": "array", "description": "Array of {old_text, new_text} objects to apply.", "items": map[string]any{
 					"type": "object", "properties": map[string]any{
 						"old_text": map[string]any{"type": "string", "description": "The exact text to find."},
@@ -220,10 +221,10 @@ func (w *WorkspaceWorker) registerExtensions() {
 			}, "required": []any{"path", "edits"}},
 		},
 		"bash": {
-			desc: "Run a shell command within the workspace root directory. Returns exit code, stdout, and stderr. Output larger than 20KB is truncated to its head and tail. Supports optional timeout.",
+			desc: "Run a shell command within the workspace. Returns exit code, stdout, and stderr. Output larger than 20KB is truncated to its head and tail. Supports optional timeout.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"command": map[string]any{"type": "string", "description": "The shell command to execute."},
-				"cwd":     map[string]any{"type": "string", "description": "Working directory relative to workspace root."},
+				"cwd":     map[string]any{"type": "string", "description": "Working directory. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory. Defaults to the primary mount."},
 				"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional, capped at 300)."},
 			}, "required": []any{"command"}},
 		},
@@ -231,7 +232,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 			desc: "Search files recursively using grep -rn. Returns file:line:content matches.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"pattern": map[string]any{"type": "string", "description": "Regex pattern to search for."},
-				"path":    map[string]any{"type": "string", "description": "Directory to search. Defaults to workspace root."},
+				"path":    map[string]any{"type": "string", "description": "Directory to search. Defaults to the primary mount."},
 				"include": map[string]any{"type": "string", "description": "File glob to include (e.g. *.go)."},
 				"exclude": map[string]any{"type": "string", "description": "File glob to exclude (e.g. *_test.go)."},
 			}, "required": []any{"pattern"}},
@@ -239,14 +240,14 @@ func (w *WorkspaceWorker) registerExtensions() {
 		"find": {
 			desc: "Find files by name glob using find -name.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
-				"path":    map[string]any{"type": "string", "description": "Directory to search. Defaults to workspace root."},
+				"path":    map[string]any{"type": "string", "description": "Directory to search. Defaults to the primary mount."},
 				"pattern": map[string]any{"type": "string", "description": "Filename glob pattern (e.g. *.go)."},
 			}, "required": []any{"pattern"}},
 		},
 		"ls": {
 			desc: "List directory contents. Returns a structured summary with entries marked as [file] or [dir].",
 			params: map[string]any{"type": "object", "properties": map[string]any{
-				"path": map[string]any{"type": "string", "description": "Directory to list. Defaults to workspace root."},
+				"path": map[string]any{"type": "string", "description": "Directory to list. Defaults to the primary mount."},
 			}},
 		},
 	}
@@ -260,17 +261,37 @@ func (w *WorkspaceWorker) registerExtensions() {
 			w.dispatchHandler(ctx, tc)
 		})
 	}
+
+	w.registerMountExtensions()
+	w.registerModeExtension()
 }
 
 // dispatchHandler serves a tool call through the registered handler map.
+// Two dispatch-time gates run before the handler: read-only mode rejects the
+// mutating tools (they stay registered and listening — the error says why),
+// and a boundary escape is converted into an approval request instead of a
+// plain failure.
 func (w *WorkspaceWorker) dispatchHandler(ctx context.Context, tc baseworker.ToolCall) {
 	handler, ok := w.handlers[tc.Name]
 	if !ok {
 		w.ReplyFailed(tc.CallerID, tc.CallID, "unknown tool: "+tc.Name, tc.TraceID)
 		return
 	}
+	w.mu.Lock()
+	readOnly := w.mode == ModeReadOnly
+	w.mu.Unlock()
+	if readOnly && mutatingTools[tc.Name] {
+		w.ReplyFailed(tc.CallerID, tc.CallID,
+			"read-only mode: "+tc.Name+" is not allowed (switch back with mode.set)", tc.TraceID)
+		return
+	}
 	result, err := handler(ctx, tc.Args)
 	if err != nil {
+		var esc *backend.EscapeError
+		if errors.As(err, &esc) {
+			w.requestApproval(ctx, tc, esc.Path)
+			return
+		}
 		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
 		return
 	}

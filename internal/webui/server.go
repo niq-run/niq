@@ -194,6 +194,12 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// payload. The bus ACL still applies (HIW must be granted the type).
 	mux.HandleFunc("POST /api/workers/{id}/event", s.handleWorkerEvent)
 
+	// Approvals: the HIW owns the approval state (it receives the
+	// approval.request events); the server is a thin view — list what HIW
+	// tracks, and forward the human's decision through HIW.
+	mux.HandleFunc("GET /api/approvals", s.handleApprovals)
+	mux.HandleFunc("POST /api/approvals/{id}/decision", s.handleApprovalDecision)
+
 	// ── Static assets ──
 	if devMode {
 		log.Println("[webui] dev mode: static assets served by Vite on :5173")
@@ -384,20 +390,45 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 
 	// The stream now carries only events newer than `watermark`; history is
 	// paged in separately by the client. Advertise the watermark up front as a
-	// control event so the client can start its backwards pagination.
-	ch, watermark, err := s.eventLog.FollowLive(r.Context(), filter)
+	// control event so the client can start its backwards pagination, then
+	// deliver the watermark event itself — it is in no history page
+	// (LoadBefore is strictly-before) and was routed before the subscription,
+	// so this is its only delivery path. Without it the newest event at
+	// connect time is invisible until a later reconnect covers it.
+	ch, watermarkEvt, err := s.eventLog.FollowLive(r.Context(), filter)
 	if err != nil {
 		log.Printf("[webui] follow error: %v", err)
 		return
 	}
 
-	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermark)
+	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermarkEvt.ID)
 	flusher.Flush()
-
-	for evt := range ch {
-		data, _ := json.Marshal(evt)
+	if watermarkEvt.ID != "" {
+		data, _ := json.Marshal(watermarkEvt)
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
+	}
+
+	// Heartbeat: an idle stream sends nothing, so a silently-dead connection
+	// (laptop sleep, NAT timeout) stays undetected and the browser keeps
+	// waiting on a stale EventSource. A periodic comment keeps the path warm
+	// and makes drops surface as a prompt reconnect.
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, _ := json.Marshal(evt)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		}
 	}
 }
 
@@ -931,9 +962,9 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// handleWorkerEvent sends one event to a worker on its behalf — the human UI
-// driving a worker's behaviour/state by publishing an event from the worker's
-// "watch" contract. The payload is the argument object (top-level). The event
+// handleWorkerEvent serves POST /api/workers/{id}/event: the human UI drives a
+// worker's behaviour/state by publishing an event from the worker's "watch"
+// contract. The payload is the argument object (top-level). The event
 // is sent through the normal bus: HIW's publish_allow must grant the type, and
 // the target worker must be online.
 func (s *Server) handleWorkerEvent(w http.ResponseWriter, r *http.Request) {
@@ -959,6 +990,61 @@ func (s *Server) handleWorkerEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleApprovals serves GET /api/approvals: the approval entries the HIW
+// tracks (pending first, then the decided history). The server holds no state
+// of its own — the HIW is the owner.
+func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request) {
+	entries := s.hiw.Approvals()
+	if entries == nil {
+		entries = []hiw.ApprovalEntry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"approvals": entries})
+}
+
+// handleApprovalDecision serves POST /api/approvals/{id}/decision: forward the
+// human's verdict through HIW to the requesting worker. The entry is looked up
+// by its approval.request event id; the requester must still be online.
+func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Approved *bool  `json:"approved"`
+		Note     string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Approved == nil {
+		http.Error(w, "approved is required", http.StatusBadRequest)
+		return
+	}
+
+	var entry hiw.ApprovalEntry
+	found := false
+	for _, e := range s.hiw.Approvals() {
+		if e.EventID == id {
+			entry = e
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "unknown approval "+id, http.StatusNotFound)
+		return
+	}
+	if s.engine.Channel(entry.WorkerID) == nil {
+		http.Error(w, "worker "+entry.WorkerID+" is offline", http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.hiw.SendApprovalDecision(r.Context(), entry.RequestID, *body.Approved, body.Note); err != nil {
+		http.Error(w, "send decision: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"done": true})
 }
 
 // parseWorkerRoles reads the ?role= multi values into worker-traffic roles

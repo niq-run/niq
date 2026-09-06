@@ -24,6 +24,8 @@ interface SidebarProps {
   isMobile: boolean
   open: boolean
   onNavigate: () => void
+  // Pending approval requests (HIW-tracked) — shown as a nav badge.
+  pendingApprovals?: number
 }
 
 // Sidebar resize: the draggable width range, persisted in localStorage.
@@ -35,7 +37,7 @@ function loadSidebarWidth(): number {
   return Math.min(Math.max(v, MIN_SIDEBAR_WIDTH), Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.5))
 }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, panel, onSelectPanel, archived, isMobile, open, onNavigate }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0 }: SidebarProps) {
   const { dark, toggle, colors } = useTheme()
   const { lang, setLang, t } = useI18n()
   // Hovered sidebar option (non-toggle, non-checkbox rows) — shows a full-width
@@ -57,7 +59,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
 
   // View labels must be computed inside the component (not module-level) so
   // they re-render when the language changes.
-  const VIEW_LABELS: Record<ViewMode, string> = { talk: t('nav.talk'), events: t('nav.events'), workers: t('nav.workers') }
+  const VIEW_LABELS: Record<ViewMode, string> = { talk: t('nav.talk'), approvals: t('nav.approvals'), events: t('nav.events'), workers: t('nav.workers') }
 
   // ── Logo drag: the logo can be dragged sideways and springs back. Dragging
   // it all the way right toggles a mirror flip that plays out while the logo
@@ -314,7 +316,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           <button
             onClick={onNavigate}
             title={t('sidebar.close')}
-            style={{ background: 'none', border: '1px solid ' + colors.border, borderRadius: 4, color: colors.textDim, fontSize: fontSizes.md, lineHeight: 1, padding: '4px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            style={{ background: 'none', border: '1px solid ' + colors.border, borderRadius: 2, color: colors.textDim, fontSize: fontSizes.md, lineHeight: 1, padding: '4px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
           >
             ✕
           </button>
@@ -388,9 +390,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           onClick={() => { setView(v); onNavigate() }}
           onMouseEnter={() => setHoverId('view:' + v)}
           onMouseLeave={() => setHoverId(null)}
-          style={{ ...hoverStyle('view:' + v), cursor: 'pointer', color: view === v ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
+          style={{ ...hoverStyle('view:' + v), cursor: 'pointer', color: view === v ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
         >
-          {VIEW_LABELS[v]}{view === v ? ' \u25C9' : ''}
+          <span style={{ flex: 1 }}>{VIEW_LABELS[v]}{view === v ? ' \u25C9' : ''}</span>
+          {v === 'approvals' && pendingApprovals > 0 && (
+            <span style={{ border: '1px solid ' + colors.accent, color: colors.accent, borderRadius: 2, minWidth: 14, textAlign: 'center', padding: '0 3px', fontSize: 10, lineHeight: '13px', userSelect: 'none' }}>{pendingApprovals}</span>
+          )}
         </div>
       ))}
 

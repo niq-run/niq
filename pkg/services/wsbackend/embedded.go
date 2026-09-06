@@ -17,32 +17,211 @@ import (
 )
 
 // EmbeddedBackend implements FileOperator, BashOperator, and DirLister
-// using the local filesystem and os/exec.
+// using the local filesystem and os/exec. It operates over one or more
+// mounted directories; the first mount is the primary one (relative tool
+// paths and the default bash cwd resolve against it), while absolute paths
+// are accepted when they fall inside any mount.
 //
 // File mutations (Write, Edit) are serialised per resolved path via
 // an internal mutex map. No two goroutines can mutate the same file
 // concurrently; reads are lock-free.
 type EmbeddedBackend struct {
-	RootDir   string
+	mountsMu  sync.Mutex
+	mounts    []mount
 	fileLocks map[string]*sync.Mutex
 	locksMu   sync.Mutex
 }
 
-// NewEmbeddedBackend returns an EmbeddedBackend initialised with an
-// empty file lock map. Must be used instead of direct struct literals
-// so that the per-file mutex map is not nil.
-func NewEmbeddedBackend(rootDir string) *EmbeddedBackend {
-	expanded, err := expandHome(rootDir)
-	if err != nil {
-		log.Printf("[wsbackend] expandHome %q: %v", rootDir, err)
-	} else if expanded != rootDir {
-		log.Printf("[wsbackend] expandHome %q → %q", rootDir, expanded)
-	}
-	rootDir = expanded
-	return &EmbeddedBackend{
-		RootDir:   rootDir,
+// mount is one mounted directory: path is the canonical absolute path as
+// configured; real is its symlink-resolved form used for containment.
+type mount struct {
+	path string
+	real string
+}
+
+// NewEmbeddedBackend returns an EmbeddedBackend with the given mounted
+// directories. Each path is expanded (~), canonicalised and validated; a
+// path that fails validation is logged and skipped. Must be used instead of
+// direct struct literals so that the per-file mutex map is not nil.
+func NewEmbeddedBackend(mounts []string) *EmbeddedBackend {
+	b := &EmbeddedBackend{
 		fileLocks: make(map[string]*sync.Mutex),
 	}
+	for _, raw := range mounts {
+		if _, err := b.AddMount(raw); err != nil {
+			log.Printf("[wsbackend] mount %q: %v", raw, err)
+		}
+	}
+	if len(b.mounts) == 0 {
+		log.Printf("[wsbackend] warning: no valid mounts configured")
+	}
+	return b
+}
+
+// Mounts returns a copy of the currently mounted directory paths.
+func (b *EmbeddedBackend) Mounts() []string {
+	b.mountsMu.Lock()
+	defer b.mountsMu.Unlock()
+	out := make([]string, len(b.mounts))
+	for i, m := range b.mounts {
+		out[i] = m.path
+	}
+	return out
+}
+
+// AddMount validates and appends a mounted directory. The path must exist
+// and be a directory; duplicates (same symlink-resolved path) are rejected.
+// Returns the canonical absolute path added.
+func (b *EmbeddedBackend) AddMount(raw string) (string, error) {
+	m, err := validateMount(raw)
+	if err != nil {
+		return "", err
+	}
+	b.mountsMu.Lock()
+	defer b.mountsMu.Unlock()
+	for _, existing := range b.mounts {
+		if existing.real == m.real {
+			return "", fmt.Errorf("mount %s already mounted (as %s)", raw, existing.path)
+		}
+	}
+	b.mounts = append(b.mounts, m)
+	return m.path, nil
+}
+
+// RemoveMount detaches the mount matching the given path (~ expansion and
+// cleaning applied; symlink-resolved form compared too). The last remaining
+// mount cannot be removed — relative paths and the default bash cwd need a
+// primary. Reports whether a mount was removed.
+func (b *EmbeddedBackend) RemoveMount(raw string) (bool, error) {
+	if raw == "" {
+		return false, fmt.Errorf("mount path is empty")
+	}
+	expanded, err := expandHome(raw)
+	if err != nil {
+		return false, err
+	}
+	abs, err := filepath.Abs(filepath.Clean(expanded))
+	if err != nil {
+		return false, fmt.Errorf("resolve mount: %w", err)
+	}
+	real := abs
+	if r, evalErr := filepath.EvalSymlinks(abs); evalErr == nil && r != "" {
+		real = r
+	}
+
+	b.mountsMu.Lock()
+	defer b.mountsMu.Unlock()
+	for i, m := range b.mounts {
+		if m.path == abs || m.real == real {
+			if len(b.mounts) == 1 {
+				return false, fmt.Errorf("cannot remove the last remaining mount")
+			}
+			b.mounts = append(b.mounts[:i], b.mounts[i+1:]...)
+			return true, nil
+		}
+	}
+	return false, fmt.Errorf("%s is not mounted", abs)
+}
+
+// ReplaceMounts atomically replaces the whole mount set with the given
+// validated paths. Used by Restore to re-apply persisted mounts.
+func (b *EmbeddedBackend) ReplaceMounts(paths []string) error {
+	var next []mount
+	for _, raw := range paths {
+		m, err := validateMount(raw)
+		if err != nil {
+			return err
+		}
+		for _, existing := range next {
+			if existing.real == m.real {
+				return fmt.Errorf("duplicate mount %s", raw)
+			}
+		}
+		next = append(next, m)
+	}
+	if len(next) == 0 {
+		return fmt.Errorf("at least one mount is required")
+	}
+	b.mountsMu.Lock()
+	b.mounts = next
+	b.mountsMu.Unlock()
+	return nil
+}
+
+// currentMounts snapshots the mount slice.
+func (b *EmbeddedBackend) currentMounts() []mount {
+	b.mountsMu.Lock()
+	defer b.mountsMu.Unlock()
+	return b.mounts
+}
+
+// primary returns the first mount's path — the base for relative tool paths
+// and the default bash cwd. Empty when no valid mount is configured.
+func (b *EmbeddedBackend) primary() string {
+	b.mountsMu.Lock()
+	defer b.mountsMu.Unlock()
+	if len(b.mounts) == 0 {
+		return ""
+	}
+	return b.mounts[0].path
+}
+
+// resolve resolves a raw tool path against the mounts. Relative paths
+// resolve against the primary (first) mount; absolute paths are accepted
+// when they fall inside any mounted directory. Symlink-aware: a resolved
+// target is checked against the mount's symlink-resolved root, falling back
+// to a plain prefix check for not-yet-existing paths.
+func (b *EmbeddedBackend) resolve(raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("path is empty")
+	}
+	mounts := b.currentMounts()
+	if len(mounts) == 0 {
+		return "", fmt.Errorf("no mounts configured")
+	}
+
+	expanded, err := expandHome(raw)
+	if err != nil {
+		return "", fmt.Errorf("resolve home: %w", err)
+	}
+	abs, err := filepath.Abs(filepath.Clean(expanded))
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+
+	if filepath.IsAbs(filepath.Clean(expanded)) {
+		real, evalErr := filepath.EvalSymlinks(abs)
+		if evalErr != nil {
+			// Path does not exist yet — plain prefix check per mount.
+			for _, m := range mounts {
+				if hasPathPrefix(abs, m.path) {
+					return abs, nil
+				}
+			}
+			return "", &EscapeError{Path: raw}
+		}
+		for _, m := range mounts {
+			if hasPathPrefix(real, m.real) {
+				return abs, nil
+			}
+		}
+		return "", &EscapeError{Path: raw}
+	}
+
+	// Relative: resolve against the primary mount.
+	p := mounts[0]
+	joined := filepath.Clean(filepath.Join(p.path, filepath.Clean(expanded)))
+	real, evalErr := filepath.EvalSymlinks(joined)
+	if evalErr != nil {
+		if hasPathPrefix(joined, p.path) {
+			return joined, nil
+		}
+		return "", &EscapeError{Path: raw}
+	}
+	if hasPathPrefix(real, p.real) {
+		return joined, nil
+	}
+	return "", &EscapeError{Path: raw}
 }
 
 // fileLock returns a function that unlocks the per-file mutex for path.
@@ -63,7 +242,7 @@ func (b *EmbeddedBackend) fileLock(path string) func() {
 // offset), limit caps the number of lines returned (0 = no limit). The
 // returned string contains only the requested slice.
 func (b *EmbeddedBackend) Read(ctx context.Context, path string, offset, limit int) (string, error) {
-	resolved, err := resolvePath(b.RootDir, path)
+	resolved, err := b.resolve(path)
 	if err != nil {
 		return "", err
 	}
@@ -93,7 +272,7 @@ func (b *EmbeddedBackend) Read(ctx context.Context, path string, offset, limit i
 }
 
 func (b *EmbeddedBackend) Write(ctx context.Context, path, content string) error {
-	resolved, err := resolvePath(b.RootDir, path)
+	resolved, err := b.resolve(path)
 	if err != nil {
 		return err
 	}
@@ -112,7 +291,7 @@ func (b *EmbeddedBackend) Write(ctx context.Context, path, content string) error
 // per-file lock. If the exact oldStr is not found, it falls back to a
 // Unicode-normalised fuzzy match (curly quotes -> straight, em-dashes -> --).
 func (b *EmbeddedBackend) Edit(ctx context.Context, path, oldStr, newStr string) error {
-	resolved, err := resolvePath(b.RootDir, path)
+	resolved, err := b.resolve(path)
 	if err != nil {
 		return err
 	}
@@ -155,7 +334,7 @@ func (b *EmbeddedBackend) Edit(ctx context.Context, path, oldStr, newStr string)
 // List returns the contents of a directory as []DirEntry, sorted by name
 // (directories first, then files). Implements [DirLister].
 func (b *EmbeddedBackend) List(ctx context.Context, path string) ([]DirEntry, error) {
-	resolved, err := resolvePath(b.RootDir, path)
+	resolved, err := b.resolve(path)
 	if err != nil {
 		return nil, err
 	}
@@ -182,22 +361,28 @@ func (b *EmbeddedBackend) List(ctx context.Context, path string) ([]DirEntry, er
 	return result, nil
 }
 
-// Remove deletes a file or directory at the given path relative to the root.
-// If the path is a directory, it is removed recursively along with all contents.
+// Remove deletes a file or directory at the given path. If the path is a
+// directory, it is removed recursively along with all contents.
 func (b *EmbeddedBackend) Remove(ctx context.Context, path string) error {
-	resolved, err := resolvePath(b.RootDir, path)
+	resolved, err := b.resolve(path)
 	if err != nil {
 		return err
 	}
 
-	// Security: ensure the resolved path is within the workspace root.
-	absRoot, _ := filepath.Abs(b.RootDir)
+	// Security: ensure the resolved path is within one of the mounts.
 	absResolved, err := filepath.Abs(resolved)
 	if err != nil {
 		return fmt.Errorf("resolve absolute path: %w", err)
 	}
-	if !strings.HasPrefix(absResolved, absRoot) {
-		return fmt.Errorf("path %q escapes workspace root", path)
+	contained := false
+	for _, m := range b.currentMounts() {
+		if hasPathPrefix(absResolved, m.path) || hasPathPrefix(absResolved, m.real) {
+			contained = true
+			break
+		}
+	}
+	if !contained {
+		return &EscapeError{Path: path}
 	}
 
 	// Check if the path exists.
@@ -240,9 +425,9 @@ func (b *EmbeddedBackend) runBash(ctx context.Context, command, cwd string, onLi
 		return BashResult{}, fmt.Errorf("command is empty")
 	}
 	if cwd == "" {
-		cwd = b.RootDir
+		cwd = b.primary()
 	} else {
-		resolvedCwd, err := resolvePath(b.RootDir, cwd)
+		resolvedCwd, err := b.resolve(cwd)
 		if err != nil {
 			return BashResult{}, err
 		}
@@ -408,14 +593,14 @@ func exceededLimits(out, errOut *boundedWriter, limits BashLimits) bool {
 	return false
 }
 
-// Grep runs `grep -rn` inside the workspace root and returns
-// truncated results. Implements [GrepOperator].
+// Grep runs `grep -rn` inside the primary mount (or the given path within
+// any mount) and returns truncated results. Implements [GrepOperator].
 func (b *EmbeddedBackend) Grep(ctx context.Context, pattern, path, include, exclude string) (string, error) {
 	searchPath := path
 	if searchPath == "" {
-		searchPath = b.RootDir
+		searchPath = b.primary()
 	} else {
-		resolved, err := resolvePath(b.RootDir, searchPath)
+		resolved, err := b.resolve(searchPath)
 		if err != nil {
 			return "", err
 		}
@@ -447,14 +632,14 @@ func (b *EmbeddedBackend) Grep(ctx context.Context, pattern, path, include, excl
 	return output, nil
 }
 
-// Find runs `find -name` inside the workspace root and returns
-// truncated results. Implements [FindOperator].
+// Find runs `find -name` inside the primary mount (or the given path within
+// any mount) and returns truncated results. Implements [FindOperator].
 func (b *EmbeddedBackend) Find(ctx context.Context, path, pattern string) (string, error) {
 	searchPath := path
 	if searchPath == "" {
-		searchPath = b.RootDir
+		searchPath = b.primary()
 	} else {
-		resolved, err := resolvePath(b.RootDir, searchPath)
+		resolved, err := b.resolve(searchPath)
 		if err != nil {
 			return "", err
 		}

@@ -88,7 +88,7 @@ export default function CollapsibleCode({ code, language = 'json', foldThreshold
               onClick={() => setExpanded(v => !v)}
               title={folded ? t('talk.code.expand.tooltip') : t('talk.code.collapse.tooltip')}
               style={{
-                cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4,
+                cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2,
                 padding: '2px 10px', color: folded ? colors.accent : colors.textDimmed, fontSize: fontSizes.sm,
                 userSelect: 'none', background: folded ? colors.bgChip : 'transparent', whiteSpace: 'nowrap',
               }}

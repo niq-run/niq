@@ -196,43 +196,55 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 
 func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 	p := cfg.Params
-	path, _ := p["root_dir"].(string)
-	if path == "" {
-		path, _ = p["path"].(string)
-	}
-	if path == "" {
-		return worker.SpawnSpec{}, fmt.Errorf("workspace: root_dir is required")
-	}
-	abs, err := filepath.Abs(path)
+	mounts, err := parseMountsParam(p)
 	if err != nil {
-		return worker.SpawnSpec{}, fmt.Errorf("workspace: bad root_dir: %w", err)
+		return worker.SpawnSpec{}, err
+	}
+	if len(mounts) == 0 {
+		return worker.SpawnSpec{}, fmt.Errorf("workspace: at least one mount is required")
 	}
 	// Use the id passed in from the project/config definition. Only fall back to
-	// a path-derived id when none was given (legacy bare workspace).
+	// a path-derived id when none was given (bare workspace).
 	id := cfg.ID
 	if id == "" {
-		id = "ws-" + sanitizeWorkerID(abs)
+		id = "ws-" + sanitizeWorkerID(mounts[0])
+	}
+	approver, _ := p["approver"].(string)
+	if approver == "" {
+		approver = "webui-hiw" // default approver: the human UI worker
 	}
 	params := p
-	params["root_dir"] = abs
+	params["mounts"] = mounts
+	params["approver"] = approver
 	cfg.ID = id
 	cfg.Params = params
 
-	// PublishAllow: the workspace replies to tool calls (request.*) and
-	// announces presence. SubscribeAllow: worker.discover, so the workspace
-	// re-announces its tools to joiners. Tool calls arrive directed; the
-	// workspace consumes no other broadcasts.
+	// PublishAllow: the workspace replies to tool calls (request.*), asks its
+	// approver to expand the boundary (approval.request), and announces
+	// presence. SubscribeAllow: worker.discover, so the workspace re-announces
+	// its tools to joiners. Tool calls arrive directed; the workspace consumes
+	// no other broadcasts.
 	connect := specConnect(ctx, id, "workspace",
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
+			event.NewPublishPattern("approval.request"),
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return workspace.New(workspace.Config{
-			ID:      id,
-			Bus:     ch,
-			Backend: wsbackend.NewEmbeddedBackend(abs),
+			ID:       id,
+			Bus:      ch,
+			Backend:  wsbackend.NewEmbeddedBackend(mounts),
+			Approver: approver,
+			// A runtime mount.add must outlive this process, so the worker
+			// signals it and the assembly layer checkpoints it — the same
+			// arrangement as the reason worker's provider switch.
+			OnDurableChange: func() {
+				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+					log.Printf("[project] checkpoint %s: %v", id, err)
+				}
+			},
 		})
 	}
 	cfg.Type = "workspace"
@@ -241,6 +253,52 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 		Connect: connect,
 		Build:   build,
 	}, nil
+}
+
+// parseMountsParam extracts the mount list from worker params: "mounts" as a
+// []string (config) or []any of strings (bus payloads), or the single-mount
+// "path" sugar used by the host spawn tool. Each path is ~-expanded and made
+// absolute. An absent parameter yields a nil slice.
+func parseMountsParam(p map[string]any) ([]string, error) {
+	var raws []string
+	switch v := p["mounts"].(type) {
+	case []string:
+		raws = v
+	case []any:
+		for _, item := range v {
+			s, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("workspace: mounts must be directory paths")
+			}
+			raws = append(raws, s)
+		}
+	}
+	if len(raws) == 0 {
+		if path, _ := p["path"].(string); path != "" {
+			raws = []string{path}
+		}
+	}
+	out := make([]string, 0, len(raws))
+	for _, raw := range raws {
+		expanded := raw
+		if raw == "~" || strings.HasPrefix(raw, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("workspace: resolve home: %w", err)
+			}
+			if raw == "~" {
+				expanded = home
+			} else {
+				expanded = filepath.Join(home, raw[2:])
+			}
+		}
+		abs, err := filepath.Abs(expanded)
+		if err != nil {
+			return nil, fmt.Errorf("workspace: bad mount %q: %w", raw, err)
+		}
+		out = append(out, abs)
+	}
+	return out, nil
 }
 
 // ── host ──
@@ -322,7 +380,15 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 		},
 		nil)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
-		return hiw.New(hiw.Config{ID: id, Bus: ch})
+		return hiw.New(hiw.Config{ID: id, Bus: ch,
+			// The HIW owns the approval entries the UI displays; a decision or
+			// a newly observed request must survive a restart.
+			OnDurableChange: func() {
+				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+					log.Printf("[project] checkpoint %s: %v", id, err)
+				}
+			},
+		})
 	}
 	cfg.ID = id
 	cfg.Type = "hiw"
@@ -341,9 +407,13 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	if id == "" {
 		id = "program"
 	}
-	root, _ := cfg.Params["root_dir"].(string)
-	if root == "" {
-		root = ctx.ProgramsRoot
+	root := ctx.ProgramsRoot
+	mounts, err := parseMountsParam(p)
+	if err != nil {
+		return worker.SpawnSpec{}, err
+	}
+	if len(mounts) > 0 {
+		root = mounts[0]
 	}
 	if root == "" {
 		home, _ := os.UserHomeDir()
@@ -351,7 +421,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return worker.SpawnSpec{}, fmt.Errorf("program: bad root_dir: %w", err)
+		return worker.SpawnSpec{}, fmt.Errorf("program: bad mount: %w", err)
 	}
 	os.MkdirAll(abs, 0755)
 

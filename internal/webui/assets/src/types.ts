@@ -85,7 +85,35 @@ export interface ProviderSwitchResult {
   error?: string
 }
 
-export type ViewMode = 'talk' | 'events' | 'workers'
+// ApprovalDecision is the approver's verdict on one approval request.
+export interface ApprovalDecision {
+  approved: boolean
+  note?: string
+  timestamp: number
+}
+
+// ApprovalEntry is one approval request tracked by the HIW (the default
+// approver): the boundary-expansion a worker asked for and, once decided, the
+// verdict. payload carries the request's full data so the UI can render any
+// approval kind generically.
+export interface ApprovalEntry {
+  id: string
+  request_id: string
+  worker_id: string
+  action?: string
+  tool?: string
+  path?: string
+  trace_id?: string
+  timestamp: number
+  payload?: Record<string, any>
+  decision?: ApprovalDecision | null
+}
+
+export interface ApprovalListResult {
+  approvals: ApprovalEntry[]
+}
+
+export type ViewMode = 'talk' | 'events' | 'approvals' | 'workers'
 
 // ViewSettings are the talk/events view preference toggles, persisted to
 // localStorage across sessions.
