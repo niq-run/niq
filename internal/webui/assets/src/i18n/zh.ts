@@ -37,7 +37,6 @@ export const zh: Record<StringKey, string> = {
   'view.toggle.compactMode': '紧凑模式',
   'view.toggle.streamingMode': '流式模式',
   'view.toggle.responseOnly': '仅回复',
-  'sidebar.currentProject': '当前项目：',
   'sidebar.lang.tooltip': '切换语言',
   'sidebar.resize.tooltip': '拖动调整宽度，双击重置',
   'sidebar.close': '关闭',
@@ -141,6 +140,9 @@ export const zh: Record<StringKey, string> = {
 
   // ── 输入模式选项 ──
   'mode.interrupt': '打断模式',
+  'mode.interrupt.short': '打断',
+  'mode.append.short': '追加',
+  'mode.schedule.short': '预约',
   'mode.interrupt.desc': '取消正在进行的推理并立即处理',
   'mode.interrupt.hint': '打断正在进行的推理并立即处理（等级 3）',
   'mode.schedule': '预约模式',

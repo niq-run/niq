@@ -36,7 +36,6 @@ export const en = {
   'view.toggle.compactMode': 'Compact Mode',
   'view.toggle.streamingMode': 'Streaming Mode',
   'view.toggle.responseOnly': 'Response Only',
-  'sidebar.currentProject': 'Current project: ',
   'sidebar.lang.tooltip': 'switch language',
   'sidebar.resize.tooltip': 'drag to resize, double-click to reset',
   'sidebar.close': 'close',
@@ -149,6 +148,9 @@ export const en = {
 
   // ── Input mode options (TalkInput) ──
   'mode.interrupt': 'interrupt mode',
+  'mode.interrupt.short': 'Interrupt',
+  'mode.append.short': 'Append',
+  'mode.schedule.short': 'Schedule',
   'mode.interrupt.desc': 'cancel in-flight reasoning and handle now',
   'mode.interrupt.hint': 'interrupt in-flight reasoning and handle now (level 3)',
   'mode.schedule': 'schedule mode',

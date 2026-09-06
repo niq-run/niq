@@ -453,9 +453,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
 
       {/* Projects — the 4th category: project + template management. For a
           project instance it is a jump/start hop to other projects; in control
-          mode it is the only usable thing. */}
-      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
-      <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.projects')}</strong>
+          mode it is the only usable thing. In control mode no section precedes
+          it, so the leading divider is skipped. */}
+      {mode === 'project' && (
+        <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
+      )}
+      <strong style={{ marginTop: mode === 'project' ? 0 : 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.projects')}</strong>
       <div
         onClick={() => { onSelectPanel('projects'); onNavigate() }}
         onMouseEnter={() => setHoverId('projects')}
@@ -488,10 +491,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       <div style={{ flexShrink: 0, marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
         {mode === 'project' && project && (
           <div
-            style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: colors.textDimmed, fontSize: fontSizes.sm }}
-            title={`${t('sidebar.currentProject')}[${project}]`}
+            title={project}
+            style={{ flex: 1, minWidth: 0, alignSelf: 'stretch', display: 'flex', alignItems: 'center', padding: '0 8px', color: colors.textDim, fontSize: fontSizes.sm + 1, overflow: 'hidden' }}
           >
-            {`${t('sidebar.currentProject')}[${project}]`}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
           </div>
         )}
         <div
