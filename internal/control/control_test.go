@@ -289,3 +289,46 @@ func TestControlTemplateFromProject(t *testing.T) {
 		t.Fatalf("duplicate status=%d, want 409", code)
 	}
 }
+
+// TestControlProviders verifies the provider config endpoints: GET returns the
+// file's content (the example skeleton seeded on first run), PUT replaces it,
+// and structural validation rejects duplicate names.
+func TestControlProviders(t *testing.T) {
+	setupProjectsRoot(t)
+	base := newControl(t)
+
+	do := func(method, path, body string) (int, string) {
+		req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+
+	// GET on a missing file returns an empty config, not an error.
+	code, body := do("GET", "/api/providers", "")
+	if code != 200 {
+		t.Fatalf("get status=%d: %s", code, body)
+	}
+
+	// PUT a config, then read it back.
+	cfg := `{"active":"p2","providers":[{"name":"p1","type":"deepseek"},{"name":"p2","type":"claude","api_key":"k"}]}`
+	if code, _ = do("PUT", "/api/providers", cfg); code != 204 {
+		t.Fatalf("put status=%d, want 204", code)
+	}
+	_, body = do("GET", "/api/providers", "")
+	if !strings.Contains(body, `"p2"`) || !strings.Contains(body, `"active":"p2"`) {
+		t.Fatalf("round-trip body: %s", body)
+	}
+
+	// Structural validation: duplicate names are rejected.
+	if code, _ = do("PUT", "/api/providers", `{"providers":[{"name":"x"},{"name":"x"}]}`); code != 400 {
+		t.Fatalf("duplicate name status=%d, want 400", code)
+	}
+	if code, _ = do("PUT", "/api/providers", `{"providers":[{"type":"deepseek"}]}`); code != 400 {
+		t.Fatalf("missing name status=%d, want 400", code)
+	}
+}

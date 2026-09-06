@@ -96,6 +96,8 @@ func (c *Control) Start(ctx context.Context) error {
 	mux.HandleFunc("PUT /api/templates/{name}", c.handleUpdateTemplate)
 	mux.HandleFunc("DELETE /api/templates/{name}", c.handleDeleteTemplate)
 	mux.HandleFunc("GET /api/projects", c.handleListProjects)
+	mux.HandleFunc("GET /api/providers", c.handleGetProviders)
+	mux.HandleFunc("PUT /api/providers", c.handleUpdateProviders)
 	mux.HandleFunc("GET /api/projects/{id}/template-preview", c.handleTemplatePreview)
 	mux.HandleFunc("POST /api/projects", c.handleCreateProject)
 	mux.HandleFunc("POST /api/projects/{id}/start", c.handleStartProject)
@@ -128,7 +130,7 @@ func (c *Control) Start(ctx context.Context) error {
 func corsControl(next stdhttp.Handler) stdhttp.Handler {
 	return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(stdhttp.StatusNoContent)
