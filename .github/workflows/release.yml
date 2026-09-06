@@ -26,11 +26,26 @@ jobs:
           node-version: '20'
           registry-url: https://registry.npmjs.org
 
+      # If a RELEASE_NOTES.md is committed at the repo root, use its contents
+      # as the GitHub Release body instead of goreleaser auto-generating one
+      # from the (possibly huge) commit history since the previous tag.
+      - name: Determine release notes
+        id: notes
+        run: |
+          args="release --clean"
+          if [ -f "RELEASE_NOTES.md" ]; then
+            echo "Using RELEASE_NOTES.md as the release body."
+            args="$args --release-notes RELEASE_NOTES.md"
+          else
+            echo "No RELEASE_NOTES.md found; letting goreleaser generate the changelog."
+          fi
+          echo "release_args=$args" >> "$GITHUB_OUTPUT"
+
       - name: Build and create GitHub Release
         uses: goreleaser/goreleaser-action@v6
         with:
           version: '~> v2'
-          args: release --clean
+          args: ${{ steps.notes.outputs.release_args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

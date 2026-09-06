@@ -349,6 +349,11 @@ func (w *BaseReasonWorker) convertEvent(evt event.Event) []llm.Message {
 			return h.Converter(evt)
 		}
 	}
+	// worker.input understands the HIW attachment envelope (image base64 /
+	// uploaded file paths) before falling back to the plain-text default.
+	if evt.Type == event.TypeWorkerInput {
+		return ConvertInputEvent(evt)
+	}
 	return DefaultConverter(evt)
 }
 
