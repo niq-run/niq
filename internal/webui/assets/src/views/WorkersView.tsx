@@ -4,6 +4,7 @@ import { useI18n } from '../i18n'
 import { type WorkerInfo } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
 import CreateWorkerDialog from './CreateWorkerDialog'
+import ViewHeader from '../components/ViewHeader'
 
 interface WorkersViewProps {
   workers: WorkerInfo[]
@@ -54,15 +55,12 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
   }
 
   return (
-    <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: '24px 24px 16px 24px' }}>
-      {/* On mobile the app-level top bar heads the page, so the in-view header
-          is skipped (same as the talk/events views); the action pills then
-          live in a slim bar above the table. */}
-      {!isMobile ? (
-        <div style={{ marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          {t('workers.title')}{' '}
-          <span style={{ color: colors.textMuted, fontSize: fontSizes.md }}>({workers.length})</span>
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {!isMobile && (
+        <ViewHeader
+          title={t('workers.title')}
+          count={workers.length}
+          right={<>
             <span
               onClick={() => setShowCreate(true)}
               className="btn-hover"
@@ -80,9 +78,13 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                 {t('workers.refresh')}
               </span>
             )}
-          </span>
-        </div>
-      ) : (
+          </>}
+        />
+      )}
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: isMobile ? 24 : '0 24px 16px' }}>
+        {/* On mobile the app-level top bar heads the page; the action pill then
+            lives in a slim bar above the table. */}
+        {isMobile && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
           <span
             onClick={() => setShowCreate(true)}
@@ -92,7 +94,7 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
             {t('workers.create')}
           </span>
         </div>
-      )}
+        )}
 
       {/* min-width lets the fixed columns scroll horizontally on narrow
           (phone) viewports instead of collapsing. */}
@@ -182,6 +184,7 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
         onClose={() => setShowCreate(false)}
         onCreated={() => { setShowCreate(false); onRefresh?.() }}
       />
+      </div>
     </div>
   )
 }

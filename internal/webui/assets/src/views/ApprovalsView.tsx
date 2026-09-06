@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
+import ViewHeader from '../components/ViewHeader'
 import { formatTime } from '../components/talk-utils'
 import CollapsibleCode from '../components/CollapsibleCode'
 import type { ApprovalEntry } from '../types'
@@ -56,16 +57,18 @@ export default function ApprovalsView({ approvals, onDecide, isMobile }: Approva
   })
 
   return (
-    <div style={{ flex: 1, padding: isMobile ? 16 : 24, overflowY: 'auto' }}>
-      <h3 style={{ margin: '0 0 16px', color: colors.accent, fontSize: fontSizes.xl }}>
-        {t('approvals.title')}
-        {pending.length > 0 && (
-          <span style={{ marginLeft: 10, fontSize: fontSizes.sm, color: colors.textDim }}>
-            {t('approvals.pendingCount', { n: pending.length })}
-          </span>
-        )}
-      </h3>
-
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {!isMobile && (
+        <ViewHeader
+          title={t('approvals.title')}
+          right={pending.length > 0 ? (
+            <span style={{ fontSize: fontSizes.sm, color: colors.textDim }}>
+              {t('approvals.pendingCount', { n: pending.length })}
+            </span>
+          ) : undefined}
+        />
+      )}
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: isMobile ? 16 : 24 }}>
       {approvals.length === 0 && (
         <div style={{ color: colors.textDim, fontSize: fontSizes.md }}>{t('approvals.empty')}</div>
       )}
@@ -109,6 +112,7 @@ export default function ApprovalsView({ approvals, onDecide, isMobile }: Approva
           </div>
         </div>
       ))}
+      </div>
     </div>
   )
 }

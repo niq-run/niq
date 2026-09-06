@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { usePolling } from '../hooks/usePolling'
+import JsonEditor from '../components/JsonEditor'
+import BufferedInput, { envToText, textToMap } from '../components/BufferedInput'
+import ViewHeader from '../components/ViewHeader'
 import ResizablePanel from '../components/ResizablePanel'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { vscDarkPlus, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { CONTROL, fetchTemplates, fetchTemplate, createTemplateBody, updateTemplate, deleteTemplate, fetchProjects } from '../services/api'
 import CreateTemplateDialog from './CreateTemplateDialog'
 import CreateWorkerDialog from './CreateWorkerDialog'
@@ -40,7 +41,9 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
   const [jsonText, setJsonText] = useState('')
   const [jsonError, setJsonError] = useState('')
   const [saveError, setSaveError] = useState('')
+  const [saved, setSaved] = useState(false)
   const [showAddWorker, setShowAddWorker] = useState(false)
+  const [editorTab, setEditorTab] = useState<'workers' | 'json'>('workers')
   const [drawerWidth, setDrawerWidth] = useState(() =>
     Math.max(420, Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.4)))
 
@@ -69,10 +72,12 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
     setJsonText('')
     setJsonError('')
     setSaveError('')
+    setSaved(false)
   }
 
   const onJsonChange = (text: string) => {
     setJsonText(text)
+    setSaved(false)
     try {
       setTmpl(JSON.parse(text))
       setJsonError('')
@@ -91,6 +96,7 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
     setTmpl(next)
     setJsonText(JSON.stringify(next, null, 2))
     setJsonError('')
+    setSaved(false)
   }
 
   // Card edits regenerate the JSON text, so they are only safe while tmpl is
@@ -101,6 +107,7 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
     const workers = tmpl.workers.map((w: any, j: number) => (j === i ? { ...w, ...patch } : w))
     setTmpl({ ...tmpl, workers })
     setJsonText(JSON.stringify({ ...tmpl, workers }, null, 2))
+    setSaved(false)
   }
 
   const removeWorker = (i: number) => {
@@ -108,6 +115,7 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
     const next = { ...tmpl, workers: tmpl.workers.filter((_: any, j: number) => j !== i) }
     setTmpl(next)
     setJsonText(JSON.stringify(next, null, 2))
+    setSaved(false)
   }
 
   const save = async () => {
@@ -122,9 +130,15 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
         await updateTemplate(draftId, tmpl)
       }
       try { setTemplates(await fetchTemplates()) } catch { /* usePolling retries */ }
+      // A saved draft becomes a saved template: the name locks and the next
+      // save goes through PUT.
+      setIsNew(false)
+      setDraftId(id)
+      setSaved(true)
       setSelected(id)
     } catch (e) {
-      setSaveError(t('templates.error.save', { id }))
+      setSaved(false)
+      setSaveError((e as Error)?.message || t('templates.error.save', { id }))
     }
   }
 
@@ -150,18 +164,18 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
 
   const drawerBody = tmpl && (
     <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: colors.bg, overflow: 'hidden' }}>
-      {/* Header: editable name for drafts, fixed for saved templates. The close
-          pill mirrors the worker detail's (btn-hover, rounded 4). */}
+      {/* Header: editable name for drafts, fixed for saved templates; the
+          close pill mirrors the worker detail's. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid ' + colors.border, flexShrink: 0 }}>
         {isNew ? (
           <input
             value={draftId}
-            onChange={(e) => setDraftId(e.target.value)}
+            onChange={(e) => { setDraftId(e.target.value); setSaved(false) }}
             placeholder={t('templates.newId.placeholder')}
             style={{ flex: 1, minWidth: 0, padding: '5px 8px', fontSize: fontSizes.md, background: colors.bgLight, color: colors.text, border: '1px solid ' + colors.border, borderRadius: 4, outline: 'none' }}
           />
         ) : (
-          <span style={{ color: colors.text, fontSize: fontSizes.md, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{draftId}</span>
+          <span style={{ flex: 1, minWidth: 0, color: colors.text, fontSize: fontSizes.md, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{draftId}</span>
         )}
         <span
           onClick={closeDrawer}
@@ -169,7 +183,6 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
           title={t('detail.close.tooltip')}
           style={{
             cursor: 'pointer',
-            marginLeft: 'auto',
             border: '1px solid ' + colors.border,
             borderRadius: 4,
             padding: '0 8px',
@@ -184,26 +197,72 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
         </span>
       </div>
 
-      {/* Body: worker cards above the JSON editor — typed fields per worker
-          kind (reason gets instruction/provider/model, workspace/program get
-          mounts, external gets command/cwd/env); everything else lives in the
-          JSON below. */}
-      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ color: colors.detailLabel, textTransform: 'uppercase', letterSpacing: '0.5px', fontSize: fontSizes.sm }}>{t('templates.workers')}</div>
-          <span style={{ flex: 1 }} />
+      {/* Tabs: worker cards and the raw JSON editor are two views over the
+          same template object — edits in either regenerate the other. Save
+          lives on this row too, right-aligned. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px 14px', flexShrink: 0 }}>
+        {(['workers', 'json'] as const).map((tab) => (
           <span
-            onClick={() => setShowAddWorker(true)}
-            className="btn-hover"
-            style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 2, padding: '2px 10px', userSelect: 'none' }}
+            key={tab}
+            onClick={() => setEditorTab(tab)}
+            style={{
+              cursor: 'pointer',
+              userSelect: 'none',
+              border: '1px solid ' + (editorTab === tab ? colors.accent : colors.border),
+              borderRadius: 2,
+              padding: '3px 12px',
+              fontSize: fontSizes.sm,
+              color: editorTab === tab ? colors.accent : colors.textDim,
+              background: editorTab === tab ? colors.bgChip : undefined,
+            }}
           >
-            + {t('templates.addWorker')}
+            {tab === 'workers' ? t('templates.tab.visual') : t('templates.tab.json')}
           </span>
-        </div>
-        {(tmpl.workers || []).length === 0 && (
-          <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('templates.noWorkers')}</div>
+        ))}
+        <span style={{ flex: 1 }} />
+        {saved && (
+          <span style={{ color: colors.textDim, fontSize: fontSizes.sm }}>✓ {t('templates.saved')}</span>
         )}
-        {(tmpl.workers || []).map((w: any, i: number) => {
+        {!saved && saveError && (
+          <span title={saveError} style={{ color: colors.toolFailed, fontSize: fontSizes.sm, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{saveError}</span>
+        )}
+        <span
+          onClick={save}
+          className="btn-hover"
+          style={{
+            cursor: jsonError ? 'not-allowed' : 'pointer',
+            border: '1px solid ' + (jsonError ? colors.border : colors.accent),
+            borderRadius: 4,
+            padding: '3px 12px',
+            color: jsonError ? colors.textDimmed : colors.accent,
+            fontSize: fontSizes.sm,
+            userSelect: 'none',
+            flexShrink: 0,
+          }}
+        >
+          {t('templates.save')}
+        </span>
+      </div>
+
+      {/* Body: the active tab's content. */}
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {editorTab === 'workers' && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ color: colors.detailLabel, textTransform: 'uppercase', letterSpacing: '0.5px', fontSize: fontSizes.sm }}>{t('templates.workers')}</div>
+              <span style={{ flex: 1 }} />
+              <span
+                onClick={() => setShowAddWorker(true)}
+                className="btn-hover"
+                style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 2, padding: '2px 10px', userSelect: 'none' }}
+              >
+                + {t('templates.addWorker')}
+              </span>
+            </div>
+            {(tmpl.workers || []).length === 0 && (
+              <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('templates.noWorkers')}</div>
+            )}
+            {(tmpl.workers || []).map((w: any, i: number) => {
           const cardLabel: React.CSSProperties = { display: 'block', fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4 }
           const field = (label: string, node: any, key?: string, style?: React.CSSProperties) => (
             <div key={key} style={style}>
@@ -278,7 +337,7 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
                   <BufferedInput
                     value={envToText(w.env)}
                     onText={(text) => {
-                      const env = textToEnv(text)
+                      const env = textToMap(text)
                       updateWorker(i, { env: Object.keys(env).length > 0 ? env : undefined })
                     }}
                     style={{ width: '100%', boxSizing: 'border-box', ...cardInput(colors), fontFamily: 'monospace', resize: 'vertical', minHeight: 48 }}
@@ -290,43 +349,27 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
           </div>
           )
         })}
+          </>
+        )}
 
-        <div style={{ color: colors.detailLabel, textTransform: 'uppercase', letterSpacing: '0.5px', fontSize: fontSizes.sm, marginTop: 8 }}>{t('templates.json')}</div>
-        <JsonEditor value={jsonText} onChange={onJsonChange} dark={dark} colors={colors} />
-        {jsonError && <div style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{jsonError}</div>}
-        {saveError && <div style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{saveError}</div>}
-
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <span
-            onClick={closeDrawer}
-            className="btn-hover"
-            style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 14px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
-          >
-            {t('wd.cancel')}
-          </span>
-          <span
-            onClick={save}
-            className="btn-hover"
-            style={{ cursor: jsonError ? 'not-allowed' : 'pointer', border: '1px solid ' + (jsonError ? colors.border : colors.accent), borderRadius: 4, padding: '4px 14px', color: jsonError ? colors.textDimmed : colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
-          >
-            {t('wd.save')}
-          </span>
-        </div>
+        {editorTab === 'json' && (
+          <>
+            <JsonEditor value={jsonText} onChange={onJsonChange} dark={dark} colors={colors} />
+            {jsonError && <div style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{jsonError}</div>}
+          </>
+        )}
       </div>
     </div>
   )
 
   return (
     <div style={{ flex: 1, minWidth: 0, position: 'relative', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Header: title + count + create pill (mobile: pill-only bar) */}
       {!isMobile ? (
-        <div style={{ padding: '24px 24px 12px', fontSize: fontSizes.xl, color: colors.text, display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          {t('templates.title')}{' '}
-          <span style={{ color: colors.textMuted, fontSize: fontSizes.md }}>({templates.length})</span>
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-            {createPill}
-          </span>
-        </div>
+        <ViewHeader
+          title={t('templates.title')}
+          count={templates.length}
+          right={createPill}
+        />
       ) : (
         <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 16px 8px' }}>
           {createPill}
@@ -336,7 +379,7 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
       {error && <div style={{ color: colors.toolFailed, padding: '0 24px 12px', fontSize: fontSizes.sm }}>{error}</div>}
 
       {/* Template list */}
-      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '0 24px 24px' }}>
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '12px 24px 24px' }}>
         {templates.length === 0 ? (
           <div style={{ color: colors.textDim, fontSize: fontSizes.md }}>{t('templates.empty')}</div>
         ) : (
@@ -419,158 +462,3 @@ function cardInput(colors: any) {
   }
 }
 
-// BufferedInput keeps its own text buffer while being edited, so derived
-// values (a mounts array joined into "a, b", env lines) never clobber
-// mid-typing: commits go up on every keystroke, but the displayed text only
-// syncs from the committed value after blur (or an external change while
-// untouched). as="textarea" switches the element.
-function BufferedInput({ value, onText, as, ...rest }: {
-  value: string
-  onText: (v: string) => void
-  as?: 'textarea'
-} & Record<string, any>) {
-  const [text, setText] = useState(value)
-  const [dirty, setDirty] = useState(false)
-  useEffect(() => {
-    if (!dirty) setText(value)
-  }, [value, dirty])
-  const Tag = (as || 'input') as any
-  return (
-    <Tag
-      {...rest}
-      value={text}
-      onChange={(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-        setText(e.target.value)
-        setDirty(true)
-        onText(e.target.value)
-      }}
-      onBlur={() => setDirty(false)}
-      spellCheck={false}
-    />
-  )
-}
-
-// envToText / textToEnv convert between an env object and KEY=VALUE lines.
-function envToText(env: any): string {
-  return Object.entries(env || {}).map(([k, v]) => `${k}=${v}`).join('\n')
-}
-function textToEnv(text: string): Record<string, string> {
-  const env: Record<string, string> = {}
-  for (const line of text.split('\n')) {
-    const i = line.indexOf('=')
-    if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1).trim()
-  }
-  return env
-}
-
-// JsonEditor is a syntax-highlighted JSON editor styled after the talk view's
-// tool bodies: a highlighted <pre> from the same react-syntax-highlighter sits
-// underneath a transparent-text textarea (highlighting under the caret), with
-// the same soft-wrap toggle and long-body expand/collapse affordances.
-function JsonEditor({ value, onChange, dark, colors }: {
-  value: string
-  onChange: (v: string) => void
-  dark: boolean
-  colors: any
-}) {
-  const { t } = useI18n()
-  const [wrap, setWrap] = useState(true)
-  const [expanded, setExpanded] = useState(false)
-  const taRef = useRef<HTMLTextAreaElement>(null)
-
-  // Auto-height: the textarea grows with its content, so the editor's height
-  // always equals the whole body — "expand" simply stops clipping it (a fixed
-  // editor height would make the fold toggle a no-op, with the text hidden in
-  // internal scrolling). The highlight backdrop is inset-0 of the same box, so
-  // the two layers never drift and no scroll syncing is needed.
-  useEffect(() => {
-    const ta = taRef.current
-    if (!ta) return
-    ta.style.height = 'auto'
-    ta.style.height = ta.scrollHeight + 'px'
-  }, [value, wrap])
-
-  const hlStyle = dark ? vscDarkPlus : oneLight
-  const layer: React.CSSProperties = {
-    fontFamily: 'monospace',
-    fontSize: fontSizes.base,
-    lineHeight: 1.5,
-    whiteSpace: wrap ? 'pre-wrap' : 'pre',
-    wordBreak: wrap ? 'break-word' : 'normal',
-    padding: '10px 12px',
-    margin: 0,
-    boxSizing: 'border-box',
-  }
-  // Long bodies fold to a clipped preview with an expand/collapse pill, like
-  // CollapsibleCode in the talk view.
-  const foldable = value.length > 260
-  const folded = foldable && !expanded
-  return (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
-        <span
-          onClick={() => setWrap(!wrap)}
-          title={t('talk.wrap.tooltip')}
-          style={{ cursor: 'pointer', color: colors.accentDim, fontSize: fontSizes.sm, textDecoration: 'underline dotted', userSelect: 'none' }}
-        >
-          {t('talk.wrap.toggle')}
-        </span>
-      </div>
-      <div style={{ position: 'relative', minHeight: 260, display: 'flex', flexDirection: 'column', maxHeight: folded ? 200 : undefined, overflow: folded ? 'hidden' : 'visible' }}>
-        {/* Highlight layer: opaque background + border, painted under the caret */}
-        <div
-          style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, overflow: 'hidden', background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 4 }}
-        >
-          <SyntaxHighlighter
-            language="json"
-            style={hlStyle}
-            PreTag="div"
-            codeTagProps={{ style: { ...layer, overflow: 'visible' } }}
-            customStyle={{ ...layer, background: 'transparent', overflow: 'visible', height: 'fit-content' }}
-          >
-            {value}
-          </SyntaxHighlighter>
-        </div>
-        {/* Input layer: invisible text (the highlight shows through), real caret */}
-        <textarea
-          ref={taRef}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          spellCheck={false}
-          style={{ ...layer, position: 'relative', width: '100%', background: 'transparent', color: 'transparent', caretColor: colors.text, border: '1px solid transparent', borderRadius: 4, outline: 'none', resize: 'none', overflow: 'hidden', display: 'block' }}
-        />
-        {foldable && (
-          <div
-            style={{
-              position: 'absolute', left: 0, right: 0, bottom: 0,
-              height: folded ? 56 : 'auto',
-              background: folded
-                ? (dark
-                    ? 'linear-gradient(to top, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0) 100%)'
-                    : 'linear-gradient(to top, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0) 100%)')
-                : 'transparent',
-              display: 'flex', alignItems: folded ? 'flex-end' : 'center', justifyContent: 'center',
-              padding: folded ? '0 0 8px' : '8px 0 0',
-              // The editor underneath stays clickable when expanded; only the
-              // pill itself takes pointer events.
-              pointerEvents: 'none',
-            }}
-          >
-            <span
-              onClick={() => setExpanded(v => !v)}
-              title={folded ? t('talk.code.expand.tooltip') : t('talk.code.collapse.tooltip')}
-              style={{
-                cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2,
-                padding: '2px 10px', color: folded ? colors.accent : colors.textDimmed, fontSize: fontSizes.sm,
-                userSelect: 'none', background: folded ? colors.bgChip : 'transparent', whiteSpace: 'nowrap',
-                pointerEvents: 'auto',
-              }}
-            >
-              {folded ? t('talk.code.expand') : t('talk.code.collapse')}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}

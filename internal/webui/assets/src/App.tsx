@@ -7,6 +7,8 @@ import WorkersView from './views/WorkersView'
 import WorkerDetail from './views/WorkerDetail'
 import ProjectsView from './views/ProjectsView'
 import TemplatesView from './views/TemplatesView'
+import ProvidersView from './views/ProvidersView'
+import ViewHeader from './components/ViewHeader'
 import ApprovalsView from './views/ApprovalsView'
 import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
@@ -14,9 +16,10 @@ import { useTheme, fontSizes } from './theme'
 import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
-import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval } from './services/api'
+import { CONTROL } from './services/api'
+import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject } from './services/api'
 import { attachmentBlock } from './components/talk-utils'
-import type { ApprovalEntry, ContextInfo, EventPayload, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
+import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
 
 // Talk view settings are persisted to localStorage so toggles survive reloads.
 const VIEW_SETTINGS_KEY = 'niq.view-settings'
@@ -96,7 +99,7 @@ export default function App() {
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>('talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
-  const [panel, setPanel] = useState<'projects' | 'templates' | null>(null)
+  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(null)
   const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
   const [inputMode, setInputMode] = useState('default')
@@ -163,6 +166,44 @@ export default function App() {
   useEffect(() => {
     document.title = projectName ? `niq · ${projectName}` : 'niq'
   }, [projectName])
+
+  // Is the attached project actually running? Polled from the control plane
+  // (independent of this page's own backend, which is exactly what dies when
+  // the project stops). undefined = unknown (first poll pending or control
+  // unreachable) — the banner stays hidden so a healthy page never flashes it.
+  const [projRunning, setProjRunning] = useState<boolean | undefined>(undefined)
+  const [startingProj, setStartingProj] = useState(false)
+  const [startProjErr, setStartProjErr] = useState('')
+  usePolling<ProjectInfo[]>(CONTROL + '/api/projects', 5000, (list) => {
+    if (mode !== 'project' || !projectName) return
+    const p = list.find((x: ProjectInfo) => x.id === projectName)
+    setProjRunning(p ? !!p.running : false)
+  }, mode === 'project' && projectName !== '')
+
+  // Start the current project from a stale page: the start call blocks until
+  // the project's WebUI port listens, so success means the page can go back.
+  // Same origin → reload; the project came back on a different port → hop.
+  const startCurrentProject = async () => {
+    if (!projectName || startingProj) return
+    setStartingProj(true)
+    setStartProjErr('')
+    try {
+      const r = await startProject(projectName)
+      if (r.webui_url) {
+        try {
+          const target = new URL(r.webui_url)
+          if (target.host !== window.location.host) {
+            window.location.href = r.webui_url
+            return
+          }
+        } catch { /* relative or malformed: fall through to reload */ }
+      }
+      window.location.reload()
+    } catch (e) {
+      setStartProjErr((e as Error)?.message || 'start failed')
+    }
+    setStartingProj(false)
+  }
 
   useEffect(() => {
     setApiBase(projectBase)
@@ -629,6 +670,7 @@ export default function App() {
             </button>
             <strong style={{ fontSize: fontSizes.md, color: colors.text }}>
               {panel === 'templates' ? t('sidebar.templates')
+                : panel === 'providers' ? t('sidebar.providers')
                 : panel === 'projects' ? t('sidebar.projects')
                 : mode !== 'project' ? t('sidebar.projects')
                 : view === 'talk' ? t('nav.talk')
@@ -638,10 +680,31 @@ export default function App() {
             </strong>
           </div>
         )}
+        {mode === 'project' && projectName && projRunning === false && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight, flexShrink: 0 }}>
+            <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>●</span>
+            <span style={{ flex: 1, color: colors.text, fontSize: fontSizes.sm }}>
+              {t('project.stoppedBanner')}
+            </span>
+            {startProjErr && (
+              <span title={startProjErr} style={{ color: colors.toolFailed, fontSize: fontSizes.sm, maxWidth: '40%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{startProjErr}</span>
+            )}
+            <span
+              onClick={startCurrentProject}
+              className="btn-hover"
+              style={{ cursor: startingProj ? 'default' : 'pointer', opacity: startingProj ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid ' + colors.accent, borderRadius: 2, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+            >
+              {startingProj && <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />}
+              {startingProj ? t('projects.starting') : t('projects.start')}
+            </span>
+          </div>
+        )}
         {mode !== 'project' ? (
-          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : <ProjectsView />
+          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => setPanel('providers')} />
         ) : panel === 'templates' ? (
           <TemplatesView isMobile={isMobile} />
+        ) : panel === 'providers' ? (
+          <ProvidersView />
         ) : panel === 'projects' ? (
           <ProjectsView />
         ) : view === 'talk' ? (
@@ -729,8 +792,9 @@ export default function App() {
             {/* On mobile the app-level top bar heads the page, so the in-view
                 header is skipped (same as the talk view). */}
             {!isMobile && (
-              <div style={{ marginTop: 24, marginBottom: 12, fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'center', gap: 16 }}>
-                <strong>{t('nav.events')}</strong>
+              <ViewHeader
+                title={t('nav.events')}
+                right={
                 <span style={{ fontSize: fontSizes.sm, color: colors.textMuted, display: 'flex', alignItems: 'center', gap: 8 }}>
                   {filterWorkers.size > 0 && (
                     <>
@@ -763,7 +827,8 @@ export default function App() {
                     </span>
                   )}
                 </span>
-              </div>
+              }
+            />
             )}
 
             <div key="events" className="fade-in" style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>

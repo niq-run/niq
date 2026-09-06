@@ -1,5 +1,5 @@
 import { useState, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { useTheme, fontSizes, type Palette } from '../theme'
+import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 
@@ -16,8 +16,8 @@ interface SidebarProps {
   mode: 'control' | 'project'
   project?: string
   archived: Set<string>
-  panel: 'projects' | 'templates' | null
-  onSelectPanel: (p: 'projects' | 'templates') => void
+  panel: 'projects' | 'templates' | 'providers' | null
+  onSelectPanel: (p: 'projects' | 'templates' | 'providers') => void
   // Mobile drawer mode: the sidebar slides in from the left and overlays the
   // main area; open toggles it, onNavigate is called after any navigation so
   // the caller can close the drawer.
@@ -140,7 +140,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     // Drag range = the padded content area, plus a small allowance past the
     // right divider (so the logo visibly "hits" it); the divider glows while
     // the logo is against it.
-    const padX = isMobile ? 24 : 16
+    const padX = contentPadX
     const wrap = logoWrapRef.current
     const span = logoRef.current
     const maxRight = wrap && span ? Math.max(0, wrap.clientWidth - span.offsetWidth + padX + 8) : padX + 40
@@ -238,10 +238,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       : dividerGlow,
     background: colors.bg,
     borderRight: '1px solid ' + dividerColor,
-    padding: '16px 24px',
+    padding: '0 24px 16px',
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
+    gap: 0,
   } : {
     width: sidebarWidth,
     minWidth: MIN_SIDEBAR_WIDTH,
@@ -250,10 +250,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     borderRight: '1px solid ' + dividerColor,
     boxShadow: dividerGlow,
     transition: glowTransition,
-    padding: 16,
+    padding: '0 16px 16px',
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
+    gap: 0,
   }
 
   // Mobile touch: bigger text and taller hit areas so the options are easy to
@@ -266,8 +266,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // Horizontal content inset; mobile gets more breathing room on both sides.
   // The section dividers use a matching negative horizontal margin so they
   // stay edge-to-edge.
-  const contentPadX = isMobile ? 24 : 16
-  const hrX = isMobile ? -24 : -16
+  // Two horizontal paddings: edgePadX = the root's horizontal padding, used
+  // only by direct children (the logo band) so its border reaches the vertical
+  // divider; contentPadX = the text inset inside the scroll area — elements in
+  // there (hrs, hover rows) bleed by contentPadX to reach the container edge.
+  const edgePadX = isMobile ? 24 : 16
+  const contentPadX = isMobile ? 24 : 20
+  const hrX = -contentPadX
   // Inter-row gap for the options list. Kept at 0 so the rows sit flush: with
   // the hover background bleeding full-width, neighbouring hovered rows read as
   // one continuous strip with no gap between their backgrounds. Vertical spacing
@@ -309,23 +314,11 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           Bleeds to the sidebar's edges (negating the root padding) so its
           overflow clips the logo exactly at the right divider instead of
           letting it paint over the main content area. */}
-      <div style={{ flexShrink: 0, overflow: 'hidden', margin: `0 -${contentPadX}px`, padding: `0 ${contentPadX}px` }}>
-      {/* Mobile only: collapse button for the drawer */}
-      {isMobile && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
-          <button
-            onClick={onNavigate}
-            title={t('sidebar.close')}
-            style={{ background: 'none', border: '1px solid ' + colors.border, borderRadius: 2, color: colors.textDim, fontSize: fontSizes.md, lineHeight: 1, padding: '4px 8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <div style={{ flexShrink: 0, overflow: 'hidden', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`, borderBottom: '1px solid ' + colors.border, height: VIEW_HEADER_HEIGHT, display: 'flex', alignItems: 'center' }}>
       {/* Logo + project name — clicking anywhere here plays the single-click
           cycle (a drag in the logo suppresses it). */}
-      <div style={{ marginBottom: 4 }} onClick={onLogoClick}>
-        <h2 ref={logoWrapRef} style={{ margin: '0 0 0 -3px', lineHeight: 1, color: colors.accent, fontSize: 40, fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace", fontWeight: 'bold' }}>
+      <div style={{ flex: 1, minWidth: 0 }} onClick={onLogoClick}>
+        <h2 ref={logoWrapRef} style={{ margin: '0 0 0 -3px', lineHeight: 1, color: colors.accent, fontSize: 36, fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace", fontWeight: 'bold' }}>
           <span
             ref={logoRef}
             onPointerDown={onLogoPointerDown}
@@ -360,13 +353,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           horizontal margin lets the section dividers span edge-to-edge (into
           the sidebar's padding), while the padding keeps the text inset. The
           flex column + gap reproduces the sidebar's original item spacing. */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', margin: isMobile ? '0 -24px' : '0 -16px', padding: `0 ${contentPadX}px`, display: 'flex', flexDirection: 'column', gap: optGap }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`, display: 'flex', flexDirection: 'column', gap: optGap }}>
 
       {/* View selector — the three agent views; absent in control mode (no
           project is attached, so talk/events/workers are unavailable) */}
       {mode === 'project' && (<>
-      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '8px ' + hrX + 'px 16px' }} />
-      <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.views')}</strong>
+      <strong style={{ marginTop: 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.views')}</strong>
       {(Object.keys(VIEW_LABELS) as ViewMode[]).map((v) => (
         <div
           key={v}
@@ -479,6 +471,14 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         style={{ ...hoverStyle('templates'), cursor: 'pointer', color: panel === 'templates' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
       >
         {t('sidebar.templates')}{panel === 'templates' ? ' \u25C9' : ''}
+      </div>
+      <div
+        onClick={() => { onSelectPanel('providers'); onNavigate() }}
+        onMouseEnter={() => setHoverId('providers')}
+        onMouseLeave={() => setHoverId(null)}
+        style={{ ...hoverStyle('providers'), cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
+      >
+        {t('sidebar.providers')}{panel === 'providers' ? ' \u25C9' : ''}
       </div>
 
       </div>

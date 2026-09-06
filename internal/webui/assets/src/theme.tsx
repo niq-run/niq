@@ -1,6 +1,10 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
 
 // ── Font size scale (min 12px for readability) ──
+// VIEW_HEADER_HEIGHT is the shared height of every main-area view header AND
+// the sidebar's logo band: the two bottom borders must stay on one line.
+export const VIEW_HEADER_HEIGHT = 56
+
 export const fontSizes = {
   xs: 12,   // timestamps, metadata, secondary labels
   sm: 13,   // tool call summaries, detail panels

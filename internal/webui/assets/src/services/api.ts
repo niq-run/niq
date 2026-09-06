@@ -77,7 +77,7 @@ export async function createTemplateBody(id: string, template: any): Promise<voi
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, template }),
   })
-  if (!res.ok) throw new Error('create template failed: ' + res.status)
+  if (!res.ok) throw new Error(await errText(res, 'create template failed'))
 }
 
 // updateTemplate overwrites an existing template with an edited body.
@@ -87,7 +87,32 @@ export async function updateTemplate(name: string, template: any): Promise<void>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(template),
   })
-  if (!res.ok) throw new Error('update template failed: ' + res.status)
+  if (!res.ok) throw new Error(await errText(res, 'update template failed'))
+}
+
+// errText extracts the server's error message (the handlers put the reason in
+// the body), falling back to the status line.
+async function errText(res: Response, fallback: string): Promise<string> {
+  let body = ''
+  try { body = (await res.text()).trim() } catch { /* empty body */ }
+  return body ? `${fallback}: ${body}` : `${fallback}: ${res.status}`
+}
+
+// fetchProviders returns the provider config (provider.json) verbatim.
+export async function fetchProviders(): Promise<any> {
+  const res = await fetch(CONTROL + '/api/providers')
+  if (!res.ok) throw new Error('fetch providers failed: ' + res.status)
+  return res.json()
+}
+
+// updateProviders replaces the provider config with an edited body.
+export async function updateProviders(cfg: any): Promise<void> {
+  const res = await fetch(CONTROL + '/api/providers', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  })
+  if (!res.ok) throw new Error(await errText(res, 'update providers failed'))
 }
 
 // deleteTemplate removes an on-disk template.

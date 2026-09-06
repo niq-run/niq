@@ -6,6 +6,7 @@ import { useI18n } from '../i18n'
 import { makeMdComponents } from '../components/MarkdownComponents'
 import CollapsibleCode from '../components/CollapsibleCode'
 import ThinkingBlock from '../components/ThinkingBlock'
+import ViewHeader from '../components/ViewHeader'
 import ResponseBlock from '../components/ResponseBlock'
 import SystemReminderBlock from '../components/SystemReminderBlock'
 import {
@@ -995,9 +996,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // mobile the app-level top bar (hamburger + view label) already heads the
   // page, so this in-view header is skipped to avoid a double header.
   const header = !isMobile ? (
-    <>
-      <div style={{ fontSize: fontSizes.xl, color: colors.text, padding: '0 24px', display: 'flex', alignItems: 'baseline', gap: 16, marginTop: 24 }}>
-        <strong>{t('nav.talk')}</strong>
+    <ViewHeader
+      title={t('nav.talk')}
+      right={
         <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
           {t('talk.watching')} <strong style={{ color: colors.textDim }}>{
             talkWorkers.size > 0
@@ -1005,9 +1006,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               : t('events.allWorkers')
           }</strong>
         </span>
-      </div>
-      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px 0 0' }} />
-    </>
+      }
+    />
   ) : null
 
   if (nodes.length === 0 && streamingTraces.length === 0) {

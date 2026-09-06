@@ -1,14 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { usePolling } from '../hooks/usePolling'
-import { CONTROL, fetchProjects, fetchTemplates, createProject, startProject, stopProject, restartProject } from '../services/api'
+import ViewHeader from '../components/ViewHeader'
+import { CONTROL, fetchProjects, fetchTemplates, createProject, startProject, stopProject, restartProject, fetchProviders } from '../services/api'
 import type { ProjectInfo } from '../types'
 
 // ProjectsView is the management surface shown in the control plane (and as a
 // jump/start hop from a project instance): list projects, start one, and follow
 // its WebUI URL. All control-plane calls go to the control server on :9527.
-export default function ProjectsView() {
+interface ProjectsViewProps {
+  onGoToProviders?: () => void
+}
+
+export default function ProjectsView({ onGoToProviders }: ProjectsViewProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const [projects, setProjects] = useState<ProjectInfo[]>([])
@@ -18,8 +23,11 @@ export default function ProjectsView() {
   // The project currently being started or restarted, with which op — drives the
   // loading spinner. It is cleared once the control plane reports the project
   // ready (the backend blocks until the WebUI port is actually listening).
-  const [busy, setBusy] = useState<{ id: string; op: 'start' | 'restart' } | null>(null)
+  const [busy, setBusy] = useState<{ id: string; op: 'start' | 'restart' | 'stop' } | null>(null)
   const [creating, setCreating] = useState(false)
+  const [provNotice, setProvNotice] = useState(false)
+  // 'create anyway' consumes this: the next create skips the provider check.
+  const bypassProvCheck = useRef(false)
   const [error, setError] = useState('')
 
   // Refresh the project list periodically so ports / running state stay fresh
@@ -41,6 +49,20 @@ export default function ProjectsView() {
     setCreating(true)
     setError('')
     try {
+      // Gate on a usable provider (mirrors provider.Configured): a project
+      // without one starts up mute. The notice offers a jump to the
+      // providers panel; 'create anyway' bypasses the check once.
+      if (!provNotice && !bypassProvCheck.current) {
+        const cfg = await fetchProviders()
+        const usable = (cfg.providers || []).some((p: any) => (p.api_key || '') !== '')
+        if (!usable) {
+          setProvNotice(true)
+          setCreating(false)
+          return
+        }
+      }
+      setProvNotice(false)
+      bypassProvCheck.current = false
       await createProject(name, newTemplate)
       setNewName('')
       refresh()
@@ -81,17 +103,44 @@ export default function ProjectsView() {
   }
 
   const stop = async (id: string) => {
+    setBusy({ id, op: 'stop' })
     setError('')
     try {
       await stopProject(id)
+      // Refresh immediately so 'running' flips without waiting for the poll.
+      refresh()
     } catch (e) {
       setError(t('projects.error.stop', { id }))
     }
+    setBusy(null)
   }
 
   return (
-    <div style={{ flex: 1, padding: 24, overflowY: 'auto' }}>
-      <h3 style={{ margin: '0 0 16px', color: colors.accent, fontSize: fontSizes.xl }}>{t('projects.title')}</h3>
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <ViewHeader title={t('projects.title')} />
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: 24 }}>
+
+      {/* Provider gate notice: shown when a create was attempted without a
+          usable provider (api_key empty everywhere). */}
+      {provNotice && (
+        <div style={{ border: '1px solid ' + colors.accent, borderRadius: 6, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ color: colors.text, fontSize: fontSizes.sm, flex: 1, minWidth: 200 }}>{t('projects.noProvider')}</span>
+          <span
+            onClick={() => onGoToProviders?.()}
+            className="btn-hover"
+            style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 2, padding: '3px 12px', userSelect: 'none' }}
+          >
+            {t('projects.goConfigure')}
+          </span>
+          <span
+            onClick={() => { bypassProvCheck.current = true; setProvNotice(false); setError('') }}
+            className="btn-hover"
+            style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 12px', userSelect: 'none' }}
+          >
+            {t('projects.createAnyway')}
+          </span>
+        </div>
+      )}
 
       {/* New project: pick a name + template, then create & start. */}
       <div
@@ -182,7 +231,7 @@ export default function ProjectsView() {
             {busy?.id === p.id ? (
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, color: colors.textDim }}>
                 <span className="niq-spinner" style={{ width: 13, height: 13, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
-                {busy.op === 'restart' ? t('projects.restarting') : t('projects.starting')}
+                {busy.op === 'stop' ? t('projects.stopping') : busy.op === 'restart' ? t('projects.restarting') : t('projects.starting')}
               </span>
             ) : p.running ? (
               <>
@@ -244,6 +293,7 @@ export default function ProjectsView() {
           </div>
         ))
       )}
+      </div>
     </div>
   )
 }
