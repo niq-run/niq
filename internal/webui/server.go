@@ -17,6 +17,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -133,7 +135,26 @@ type Server struct {
 	unmngd      UnmanagedController
 	declCreator WorkerDeclCreator
 	declRemover WorkerDeclRemover
+
+	// Uploads: projectDir is the on-disk project directory
+	// (~/.niq/projects/<id>), uploadDir an optional config override
+	// (project.json upload_dir; relative paths resolve against projectDir).
+	// The default upload directory is projectDir/uploads.
+	projectDir      string
+	uploadDirCfg    string // project.json upload_dir override
+	coverageMu      sync.Mutex
+	coverage        *uploadCoverage // last mount-coverage check (cached a few seconds)
 }
+
+// uploadCoverage caches whether any online workspace worker's mounts contain
+// the upload directory — asking over the bus on every input would be wasteful.
+type uploadCoverage struct {
+	at      time.Time
+	covered bool
+}
+
+// uploadCoverageTTL bounds how stale the cached coverage answer may get.
+const uploadCoverageTTL = 10 * time.Second
 
 // New creates a WebUI Server.
 // devMode enables Vite-proxy mode (frontend runs on :5173, APIs stay on addr).
@@ -148,6 +169,10 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 
 	// Input: publish user input to the bus as HIW.
 	mux.HandleFunc("POST /api/input", s.handleInput)
+
+	// Upload: write one file into the project's upload directory and return
+	// its absolute path, for the input to reference as a file attachment.
+	mux.HandleFunc("POST /api/upload", s.handleUpload)
 
 	// Workers: list all registered workers with identity, connection and
 	// host-managed lifecycle state.
@@ -314,6 +339,38 @@ func (s *Server) SetContext(ctx ContextInfo) {
 	s.context = ctx
 }
 
+// SetProjectDir attaches the on-disk project directory; the default upload
+// directory is projectDir/uploads.
+func (s *Server) SetProjectDir(dir string) {
+	s.projectDir = dir
+}
+
+// SetUploadDir overrides the upload directory (project.json upload_dir).
+// Relative paths resolve against the project directory.
+func (s *Server) SetUploadDir(dir string) {
+	s.uploadDirCfg = dir
+}
+
+// uploadDir resolves the directory uploaded files are written to: the config
+// override when set (made absolute against the project dir), else
+// projectDir/uploads. With no project dir known (control mode) it falls back
+// to the OS temp dir, where uploads are still functional but out of any
+// workspace boundary.
+func (s *Server) uploadDir() string {
+	if s.uploadDirCfg != "" {
+		if filepath.IsAbs(s.uploadDirCfg) {
+			return s.uploadDirCfg
+		}
+		if s.projectDir != "" {
+			return filepath.Join(s.projectDir, s.uploadDirCfg)
+		}
+	}
+	if s.projectDir != "" {
+		return filepath.Join(s.projectDir, "uploads")
+	}
+	return filepath.Join(os.TempDir(), "niq-uploads")
+}
+
 // handleGetArchived returns the archived-worker ids (empty store → empty list).
 func (s *Server) handleGetArchived(w http.ResponseWriter, r *http.Request) {
 	if s.archived == nil {
@@ -442,7 +499,17 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 
 // ── API handlers ──
 
+// uploadMaxBytes caps one uploaded file. Files travel on disk (only their
+// path enters the input), so the cap is generous; images embedded as base64
+// are capped client-side at 5MB instead.
+const uploadMaxBytes = 64 << 20
+
+// inputMaxBytes caps a /api/input body: up to 4 image attachments of 5MB
+// each base64-expand to ~27MB, plus text.
+const inputMaxBytes = 32 << 20
+
 func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, inputMaxBytes)
 	var body struct {
 		Text      string `json:"text"`
 		Target    string `json:"target,omitempty"`
@@ -452,11 +519,151 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Attachment-bound input that no workspace worker can read gets a
+	// system-reminder telling the reason worker to bridge the boundary first.
+	if reasonBase.HasAttachments(body.Text) {
+		if reminder := s.uploadBoundaryReminder(r.Context()); reminder != "" {
+			body.Text += "\n" + reminder
+		}
+	}
 	if err := s.hiw.SendInput(r.Context(), body.Text, body.Target, body.InputMode); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// uploadBoundaryReminder returns a system-reminder for the input text when
+// the upload directory falls outside every online workspace worker's mounts
+// (or none is online). Empty means the boundary is fine — or the check is
+// stale-cached. Best-effort: a failed bus probe counts as uncovered only
+// when it indicates no workspace is reachable; failures keep the last
+// cached verdict.
+func (s *Server) uploadBoundaryReminder(ctx context.Context) string {
+	s.coverageMu.Lock()
+	cached := s.coverage
+	s.coverageMu.Unlock()
+	if cached != nil && time.Since(cached.at) < uploadCoverageTTL {
+		if cached.covered {
+			return ""
+		}
+		return uploadReminderText
+	}
+
+	covered := s.checkUploadCoverage(ctx)
+	s.coverageMu.Lock()
+	s.coverage = &uploadCoverage{at: time.Now(), covered: covered}
+	s.coverageMu.Unlock()
+	if covered {
+		return ""
+	}
+	return uploadReminderText
+}
+
+// checkUploadCoverage asks every online workspace worker for its mounts and
+// reports whether any mount contains the upload directory (or no workspace
+// exists at all and the uploads live outside any boundary by design... which
+// still counts as uncovered so the reason worker learns to bridge it).
+func (s *Server) checkUploadCoverage(ctx context.Context) bool {
+	dir := s.uploadDir()
+	for _, id := range s.engine.OnlineWorkers() {
+		if idt, ok := s.registry.Lookup(id); !ok || idt.Type != "workspace" {
+			continue
+		}
+		reply, err := s.ask(ctx, id,
+			event.New(workspaceBase.TypeMountList, "webui-hiw", nil),
+			event.TypeRequestCompleted, event.TypeRequestFailed)
+		if err != nil || reply.Type == event.TypeRequestFailed {
+			continue // unreachable worker: not evidence of coverage
+		}
+		var mounts mountListResult
+		parseMountResult(reply, &mounts)
+		for _, m := range mounts.Mounts {
+			if dir == m || strings.HasPrefix(filepath.Clean(dir)+string(filepath.Separator), filepath.Clean(m)+string(filepath.Separator)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// uploadReminderText tells the reason worker the uploaded attachments in this
+// input sit outside its workspace boundary and how to bridge it.
+const uploadReminderText = "<system-reminder>The file(s) attached to this input were uploaded to a directory that is not inside any workspace worker's mounts, so your file tools cannot read them yet. Create or reconfigure a workspace worker whose mounts include that uploads directory before reading them (spawn one through the host worker with the uploads directory and the shared programs directory as mounts).</system-reminder>"
+
+// handleUpload serves POST /api/upload: one multipart file ("file" field) is
+// written into the project's upload directory under a sanitized, collision-
+// free name, and its absolute path is returned for the input to reference.
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, uploadMaxBytes)
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		http.Error(w, "invalid multipart body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "missing multipart file field \"file\"", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	dir := s.uploadDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		http.Error(w, "create upload dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	name := sanitizeFileName(header.Filename)
+	dst, err := os.CreateTemp(dir, "up-*-"+name)
+	if err != nil {
+		http.Error(w, "create file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(dst.Name()) // no-op after the successful rename below
+	written, err := io.Copy(dst, file)
+	if err != nil {
+		dst.Close()
+		http.Error(w, "write file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := dst.Close(); err != nil {
+		http.Error(w, "close file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	final := filepath.Join(dir, filepath.Base(dst.Name()))
+	if err := os.Rename(dst.Name(), final); err != nil {
+		http.Error(w, "finalize file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"path": final,
+		"name": header.Filename,
+		"size": written,
+	})
+}
+
+// sanitizeFileName strips anything path-like or unprintable from a client
+// filename, keeping only its base and a conservative character set; empty
+// names become "file".
+func sanitizeFileName(name string) string {
+	base := filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	if base == "." || base == "/" || base == "" {
+		return "file"
+	}
+	var b strings.Builder
+	for _, r := range base {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '-', r == '_', r == ' ':
+			b.WriteRune(r)
+		}
+	}
+	out := strings.TrimSpace(b.String())
+	if out == "" {
+		return "file"
+	}
+	return out
 }
 
 // WorkerView is the unified view of a worker: its registered identity (from

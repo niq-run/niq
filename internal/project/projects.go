@@ -49,6 +49,7 @@ type Project struct {
 	CreatedAt string          `json:"created_at,omitempty"`
 	Ports     ProjectPorts    `json:"ports,omitempty"`
 	Archived  map[string]bool `json:"archived,omitempty"`
+	UploadDir string          `json:"upload_dir,omitempty"`
 	Workers   []ProjectWorker `json:"workers,omitempty"`
 }
 
@@ -103,7 +104,11 @@ func CreateProject(id string, template *TemplateConfig) (*Project, error) {
 			})
 		}
 	}
-	p := &Project{ID: id, CreatedAt: time.Now().Format(time.RFC3339), Workers: workers}
+	uploadDir := ""
+	if template != nil {
+		uploadDir = template.UploadDir
+	}
+	p := &Project{ID: id, CreatedAt: time.Now().Format(time.RFC3339), UploadDir: uploadDir, Workers: workers}
 	if err := saveProject(p); err != nil {
 		return nil, err
 	}

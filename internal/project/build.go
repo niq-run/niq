@@ -36,6 +36,9 @@ type BuildContext struct {
 	WorkerSvc    *workerhost.WorkerService
 	EventLog     *eventbusapi.EventLog
 	ProgramsRoot string
+	// ProjectID is the owning project id, substituted for "{project}" in
+	// workspace mount paths (e.g. ~/.niq/projects/{project}/uploads).
+	ProjectID string
 }
 
 // RegisterBuilders registers a Builder for every known worker type onto service.
@@ -196,7 +199,7 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 
 func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 	p := cfg.Params
-	mounts, err := parseMountsParam(p)
+	mounts, err := parseMountsParam(p, ctx.ProjectID)
 	if err != nil {
 		return worker.SpawnSpec{}, err
 	}
@@ -259,7 +262,7 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 // []string (config) or []any of strings (bus payloads), or the single-mount
 // "path" sugar used by the host spawn tool. Each path is ~-expanded and made
 // absolute. An absent parameter yields a nil slice.
-func parseMountsParam(p map[string]any) ([]string, error) {
+func parseMountsParam(p map[string]any, projectID string) ([]string, error) {
 	var raws []string
 	switch v := p["mounts"].(type) {
 	case []string:
@@ -280,7 +283,7 @@ func parseMountsParam(p map[string]any) ([]string, error) {
 	}
 	out := make([]string, 0, len(raws))
 	for _, raw := range raws {
-		expanded := raw
+		expanded := strings.ReplaceAll(raw, "{project}", projectID)
 		if raw == "~" || strings.HasPrefix(raw, "~/") {
 			home, err := os.UserHomeDir()
 			if err != nil {
@@ -408,7 +411,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 		id = "program"
 	}
 	root := ctx.ProgramsRoot
-	mounts, err := parseMountsParam(p)
+	mounts, err := parseMountsParam(p, ctx.ProjectID)
 	if err != nil {
 		return worker.SpawnSpec{}, err
 	}

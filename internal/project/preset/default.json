@@ -3,6 +3,7 @@
     { "type": "reason", "id": "niq" },
     { "type": "timer", "id": "timer" },
     { "type": "host", "id": "host" },
-    { "type": "program", "id": "program" }
+    { "type": "program", "id": "program", "mounts": ["~/.niq/projects/{project}/programs"] },
+    { "type": "workspace", "id": "ws", "mounts": ["~/.niq/projects/{project}/workspace", "~/.niq/projects/{project}/programs", "~/.niq/projects/{project}/uploads"] }
   ]
 }

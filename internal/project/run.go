@@ -110,6 +110,8 @@ func RunProject(opts ProjectRunOptions) error {
 		IDDir:        filepath.Join(projDir, "id"),
 		StateDir:     filepath.Join(projDir, "workers"),
 		ProgramsRoot: filepath.Join(projDir, "programs"),
+		ProjDir:      projDir,
+		UploadDir:    p.UploadDir,
 		BusAddr:      busAddr,
 		WebUIAddr:    webUIAddr,
 		EventsDB:     filepath.Join(projDir, "events", "events.db"),
@@ -131,6 +133,8 @@ type assemblyOptions struct {
 	IDDir        string
 	StateDir     string
 	ProgramsRoot string
+	ProjDir      string // ~/.niq/projects/<id>; anchors the webui upload dir
+	UploadDir    string // optional upload_dir override from the project config
 	BusAddr      string // "" disables the HTTP bus
 	WebUIAddr    string // "" disables the WebUI
 	Banner       string
@@ -228,6 +232,7 @@ func runAssembly(opts assemblyOptions) error {
 		WorkerSvc:    workerSvc,
 		EventLog:     eventLog,
 		ProgramsRoot: opts.ProgramsRoot,
+		ProjectID:    opts.ContextInfo.Project,
 	}
 	RegisterBuilders(buildCtx, workerSvc)
 
@@ -281,6 +286,10 @@ func runAssembly(opts assemblyOptions) error {
 				startWebUI := func(addr string) (string, error) {
 					s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, addr, false)
 					s.SetContext(opts.ContextInfo)
+					s.SetProjectDir(opts.ProjDir)
+					if opts.UploadDir != "" {
+						s.SetUploadDir(opts.UploadDir)
+					}
 					if opts.ContextInfo.Project != "" {
 						s.SetArchivedStore(projectArchiver{id: opts.ContextInfo.Project})
 					}
