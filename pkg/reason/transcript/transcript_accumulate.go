@@ -328,6 +328,8 @@ func parkReason(cause string) string {
 		return "Tool call aborted"
 	case "reminder":
 		return "Tool call interrupted by reminder; reasoner proceeded without waiting"
+	case "restart":
+		return "Tool call did not survive the restart; reasoner is no longer waiting"
 	default:
 		return "Tool call parked; reasoner proceeded"
 	}
@@ -369,6 +371,8 @@ func lateResultMessage(callID, name, text, cause string) llm.Message {
 		label = "Aborted tool call"
 	case "reminder":
 		label = "Interrupted tool call"
+	case "restart":
+		label = "Tool call interrupted by restart"
 	}
 	return llm.Message{
 		Role: llm.RoleUser,

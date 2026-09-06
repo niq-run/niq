@@ -155,7 +155,23 @@ the transcript (transcript.go); the worker translates its lifecycle into sealed
 `RequestTracker` (pkg/reason/requesttracker) records only requests still being awaited:
 - **Pending** — active, the reasoner is still waiting.
 - **Parked** — no longer awaited, kept in case a late result arrives
-  (`ParkCause` distinguishes input/timeout/abort/reminder).
+  (`ParkCause` distinguishes input/timeout/abort/reminder/restart).
+
+Persistence: the tracker rides along in every snapshot (`Snapshot` captures the
+transcript and the tracker together — a `[pending]` placeholder is never
+persisted without its request). On `Restore` a rebuilt wait is always parked
+(`PreemptCauseRestart`): the invocation was issued by an instance that no
+longer exists, and in practice its target does not have it either (a restarted
+peer has forgotten it; nothing reaps a pending call on worker.gone). A restored
+Pending could therefore never resolve — and since `Resolved()` gates
+schedule-mode input, that wait would now survive restarts. Parking keeps
+tracker and transcript in step (the placeholder is rewritten with the
+explanation) and a result arriving afterwards is matched as a late result
+instead of being dropped. Restored calls are never re-dispatched (side-effect
+risk), and the synthesized tool-call id counter (`toolCallSeq`) is persisted
+too: its uniqueness domain is the whole transcript, so re-minting from 0 after
+a restart would collide with ids already in history and a result would patch
+the wrong message.
 
 ### Context budget and compaction
 

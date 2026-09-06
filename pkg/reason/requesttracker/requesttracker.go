@@ -18,9 +18,15 @@
 //
 // Terminal outcomes (completed / failed / rejected) are not tracked here —
 // they are message-level concepts built by the caller from the event.
+//
+// State/Restore carry the whole map across a worker restart. Restore is
+// faithful (a Pending call comes back Pending); deciding what a restored wait
+// still means is the caller's policy, not this package's.
 package requesttracker
 
 import (
+	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/niq-run/niq/core/event"
@@ -44,6 +50,7 @@ const (
 	PreemptCauseTimeout  PreemptCause = "timeout"  // the batch timeout fired
 	PreemptCauseAbort    PreemptCause = "abort"    // an abort signal ended the call
 	PreemptCauseReminder PreemptCause = "reminder" // an elapse reminder timer fired
+	PreemptCauseRestart  PreemptCause = "restart"  // the worker restarted; the wait did not survive it
 )
 
 // RequestStatus tracks the lifecycle stage of an issued request while it is
@@ -163,6 +170,72 @@ func (m *RequestTracker) ResolveLate(evt event.Event) *TrackedRequest {
 	}
 	delete(m.pending, callID)
 	return run
+}
+
+// trackedRequestState is the persisted form of one tracked request. The field
+// set may only grow: older blobs stay readable.
+type trackedRequestState struct {
+	CallID    string        `json:"call_id"`
+	Name      string        `json:"name"`
+	TargetID  string        `json:"target_id"`
+	Status    RequestStatus `json:"status"`
+	ParkCause PreemptCause  `json:"park_cause,omitempty"`
+}
+
+// State serializes every request still in the map. An empty tracker yields a
+// nil blob (nothing worth persisting), so a snapshot taken between calls does
+// not grow.
+func (m *RequestTracker) State() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.pending) == 0 {
+		return nil, nil
+	}
+	reqs := make([]trackedRequestState, 0, len(m.pending))
+	for _, call := range m.pending {
+		reqs = append(reqs, trackedRequestState{
+			CallID:    call.CallID,
+			Name:      call.Name,
+			TargetID:  call.TargetID,
+			Status:    call.Status,
+			ParkCause: call.ParkCause,
+		})
+	}
+	return json.Marshal(reqs)
+}
+
+// Restore rehydrates the map from a State blob, replacing whatever it held. An
+// empty blob is a no-op (it is what a tracker with nothing to persist writes).
+// Entries that could never be matched are dropped: no call id, or a status
+// that is neither Pending nor Parked (HandleResponse and ResolveLate would both
+// skip it, leaving it in the map unresolved forever).
+func (m *RequestTracker) Restore(state []byte) error {
+	if len(state) == 0 {
+		return nil
+	}
+	var reqs []trackedRequestState
+	if err := json.Unmarshal(state, &reqs); err != nil {
+		return fmt.Errorf("requesttracker restore: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.pending = make(map[string]*TrackedRequest, len(reqs))
+	for _, r := range reqs {
+		if r.CallID == "" || (r.Status != RequestPending && r.Status != RequestParked) {
+			continue
+		}
+		m.pending[r.CallID] = &TrackedRequest{
+			CallID:    r.CallID,
+			Name:      r.Name,
+			TargetID:  r.TargetID,
+			Status:    r.Status,
+			ParkCause: r.ParkCause,
+		}
+	}
+	return nil
 }
 
 // Resolved reports whether every tracked request has reached a terminal or

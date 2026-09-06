@@ -286,10 +286,10 @@ func (w *BaseReasonWorker) captureTraceID(evt event.Event) {
 	}
 }
 
-// parkPending parks all pending tool calls with the given cause and cancels the
-// current round's timeout timer. Returns the parked calls for callers that need
-// to recall them (e.g., handleAbort).
-func (w *BaseReasonWorker) parkPending(cause requesttracker.PreemptCause) []*requesttracker.TrackedRequest {
+// parkRequests parks all pending tool calls with the given cause and rewrites
+// each one's transcript placeholder with the explanation. Returns the parked
+// calls for callers that need to recall them (e.g., handleAbort).
+func (w *BaseReasonWorker) parkRequests(cause requesttracker.PreemptCause) []*requesttracker.TrackedRequest {
 	tcs := w.requestTracker.ParkAll(cause)
 	for _, rc := range tcs {
 		w.transcript.Apply(transcript.ToolParkedPatch{
@@ -298,6 +298,14 @@ func (w *BaseReasonWorker) parkPending(cause requesttracker.PreemptCause) []*req
 			Cause:  string(cause),
 		})
 	}
+	return tcs
+}
+
+// parkPending is parkRequests plus the current round's timeout: once nothing is
+// awaited, the round's timer is no longer needed. Restore does not use it —
+// there is no round (and no timer) to cancel on a worker that has not started.
+func (w *BaseReasonWorker) parkPending(cause requesttracker.PreemptCause) []*requesttracker.TrackedRequest {
+	tcs := w.parkRequests(cause)
 	w.cancelTimeout()
 	return tcs
 }

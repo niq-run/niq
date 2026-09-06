@@ -311,11 +311,12 @@ func (w *BaseReasonWorker) Stop() error {
 
 // reasonState is the persisted runtime state of a reason worker.
 //
-// The transcript is carried as a raw blob because its shape belongs to the
-// transcript, not to us. Provider is the provider/model the worker is currently
-// using, so a worker switched at runtime (worker.update provider.switch)
-// resumes on that choice instead of silently falling back to the configured
-// default — without it, a switch would be lost on every restart.
+// The transcript and the request tracker are carried as raw blobs because their
+// shape belongs to the transcript / the tracker, not to us. Provider is the
+// provider/model the worker is currently using, so a worker switched at runtime
+// (worker.update provider.switch) resumes on that choice instead of silently
+// falling back to the configured default — without it, a switch would be lost
+// on every restart.
 type reasonState struct {
 	Transcript json.RawMessage    `json:"transcript"`
 	Provider   *providerSelection `json:"provider,omitempty"`
@@ -324,6 +325,17 @@ type reasonState struct {
 	// slice. Snapshot always persists the current value, so restore
 	// unconditionally overrides config — there is no "edited" flag.
 	Programs []program.Program `json:"programs"`
+	// Requests is the tracker's blob: the tool calls still in flight when the
+	// snapshot was taken. Both halves of one wait (the transcript's placeholder
+	// and the tracker's entry) are captured together, so a [pending] message is
+	// never restored without its request.
+	Requests json.RawMessage `json:"requests,omitempty"`
+	// ToolCallSeq is the id counter behind synthesized tool-call ids. Its
+	// uniqueness domain is the whole transcript (every id it has ever seen),
+	// not just the calls currently tracked: resetting it on restart would
+	// re-mint an id still present in the restored history, and a result would
+	// then patch that old message instead of the new call's placeholder.
+	ToolCallSeq uint64 `json:"tool_call_seq"`
 }
 
 type providerSelection struct {
@@ -331,8 +343,8 @@ type providerSelection struct {
 	Model string `json:"model"`
 }
 
-// Snapshot captures the worker's durable execution state: the transcript plus
-// its current provider/model selection.
+// Snapshot captures the worker's durable execution state: the transcript, the
+// tool calls it is still awaiting, and its current provider/model selection.
 func (w *BaseReasonWorker) Snapshot() ([]byte, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -341,6 +353,16 @@ func (w *BaseReasonWorker) Snapshot() ([]byte, error) {
 		return nil, err
 	}
 	state := reasonState{Transcript: transcript}
+	// The tracker rides along in whatever snapshot is taken (suspend,
+	// checkpoint, shutdown) — it raises no durable-change signal of its own,
+	// because a pending call only means something together with the transcript
+	// placeholder it belongs to.
+	requests, err := w.requestTracker.State()
+	if err != nil {
+		return nil, err
+	}
+	state.Requests = requests
+	state.ToolCallSeq = w.toolCallSeq
 	// Only persist a selection the worker actually made; a worker left on its
 	// configured default stays on it (and picks up config changes to it).
 	if w.providerName != "" && w.providerModel != "" {
@@ -355,8 +377,17 @@ func (w *BaseReasonWorker) Snapshot() ([]byte, error) {
 	return json.Marshal(state)
 }
 
-// Restore rehydrates the worker from a Snapshot blob, restoring the transcript
-// and re-applying the persisted provider/model selection.
+// Restore rehydrates the worker from a Snapshot blob, restoring the transcript,
+// the tool calls it was awaiting, and the persisted provider/model selection.
+//
+// A restored wait is always parked: the invocation was issued by a worker
+// instance that no longer exists, and in practice its target does not have it
+// either (a restarted peer has forgotten it, and nothing reaps a pending call
+// on worker.gone). Waiting on it would be a wait that can never end — and one
+// that now survives restarts, since Resolved() gates schedule-mode input.
+// Parking keeps the tracker and the transcript in step: the placeholder is
+// rewritten with the explanation, and a result that still arrives is matched as
+// a late result instead of being dropped.
 //
 //	Called after construction and before Start.
 func (w *BaseReasonWorker) Restore(state []byte) error {
@@ -369,6 +400,18 @@ func (w *BaseReasonWorker) Restore(state []byte) error {
 	if err := w.transcript.Restore(s.Transcript); err != nil {
 		return err
 	}
+	w.toolCallSeq = s.ToolCallSeq
+	// The tracker is bookkeeping, not memory: a corrupt blob must not keep the
+	// daemon from starting (Restore's error fails project recovery), and losing
+	// it only means late results go unmatched. The transcript is the opposite:
+	// its failure is still fatal above.
+	if err := w.requestTracker.Restore(s.Requests); err != nil {
+		log.Printf("[reason %s] restore: %v; tool results for those calls will not be matched", w.ID(), err)
+	}
+	// Park after the transcript is restored — the patches rewrite placeholders
+	// that Restore just brought back. No request.cancel here (unlike
+	// parkPending): nothing has been sent on this instance's channel yet.
+	w.parkRequests(requesttracker.PreemptCauseRestart)
 	// Programs override config whenever the snapshot actually carries them.
 	// Field-absent snapshots (taken before Programs existed) leave s.Programs
 	// nil, in which case config stands — a backward-compat guard, not a
