@@ -15,7 +15,8 @@ import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval } from './services/api'
-import type { ApprovalEntry, ContextInfo, EventPayload, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
+import { attachmentBlock } from './components/talk-utils'
+import type { ApprovalEntry, ContextInfo, EventPayload, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
 
 // Talk view settings are persisted to localStorage so toggles survive reloads.
 const VIEW_SETTINGS_KEY = 'niq.view-settings'
@@ -68,6 +69,14 @@ function mergeEvents(existing: EventPayload[], incoming: EventPayload[]): EventP
   return out
 }
 
+// composeInput appends the staged attachments to the message text as HIW
+// attachment envelope blocks (parsed worker-side and by the talk renderer).
+function composeInput(text: string, attachments: StagedAttachment[]): string {
+  const blocks = attachments.map(attachmentBlock)
+  if (blocks.length === 0) return text
+  return [text.trim(), ...blocks].filter(Boolean).join('\n\n')
+}
+
 export default function App() {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
@@ -91,6 +100,7 @@ export default function App() {
   const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
   const [inputMode, setInputMode] = useState('default')
+  const [attachments, setAttachments] = useState<StagedAttachment[]>([])
   const [sending, setSending] = useState(false)
   const [mentionKey, setMentionKey] = useState(0)
   const [filterWorkers, setFilterWorkers] = useState<Set<string>>(new Set())
@@ -356,13 +366,14 @@ export default function App() {
         msgTarget = selectedReasons.length > 0 ? selectedReasons[0] : ''
       }
     }
-    sendInput(msgText, msgTarget, inputMode).then(() => {
+    sendInput(composeInput(msgText, attachments), msgTarget, inputMode).then(() => {
       setInput('')
+      setAttachments([])
       setSending(false)
     }).catch(() => {
       setSending(false)
     })
-  }, [input, view, talkWorkers, inputMode, sending, workers, mentionTarget])
+  }, [input, view, talkWorkers, inputMode, sending, workers, mentionTarget, attachments])
 
   const handleAbort = useCallback(() => {
     const reasonWorkers = workers.filter(w => w.type === 'reason')
@@ -628,9 +639,9 @@ export default function App() {
           </div>
         )}
         {mode !== 'project' ? (
-          panel === 'templates' ? <TemplatesView /> : <ProjectsView />
+          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : <ProjectsView />
         ) : panel === 'templates' ? (
-          <TemplatesView />
+          <TemplatesView isMobile={isMobile} />
         ) : panel === 'projects' ? (
           <ProjectsView />
         ) : view === 'talk' ? (
@@ -666,6 +677,8 @@ export default function App() {
               onClearMentionTarget={() => setMentionTarget('')}
               onSelectTarget={(id) => setMentionTarget(id)}
               isMobile={isMobile}
+              attachments={attachments}
+              onAttachmentsChange={setAttachments}
             />
           </div>
         ) : view === 'approvals' ? (

@@ -8,6 +8,11 @@ interface CreateWorkerDialogProps {
   open: boolean
   onClose: () => void
   onCreated: (r: CreateWorkerResult) => void
+  // When set, the dialog is a BUILDER: submit hands the form's body object to
+  // onBuild instead of creating a live worker (the template drawer uses this
+  // to append a worker entry into the template's JSON). The form and its
+  // validation are exactly the same — only the destination differs.
+  onBuild?: (body: Record<string, unknown>) => void
 }
 
 // Managed worker types offered by the form. host/hiw are infrastructure the
@@ -20,7 +25,7 @@ const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program'] as const
 // the host worker's spawn event. A centered overlay on both desktop and
 // mobile: the trigger is a header pill (no anchor for a dropdown) and the form
 // is far larger than a picker list.
-export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateWorkerDialogProps) {
+export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }: CreateWorkerDialogProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const [mode, setMode] = useState<'managed' | 'external'>('managed')
@@ -77,12 +82,13 @@ export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateW
   const typesFromList = (s: string) =>
     s.split(',').map(x => x.trim()).filter(Boolean)
 
-  const submit = async () => {
-    if (busy) return
-    setNote('')
-    if (!effType) { setNote(t('workers.create.errType')); return }
-    if (!/^[A-Za-z0-9._-]+$/.test(id)) { setNote(t('workers.create.errId')); return }
-    if (isExternal && !command.trim()) { setNote(t('workers.create.errCommand')); return }
+  // buildBody assembles the worker declaration from the form fields — the
+  // shared core of both destinations (create a live worker / append to a
+  // template's workers). Returns null after recording a validation note.
+  const buildBody = (): Record<string, unknown> | null => {
+    if (!effType) { setNote(t('workers.create.errType')); return null }
+    if (!/^[A-Za-z0-9._-]+$/.test(id)) { setNote(t('workers.create.errId')); return null }
+    if (isExternal && !command.trim()) { setNote(t('workers.create.errCommand')); return null }
 
     const env: Record<string, string> = {}
     for (const line of envText.split('\n')) {
@@ -114,6 +120,20 @@ export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateW
     const pubs = typesFromList(publish)
     if (subs.length > 0) body.subscriptions = subs.map(x => ({ type: x }))
     if (pubs.length > 0) body.publish = pubs.map(x => ({ type: x }))
+    return body
+  }
+
+  const submit = async () => {
+    if (busy) return
+    setNote('')
+    const body = buildBody()
+    if (!body) return
+
+    // Builder mode (template drawer): hand the body over, nothing is launched.
+    if (onBuild) {
+      onBuild(body)
+      return
+    }
 
     setBusy(true)
     try {
@@ -152,7 +172,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateW
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
-          <span style={{ color: colors.text, fontSize: fontSizes.md }}>{t('workers.create.title')}</span>
+          <span style={{ color: colors.text, fontSize: fontSizes.md }}>{onBuild ? t('templates.addWorker.title') : t('workers.create.title')}</span>
           <span
             onClick={onClose}
             className="btn-hover"
@@ -257,7 +277,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated }: CreateW
             className="btn-hover"
             style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, border: '1px solid ' + colors.accent, borderRadius: 4, padding: '4px 14px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
           >
-            {busy ? t('workers.create.saving') : t('workers.create.submit')}
+            {busy ? t('workers.create.saving') : onBuild ? t('templates.addWorker.submit') : t('workers.create.submit')}
           </span>
           <span
             onClick={onClose}

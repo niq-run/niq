@@ -27,6 +27,11 @@ var presetFS embed.FS
 // set of workers a new project is seeded with.
 type TemplateConfig struct {
 	Workers []WorkerConfig `json:"workers"`
+
+	// UploadDir is where the WebUI stores files uploaded from the talk input
+	// (project.json upload_dir). Empty means <project dir>/uploads. Relative
+	// paths resolve against the project dir.
+	UploadDir string `json:"upload_dir,omitempty"`
 }
 
 // SubscriptionSpec is one SubscribeAllow entry. It accepts either a bare
@@ -142,6 +147,13 @@ func parseConfig(raw []byte) (*TemplateConfig, error) {
 		return nil, fmt.Errorf("project: parse config: %w", err)
 	}
 	return validateWorkers(&cfg)
+}
+
+// ValidateTemplate parses and validates a template body arriving over the
+// control API (POST with a full template, PUT of an existing one). The same
+// rules as template files on disk: workers need a type and an id.
+func ValidateTemplate(raw []byte) (*TemplateConfig, error) {
+	return parseConfig(raw)
 }
 
 // TemplatesDir returns the on-disk template directory under the shared
@@ -289,6 +301,9 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 }
 
 func validateWorkers(cfg *TemplateConfig) (*TemplateConfig, error) {
+	if len(cfg.Workers) == 0 {
+		return nil, fmt.Errorf("project: template needs at least one worker")
+	}
 	for i, w := range cfg.Workers {
 		if w.Type == "" {
 			return nil, fmt.Errorf("project: worker %d: type is required", i)

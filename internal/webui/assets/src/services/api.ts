@@ -60,6 +60,36 @@ export async function createTemplate(id: string, copyFrom: string): Promise<void
   if (!res.ok) throw new Error('create template failed: ' + res.status)
 }
 
+// fetchTemplatePreview returns the template a project would export (its worker
+// configurations re-expressed) WITHOUT creating anything — the UI shows it as
+// an editable draft.
+export async function fetchTemplatePreview(projectId: string): Promise<any> {
+  const res = await fetch(CONTROL + `/api/projects/${encodeURIComponent(projectId)}/template-preview`)
+  if (!res.ok) throw new Error('template preview failed: ' + res.status)
+  return res.json()
+}
+
+// createTemplateBody creates a new on-disk template from a full (edited)
+// template body.
+export async function createTemplateBody(id: string, template: any): Promise<void> {
+  const res = await fetch(CONTROL + '/api/templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, template }),
+  })
+  if (!res.ok) throw new Error('create template failed: ' + res.status)
+}
+
+// updateTemplate overwrites an existing template with an edited body.
+export async function updateTemplate(name: string, template: any): Promise<void> {
+  const res = await fetch(CONTROL + `/api/templates/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(template),
+  })
+  if (!res.ok) throw new Error('update template failed: ' + res.status)
+}
+
 // deleteTemplate removes an on-disk template.
 export async function deleteTemplate(name: string): Promise<void> {
   const res = await fetch(CONTROL + `/api/templates/${encodeURIComponent(name)}`, { method: 'DELETE' })
@@ -125,6 +155,23 @@ export async function sendInput(text: string, target: string, inputMode: string)
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, target, input_mode: inputMode }),
   })
+}
+
+// UploadedFile is what POST /api/upload returns: the file's absolute path in
+// the project's upload directory, to reference from an input attachment.
+export interface UploadedFile {
+  path: string
+  name: string
+  size: number
+}
+
+// uploadFile uploads one file (multipart) into the project's upload dir.
+export async function uploadFile(file: File): Promise<UploadedFile> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(p('/api/upload'), { method: 'POST', body: form })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'upload failed: ' + res.status)
+  return res.json()
 }
 
 export async function abortWorker(target: string): Promise<void> {

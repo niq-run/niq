@@ -353,23 +353,6 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>p</span>
           </span>
         </h2>
-
-        {/* Current project name — plain text below the logo. */}
-        {mode === 'project' && project && (
-          <div
-            style={{
-              marginTop: 40,
-              color: colors.textDim,
-              fontSize: fontSizes.sm,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-            title={`[${project}]`}
-          >
-            {`[${project}]`}
-          </div>
-        )}
       </div>
       </div>
 
@@ -500,8 +483,17 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
 
       </div>
 
-      {/* Theme + language toggles — fixed footer, stays put when the options scroll */}
+      {/* Fixed footer: current project on the left, theme + language toggles
+          on the right — stays put when the options scroll. */}
       <div style={{ flexShrink: 0, marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+        {mode === 'project' && project && (
+          <div
+            style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: colors.textDimmed, fontSize: fontSizes.sm }}
+            title={`${t('sidebar.currentProject')}[${project}]`}
+          >
+            {`${t('sidebar.currentProject')}[${project}]`}
+          </div>
+        )}
         <div
           onClick={toggle}
           style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm + 1 }}

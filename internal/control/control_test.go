@@ -216,3 +216,76 @@ func TestControlStartProjectNotFound(t *testing.T) {
 		t.Fatalf("status=%d, want 404", resp.StatusCode)
 	}
 }
+
+// TestControlTemplateFromProject verifies the project-export flow: preview
+// (no write), creating a template from an edited draft body (POST with
+// template), updating it (PUT), and the validation paths.
+func TestControlTemplateFromProject(t *testing.T) {
+	setupProjectsRoot(t)
+	if _, err := project.CreateProject("alpha", fakeTemplate()); err != nil {
+		t.Fatal(err)
+	}
+	base := newControl(t)
+
+	do := func(method, path, body string) (int, string) {
+		var req *http.Request
+		if body == "" {
+			req, _ = http.NewRequest(method, base+path, nil)
+		} else {
+			req, _ = http.NewRequest(method, base+path, strings.NewReader(body))
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+
+	// Preview returns the exported workers without creating a template.
+	code, body := do("GET", "/api/projects/alpha/template-preview", "")
+	if code != 200 || !strings.Contains(body, `"niq"`) || !strings.Contains(body, "volcan-ark") {
+		t.Fatalf("preview status=%d body=%s", code, body)
+	}
+	if _, err := os.Stat(filepath.Join(project.TemplatesDir(), "t1.json")); err == nil {
+		t.Fatal("preview must not write a template file")
+	}
+
+	// Save the draft (as the edited webui drawer would) under a new id.
+	draft := `{"id":"t1","template":{"workers":[{"type":"hiw","id":"default-hiw"},{"type":"reason","id":"niq","instruction":"edited goal"}]}}`
+	if code, _ = do("POST", "/api/templates", draft); code != 201 {
+		t.Fatalf("create from draft status=%d, want 201", code)
+	}
+	_, body = do("GET", "/api/templates/t1", "")
+	if !strings.Contains(body, "edited goal") {
+		t.Fatalf("saved draft body: %s", body)
+	}
+
+	// Edit the saved template through PUT.
+	if code, _ = do("PUT", "/api/templates/t1", `{"workers":[{"type":"hiw","id":"default-hiw"}]}`); code != 204 {
+		t.Fatalf("put status=%d, want 204", code)
+	}
+	_, body = do("GET", "/api/templates/t1", "")
+	if strings.Contains(body, "edited goal") {
+		t.Fatalf("put should have replaced the body: %s", body)
+	}
+
+	// Validation: PUT of a nonexistent template, a workerless body, and a
+	// create with both/no source.
+	if code, _ = do("PUT", "/api/templates/nope", `{"workers":[]}`); code != 404 {
+		t.Fatalf("put missing status=%d, want 404", code)
+	}
+	if code, _ = do("PUT", "/api/templates/t1", `{"workers":[]}`); code != 400 {
+		t.Fatalf("put empty workers status=%d, want 400", code)
+	}
+	if code, _ = do("POST", "/api/templates", `{"id":"t2"}`); code != 400 {
+		t.Fatalf("no source status=%d, want 400", code)
+	}
+	if code, _ = do("POST", "/api/templates", `{"id":"t2","copy_from":"default","template":{"workers":[{"type":"hiw","id":"h"}]}}`); code != 400 {
+		t.Fatalf("two sources status=%d, want 400", code)
+	}
+	if code, _ = do("POST", "/api/templates", draft); code != 409 {
+		t.Fatalf("duplicate status=%d, want 409", code)
+	}
+}

@@ -11,7 +11,7 @@ import SystemReminderBlock from '../components/SystemReminderBlock'
 import {
   getInputText, isToolEvent, isToolResult, isReasonBoundary,
   toolContent, toolSummary, toolCallId,
-  formatTime, findReferencedInput, splitSystemReminder,
+  formatTime, findReferencedInput, splitSystemReminder, parseAttachments,
 } from '../components/talk-utils'
 import type { EventPayload } from '../types'
 
@@ -159,12 +159,21 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // Only reason workers (the conversation partners) get a standalone avatar
   // row; other workers' events carry their worker ID inline in the block title.
   const isReason = (wid: string) => workerTypes[wid] === 'reason'
-  // Convert the human worker's id into a friendlier "you" for display.
-  const displayName = (wid?: string) => (wid && wid === humanId ? 'you' : wid ?? '')
-  // Direction of the worker identity in a block title, relative to the reason
-  // worker: "to X" for events the reason worker sends, "from: X" for events it
-  // receives from another worker.
-  const directionOf = (evt: EventPayload): string => {
+  // Convert the human worker's id into a friendlier "you" for display. The
+  // [webui] channel marker stays untranslated (it is a transport name): the
+  // same human also speaks through other transports (lark bridge, ...), each
+  // with its own worker id, so marking the channel tells the reader which
+  // door the message came through.
+  const displayName = (wid?: string) => (wid && wid === humanId ? `${t('talk.you')}[webui]` : wid ?? '')
+  // Direction of the worker identity in a block title. Left-aligned blocks
+  // read from the reason worker's side ("to X" = it sends, "from: X" =
+  // someone sent it in). Right-aligned blocks sit visually as outgoing
+  // toward the reason worker, so they always read "to <reason worker>" —
+  // regardless of who the sender was.
+  const directionOf = (evt: EventPayload, alignRight?: boolean): string => {
+    if (alignRight && evt.target_worker_id) {
+      return `to ${displayName(evt.target_worker_id)}`
+    }
     if (isReason(evt.worker_id)) {
       return evt.target_worker_id ? `to ${displayName(evt.target_worker_id)}` : ''
     }
@@ -444,7 +453,10 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
 
     // worker.input
     if (evt.type === 'worker.input') {
-      const { reminder, content } = splitSystemReminder(getInputText(evt))
+      // Attachment blocks never enter the markdown: they render as chips
+      // (image thumbnails / file references) below the message text.
+      const parsed = parseAttachments(getInputText(evt))
+      const { reminder, content } = splitSystemReminder(parsed.text)
       // The sending UI selects one of three input levels (interrupt / schedule /
       // append). The event stores it as payload.input_mode; the web UI's own
       // default "interrupt" is emitted without the field, so an absent value on
@@ -510,6 +522,26 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                 <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>{content}</Markdown>
               ) : null}
             </div>
+            {parsed.attachments.length > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                {parsed.attachments.map((a, i) => a.kind === 'image' ? (
+                  <img
+                    key={i}
+                    src={`data:${a.mime};base64,${a.data}`}
+                    alt={a.name || 'attachment'}
+                    style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 4, border: '1px solid ' + colors.border, display: 'block' }}
+                  />
+                ) : (
+                  <span
+                    key={i}
+                    title={a.path}
+                    style={{ fontSize: fontSizes.sm, color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 4, padding: '2px 8px' }}
+                  >
+                    {'\uD83D\uDCC4 ' + (a.name || a.path)}
+                  </span>
+                ))}
+              </div>
+            )}
             {evt.trace_id && (
               <div style={{ marginTop: 6, textAlign: alignRight ? 'right' : 'left' }}>
                 <span
@@ -904,10 +936,10 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                       <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('thinking.chars', { n: contentLen })}</span>
                     </>
                   )}
-                  {directionOf(evt) && (
+                  {directionOf(evt, alignRight) && (
                     <>
                       <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
-                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{directionOf(evt)}</span>
+                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{directionOf(evt, alignRight)}</span>
                     </>
                   )}
                   {isExpanded && contentLen > 0 && (
@@ -922,8 +954,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             </div>
             {isMobile && isExpanded && (
               <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4, columnGap: 8, marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)'), fontSize: fontSizes.sm, color: colors.textDimmed }}>
-                {directionOf(evt) && (
-                  <span style={{ whiteSpace: 'nowrap' }}>{directionOf(evt)}</span>
+                {directionOf(evt, alignRight) && (
+                  <span style={{ whiteSpace: 'nowrap' }}>{directionOf(evt, alignRight)}</span>
                 )}
                 <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}>{formatTime(evt.timestamp)}</span>
               </div>

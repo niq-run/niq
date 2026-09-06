@@ -2,7 +2,18 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import PickerDropdown, { type PickerOption } from './PickerDropdown'
-import type { WorkerInfo } from '../types'
+import { uploadFile } from '../services/api'
+import type { StagedAttachment, WorkerInfo } from '../types'
+
+// Attachment limits: images ride inline as base64, files go through
+// /api/upload and only their path enters the input.
+const MAX_ATTACHMENTS = 4
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+// Images above this edge length are downscaled before embedding — the
+// useful resolution ceiling of mainstream vision models, and a large win
+// for event/snapshot size.
+const IMAGE_MAX_DIM = 1568
+const IMAGE_JPEG_QUALITY = 0.85
 
 interface TalkInputProps {
   talkPartner: string
@@ -19,19 +30,140 @@ interface TalkInputProps {
   onClearMentionTarget: () => void
   onSelectTarget: (id: string) => void
   isMobile: boolean
+  // Attachments staged for the next send: pasted/picked images (inline
+  // base64) and uploaded files (referenced by path).
+  attachments: StagedAttachment[]
+  onAttachmentsChange: (a: StagedAttachment[]) => void
 }
 
-export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget, isMobile }: TalkInputProps) {
+export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget, isMobile, attachments, onAttachmentsChange }: TalkInputProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerMode, setPickerMode] = useState<'mention' | 'target'>('target')
   const [mentionQuery, setMentionQuery] = useState('')
   const [mentionIndex, setMentionIndex] = useState(0)
   const [modeOpen, setModeOpen] = useState(false)
+  const [uploading, setUploading] = useState(0)
+  const [attachNote, setAttachNote] = useState('')
 
   const reasonWorkers = useMemo(() => workers.filter(w => w.type === 'reason'), [workers])
+
+  // ── Attachments ──
+  const stage = (a: StagedAttachment) => {
+    onAttachmentsChange([...attachments, a])
+    setAttachNote('')
+  }
+
+  const readAsDataURL = (file: File | Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(r.result as string)
+      r.onerror = () => reject(r.error)
+      r.readAsDataURL(file)
+    })
+
+  const loadImage = (url: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => resolve(img)
+      img.onerror = reject
+      img.src = url
+    })
+
+  const canvasToDataURL = (canvas: HTMLCanvasElement, mime: string, quality?: number) =>
+    new Promise<string>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { reject(new Error('canvas encode failed')); return }
+          const r = new FileReader()
+          r.onload = () => resolve(r.result as string)
+          r.onerror = () => reject(r.error)
+          r.readAsDataURL(blob)
+        },
+        mime,
+        quality,
+      )
+    })
+
+  // compressImage shrinks a picked/pasted image before it rides inline:
+  // downscale past IMAGE_MAX_DIM, re-encode (JPEG q0.85 for non-PNG; PNG
+  // keeps its alpha and only falls back to JPEG if still over the cap).
+  // Already-small images pass through untouched.
+  const compressImage = async (file: File): Promise<{ data: string; mime: string; bytes: number }> => {
+    const url = await readAsDataURL(file)
+    const img = await loadImage(url)
+    const scale = Math.min(1, IMAGE_MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight))
+    if (scale === 1 && file.size <= MAX_IMAGE_BYTES) {
+      return { data: url.split(',')[1] || '', mime: file.type, bytes: file.size }
+    }
+
+    const keepPng = file.type === 'image/png'
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
+    const ctx = canvas.getContext('2d')!
+    if (!keepPng) {
+      // JPEG has no alpha: fill white before drawing.
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+    }
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+    if (keepPng) {
+      const pngURL = await canvasToDataURL(canvas, 'image/png')
+      const bytes = Math.round((pngURL.length - pngURL.indexOf(',')) * 0.75)
+      if (bytes <= MAX_IMAGE_BYTES) {
+        return { data: pngURL.split(',')[1] || '', mime: 'image/png', bytes }
+      }
+      // Still too big: flatten onto white and encode as JPEG.
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    }
+    const url2 = await canvasToDataURL(canvas, 'image/jpeg', IMAGE_JPEG_QUALITY)
+    return { data: url2.split(',')[1] || '', mime: 'image/jpeg', bytes: Math.round((url2.length - url2.indexOf(',')) * 0.75) }
+  }
+
+  // addFiles stages picked/pasted files: images inline as base64 (capped),
+  // everything else via the upload endpoint (path reference).
+  const addFiles = async (files: FileList | File[]) => {
+    for (const f of Array.from(files)) {
+      if (attachments.length + uploading >= MAX_ATTACHMENTS) {
+        setAttachNote(t('talk.attach.tooMany'))
+        return
+      }
+      if (f.type.startsWith('image/')) {
+        try {
+          const { data, mime, bytes } = await compressImage(f)
+          if (bytes > MAX_IMAGE_BYTES) {
+            setAttachNote(t('talk.attach.tooLarge'))
+            continue
+          }
+          stage({ id: crypto.randomUUID(), kind: 'image', name: f.name, mime, data, size: bytes })
+        } catch {
+          setAttachNote(t('talk.attach.uploadFailed'))
+        }
+      } else {
+        setUploading(n => n + 1)
+        try {
+          const res = await uploadFile(f)
+          stage({ id: crypto.randomUUID(), kind: 'file', name: res.name, path: res.path, size: res.size })
+        } catch (e) {
+          setAttachNote((e as Error)?.message || t('talk.attach.uploadFailed'))
+        } finally {
+          setUploading(n => n - 1)
+        }
+      }
+    }
+  }
+
+  const removeAttachment = (id: string) => {
+    onAttachmentsChange(attachments.filter(a => a.id !== id))
+    setAttachNote('')
+  }
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value
@@ -212,11 +344,58 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         )}
       </div>
 
+      {/* Attachment chips: staged images (thumbnail) and uploaded files
+          (name), each removable, plus upload/note status. */}
+      {(attachments.length > 0 || uploading > 0 || attachNote) && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0' }}>
+          {attachments.map(a => (
+            <span
+              key={a.id}
+              title={a.kind === 'file' ? a.path : `${a.name} (${Math.ceil(a.size / 1024)}KB)`}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px',
+                border: '1px solid ' + colors.border, borderRadius: 4, background: colors.bgLight,
+                fontSize: fontSizes.sm, color: colors.textDim, userSelect: 'none',
+              }}
+            >
+              {a.kind === 'image' ? (
+                <img src={`data:${a.mime};base64,${a.data}`} alt={a.name} style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 2, display: 'block' }} />
+              ) : (
+                <span>{'📄'}</span>
+              )}
+              <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+              <span
+                onClick={() => removeAttachment(a.id)}
+                className="btn-hover"
+                style={{ cursor: 'pointer', color: colors.textDimmed, padding: '0 2px', userSelect: 'none' }}
+              >
+                {'\u2715'}
+              </span>
+            </span>
+          ))}
+          {uploading > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: colors.textDimmed, fontSize: fontSizes.sm }}>
+              <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
+              {t('talk.attach.uploading')}
+            </span>
+          )}
+          {attachNote && <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{attachNote}</span>}
+        </div>
+      )}
+
       <textarea
         ref={textareaRef}
         value={input}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
+        onPaste={(e) => {
+          // Pasted images stage as attachments instead of leaking into the
+          // text as a path or binary junk.
+          if (e.clipboardData?.files?.length) {
+            e.preventDefault()
+            addFiles(e.clipboardData.files)
+          }
+        }}
         className="talk-input"
         placeholder={t('talk.input.placeholder')}
         rows={3}
@@ -234,6 +413,29 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         }}
       />
       <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', alignItems: 'center' }}>
+        {/* File picker: non-image files upload to the project's upload dir
+            and enter the input as path references. */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => { if (e.target.files?.length) addFiles(e.target.files); e.target.value = '' }}
+        />
+        {/* Attach: text button at the left edge of the right-aligned
+            action cluster (mode / send / stop). */}
+        <span
+          onClick={() => fileInputRef.current?.click()}
+          title={t('talk.attach')}
+          style={{
+            cursor: 'pointer', userSelect: 'none',
+            color: colors.textDim, fontSize: isMobile ? 15 : 13, lineHeight: isMobile ? '22px' : '20px',
+            padding: isMobile ? '6px 14px' : '4px 12px',
+            border: '1px solid ' + colors.border, borderRadius: 4,
+          }}
+        >
+          {t('talk.attach.add')}
+        </span>
         <div style={{ position: 'relative', display: 'inline-block' }}>
           <span
             onClick={(e) => { e.stopPropagation(); setModeOpen(v => !v) }}

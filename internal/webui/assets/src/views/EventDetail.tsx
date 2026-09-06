@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { type EventPayload } from '../types'
-import { getTypeColor, formatTime } from '../components/talk-utils'
+import { getTypeColor, formatTime, parseAttachments } from '../components/talk-utils'
 import { makeMdComponents } from '../components/MarkdownComponents'
 import PayloadGate from '../components/PayloadGate'
 import CollapsibleCode from '../components/CollapsibleCode'
@@ -33,7 +33,9 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
     evt.type === "worker.input"
   const contentText = isContentEvent
     ? evt.type === "worker.input"
-      ? (evt.payload?.text as string) || ""
+      ? // Attachment blocks (image base64 / file paths) are not text — the
+        // detail view keeps the message body only.
+        parseAttachments((evt.payload?.text as string) || "").text
       : Array.isArray(evt.payload?.content)
         ? (evt.payload.content as any[]).filter(Boolean).join("\n")
         : ""

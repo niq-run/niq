@@ -33,6 +33,56 @@ export function getInputText(evt: EventPayload): string {
   return (evt.payload?.text as string) || ''
 }
 
+// ── HIW attachment envelope ──
+
+// ParsedAttachment is one <attachment> block found in an input text: an
+// image carried inline as base64, or a file reference by path.
+export interface ParsedAttachment {
+  kind: 'image' | 'file'
+  mime?: string
+  data?: string // image: base64
+  name?: string
+  path?: string // file
+  size?: number
+}
+
+const ATTACH_RE = /<attachment\b([^>]*?)(\/>|>([\s\S]*?)<\/attachment>)/g
+const ATTR_RE = /([a-zA-Z_][\w-]*)="([^"]*)"/g
+
+// parseAttachments splits an input text into the remaining plain text (blocks
+// removed, trimmed) and the ordered attachment list. Malformed blocks stay in
+// the text — same fail-open rule as the worker-side parser.
+export function parseAttachments(text: string): { text: string; attachments: ParsedAttachment[] } {
+  const attachments: ParsedAttachment[] = []
+  const kept: string[] = []
+  let pos = 0
+  for (const m of text.matchAll(ATTACH_RE)) {
+    const start = m.index ?? 0
+    kept.push(text.slice(pos, start))
+    pos = start + m[0].length
+    const attrs: Record<string, string> = {}
+    for (const a of m[1].matchAll(ATTR_RE)) attrs[a[1].toLowerCase()] = a[2]
+    if (attrs.type === 'image' && m[3] && m[3].trim()) {
+      attachments.push({ kind: 'image', mime: attrs.mime || 'image/png', data: m[3].replace(/\s+/g, ''), name: attrs.name })
+    } else if (attrs.type === 'file' && attrs.path) {
+      attachments.push({ kind: 'file', name: attrs.name || attrs.path, path: attrs.path, size: Number(attrs.size) || 0 })
+    } else {
+      kept.push(m[0]) // malformed: keep the raw block
+    }
+  }
+  kept.push(text.slice(pos))
+  return { text: kept.join('').trim(), attachments }
+}
+
+// Compose an attachment envelope block (the mirror of the parsers above); the
+// composer in App appends these to the input text.
+export function attachmentBlock(a: ParsedAttachment): string {
+  if (a.kind === 'image') {
+    return `<attachment type="image" mime="${a.mime}" name="${a.name}">\n${a.data}\n</attachment>`
+  }
+  return `<attachment type="file" name="${a.name}" path="${a.path}" size="${a.size}"/>`
+}
+
 // ── Type checks ──
 
 export function isToolEvent(type: string): boolean {
@@ -201,7 +251,8 @@ export function findReferencedInput(events: EventPayload[], responseEvt: EventPa
   if (!responseEvt.trace_id) return null
   for (const evt of events) {
     if (evt.type === 'worker.input' && evt.trace_id === responseEvt.trace_id) {
-      const text = getInputText(evt)
+      // Quote the message text only — attachment blocks render as chips.
+      const text = parseAttachments(getInputText(evt)).text
       if (text) return { text, workerId: evt.worker_id, evtId: evt.id }
     }
   }

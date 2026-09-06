@@ -115,6 +115,13 @@ export interface ApprovalListResult {
 
 export type ViewMode = 'talk' | 'events' | 'approvals' | 'workers'
 
+// StagedAttachment is one attachment composed in the talk input, appended to
+// the input text as an <attachment> block on send. Images ride inline as
+// base64; files are uploaded first and referenced by path.
+export type StagedAttachment =
+  | { id: string; kind: 'image'; name: string; mime: string; data: string; size: number }
+  | { id: string; kind: 'file'; name: string; path: string; size: number }
+
 // ViewSettings are the talk/events view preference toggles, persisted to
 // localStorage across sessions.
 export interface ViewSettings {
