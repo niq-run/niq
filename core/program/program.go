@@ -44,12 +44,17 @@ const (
 // (e.g. the register, edit, delete tools). They are
 // defined by the system operator and form the immutable core of the
 // Worker's identity and behaviour.
+// Meta carries yaml tags as well as json tags: it is the schema of a
+// Program's YAML frontmatter, and yaml.v3 ignores json tags — without them it
+// would derive keys by lowercasing the field name ("ContentType" →
+// "contenttype"), which silently never matches "content_type" in the file and
+// leaves ContentType empty.
 type Meta struct {
-	Name        string      `json:"name"`
-	ContentType ContentType `json:"content_type"`
-	Description string      `json:"description,omitempty"`
-	Tags        []string    `json:"tags,omitempty"`
-	Locked      bool        `json:"locked,omitempty"`
+	Name        string      `json:"name" yaml:"name"`
+	ContentType ContentType `json:"content_type" yaml:"content_type,omitempty"`
+	Description string      `json:"description,omitempty" yaml:"description,omitempty"`
+	Tags        []string    `json:"tags,omitempty" yaml:"tags,omitempty"`
+	Locked      bool        `json:"locked,omitempty" yaml:"locked,omitempty"`
 }
 
 // Program is a loadable logical unit — niq's equivalent of a "skill".
@@ -61,6 +66,17 @@ type Meta struct {
 // via program.load at runtime.
 type Program struct {
 	Meta
+
+	// Path is this Program's root addressing path. It is an abstract
+	// address, not a filesystem location: only the Backend that stores the
+	// Program knows where it actually lives, and that mapping never leaves
+	// the Backend.
+	//
+	// It is always equal to Name. Sub-contents hang off it as
+	// "{name}/path/to/file.type"; the entry content is the special case
+	// whose Path is exactly "{name}".
+	Path string `json:"path,omitempty"`
+
 	EntryContent ProgramContent   `json:"entry_content"`
 	Contents     []ProgramContent `json:"contents,omitempty"`
 }
@@ -69,7 +85,16 @@ type Program struct {
 // It is the unit of progressive loading: EntryContent is always loaded,
 // Contents are loaded on demand via program.load.
 type ProgramContent struct {
+	// Name is the Program this content belongs to. Every content carries it
+	// so a content is self-describing once detached from its Program.
+	Name string `json:"name,omitempty"`
+
 	FormType FormType `json:"form_type"`
-	Path     string   `json:"path,omitempty"` // relative path within the program directory
-	Content  string   `json:"content,omitempty"`
+
+	// Path is the addressing path used to load this content:
+	// "{program name}/path/to/file.type". The entry content is the special
+	// case where it is just "{program name}".
+	Path string `json:"path,omitempty"`
+
+	Content string `json:"content,omitempty"`
 }

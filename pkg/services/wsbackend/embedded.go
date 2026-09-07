@@ -171,6 +171,15 @@ func (b *EmbeddedBackend) primary() string {
 // when they fall inside any mounted directory. Symlink-aware: a resolved
 // target is checked against the mount's symlink-resolved root, falling back
 // to a plain prefix check for not-yet-existing paths.
+// resolve validates raw against the mounts and returns the absolute path to
+// use.
+//
+// Containment rule: a path is accepted when its symlink-resolved form falls
+// inside a mount, or — because a symlinked entry may legitimately point
+// elsewhere, e.g. a program directory symlinked into the workspace — when its
+// logical form still falls inside a mount. Only the second case can leave the
+// mount. Syntactic traversal ("..") is always rejected: paths are Cleaned
+// first, so an escape attempt loses the mount prefix and fails both checks.
 func (b *EmbeddedBackend) resolve(raw string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("path is empty")
@@ -205,6 +214,12 @@ func (b *EmbeddedBackend) resolve(raw string) (string, error) {
 				return abs, nil
 			}
 		}
+		// Symlink escape is allowed — see resolve.
+		for _, m := range mounts {
+			if hasPathPrefix(abs, m.path) {
+				return abs, nil
+			}
+		}
 		return "", &EscapeError{Path: raw}
 	}
 
@@ -219,6 +234,14 @@ func (b *EmbeddedBackend) resolve(raw string) (string, error) {
 		return "", &EscapeError{Path: raw}
 	}
 	if hasPathPrefix(real, p.real) {
+		return joined, nil
+	}
+	// A symlinked component may legitimately point outside the mount — a
+	// program or workspace directory symlinked in from elsewhere. Allow it
+	// when the logical path is still inside the mount. Syntactic traversal
+	// ("..") stays rejected: joined is Cleaned, so anything that escapes
+	// loses the mount prefix.
+	if hasPathPrefix(joined, p.path) {
 		return joined, nil
 	}
 	return "", &EscapeError{Path: raw}
@@ -347,9 +370,19 @@ func (b *EmbeddedBackend) List(ctx context.Context, path string) ([]DirEntry, er
 		if e.Name() == "" {
 			continue
 		}
+		// os.ReadDir reports a symlink's own type, not its target's, so a
+		// symlink to a directory comes back IsDir=false and callers would
+		// never descend into it. Stat the entry to see through the link; a
+		// broken symlink simply stays a non-directory.
+		isDir := e.IsDir()
+		if !isDir && e.Type()&os.ModeSymlink != 0 {
+			if info, statErr := os.Stat(filepath.Join(resolved, e.Name())); statErr == nil {
+				isDir = info.IsDir()
+			}
+		}
 		result = append(result, DirEntry{
 			Name:  e.Name(),
-			IsDir: e.IsDir(),
+			IsDir: isDir,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {

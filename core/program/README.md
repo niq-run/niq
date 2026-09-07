@@ -34,7 +34,15 @@ Program is niq's equivalent of what ecosystems like LangChain, OpenAI GPTs, and
 Claude call a "skill". The key difference: a traditional skill is a package of
 instructions + executable files, stored in the workspace filesystem and loaded
 by path. A Program is decoupled from the workspace — it can be stored in config,
-memory, or loaded from any address via a Resolver.
+memory, or loaded from any address. Resolving that address is the Backend's
+job — see [Addressing](#addressing).
+
+That decoupling is what makes the filesystem Backend an adapter rather than
+the definition: a mainstream agent's skill directory drops in as-is
+(`SKILL.md` is accepted as an entry file alongside `PROGRAM.md`), the Backend
+reads its frontmatter and files, and everything else sees a Program. Skills
+are necessarily filesystem-shaped; Program is not, and the Backend is the
+seam between the two.
 
 Program reimagines "skill" not as a packaged executable with uncontrolled side
 effects, but as source code whose single, well-defined output is tool calls.
@@ -122,18 +130,71 @@ Instruction says "who you are". Program says "what you know and can do".
 Both end up in the LLM's context window, but through different paths and for
 different purposes.
 
+## Addressing
+
+Every Program and every one of its `ProgramContent`s carries both a `Name`
+and a `Path`.
+
+- **`Name`** is the Program's name — which content belongs to it. Every
+  content repeats its Program's name so a content stays self-describing once
+  detached.
+- **`Path`** is the addressing path — where the content lives. Contents differ
+  here: `{name}/path/to/file.type`.
+
+The Program's own `Path` is its root, always equal to its `Name`. The entry
+content is the special case whose `Path` is exactly `{name}`.
+
+A `Path` is an **abstract address**, never a filesystem location. How it maps
+onto real storage is private to the `Backend`: the filesystem implementation
+walks its mount recursively, so a Program named `foo` can sit in
+`vendor/deep/`, and no caller can tell. Discovery is recursive; the address
+space it presents is flat.
+
+```
+{name}                    → a Program's entry content
+{name}/rules/go.md        → one of its sub-contents
+```
+
+Two Backends may read the same address very differently, and that is the
+point:
+
+| Address | Backend | Where it actually lives |
+|---------|---------|-------------------------|
+| `code-review` | filesystem (`pgbackend`) | `<root>/code-review/` |
+| `foo` | filesystem (`pgbackend`) | `<root>/vendor/deep/` — name need not match the directory |
+| `builtin://code-review` | in-memory registry | a compiled-in map |
+| `config://safety-rules` | config store | a row keyed by the address |
+
+Adding a scheme means adding a Backend, not teaching core a new format.
+
+Two rules follow, and both are enforced by keeping the mapping inside the
+Backend:
+
+- Core never parses an address and never derives one from a `Name`.
+- Nothing outside the Backend ever sees a directory.
+
+Names are not required to be unique by the type system. When two Programs
+answer to the same name, `List` keeps the first and logs; the tie is a
+configuration mistake, not something to resolve silently.
+
+`List` enumerates by re-reading storage, so it never reports stale Programs.
+`Read`, `Edit` and `Remove` resolve a single address through the Backend's own
+name → location index instead, which a Backend is free to maintain however it
+likes; a miss re-reads, so a Program created without a prior `List` is still
+found.
+
+`Upsert` is how a Program's metadata is written and updated; it never touches
+content. Metadata and content travel by different calls — `Upsert` for the
+former, `Write` and `Edit` for the latter — because they change for different
+reasons and at different rates: renaming a tag should not mean resending a
+body, and rewriting a body should not risk clobbering a description.
+
 ## Progressive Loading
 
-Program supports progressive loading via the Path field:
-
-| Path value | Meaning | Content source |
-|---------|------|-------------|
-| `""` or `"."` | Inline | Set directly in Config |
-| `"builtin://code-review"` | Builtin registry | Resolver looks up a map |
-| `"config://safety-rules"` | Config store | Resolver fetches by key |
-
-The address scheme is defined by the injected Resolver implementation. The core
-package makes no assumptions about path formats.
+A Program's `EntryContent` is read first — at `{name}`. `List` also reports
+the paths of its `Contents`, so a caller can see what is available and pull
+each one on demand by its own `Path`. Content bodies are never loaded just to
+enumerate them.
 
 ## Consumption in the LLM Worker
 
@@ -149,7 +210,7 @@ ScriptType:
 ## Design Principles
 
 - **Program is data, not code.** Worker is code; Program is the logical body a worker loads.
-- **Program is not bound to a workspace.** Skills depend on filesystem paths; Programs depend on abstract addresses (Path + Resolver).
+- **Program is not bound to a workspace.** Skills depend on filesystem paths; Programs depend on abstract addresses (Path + Backend).
 - **Program enables meta-capabilities.** A parent worker can generate new Programs at runtime and use them to create child workers.
 - **Tool calls are executable programs.** A tool call — name + arguments — is the executable form of a Program. niq produces and runs these programs in real time.
 

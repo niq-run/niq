@@ -37,14 +37,18 @@ func TestResolvePath(t *testing.T) {
 		// empty
 		{name: "empty", raw: "", wantErr: true},
 
-		// symlink escape
+		// Symlink escape is deliberately permitted: a symlinked entry whose
+		// logical path is still inside the mount is followed, even when the
+		// target is outside. This is what lets a directory be symlinked into
+		// the workspace (e.g. a program directory) and still be read.
+		// Syntactic traversal ("..") above is still rejected.
 		{
-			name: "symlink escape to /etc",
+			name: "symlink out of mount is followed",
 			raw:  "link-out/passwd",
 			prep: func() {
 				os.Symlink("/etc", filepath.Join(root, "link-out"))
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 
 		// ~ expansion — always outside a temp workspace

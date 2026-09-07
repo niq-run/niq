@@ -33,19 +33,19 @@ type Config struct {
 // It subscribes to its tool events and worker.discover, and exposes
 // search/load/edit/register/delete tools on the bus.
 //
-// Programs are discovered from the Backend at startup and cached in the
-// programs map. The map is the single source of truth for registered programs;
-// the Backend is the persistent storage for their content files.
+// The backend is the single source of truth: Programs are re-listed on every
+// tool call, so changes made on disk after startup are picked up without a
+// restart. The worker never sees a filesystem path — it passes abstract
+// addresses ("{name}" for a Program's entry, "{name}/path" for a content) and
+// lets the backend resolve them.
 type Worker struct {
 	baseworker.BaseWorker
-	backend  program.Backend
-	programs map[string]*program.Program
+	backend program.Backend
 
 	started bool
 	cancel  context.CancelFunc
 
-	mu  sync.Mutex   // guards started / cancel
-	pMu sync.RWMutex // guards programs map
+	mu sync.Mutex // guards started / cancel
 }
 
 // New creates a Program Worker.
@@ -56,8 +56,7 @@ func New(cfg Config) *Worker {
 	}
 	w := &Worker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
-		backend:  cfg.Backend,
-		programs: make(map[string]*program.Program),
+		backend:    cfg.Backend,
 	}
 	w.registerExtensions()
 	return w
@@ -76,8 +75,11 @@ func (w *Worker) Start(ctx context.Context) error {
 	runCtx, cancelFn := context.WithCancel(ctx)
 	w.cancel = cancelFn
 
-	// Discover programs from the backend.
-	if err := w.discover(ctx); err != nil {
+	// List once so a broken program root is reported at startup rather than
+	// silently on the first tool call. The result is not retained — every
+	// tool call re-lists.
+	progs, err := w.backend.List(ctx)
+	if err != nil {
 		log.Printf("[program] discovery warning: %v", err)
 	}
 
@@ -86,7 +88,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	w.AnnounceReady("program", nil)
 
 	w.started = true
-	log.Printf("[program] started with %d programs", w.listPrograms())
+	log.Printf("[program] started with %d programs", len(progs))
 
 	return nil
 }
@@ -111,47 +113,23 @@ func (w *Worker) Stop() error {
 func (w *Worker) Snapshot() ([]byte, error)  { return nil, nil }
 func (w *Worker) Restore(state []byte) error { return nil }
 
-// listPrograms returns the count of registered programs for logging.
-func (w *Worker) listPrograms() int {
-	w.pMu.RLock()
-	defer w.pMu.RUnlock()
-	return len(w.programs)
-}
+// ── Program lookup ──
 
-// ── Program map operations ──
-
-// register adds or replaces a program in the cache.
-func (w *Worker) register(p *program.Program) error {
-	if p.Name == "" {
-		return fmt.Errorf("program: name is required")
+// search returns the Programs whose name, description, or tags contain the
+// query substring (case-insensitive). If ct is non-empty, results are filtered
+// by ContentType.
+//
+// The backend is scanned on every call rather than cached, so Programs added
+// or edited on disk after startup are found without a restart.
+func (w *Worker) search(ctx context.Context, query string, ct program.ContentType) ([]*program.Program, error) {
+	progs, err := w.backend.List(ctx)
+	if err != nil {
+		return nil, err
 	}
-	w.pMu.Lock()
-	defer w.pMu.Unlock()
-	w.programs[p.Name] = p
-	return nil
-}
-
-// get retrieves a program by name.
-func (w *Worker) get(name string) (*program.Program, error) {
-	w.pMu.RLock()
-	defer w.pMu.RUnlock()
-	p, ok := w.programs[name]
-	if !ok {
-		return nil, fmt.Errorf("program: %q not found", name)
-	}
-	return p, nil
-}
-
-// search finds programs whose name, description, or tags contain the query
-// substring (case-insensitive). If ct is non-empty, results are filtered by
-// ContentType.
-func (w *Worker) search(query string, ct program.ContentType) ([]*program.Program, error) {
-	w.pMu.RLock()
-	defer w.pMu.RUnlock()
 
 	q := strings.ToLower(query)
 	var result []*program.Program
-	for _, p := range w.programs {
+	for _, p := range progs {
 		if ct != "" && p.ContentType != ct {
 			continue
 		}
@@ -160,6 +138,29 @@ func (w *Worker) search(query string, ct program.ContentType) ([]*program.Progra
 		}
 	}
 	return result, nil
+}
+
+// programForPath returns the Program that owns an address: either the Program
+// itself (root path) or the one whose path prefixes it. Only the tools that
+// need a Program's metadata — the locked check in edit/delete/register — use
+// it; load goes straight to the backend.
+func (w *Worker) programForPath(ctx context.Context, addr string) (*program.Program, error) {
+	progs, err := w.backend.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var match *program.Program
+	for _, p := range progs {
+		if p.Path == addr || strings.HasPrefix(addr, p.Path+"/") {
+			if match == nil || len(p.Path) > len(match.Path) {
+				match = p
+			}
+		}
+	}
+	if match == nil {
+		return nil, fmt.Errorf("program: %q not found", addr)
+	}
+	return match, nil
 }
 
 // matchProgram checks whether a program's name, description, or any of its
