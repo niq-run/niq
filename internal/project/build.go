@@ -283,18 +283,19 @@ func parseMountsParam(p map[string]any, projectID string) ([]string, error) {
 	}
 	out := make([]string, 0, len(raws))
 	for _, raw := range raws {
-		expanded := strings.ReplaceAll(raw, "{project}", projectID)
-		if raw == "~" || strings.HasPrefix(raw, "~/") {
+		expanded := raw
+		if expanded == "~" || strings.HasPrefix(expanded, "~/") {
 			home, err := os.UserHomeDir()
 			if err != nil {
 				return nil, fmt.Errorf("workspace: resolve home: %w", err)
 			}
-			if raw == "~" {
+			if expanded == "~" {
 				expanded = home
 			} else {
-				expanded = filepath.Join(home, raw[2:])
+				expanded = filepath.Join(home, expanded[2:])
 			}
 		}
+		expanded = strings.ReplaceAll(expanded, "{project}", projectID)
 		abs, err := filepath.Abs(expanded)
 		if err != nil {
 			return nil, fmt.Errorf("workspace: bad mount %q: %w", raw, err)
