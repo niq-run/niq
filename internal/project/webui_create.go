@@ -58,6 +58,8 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 		return webui.WorkerCreated{}, fmt.Errorf("worker %s already exists", wc.ID)
 	}
 
+	wc = instantiateWorker(wc, c.projectID)
+
 	if isManagedWorker(wc) {
 		// The builder reads everything from Params, so the authoritative
 		// config.json (seeded from the form) is the whole story; the

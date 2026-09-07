@@ -1,8 +1,10 @@
 package project
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +74,35 @@ func TestCreateLoadListProject(t *testing.T) {
 	}
 	if got := ProjectsRoot(); got != root {
 		t.Fatalf("ProjectsRoot = %q, want %q", got, root)
+	}
+}
+
+// TestCreateProjectExpandsPlaceholder verifies the {project} template
+// placeholder is resolved once, at config.json seeding time — the persisted
+// config carries real paths and the runtime never sees it.
+func TestCreateProjectExpandsPlaceholder(t *testing.T) {
+	setupProjectsRoot(t)
+	tpl := &TemplateConfig{Workers: []WorkerConfig{
+		{Type: "workspace", ID: "ws", Mounts: []string{"~/.niq/projects/{project}/workspace"}},
+	}}
+	if _, err := CreateProject("alpha", tpl); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	cfg, ok := readWorkerConfig(ProjectDir("alpha"), "ws")
+	if !ok {
+		t.Fatal("ws config.json not seeded")
+	}
+	raw, _ := cfg.Params["mounts"].([]any)
+	mounts := make([]string, 0, len(raw))
+	for _, m := range raw {
+		s, _ := m.(string)
+		mounts = append(mounts, s)
+	}
+	if len(mounts) != 1 || mounts[0] != "~/.niq/projects/alpha/workspace" {
+		t.Fatalf("seeded mounts = %v, want [~/.niq/projects/alpha/workspace]", mounts)
+	}
+	if strings.Contains(fmt.Sprint(cfg.Params["mounts"]), "{project}") {
+		t.Fatalf("placeholder leaked into seeded config: %v", cfg.Params["mounts"])
 	}
 }
 

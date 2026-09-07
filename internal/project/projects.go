@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/niq-run/niq/core/worker"
@@ -84,6 +85,7 @@ func CreateProject(id string, template *TemplateConfig) (*Project, error) {
 	var workers []ProjectWorker
 	if template != nil {
 		for _, wc := range template.Workers {
+			wc = instantiateWorker(wc, id)
 			if isManagedWorker(wc) {
 				if err := seedWorkerConfig(ProjectDir(id), wc); err != nil {
 					return nil, err
@@ -179,6 +181,23 @@ func workersRoot(projectID string) string {
 // workerConfigPath returns the authoritative config.json path for a worker.
 func workerConfigPath(projDir, id string) string {
 	return filepath.Join(projDir, "workers", sanitizeID(id), "config.json")
+}
+
+// instantiateWorker resolves template-layer placeholders in a worker
+// declaration for a concrete project: "{project}" in mount paths becomes the
+// project id. Called once when a declaration is instantiated into a project
+// (template seeding, WebUI creation) — the persisted config.json carries real
+// paths and the runtime never sees the placeholder.
+func instantiateWorker(wc WorkerConfig, projectID string) WorkerConfig {
+	if len(wc.Mounts) == 0 {
+		return wc
+	}
+	mounts := make([]string, len(wc.Mounts))
+	for i, m := range wc.Mounts {
+		mounts[i] = strings.ReplaceAll(m, "{project}", projectID)
+	}
+	wc.Mounts = mounts
+	return wc
 }
 
 // seedWorkerConfig writes a worker's authoritative config.json from its full

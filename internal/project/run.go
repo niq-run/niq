@@ -232,7 +232,6 @@ func runAssembly(opts assemblyOptions) error {
 		WorkerSvc:    workerSvc,
 		EventLog:     eventLog,
 		ProgramsRoot: opts.ProgramsRoot,
-		ProjectID:    opts.ContextInfo.Project,
 	}
 	RegisterBuilders(buildCtx, workerSvc)
 

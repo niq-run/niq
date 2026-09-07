@@ -36,9 +36,6 @@ type BuildContext struct {
 	WorkerSvc    *workerhost.WorkerService
 	EventLog     *eventbusapi.EventLog
 	ProgramsRoot string
-	// ProjectID is the owning project id, substituted for "{project}" in
-	// workspace mount paths (e.g. ~/.niq/projects/{project}/uploads).
-	ProjectID string
 }
 
 // RegisterBuilders registers a Builder for every known worker type onto service.
@@ -199,7 +196,7 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 
 func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 	p := cfg.Params
-	mounts, err := parseMountsParam(p, ctx.ProjectID)
+	mounts, err := parseMountsParam(p)
 	if err != nil {
 		return worker.SpawnSpec{}, err
 	}
@@ -261,8 +258,10 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 // parseMountsParam extracts the mount list from worker params: "mounts" as a
 // []string (config) or []any of strings (bus payloads), or the single-mount
 // "path" sugar used by the host spawn tool. Each path is ~-expanded and made
-// absolute. An absent parameter yields a nil slice.
-func parseMountsParam(p map[string]any, projectID string) ([]string, error) {
+// absolute. Template placeholders ({project}) were already resolved when the
+// config was seeded from its template; this function only handles runtime
+// concerns. An absent parameter yields a nil slice.
+func parseMountsParam(p map[string]any) ([]string, error) {
 	var raws []string
 	switch v := p["mounts"].(type) {
 	case []string:
@@ -295,7 +294,6 @@ func parseMountsParam(p map[string]any, projectID string) ([]string, error) {
 				expanded = filepath.Join(home, expanded[2:])
 			}
 		}
-		expanded = strings.ReplaceAll(expanded, "{project}", projectID)
 		abs, err := filepath.Abs(expanded)
 		if err != nil {
 			return nil, fmt.Errorf("workspace: bad mount %q: %w", raw, err)
@@ -412,7 +410,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 		id = "program"
 	}
 	root := ctx.ProgramsRoot
-	mounts, err := parseMountsParam(p, ctx.ProjectID)
+	mounts, err := parseMountsParam(p)
 	if err != nil {
 		return worker.SpawnSpec{}, err
 	}

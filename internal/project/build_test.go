@@ -6,20 +6,20 @@ import (
 	"testing"
 )
 
-func TestParseMountsParamProjectPlaceholder(t *testing.T) {
+func TestParseMountsParamTildeExpansion(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatalf("resolve home: %v", err)
 	}
 	p := map[string]any{
 		"mounts": []any{
-			"~/.niq/projects/{project}/workspace",
+			"~/.niq/projects/alpha/workspace",
 			"~/uploads",
 			"/abs/path",
 			"~",
 		},
 	}
-	mounts, err := parseMountsParam(p, "alpha")
+	mounts, err := parseMountsParam(p)
 	if err != nil {
 		t.Fatalf("parseMountsParam: %v", err)
 	}
@@ -40,8 +40,8 @@ func TestParseMountsParamProjectPlaceholder(t *testing.T) {
 }
 
 func TestParseMountsParamPathSugar(t *testing.T) {
-	p := map[string]any{"path": "~/.niq/projects/{project}/programs"}
-	mounts, err := parseMountsParam(p, "beta")
+	p := map[string]any{"path": "~/.niq/projects/beta/programs"}
+	mounts, err := parseMountsParam(p)
 	if err != nil {
 		t.Fatalf("parseMountsParam: %v", err)
 	}
