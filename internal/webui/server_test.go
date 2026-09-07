@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -154,6 +155,92 @@ func TestWebUIContextProjectMode(t *testing.T) {
 	}
 }
 
+func TestBasicAuthNonLoopback(t *testing.T) {
+	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s.SetBasicAuth("alice", "s3cret")
+
+	hit := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true })
+	h := s.basicAuth(next)
+
+	// Loopback peers are not challenged even without credentials.
+	hit = false
+	req := httptest.NewRequest("GET", "/api/context", nil)
+	req.RemoteAddr = "127.0.0.1:5555"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if !hit || rr.Code != http.StatusOK {
+		t.Fatalf("loopback: hit=%v code=%d, want hit with 200", hit, rr.Code)
+	}
+
+	// Non-loopback without credentials → 401 + WWW-Authenticate.
+	hit = false
+	req = httptest.NewRequest("GET", "/api/context", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if hit || rr.Code != http.StatusUnauthorized {
+		t.Fatalf("no-cred: hit=%v code=%d, want reject with 401", hit, rr.Code)
+	}
+	if rr.Header().Get("WWW-Authenticate") == "" {
+		t.Fatal("no-cred: missing WWW-Authenticate header")
+	}
+
+	// Non-loopback with the right credentials → allowed.
+	hit = false
+	req = httptest.NewRequest("GET", "/api/context", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	req.SetBasicAuth("alice", "s3cret")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if !hit || rr.Code != http.StatusOK {
+		t.Fatalf("good-cred: hit=%v code=%d, want hit with 200", hit, rr.Code)
+	}
+
+	// Wrong password → 401.
+	hit = false
+	req = httptest.NewRequest("GET", "/api/context", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	req.SetBasicAuth("alice", "nope")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if hit || rr.Code != http.StatusUnauthorized {
+		t.Fatalf("bad-cred: hit=%v code=%d, want reject with 401", hit, rr.Code)
+	}
+}
+
+func TestBasicAuthDisabledBypassesAll(t *testing.T) {
+	s := New(nil, nil, nil, nil, nil, ":0", false) // no credentials configured
+	hit := false
+	h := s.basicAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	req := httptest.NewRequest("GET", "/api/context", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if !hit || rr.Code != http.StatusOK {
+		t.Fatalf("disabled: hit=%v code=%d, want pass-through", hit, rr.Code)
+	}
+}
+
+func TestParseAuthSpec(t *testing.T) {
+	for _, tc := range []struct {
+		spec, wantUser, wantPass string
+		wantOK                   bool
+	}{
+		{"", "", "", false},
+		{"  ", "", "", false},
+		{"s3cret", "niq", "s3cret", true},
+		{"alice:s3cret", "alice", "s3cret", true},
+		{":s3cret", "", "", false},
+		{"alice:", "", "", false},
+	} {
+		u, p, ok := ParseAuthSpec(tc.spec)
+		if u != tc.wantUser || p != tc.wantPass || ok != tc.wantOK {
+			t.Fatalf("ParseAuthSpec(%q) = (%q,%q,%v), want (%q,%q,%v)", tc.spec, u, p, ok, tc.wantUser, tc.wantPass, tc.wantOK)
+		}
+	}
+}
+
 func TestWebUIServeOnBoundListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := New(nil, nil, nil, nil, nil, ":0", false)
@@ -182,12 +269,12 @@ type stubUnmanagedController struct {
 	declared []UnmanagedStatus
 }
 
-func (c *stubUnmanagedController) Start(id string) error         { return nil }
-func (c *stubUnmanagedController) Stop(id string) error          { return nil }
-func (c *stubUnmanagedController) Restart(id string) error       { return nil }
-func (c *stubUnmanagedController) List() []UnmanagedStatus       { return nil }
-func (c *stubUnmanagedController) Declared() []UnmanagedStatus   { return c.declared }
-func (c *stubUnmanagedController) Remove(id string) error        { return nil }
+func (c *stubUnmanagedController) Start(id string) error       { return nil }
+func (c *stubUnmanagedController) Stop(id string) error        { return nil }
+func (c *stubUnmanagedController) Restart(id string) error     { return nil }
+func (c *stubUnmanagedController) List() []UnmanagedStatus     { return nil }
+func (c *stubUnmanagedController) Declared() []UnmanagedStatus { return c.declared }
+func (c *stubUnmanagedController) Remove(id string) error      { return nil }
 
 // fakeBuilderSpec returns a SpawnSpec whose closures are never called by the
 // code paths under test (RestoreSuspended builds the spec without connecting).

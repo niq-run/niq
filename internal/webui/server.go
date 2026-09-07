@@ -8,6 +8,8 @@ package webui
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -140,10 +142,15 @@ type Server struct {
 	// (~/.niq/projects/<id>), uploadDir an optional config override
 	// (project.json upload_dir; relative paths resolve against projectDir).
 	// The default upload directory is projectDir/uploads.
-	projectDir      string
-	uploadDirCfg    string // project.json upload_dir override
-	coverageMu      sync.Mutex
-	coverage        *uploadCoverage // last mount-coverage check (cached a few seconds)
+	projectDir   string
+	uploadDirCfg string // project.json upload_dir override
+	coverageMu   sync.Mutex
+	coverage     *uploadCoverage // last mount-coverage check (cached a few seconds)
+
+	// Optional basic auth: required for requests coming from non-loopback peers.
+	// Localhost (same machine) access stays open. Both must be set to enable.
+	authUser string
+	authPass string
 }
 
 // uploadCoverage caches whether any online workspace worker's mounts contain
@@ -253,7 +260,7 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	mux.HandleFunc("GET /api/archived", s.handleGetArchived)
 	mux.HandleFunc("POST /api/workers/{id}/archived", s.handleSetArchived)
 
-	s.server = &http.Server{Addr: addr, Handler: cors(mux)}
+	s.server = &http.Server{Addr: addr, Handler: cors(s.basicAuth(mux))}
 	return s
 }
 
@@ -349,6 +356,33 @@ func (s *Server) SetProjectDir(dir string) {
 // Relative paths resolve against the project directory.
 func (s *Server) SetUploadDir(dir string) {
 	s.uploadDirCfg = dir
+}
+
+// SetBasicAuth enables HTTP basic auth for requests from non-loopback peers
+// (local machine access stays password-free). Cleared when either user or pass
+// is empty.
+func (s *Server) SetBasicAuth(user, pass string) {
+	s.authUser, s.authPass = user, pass
+}
+
+// ParseAuthSpec parses a "user:password" spec into separate parts. A value
+// without a colon is treated as the password with a default user of "niq".
+// Returns ok=false for an empty/blank spec or when parts would be empty (auth
+// stays disabled).
+func ParseAuthSpec(spec string) (user, pass string, ok bool) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return "", "", false
+	}
+	user = "niq"
+	pass = spec
+	if i := strings.Index(spec, ":"); i >= 0 {
+		user, pass = spec[:i], spec[i+1:]
+	}
+	if user == "" || pass == "" {
+		return "", "", false
+	}
+	return user, pass, true
 }
 
 // uploadDir resolves the directory uploaded files are written to: the config
@@ -1422,4 +1456,58 @@ func cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// basicAuth protects the WebUI behind HTTP basic auth, but only for clients
+// that are not on the loopback interface: same-machine access (e.g. someone
+// with a shell on the box, or a local proxy) stays open, while remote peers
+// must authenticate. Pure OPTIONS preflight requests are passed through so
+// CORS works; the follow-up real request is still gated.
+func (s *Server) basicAuth(next http.Handler) http.Handler {
+	return BasicAuth(s.authUser, s.authPass, next)
+}
+
+// BasicAuth wraps a handler with HTTP basic auth that applies only to
+// non-loopback clients: same-machine (loopback) access stays open, while
+// remote peers must present valid credentials. With no user/pass configured
+// the handler is a straight pass-through. Works for both the project WebUI and
+// the control-plane SPA.
+func BasicAuth(user, pass string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authEnabled(user, pass) || isLoopbackRemote(r.RemoteAddr) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gotUser, gotPass, ok := r.BasicAuth()
+		if !ok || !secureEqual(gotUser, user) || !secureEqual(gotPass, pass) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="niq"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isLoopbackRemote reports whether the peer address is a loopback IP
+// (127.0.0.0/8 or ::1), i.e. the request originated on this machine.
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// authEnabled reports whether basic auth has been configured (both a user and a
+// password must be present).
+func authEnabled(user, pass string) bool {
+	return user != "" && pass != ""
+}
+
+// secureEqual compares two strings in constant time (via their SHA-256 digests)
+// so a password guess cannot be accelerated by measuring comparison time.
+func secureEqual(a, b string) bool {
+	ha, hb := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1
 }

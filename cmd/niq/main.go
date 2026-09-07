@@ -59,11 +59,12 @@ func main() {
 func runControl(args []string) error {
 	fs := flag.NewFlagSet("niq", flag.ContinueOnError)
 	addr := fs.String("addr", ":9527", "Control-plane listen address")
+	auth := fs.String("auth", "", "Basic auth 'user:pass' for non-localhost access; persists to ~/.niq/common/auth.json (empty = read that file)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	setupLogging()
-	return control.RunControl(control.ControlOptions{Addr: *addr})
+	return control.RunControl(control.ControlOptions{Addr: *addr, Auth: *auth})
 }
 
 func runProject(args []string) error {
@@ -108,6 +109,7 @@ func runProject(args []string) error {
 		id := args[1]
 		busAddr := fs.String("bus", "", "httptrans bus listen address (empty reuses the project's persisted port)")
 		webUIAddr := fs.String("webui", "", "WebUI listen address (empty reuses the project's persisted port)")
+		webUIAuth := fs.String("webui-auth", "", "Basic auth 'user:pass' for non-localhost WebUI access; persists to ~/.niq/common/auth.json (empty = read that file)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
@@ -116,6 +118,7 @@ func runProject(args []string) error {
 			ProjectID: id,
 			BusAddr:   *busAddr,
 			WebUIAddr: *webUIAddr,
+			WebUIAuth: *webUIAuth,
 		})
 
 	default:
@@ -159,11 +162,16 @@ func printUsage() {
 Usage:
   niq                       start the control plane (default :9527)
   niq control --addr :9527  start the control plane explicitly
+  niq control --addr :9527 --auth user:pass
+                            start the control plane, locking non-localhost
+                            access behind basic auth (saved to
+                            ~/.niq/common/auth.json, reused on later runs)
   niq project list          list projects and their ports
   niq project create <id> [--template <name>]
                             create a project from a template
-  niq project run <id> [--bus :0] [--webui :0]
-                            run a project instance in this process
+  niq project run <id> [--bus :0] [--webui :0] [--webui-auth user:pass]
+                            run a project instance in this process (webui-auth
+                            locks non-localhost WebUI access behind basic auth)
   niq --version             print version
 `)
 }

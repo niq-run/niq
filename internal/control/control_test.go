@@ -43,6 +43,27 @@ func fakeTemplate() *project.TemplateConfig {
 
 // TestControlContextAndList verifies the control-plane exposes the SPA mode
 // context and lists projects, isolated under a temp HOME.
+// TestControlBasicAuthLoopbackOpen asserts a control plane with basic auth
+// enabled still serves loopback (same-machine) requests without credentials;
+// the non-loopback credential gating itself is covered by the webui tests for
+// webui.BasicAuth.
+func TestControlBasicAuthLoopbackOpen(t *testing.T) {
+	c := NewControl("127.0.0.1:0")
+	c.SetBasicAuth("alice", "s3cret")
+	addr, err := c.Bind()
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Start(ctx) }()
+
+	code, body := doGet(t, "http://"+addr+"/api/context")
+	if code != http.StatusOK {
+		t.Fatalf("loopback context status=%d (%s), want 200", code, body)
+	}
+}
+
 func TestControlContextAndList(t *testing.T) {
 	setupProjectsRoot(t)
 	if _, err := project.CreateProject("alpha", fakeTemplate()); err != nil {

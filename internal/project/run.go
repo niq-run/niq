@@ -35,6 +35,7 @@ type ProjectRunOptions struct {
 	ProjectID string
 	BusAddr   string // httptrans bus listen address (":0" = dynamic)
 	WebUIAddr string // webui listen address (":0" = dynamic)
+	WebUIAuth string // optional user:pass basic-auth spec for the WebUI (empty = disabled)
 }
 
 // RunProject loads a project's authoritative project.json and runs it as its
@@ -114,6 +115,7 @@ func RunProject(opts ProjectRunOptions) error {
 		UploadDir:    p.UploadDir,
 		BusAddr:      busAddr,
 		WebUIAddr:    webUIAddr,
+		WebUIAuth:    opts.WebUIAuth,
 		EventsDB:     filepath.Join(projDir, "events", "events.db"),
 		Banner:       "project " + opts.ProjectID,
 		OnResolved:   onResolved,
@@ -137,6 +139,7 @@ type assemblyOptions struct {
 	UploadDir    string // optional upload_dir override from the project config
 	BusAddr      string // "" disables the HTTP bus
 	WebUIAddr    string // "" disables the WebUI
+	WebUIAuth    string // optional user:pass basic-auth spec for the WebUI ("" = disabled)
 	Banner       string
 	OnResolved   func(bus, webui string)
 	ContextInfo  webui.ContextInfo
@@ -155,6 +158,19 @@ const webuiHIWID = "webui-hiw"
 func runAssembly(opts assemblyOptions) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// Resolve WebUI auth up front: enabling it when credentials are available,
+	// and warning (but not blocking) when a remote-reachable bind has no auth
+	// configured. Loopback-only binds need no auth at all.
+	var webUIAuthUser, webUIAuthPass string
+	var webUIAuthEnabled bool
+	if opts.WebUIAddr != "" {
+		user, pass, enabled, warning := webui.StartupAuth(opts.WebUIAddr, opts.WebUIAuth, webui.AuthPath())
+		webUIAuthUser, webUIAuthPass, webUIAuthEnabled = user, pass, enabled
+		if warning != "" {
+			fmt.Fprintln(os.Stderr, warning)
+		}
+	}
 
 	// Identity registry (file-backed).
 	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(opts.IDDir, "identities.json"))
@@ -286,6 +302,10 @@ func runAssembly(opts assemblyOptions) error {
 					s := webui.New(hiwWorker, eventLog, engine, workerSvc, registry, addr, false)
 					s.SetContext(opts.ContextInfo)
 					s.SetProjectDir(opts.ProjDir)
+					if webUIAuthEnabled {
+						s.SetBasicAuth(webUIAuthUser, webUIAuthPass)
+						log.Printf("[project] WebUI remote access protected with basic auth (localhost stays open)")
+					}
 					if opts.UploadDir != "" {
 						s.SetUploadDir(opts.UploadDir)
 					}

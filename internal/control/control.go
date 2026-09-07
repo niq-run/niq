@@ -28,6 +28,7 @@ import (
 // ControlOptions configures the control-plane service.
 type ControlOptions struct {
 	Addr string // default ":9527"
+	Auth string // optional user:pass basic-auth spec (non-localhost access; empty disables)
 }
 
 // RunControl runs the control-plane service until ctx is cancelled (e.g. Ctrl+C).
@@ -39,7 +40,14 @@ func RunControl(opts ControlOptions) error {
 	if err := project.SeedTemplates(project.TemplatesDir()); err != nil {
 		log.Printf("[control] seed templates: %v", err)
 	}
-	return NewControl(opts.Addr).Start(ctx)
+	c := NewControl(opts.Addr)
+	if user, pass, enabled, warning := webui.StartupAuth(opts.Addr, opts.Auth, webui.AuthPath()); enabled {
+		c.SetBasicAuth(user, pass)
+		log.Printf("[control] WebUI remote access protected with basic auth (localhost stays open)")
+	} else if warning != "" {
+		fmt.Fprintln(os.Stderr, warning)
+	}
+	return c.Start(ctx)
 }
 
 // Control is the control-plane HTTP service.
@@ -49,6 +57,9 @@ type Control struct {
 	listener   net.Listener
 	bound      string
 	controlURL string
+
+	authUser string // basic-auth user for non-loopback access ("" = disabled)
+	authPass string
 
 	mu    sync.Mutex
 	procs map[string]*os.Process // project id -> the running 'niq project run' process
@@ -60,6 +71,13 @@ func NewControl(addr string) *Control {
 		addr = ":9527"
 	}
 	return &Control{addr: addr, controlURL: "http://localhost" + addr, procs: map[string]*os.Process{}}
+}
+
+// SetBasicAuth enables HTTP basic auth for requests from non-loopback peers
+// (local machine access stays password-free). Cleared when either user or pass
+// is empty.
+func (c *Control) SetBasicAuth(user, pass string) {
+	c.authUser, c.authPass = user, pass
 }
 
 // Bind binds the listen socket and returns the resolved host:port.
@@ -110,7 +128,7 @@ func (c *Control) Start(ctx context.Context) error {
 	}
 	mux.Handle("GET /", stdhttp.FileServer(stdhttp.FS(assets)))
 
-	c.server = &stdhttp.Server{Handler: corsControl(mux)}
+	c.server = &stdhttp.Server{Handler: corsControl(webui.BasicAuth(c.authUser, c.authPass, mux))}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
