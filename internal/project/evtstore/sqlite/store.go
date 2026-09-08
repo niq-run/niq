@@ -271,6 +271,10 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 		query += " AND trace_id = ?"
 		args = append(args, opts.TraceID)
 	}
+	if opts.RequestID != "" {
+		query += " AND request_id = ?"
+		args = append(args, opts.RequestID)
+	}
 	if opts.Since > 0 {
 		query += " AND timestamp >= ?"
 		args = append(args, opts.Since)
@@ -316,9 +320,9 @@ func (s *Store) query(ctx context.Context, query string, args ...any) ([]event.E
 	var result []event.Event
 	for rows.Next() {
 		var (
-			evt                 event.Event
-			payloadRaw          string
-			recipientsRaw       string
+			evt                  event.Event
+			payloadRaw           string
+			recipientsRaw        string
 			traceID, rid, sv, ds sql.NullString
 		)
 		if err := rows.Scan(&evt.ID, &evt.Type, &evt.WorkerId, &payloadRaw,

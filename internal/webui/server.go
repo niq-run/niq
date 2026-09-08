@@ -226,6 +226,9 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// Events pagination: load events before a given anchor.
 	mux.HandleFunc("GET /api/events/before/{id}", s.handleLoadBefore)
 
+	// Events by request_id: one-shot lookup of a request → response pair.
+	mux.HandleFunc("GET /api/events/by-request/{requestId}", s.handleListByRequest)
+
 	// Abort: interrupt a worker's current reasoning.
 	mux.HandleFunc("POST /api/abort", s.handleAbort)
 
@@ -480,6 +483,7 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 		WorkerIDs:   r.URL.Query()["worker"],
 		WorkerRoles: parseWorkerRoles(r.URL.Query()),
 		TraceID:     r.URL.Query().Get("trace"),
+		RequestID:   r.URL.Query().Get("request"),
 		Type:        event.EventType(r.URL.Query().Get("type")),
 	}
 
@@ -494,16 +498,16 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 	// (LoadBefore is strictly-before) and was routed before the subscription,
 	// so this is its only delivery path. Without it the newest event at
 	// connect time is invisible until a later reconnect covers it.
-	ch, watermarkEvt, err := s.eventLog.FollowLive(r.Context(), filter)
+	ch, watermarkID, gapEvt, err := s.eventLog.FollowLive(r.Context(), filter)
 	if err != nil {
 		log.Printf("[webui] follow error: %v", err)
 		return
 	}
 
-	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermarkEvt.ID)
+	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermarkID)
 	flusher.Flush()
-	if watermarkEvt.ID != "" {
-		data, _ := json.Marshal(watermarkEvt)
+	if gapEvt.ID != "" {
+		data, _ := json.Marshal(gapEvt)
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
@@ -1432,10 +1436,24 @@ func (s *Server) handleLoadBefore(w http.ResponseWriter, r *http.Request) {
 		WorkerIDs:   r.URL.Query()["worker"],
 		WorkerRoles: parseWorkerRoles(r.URL.Query()),
 		TraceID:     r.URL.Query().Get("trace"),
+		RequestID:   r.URL.Query().Get("request"),
 		Type:        event.EventType(r.URL.Query().Get("type")),
 	}
 
 	events, err := s.eventLog.LoadBefore(r.Context(), filter, anchor, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(events)
+}
+
+// handleListByRequest returns all persisted events sharing a request_id: the
+// invocation and its request.* reply. The detail panel calls this to jump from
+// a tool-call to its answer (or back) — a one-shot query, not a live filter.
+func (s *Server) handleListByRequest(w http.ResponseWriter, r *http.Request) {
+	requestID := r.PathValue("requestId")
+	events, err := s.eventLog.ListByRequest(r.Context(), requestID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

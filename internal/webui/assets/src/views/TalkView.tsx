@@ -10,7 +10,7 @@ import ViewHeader from '../components/ViewHeader'
 import ResponseBlock from '../components/ResponseBlock'
 import SystemReminderBlock from '../components/SystemReminderBlock'
 import {
-  getInputText, isToolEvent, isToolResult, isReasonBoundary,
+  getInputText, isToolEvent, isToolInvocation, isToolResult, isReasonBoundary,
   toolContent, toolSummary, toolCallId,
   formatTime, findReferencedInput, splitSystemReminder, parseAttachments,
 } from '../components/talk-utils'
@@ -38,26 +38,27 @@ interface TalkViewProps {
 }
 
 // StreamTrace is one in-flight reason trace being accumulated from
-// reason.*_delta events, dropped once its final reason.thinking / reason.response
-// arrives.
-type StreamTrace = { traceId: string; thinking: string; text: string; workerId: string; lastTs: number }
+// reason.*_delta events. Thinking and text are tracked (and finalized)
+// independently: a trace is only dropped from the live view once BOTH its
+// terminal reason.thinking AND reason.response have arrived. Finalizing the
+// whole trace on the first terminal (reason.thinking fires before
+// reason.response) would drop the response-text deltas that stream between the
+// two, so the answer would appear only at the very end instead of live.
+type StreamTrace = { traceId: string; thinking: string; text: string; workerId: string; lastTs: number; thinkingDone: boolean; textDone: boolean }
 
-// computeStreamingTraces accumulates reason.*_delta by trace_id. A trace is
-// dropped once its terminal reason.thinking / reason.response event arrives.
+// computeStreamingTraces accumulates reason.*_delta by trace_id. Each phase
+// (thinking / text) is dropped once its own terminal event arrives, and the
+// trace is removed from the list only when nothing live is left — so thinking
+// streams until reason.thinking, then the response text keeps streaming until
+// reason.response.
 function computeStreamingTraces(events: EventPayload[], talkWorkers: Set<string>, deliveries: Record<string, string[]>): StreamTrace[] {
-  const map: Record<string, { thinking: string; text: string; workerId: string; lastTs: number }> = {}
-  const finalized = new Set<string>()
+  const map: Record<string, { thinking: string; text: string; workerId: string; lastTs: number; thinkingDone: boolean; textDone: boolean }> = {}
   for (const evt of events) {
     const t = evt.type
     if (t !== 'reason.thinking_delta' && t !== 'reason.text_delta' &&
         t !== 'reason.thinking' && t !== 'reason.response') continue
     const tid = evt.trace_id
     if (!tid) continue
-    if (t === 'reason.thinking' || t === 'reason.response') {
-      finalized.add(tid)
-      continue
-    }
-    if (finalized.has(tid)) continue
     // Respect the same talkWorkers filter as relevantEvents.
     if (talkWorkers.size > 0) {
       const recipients = deliveries[evt.id] || evt.recipients
@@ -65,15 +66,28 @@ function computeStreamingTraces(events: EventPayload[], talkWorkers: Set<string>
           !talkWorkers.has(evt.target_worker_id) &&
           !(recipients && recipients.some(r => talkWorkers.has(r)))) continue
     }
-    if (!map[tid]) map[tid] = { thinking: '', text: '', workerId: evt.worker_id, lastTs: evt.timestamp }
-    const delta = (evt.payload?.delta as string) || ''
-    if (t === 'reason.thinking_delta') map[tid].thinking += delta
-    else map[tid].text += delta
-    map[tid].lastTs = evt.timestamp
+    const entry = map[tid]
+    if (!entry) {
+      map[tid] = { thinking: '', text: '', workerId: evt.worker_id, lastTs: evt.timestamp, thinkingDone: false, textDone: false }
+    } else {
+      entry.lastTs = evt.timestamp
+    }
+    const cur = map[tid]
+    // Terminal events flip only their own phase; don't return early here so the
+    // peer phase (e.g. text streams arriving after reason.thinking) keeps
+    // building the live block.
+    if (t === 'reason.thinking') { cur.thinkingDone = true; continue }
+    if (t === 'reason.response') { cur.textDone = true; continue }
+    // A phase never resumes after its terminal: later stray deltas (possible
+    // across eventbus reordering) are ignored.
+    if (t === 'reason.thinking_delta' && !cur.thinkingDone) cur.thinking += (evt.payload?.delta as string) || ''
+    else if (t === 'reason.text_delta' && !cur.textDone) cur.text += (evt.payload?.delta as string) || ''
   }
+  // Keep a trace only while a live (not-yet-finalized and non-empty) portion
+  // still needs streaming; drop it once there is nothing left to show.
   return Object.entries(map)
-    .filter(([tid]) => !finalized.has(tid))
-    .map(([tid, v]) => ({ traceId: tid, ...v }))
+    .filter(([, v]) => (!v.thinkingDone && v.thinking !== '') || (!v.textDone && v.text !== ''))
+    .map(([traceId, v]) => ({ traceId, thinking: v.thinking, text: v.text, workerId: v.workerId, lastTs: v.lastTs, thinkingDone: v.thinkingDone, textDone: v.textDone }))
 }
 
 // computeToolPartials accumulates request.progressed output by request_id, and
@@ -427,9 +441,11 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
 
   for (const [i, evt] of relevantEvents.entries()) {
     if (isReasonBoundary(evt.type)) continue
-    // Response-only mode: hide the intermediate process (thinking + tool calls,
-    // including cancels).
-    if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || isToolEvent(evt.type))) continue
+    // Response-only mode: hide the intermediate process — thinking, reasoning
+    // interruptions, tool invocations (the domain-typed request starters) and
+    // the request.* lifecycle (cancels). The reason.response / worker.input
+    // terminal content is the only thing left visible.
+    if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || isToolEvent(evt.type) || isToolInvocation(evt.type))) continue
 
     // A terminal result answers an invocation: it is merged into that
     // invocation's card and never rendered as its own row. Skip it before the
@@ -1043,8 +1059,14 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px' }}
         >
         {nodes}
-        {!responseOnly && streamingTraces.map(({ traceId, thinking, text, workerId, lastTs }) => {
-          if (!thinking && !text) return null
+        {!responseOnly && streamingTraces.map(({ traceId, thinking, text, workerId, lastTs, thinkingDone, textDone }) => {
+          // Only the not-yet-finalized phase streams: once reason.thinking
+          // lands, the terminal ThinkingBlock (rendered among nodes) takes
+          // over thinking and the live block keeps streaming just the
+          // response text until reason.response.
+          const showThinking = !!thinking && !thinkingDone
+          const showText = !!text && !textDone
+          if (!showThinking && !showText) return null
           const synthetic = (type: 'reason.thinking' | 'reason.response', content: string): EventPayload => ({
             id: `stream-${type}-${traceId}`,
             type,
@@ -1060,10 +1082,10 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                 <WorkerBadge id={workerId} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
                 <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, fontStyle: 'italic' }}>● streaming</span>
               </div>
-              {thinking && (
+              {showThinking && (
                 <ThinkingBlock evt={synthetic('reason.thinking', thinking)} defaultExpanded={thinkingExpanded} compact={compactMode} />
               )}
-              {text && (
+              {showText && (
                 <ResponseBlock evt={synthetic('reason.response', text)} />
               )}
             </div>

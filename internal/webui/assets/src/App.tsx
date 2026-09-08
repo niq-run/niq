@@ -17,7 +17,7 @@ import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
-import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject } from './services/api'
+import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject } from './services/api'
 import { attachmentBlock } from './components/talk-utils'
 import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
 
@@ -124,7 +124,14 @@ export default function App() {
       return next
     })
   }
-  const [traceFilter, setTraceFilter] = useState('')
+  	const [traceFilter, setTraceFilter] = useState('')
+  // The event currently shown in the detail panel. In the normal case it is
+  // the row selected in the events list (selectedEventId); a one-shot
+  // request_id lookup swaps it to the paired event (e.g. a tool call → its
+  // request.* answer), which may not be in the loaded list. detailStack holds
+  // the back-navigation history of that swap.
+  const [detailEvt, setDetailEvt] = useState<EventPayload | null>(null)
+  const [detailStack, setDetailStack] = useState<EventPayload[]>([])
   // Which side of the filtered workers' traffic to show: sent (they are the
   // source) / received (they are target or recipient). Both by default, which
   // matches the unfiltered-by-role behavior.
@@ -277,6 +284,8 @@ export default function App() {
       eventsMountedAt.current = Date.now()
     }
     setSelectedEventId(null)
+    setDetailEvt(null)
+    setDetailStack([])
 
     // Page backwards from the watermark to fill history. Issued once the stream
     // advertises its watermark. History is merged into the current timeline
@@ -441,8 +450,18 @@ export default function App() {
   }, [])
 
   const selectEvent = useCallback((id: string) => {
-    setSelectedEventId(prev => prev === id ? null : id)
-  }, [])
+    setSelectedEventId(prev => {
+      const next = prev === id ? null : id
+      return next
+    })
+    // Sync the detail panel to the tapped row and reset any request-pair
+    // back-navigation stack.
+    const evt = events.find(e => e.id === id)
+    if (evt) {
+      setDetailEvt(evt)
+      setDetailStack([])
+    }
+  }, [events])
 
   const selectWorker = useCallback((id: string) => {
     setSelectedWorkerId(prev => prev === id ? null : id)
@@ -472,6 +491,45 @@ export default function App() {
 
   const clearTraceFilter = useCallback(() => {
     setTraceFilter('')
+  }, [])
+
+  // One-shot request lookup: given the event shown in the detail panel (which
+  // carries a request_id), fetch every persisted event sharing that id and swap
+  // the panel to its pair — from an invocation to its request.* answer, or from
+  // a request.* answer back to the invocation that started it. This is a
+  // standalone query, fully decoupled from the live event stream.
+  const handleFindRequestPair = useCallback(async () => {
+    if (!detailEvt?.request_id) return
+    const rid = detailEvt.request_id
+    const isReply = detailEvt.type === 'request.completed' || detailEvt.type === 'request.failed' || detailEvt.type === 'request.rejected'
+    let paired: EventPayload | undefined
+    try {
+      const all = (await fetchEventsByRequest(rid)) as EventPayload[]
+      if (isReply) {
+        // We're on the answer: jump to the invocation that started it (a
+        // domain-typed event, i.e. not a request.* reply).
+        paired = all.find(e => !e.type.startsWith('request.'))
+      } else {
+        // We're on the invocation: prefer the terminal answer over the
+        // intermediate request.progressed lifecycle events.
+        paired = all.find(e => e.type === 'request.completed' || e.type === 'request.failed' || e.type === 'request.rejected')
+      }
+    } catch { /* query failed; leave the panel unchanged */ }
+    if (!paired || paired.id === detailEvt.id) return
+    setDetailStack(prev => [...prev, detailEvt])
+    setSelectedEventId(paired.id)
+    setDetailEvt(paired)
+  }, [detailEvt])
+
+  // Back out of a request-pair jump to the previously shown event.
+  const handleDetailBack = useCallback(() => {
+    setDetailStack(prev => {
+      if (prev.length === 0) return prev
+      const last = prev[prev.length - 1]
+      setDetailEvt(last)
+      setSelectedEventId(last.id)
+      return prev.slice(0, -1)
+    })
   }, [])
 
   // Toggle a worker in the events-view filter set (multi-select).
@@ -619,8 +677,6 @@ export default function App() {
     return map
   }, [events])
 
-  // Event currently shown in the right-hand detail panel (events view only).
-  const selectedEvent = view === 'events' ? events.find(e => e.id === selectedEventId) : undefined
   // Worker currently shown in the right-hand detail panel (workers view only).
   const selectedWorker = view === 'workers' ? workers.find(w => w.id === selectedWorkerId) : undefined
 
@@ -880,14 +936,14 @@ export default function App() {
             </div>
             {/* Detail panel anchored to the page-level column, so it spans the
                 full height including the Events title — same as the workers view. */}
-            {selectedEvent && (
+            {detailEvt && view === 'events' && (
               isMobile ? (
                 <MobileDetailPanel>
-                  <EventDetail evt={selectedEvent} deliveries={deliveries} onClose={() => setSelectedEventId(null)} />
+                  <EventDetail evt={detailEvt} deliveries={deliveries} canGoBack={detailStack.length > 0} onBack={handleDetailBack} onFindPair={handleFindRequestPair} onClose={() => { setSelectedEventId(null); setDetailEvt(null) }} />
                 </MobileDetailPanel>
               ) : (
                 <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
-                  <EventDetail evt={selectedEvent} deliveries={deliveries} onClose={() => setSelectedEventId(null)} />
+                  <EventDetail evt={detailEvt} deliveries={deliveries} canGoBack={detailStack.length > 0} onBack={handleDetailBack} onFindPair={handleFindRequestPair} onClose={() => { setSelectedEventId(null); setDetailEvt(null) }} />
                 </ResizablePanel>
               )
             )}

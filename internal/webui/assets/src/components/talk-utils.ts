@@ -101,6 +101,29 @@ export function isReasonBoundary(type: string): boolean {
   return type === 'reason.start' || type === 'reason.end'
 }
 
+// isToolInvocation reports whether an event is a tool-call card: a domain-typed
+// event (the capability's own name, e.g. "read", "bash", "elapse", or a meta
+// extension like "context.compress") that the reason worker published with a
+// request_id set, answered later by a request.* reply. Everything that has its
+// own dedicated renderer (user input, reasoning output, timers, approvals,
+// cancels) is NOT an invocation.
+export function isToolInvocation(type: string): boolean {
+  switch (type) {
+    case 'worker.input':
+    case 'worker.abort':
+    case 'timer.reminder':
+    case 'timer.timeout':
+    case 'request.cancel':
+    case 'reason.interrupted':
+    case 'reason.thinking':
+    case 'reason.response':
+    case 'approval.request':
+      return false
+    default:
+      return true
+  }
+}
+
 // ── Tool helpers ──
 
 // toolSummary is the card title: the event type, in brackets. Every event is

@@ -71,6 +71,9 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 		if opts.TraceID != "" && e.TraceID != opts.TraceID {
 			continue
 		}
+		if opts.RequestID != "" && e.RequestId != opts.RequestID {
+			continue
+		}
 		if opts.Since > 0 && e.Timestamp < opts.Since {
 			continue
 		}

@@ -3,6 +3,7 @@ import type {
   ApprovalListResult,
   ContextInfo,
   CreateWorkerResult,
+  EventPayload,
   EventPattern,
   ProjectInfo,
   ProjectStartResult,
@@ -369,12 +370,21 @@ export async function decideApproval(id: string, approved: boolean, note = ''): 
   if (!res.ok) throw new Error((await res.text()).trim() || 'decision failed: ' + res.status)
 }
 
-export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = '', roles: string[] = []): Promise<any[]> {
+export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = '', roles: string[] = [], request = ''): Promise<any[]> {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
   for (const w of workers) params.append('worker', w)
   for (const role of roles) params.append('role', role)
   if (trace) params.set('trace', trace)
+  if (request) params.set('request', request)
   const res = await fetch(p(`/api/events/before/${anchorId}?${params}`))
+  return res.json()
+}
+
+// fetchEventsByRequest returns all persisted events carrying the given
+// request_id — the invocation plus its request.* answer. It is a one-shot
+// historical query, decoupled from the live event stream.
+export async function fetchEventsByRequest(requestId: string): Promise<EventPayload[]> {
+  const res = await fetch(p(`/api/events/by-request/${encodeURIComponent(requestId)}`))
   return res.json()
 }

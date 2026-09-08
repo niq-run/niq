@@ -81,6 +81,7 @@ func (s *Server) handleStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	filter := Filter{
 		WorkerIDs: r.URL.Query()["worker"],
 		TraceID:   r.URL.Query().Get("trace"),
+		RequestID: r.URL.Query().Get("request"),
 		Type:      event.EventType(r.URL.Query().Get("type")),
 	}
 
@@ -94,17 +95,17 @@ func (s *Server) handleStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	// the watermark event itself — it is in no history page (LoadBefore is
 	// strictly-before) and was routed before the subscription, so this is its
 	// only delivery path.
-	ch, watermarkEvt, err := s.log.FollowLive(r.Context(), filter)
+	ch, watermarkID, gapEvt, err := s.log.FollowLive(r.Context(), filter)
 	if err != nil {
 		log.Printf("[eventbus api] follow error: %v", err)
 		stdhttp.Error(w, err.Error(), 500)
 		return
 	}
 
-	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermarkEvt.ID)
+	fmt.Fprintf(w, "event: watermark\ndata: %s\n\n", watermarkID)
 	flusher.Flush()
-	if watermarkEvt.ID != "" {
-		data, _ := json.Marshal(watermarkEvt)
+	if gapEvt.ID != "" {
+		data, _ := json.Marshal(gapEvt)
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
@@ -125,6 +126,7 @@ func (s *Server) handleLoadBefore(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 	filter := Filter{
 		WorkerIDs: r.URL.Query()["worker"],
 		TraceID:   r.URL.Query().Get("trace"),
+		RequestID: r.URL.Query().Get("request"),
 		Type:      event.EventType(r.URL.Query().Get("type")),
 	}
 

@@ -47,5 +47,6 @@ type QueryOpts struct {
 	// matches (RoleSent / RoleReceived). Empty means both.
 	WorkerRoles []string
 	TraceID     string // filter by trace ID
+	RequestID   string // filter by request ID (request → response pairing)
 	Desc        bool   // true = newest first (display), false = oldest first (replay)
 }

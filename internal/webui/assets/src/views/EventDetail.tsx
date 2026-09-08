@@ -13,9 +13,14 @@ interface EventDetailProps {
   evt: EventPayload;
   deliveries: Record<string, string[]>;
   onClose: () => void;
+  // One-shot request_id pairing: jump from a tool-call to its request.* answer
+  // (or back). Untied to the live event stream.
+  canGoBack?: boolean;
+  onBack?: () => void;
+  onFindPair?: () => void;
 }
 
-export default function EventDetail({ evt, deliveries, onClose }: EventDetailProps) {
+export default function EventDetail({ evt, deliveries, onClose, canGoBack, onBack, onFindPair }: EventDetailProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   const time = formatTime(evt.timestamp)
@@ -120,10 +125,38 @@ export default function EventDetail({ evt, deliveries, onClose }: EventDetailPro
           <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 16px", alignItems: "baseline" }}>
             <DetailRow label={t('detail.id')} value={evt.id} colors={colors} />
             <DetailRow label={t('detail.traceId')} value={evt.trace_id || t('detail.none')} colors={colors} />
+            {evt.request_id && (
+              <DetailRow label={t('detail.requestId')} value={evt.request_id} colors={colors} />
+            )}
             <DetailRow label={t('detail.time')} value={`${time} · ${evt.timestamp}`} colors={colors} />
             <DetailRow label={t('detail.target')} value={evt.target_worker_id || t('detail.broadcast')} colors={colors} />
             {recipients && <DetailRow label={t('detail.delivered')} value={recipients.join(", ")} colors={colors} />}
           </div>
+          {/* Request-pair navigation: jump between a tool-call and its
+              request.* answer, and back out. Standalone query — not a stream
+              filter. */}
+          {evt.request_id && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+              {canGoBack && (
+                <span
+                  onClick={onBack}
+                  title={t('detail.back.tooltip')}
+                  className="btn-hover"
+                  style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 4, padding: '2px 10px', color: colors.text, fontSize: fontSizes.sm, userSelect: 'none' }}
+                >
+                  {"\u2190 "}{t('detail.back')}
+                </span>
+              )}
+              <span
+                onClick={onFindPair}
+                title={t('detail.findPair.tooltip')}
+                className="btn-hover"
+                style={{ cursor: 'pointer', border: '1px solid ' + colors.accent, borderRadius: 4, padding: '2px 10px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+              >
+                {t('detail.findPair')}
+              </span>
+            </div>
+          )}
           <div style={{ marginTop: 8, borderTop: "1px solid " + colors.detailBorder, paddingTop: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, textTransform: 'uppercase', letterSpacing: '0.5px' }}>

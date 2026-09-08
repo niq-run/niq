@@ -64,6 +64,40 @@ func TestMemoryStoreInsertionOrder(t *testing.T) {
 	}
 }
 
+// TestMemoryStoreRequestIDFilter asserts the RequestID query option pairs a
+// request event with its request.* answer (they share the same request_id).
+func TestMemoryStoreRequestIDFilter(t *testing.T) {
+	s := NewMemoryEventStore()
+	ctx := context.Background()
+	now := time.Now().Unix()
+	evs := []event.Event{
+		{ID: "r1", Type: "bash", WorkerId: "niq", RequestId: "req-1", TraceID: "t1", Timestamp: now},
+		{ID: "r2", Type: "request.completed", WorkerId: "ws", RequestId: "req-1", TraceID: "t1", Timestamp: now},
+		{ID: "r3", Type: "bash", WorkerId: "niq", RequestId: "req-2", TraceID: "t1", Timestamp: now},
+	}
+	if err := s.Append(ctx, evs...); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	got, err := s.List(ctx, "*", store.QueryOpts{RequestID: "req-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The invocation AND its request.* answer both match; the other call does not.
+	if g := ids(got); !equal(g, []string{"r1", "r2"}) {
+		t.Fatalf("request filter = %v, want [r1 r2]", g)
+	}
+
+	// No match → empty.
+	none, err := s.List(ctx, "*", store.QueryOpts{RequestID: "req-9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("request filter no-match = %d events, want 0", len(none))
+	}
+}
+
 func ids(evs []event.Event) []string {
 	out := make([]string, len(evs))
 	for i, e := range evs {

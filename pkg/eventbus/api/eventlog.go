@@ -19,12 +19,13 @@ import (
 
 // Filter controls which events a subscriber receives.
 type Filter struct {
-	WorkerIDs []string        // filter by source, target, or recipient worker
+	WorkerIDs []string // filter by source, target, or recipient worker
 	// WorkerRoles narrows which side of the worker's traffic WorkerIDs
 	// matches: store.RoleSent (source) / store.RoleReceived (target or
 	// recipient). Empty means both.
 	WorkerRoles []string
 	TraceID     string          // filter by trace ID
+	RequestID   string          // filter by request ID (request → response pairing)
 	Type        event.EventType // filter by event type (exact match)
 }
 
@@ -35,6 +36,9 @@ func matchesFilter(evt event.Event, f Filter) bool {
 		return false
 	}
 	if f.TraceID != "" && evt.TraceID != f.TraceID {
+		return false
+	}
+	if f.RequestID != "" && evt.RequestId != f.RequestID {
 		return false
 	}
 	if f.Type != "" && evt.Type != f.Type {
@@ -141,30 +145,35 @@ func (l *EventLog) Hook() func(event.Event) {
 // It first replays history from the store, then seamlessly switches to
 // real-time delivery via the subscriber mechanism.
 // FollowLive returns a channel of real-time events only — no history replay.
-// It also returns the watermark: the newest event persisted in the store at
-// the moment of subscription, returned as the event itself. The caller is
-// expected to page backwards from that watermark (via LoadBefore) to fetch
-// history AND to deliver the watermark event to its client explicitly:
-// LoadBefore is strictly-before, so this event would otherwise fall through
-// the crack — in no history page and, being routed before the subscription,
-// on no live path either.
-func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.Event, event.Event, error) {
+// It also returns the watermark ID (the newest event persisted in the store at
+// the moment of subscription) and, when that newest event matches the filter,
+// the event itself (gapEvt). The watermark ID is filter-agnostic: the caller
+// advertises it to the client as the pagination anchor, and the client pages
+// backward from it via LoadBefore (which filters on its own). This keeps
+// history reachable even when the filter matches no recent event (an old
+// trace, or a completed request_id pair). gapEvt is only non-zero when the
+// newest event belongs to the filtered view: LoadBefore is strictly-before,
+// so without separate delivery this event would fall through the crack — in
+// no history page and, being routed before the subscription, on no live path
+// either.
+func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.Event, string, event.Event, error) {
 	// Subscription boundary: the newest event ID currently in the store.
 	// Event IDs are time-ordered UUIDv7, so this is a safe monotonic watermark
 	// even across filter boundaries. The ID is filter-agnostic (history paging
 	// filters on its own); the event itself is only handed over when it
 	// matches this subscription's filter.
-	var watermarkEvt event.Event
+	watermark := ""
+	var gapEvt event.Event
 	if latest, err := l.store.List(ctx, "*", store.QueryOpts{Limit: 1, Desc: true}); err == nil && len(latest) > 0 {
+		watermark = latest[0].ID
 		if matchesFilter(latest[0], filter) {
-			watermarkEvt = latest[0]
+			gapEvt = latest[0]
 		}
 	}
-	watermark := watermarkEvt.ID
 
 	liveCh, err := l.Subscribe(ctx, filter)
 	if err != nil {
-		return nil, event.Event{}, err
+		return nil, "", event.Event{}, err
 	}
 
 	out := make(chan event.Event, 256)
@@ -190,7 +199,7 @@ func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.
 			}
 		}
 	}()
-	return out, watermarkEvt, nil
+	return out, watermark, gapEvt, nil
 }
 
 // LoadBefore returns events older than the given anchor event ID.
@@ -205,5 +214,17 @@ func (l *EventLog) LoadBefore(ctx context.Context, filter Filter, anchor string,
 		WorkerIDs:   filter.WorkerIDs,
 		WorkerRoles: filter.WorkerRoles,
 		TraceID:     filter.TraceID,
+		RequestID:   filter.RequestID,
 	})
+}
+
+// ListByRequest returns every persisted event that carries the given request_id
+// — the invocation (e.g. a "bash" event) and whichever request.* reply echoed it
+// (request.completed / failed / rejected). It is a one-shot historical query,
+// independent of any live stream or pagination anchor.
+func (l *EventLog) ListByRequest(ctx context.Context, requestID string) ([]event.Event, error) {
+	if requestID == "" {
+		return nil, nil
+	}
+	return l.store.List(ctx, "*", store.QueryOpts{RequestID: requestID})
 }

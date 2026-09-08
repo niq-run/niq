@@ -43,6 +43,41 @@ func TestRequestIDRoundtrip(t *testing.T) {
 	}
 }
 
+// TestListRequestIDFilter verifies the request_id query option pairs an
+// invocation event with its request.* reply under SQL, mirroring the webui's
+// "find the response for this request" flow.
+func TestListRequestIDFilter(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	inv := event.New("bash", "niq", map[string]any{"cmd": "ls"})
+	inv.RequestId = "req-1"
+	reply := event.New(event.TypeRequestCompleted, "ws", map[string]any{"result": "ok"})
+	reply.RequestId = "req-1"
+	other := event.New("bash", "niq", map[string]any{"cmd": "pwd"})
+	other.RequestId = "req-2"
+
+	if err := s.Append(context.Background(), inv, reply, other); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	got, err := s.List(context.Background(), "*", store.QueryOpts{RequestID: "req-1"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("request filter = %d events, want 2 (invocation + reply)", len(got))
+	}
+	for _, e := range got {
+		if e.RequestId != "req-1" {
+			t.Fatalf("event %s has request_id %q, want req-1", e.ID, e.RequestId)
+		}
+	}
+}
+
 // TestMigrateAddsRequestIDColumn verifies a database created with the old
 // schema (no request_id) is upgraded in place by New's migrate step, and that
 // newly appended events persist request_id.
