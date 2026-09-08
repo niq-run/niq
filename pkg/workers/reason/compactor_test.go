@@ -2,6 +2,7 @@ package reason
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -31,11 +32,28 @@ func (p *summarizeProvider) Complete(_ context.Context, req *llm.CompletionReque
 	}}, nil
 }
 
-func (p *summarizeProvider) CompleteStream(_ context.Context, _ *llm.CompletionRequest) (*llm.EventStream, error) {
+func (p *summarizeProvider) CompleteStream(_ context.Context, req *llm.CompletionRequest) (*llm.EventStream, error) {
+	p.mu.Lock()
+	// Only a summarization request carries exactly one user message (the
+	// projection); record the prompt on that shape only so the worker's
+	// follow-up reasoning round (a full transcript) does not clobber it.
+	if isSummarizeRequest(req) {
+		p.seenPrompt = req.Context.SystemPrompt
+	}
+	digest := "DIGEST(" + p.summarized + ")"
+	chatMsg := p.chatMessage
+	p.mu.Unlock()
+	// Emit the digest as streamed text deltas (the path summarize consumes);
+	// also carry it in the closing message so a provider that delivers only via
+	// the final message still round-trips.
 	es := llm.NewEventStream()
 	es.Push(llm.EventTextStart{})
+	es.Push(llm.EventTextDelta{Delta: digest})
 	es.Push(llm.EventTextEnd{})
-	es.End(p.chatMessage)
+	if len(chatMsg.Content) == 0 {
+		chatMsg.Content = []llm.ContentBlock{{Type: llm.ContentText, Text: digest}}
+	}
+	es.End(chatMsg)
 	return es, nil
 }
 
@@ -45,6 +63,16 @@ func (p *summarizeProvider) prompt() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.seenPrompt
+}
+
+// isSummarizeRequest reports whether req is a summarization call (a single
+// user message) rather than a worker reasoning call (a full transcript).
+func isSummarizeRequest(req *llm.CompletionRequest) bool {
+	if req == nil || req.Context == nil {
+		return false
+	}
+	msgs := req.Context.Messages
+	return len(msgs) == 1 && msgs[0].Role == llm.RoleUser
 }
 
 // newReasonBase builds a bare BaseReasonWorker wired like NewWorker (keepTail
@@ -58,6 +86,76 @@ func newReasonBase(t *testing.T, prov llm.LLMProvider, keepTail int, seed []llm.
 		ContextWindow: 1000, KeepTail: keepTail, SeedMessages: seed,
 	})
 	return w
+}
+
+// TestSummarizeAccumulatesStreamedText verifies summarize reads the digest from
+// streamed text deltas rather than a non-streaming response, so streaming-only
+// gateways work for compaction.
+func TestSummarizeAccumulatesStreamedText(t *testing.T) {
+	prov := &summarizeProvider{summarized: "s1",
+		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
+	got, err := summarize(context.Background(), prov, "projection", "directive", "")
+	if err != nil {
+		t.Fatalf("summarize: %v", err)
+	}
+	if got != "DIGEST(s1)" {
+		t.Fatalf("got %q, want %q", got, "DIGEST(s1)")
+	}
+}
+
+// TestSummarizeSurfacesStreamError verifies a stream abort error (as providers
+// emit via EventError on Abort) is returned instead of an empty digest.
+func TestSummarizeSurfacesStreamError(t *testing.T) {
+	prov := &streamErrProvider{}
+	if _, err := summarize(context.Background(), prov, "projection", "directive", ""); err == nil {
+		t.Fatal("expected stream error to be surfaced")
+	}
+}
+
+// streamErrProvider returns a stream that aborts immediately with an error.
+type streamErrProvider struct {
+}
+
+func (p *streamErrProvider) Complete(context.Context, *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	return nil, fmt.Errorf("unexpected non-streaming call")
+}
+
+func (p *streamErrProvider) CompleteStream(context.Context, *llm.CompletionRequest) (*llm.EventStream, error) {
+	es := llm.NewEventStream()
+	es.Abort(fmt.Errorf("stream boom"))
+	return es, nil
+}
+
+func (p *streamErrProvider) ListModels(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
+
+// digestInResultProvider ends with text only in the closing message (no deltas), to
+// exercise summarize's fallback to the final message content.
+type digestInResultProvider struct {
+}
+
+func (p *digestInResultProvider) Complete(context.Context, *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	return nil, fmt.Errorf("unexpected non-streaming call")
+}
+
+func (p *digestInResultProvider) CompleteStream(context.Context, *llm.CompletionRequest) (*llm.EventStream, error) {
+	es := llm.NewEventStream()
+	es.End(llm.Message{Role: llm.RoleAssistant, StopReason: "stop",
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "fallback-digest"}}})
+	return es, nil
+}
+
+func (p *digestInResultProvider) ListModels(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+
+func TestSummarizeFallsBackToFinalMessage(t *testing.T) {
+	got, err := summarize(context.Background(), &digestInResultProvider{}, "projection", "directive", "")
+	if err != nil {
+		t.Fatalf("summarize: %v", err)
+	}
+	if got != "fallback-digest" {
+		t.Fatalf("got %q, want %q", got, "fallback-digest")
+	}
 }
 
 // TestProjectTranscriptStrips verifies the projection drops thinking blocks

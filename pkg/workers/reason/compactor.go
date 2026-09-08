@@ -84,16 +84,18 @@ func compactionNote(label string) string {
 	return "[system] context compressed: older messages were summarized into a digest. Continue the task with the recent context."
 }
 
-// summarize calls the LLM once, non-streaming. With a previous digest present
-// it runs in update mode: merge new progress into the old summary instead of
-// rebuilding from scratch, so early goals and constraints survive repeated
-// compactions.
+// summarize calls the LLM over a stream and accumulates the digest from the
+// streamed text. Some gateways only support streaming (rejecting non-streaming
+// requests outright), so summarization must go through CompleteStream rather
+// than Complete. With a previous digest present it runs in update mode: merge
+// new progress into the old summary instead of rebuilding from scratch, so
+// early goals and constraints survive repeated compactions.
 func summarize(ctx context.Context, prov llm.LLMProvider, projection, directive, previousDigest string) (string, error) {
 	if previousDigest != "" {
 		directive = directive + "\n\nA previous summary exists; update it incrementally: merge new progress " +
 			"into it, move finished items, keep earlier goals and constraints. Previous summary:\n" + previousDigest
 	}
-	resp, err := prov.Complete(ctx, &llm.CompletionRequest{
+	stream, err := prov.CompleteStream(ctx, &llm.CompletionRequest{
 		Context: &llm.Context{
 			SystemPrompt: directive,
 			Messages:     []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: projection}}}},
@@ -102,7 +104,35 @@ func summarize(ctx context.Context, prov llm.LLMProvider, projection, directive,
 	if err != nil {
 		return "", err
 	}
-	for _, block := range resp.Message.Content {
+
+	var text strings.Builder
+	var streamErr error
+	for {
+		evt, ok := stream.Next()
+		if !ok {
+			break
+		}
+		switch e := evt.(type) {
+		case llm.EventTextDelta:
+			text.WriteString(e.Delta)
+		case llm.EventError:
+			streamErr = e.Err
+		}
+	}
+	if streamErr != nil {
+		return "", streamErr
+	}
+	if strings.TrimSpace(text.String()) != "" {
+		return text.String(), nil
+	}
+	// Fallback for providers that deliver the digest in the closing message
+	// rather than as text deltas. End/Abort always populate the result channel
+	// before closing events, so Result returns promptly here.
+	msg, err := stream.Result(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, block := range msg.Content {
 		if block.Type == llm.ContentText && block.Text != "" {
 			return block.Text, nil
 		}
