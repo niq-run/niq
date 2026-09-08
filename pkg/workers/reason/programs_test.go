@@ -111,6 +111,11 @@ func TestProgramUpdateViaBus(t *testing.T) {
 	if len(programs) != 1 || programs[0].Name != "p1" {
 		t.Fatalf("query after add: programs=%+v", programs)
 	}
+	// The path travels with the entry so callers can load its content from
+	// the program worker.
+	if programs[0].Path != "p1" {
+		t.Fatalf("query after add: Path = %q, want %q", programs[0].Path, "p1")
+	}
 
 	// Removing the same program succeeds and is visible.
 	ch.in <- event.New(TypeProgramUpdate, "tester", map[string]any{"op": "remove", "name": "p1"})
@@ -122,6 +127,44 @@ func TestProgramUpdateViaBus(t *testing.T) {
 		}
 		return false
 	}, "request.completed for program.update remove")
+}
+
+// TestProgramFromArgsPinsPathAndPlaybookReference covers the two rules that
+// make a query result usable: every program carries Path == its name (so
+// program__load has an address to take), and a playbook stores no content
+// (it is only a reference into the program worker).
+func TestProgramFromArgsPinsPathAndPlaybookReference(t *testing.T) {
+	instr, err := programFromArgs(map[string]any{
+		"name": "rules", "content_type": "instruction", "content": "do this",
+	})
+	if err != nil {
+		t.Fatalf("instruction: %v", err)
+	}
+	if instr.Path != "rules" || instr.EntryContent.Path != "rules" {
+		t.Fatalf("instruction Path = %q / entry %q, want rules", instr.Path, instr.EntryContent.Path)
+	}
+	if instr.EntryContent.Content != "do this" {
+		t.Fatalf("instruction content = %q, want it kept", instr.EntryContent.Content)
+	}
+
+	pb, err := programFromArgs(map[string]any{
+		"name": "deploy", "content_type": "playbook", "content": "should be dropped",
+	})
+	if err != nil {
+		t.Fatalf("playbook: %v", err)
+	}
+	if pb.Path != "deploy" {
+		t.Fatalf("playbook Path = %q, want deploy", pb.Path)
+	}
+	if pb.EntryContent.Content != "" {
+		t.Fatalf("playbook content = %q, want empty (reference only)", pb.EntryContent.Content)
+	}
+
+	if _, err := programFromArgs(map[string]any{
+		"name": "bad", "content_type": "instruction",
+	}); err == nil {
+		t.Fatal("instruction without content: want error")
+	}
 }
 
 // int32c is a tiny atomic counter for the durable-change hook.

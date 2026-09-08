@@ -112,23 +112,26 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	// edit), so handleToolCalls dispatches them normally and the
 	// request.completed reply schedules the next round.
 	w.Register(baseworker.Extension{
-		Event:       TypeProgramQuery,
-		Description: "List this worker's instruction and playbook programs (name, type, description, tags, locked).",
-		Parameters:  obj(map[string]any{}),
+		Event: TypeProgramQuery,
+		Description: "List this worker's instruction and playbook programs (name, type, description, tags, locked, path). " +
+			"Instructions carry their content here; playbooks are references — only metadata is listed, and their content " +
+			"is loaded from the program worker by passing the path to program__load.",
+		Parameters: obj(map[string]any{}),
 	}, func(evt event.Event) {
 		handleProgramQuery(w, evt)
 	})
 
 	w.Register(baseworker.Extension{
 		Event: TypeProgramUpdate,
-		Description: "Add or remove one of this worker's programs. This manages only the metadata reference registered " +
-			"on THIS worker: a program's actual content lives in the program worker, so it must already exist there — " +
-			"if it does not, create it in the program worker first (e.g. via its register tool), then add the reference here. " +
-			"Instructions are inlined into the system prompt; playbooks are referenced by metadata only (name/description/tags).",
+		Description: "Add or remove one of this worker's programs. Instruction: supply content and it is inlined " +
+			"into the system prompt — self-contained, nothing to set up elsewhere. Playbook: only name/description/tags " +
+			"are kept here (surfaced in the prompt); its content lives in the program worker, so create it there first " +
+			"with program__upsert then program__write, and load it with program__load(\"<name>\"). " +
+			"Locked programs cannot be removed.",
 		Parameters: obj(map[string]any{
 			"op": map[string]any{"type": "string", "enum": []string{"add", "remove"},
 				"description": "add a new program, or remove an existing one by name"},
-			"name":        map[string]any{"type": "string", "description": "program name (required for both ops)"},
+			"name": map[string]any{"type": "string", "description": "program name (required for both ops)"},
 			"content_type": map[string]any{"type": "string", "enum": []string{"instruction", "playbook"},
 				"description": "required for add: instruction is inlined, playbook is a metadata reference"},
 			"content": map[string]any{"type": "string",
@@ -296,6 +299,11 @@ func handleProgramQuery(w *reasonBase.BaseReasonWorker, evt event.Event) {
 // with request.completed / request.failed echoing the request's id — the
 // normal reply path schedules the next reasoning round.
 //
+// The two kinds are deliberately asymmetric: an instruction is self-contained
+// (its content is supplied here and inlined into the prompt), while a playbook
+// is only a reference — name/description/tags live here, and its content stays
+// in the program worker to be loaded on demand. See buildInstruction.
+//
 // Runs inside process() with w.mu held (see handleProgramQuery).
 func handleProgramUpdate(w *reasonBase.BaseReasonWorker, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
@@ -338,7 +346,11 @@ func handleProgramUpdate(w *reasonBase.BaseReasonWorker, evt event.Event) {
 // programFromArgs builds a program.Program from a tool-call argument map. The
 // convention mirrors program.Meta / ProgramContent: name and content_type are
 // required; content_type=instruction requires content (it is inlined into the
-// prompt), while playbook is a metadata reference and ignores content.
+// prompt), while playbook is a metadata reference whose content lives in the
+// program worker — nothing is stored for it here.
+//
+// Every program gets Path == its name, so program.query can hand the caller a
+// path to feed to the program worker's load tool.
 func programFromArgs(args map[string]any) (program.Program, error) {
 	name, _ := args["name"].(string)
 	if name == "" {
@@ -352,6 +364,11 @@ func programFromArgs(args map[string]any) (program.Program, error) {
 	if ct == "instruction" && content == "" {
 		return program.Program{}, fmt.Errorf("content is required for content_type=instruction")
 	}
+	if ct == "playbook" {
+		// A playbook is only a reference; its content stays in the program
+		// worker and is loaded on demand.
+		content = ""
+	}
 	desc, _ := args["description"].(string)
 	locked, _ := args["locked"].(bool)
 	return program.Program{
@@ -362,8 +379,11 @@ func programFromArgs(args map[string]any) (program.Program, error) {
 			Tags:        toStringSlice(args["tags"]),
 			Locked:      locked,
 		},
+		Path: name,
 		EntryContent: program.ProgramContent{
+			Name:     name,
 			FormType: program.FormTypePrompt,
+			Path:     name,
 			Content:  content,
 		},
 	}, nil
