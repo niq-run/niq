@@ -14,7 +14,7 @@ func TestProgramAddRemove(t *testing.T) {
 	w := newTestWorker(&staticProvider{}, nil)
 
 	if err := w.AddProgram(program.Program{
-		Meta:        program.Meta{Name: "p1", ContentType: "instruction"},
+		Meta:         program.Meta{Name: "p1", ContentType: "instruction"},
 		EntryContent: program.ProgramContent{Content: "x"},
 	}); err != nil {
 		t.Fatalf("add p1: %v", err)

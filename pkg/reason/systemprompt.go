@@ -2,7 +2,8 @@
 //
 // The system prompt is built from a fixed template and the worker's loaded
 // Programs. Instruction Programs contribute their full content; Playbook
-// Programs contribute only their metadata (name, description, tags).
+// Programs contribute only their metadata (name, path, description, tags) —
+// the path is what the LLM passes to program__load to pull the content.
 //
 // The template is compiled once at package init and executed on each
 // reasoning round with the current program data.
@@ -16,7 +17,8 @@ import (
 // systemPromptTmpl is the template for the Reason Worker's system prompt.
 // The opening lines set the worker's identity and how it collaborates over the
 // event bus; {{.WorkerID}} is replaced with the worker's ID.
-// Playbooks contribute only metadata (name, description, tags).
+// Playbooks contribute only metadata (name, path, description, tags); their
+// path is what loads the content.
 // Instructions contribute their full entry content.
 // Locked programs are marked with [locked] so the LLM knows they are
 // immutable system-level rules that cannot be modified via meta-extensions.
@@ -25,8 +27,10 @@ const systemPromptText = `You are a reasoning worker inside the niq system, your
 Every worker has its own focus. Yours is the goal the system set for you — keep advancing it. Collaborate with other workers through tool calls, so the whole system keeps converging on its goals. Tool workers cover specific domains and capabilities. Reasoning workers think like you. Reach out to another reasoning worker, via send_message, only when that cooperation is clearly needed.
 
 {{if .Playbooks}}## Available Playbooks
-Reference procedures you may choose to follow when they fit the task.
-{{range .Playbooks}}- {{.Name}}: {{.Description}} (tags: {{.Tags}})
+Reference procedures you may choose to follow when they fit the task. Only their
+metadata is listed here — load a playbook's content with program__load, passing
+its path.
+{{range .Playbooks}}- {{.Name}} (path: {{.Path}}): {{.Description}} (tags: {{.Tags}})
 {{end}}
 {{end}}{{if .Instructions}}## Instructions
 Rules you must follow — [locked] ones are immutable.
@@ -43,6 +47,7 @@ type templateData struct {
 
 type playbookEntry struct {
 	Name        string
+	Path        string
 	Description string
 	Tags        string
 }
@@ -65,7 +70,7 @@ var systemPromptTmpl = template.Must(
 
 // buildInstruction executes the system prompt template with the worker's
 // current programs. Instruction Programs provide full content; Playbook
-// Programs provide only metadata.
+// Programs provide only metadata plus the path that addresses their content.
 func (w *BaseReasonWorker) buildInstruction() string {
 	var data templateData
 	data.WorkerID = w.ID()
@@ -80,8 +85,17 @@ func (w *BaseReasonWorker) buildInstruction() string {
 				})
 			}
 		case "playbook":
+			// Path is the only address the program worker accepts, so it is
+			// what the LLM must hand to program__load. Fall back to the name
+			// for programs seeded without one — the two are the same by
+			// convention.
+			path := p.Path
+			if path == "" {
+				path = p.Name
+			}
 			data.Playbooks = append(data.Playbooks, playbookEntry{
 				Name:        p.Name,
+				Path:        path,
 				Description: p.Description,
 				Tags:        strings.Join(p.Tags, ", "),
 			})

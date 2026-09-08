@@ -43,18 +43,32 @@ func TestBuildInstructionInstruction(t *testing.T) {
 }
 
 // TestBuildInstructionPlaybook verifies playbook programs contribute only
-// metadata (name/description/tags), not full content.
+// metadata (path/name/description/tags), not full content. The path is what
+// the LLM needs to load the content from the program worker, so it must be
+// rendered even when the program was seeded without one.
 func TestBuildInstructionPlaybook(t *testing.T) {
 	w := NewBaseReasonWorker(Config{ID: "r1", Bus: newTestChannel(), Programs: []program.Program{
 		{
 			Meta: program.Meta{Name: "code-review", ContentType: program.ContentTypePlaybook,
 				Description: "Review code", Tags: []string{"go", "review"}},
+			Path:         "vendor/code-review",
 			EntryContent: program.ProgramContent{Content: "STEP: run linter"},
+		},
+		{
+			// Seeded without a Path — must fall back to the name.
+			Meta: program.Meta{Name: "release", ContentType: program.ContentTypePlaybook,
+				Description: "Cut a release"},
 		},
 	}})
 	s := w.buildInstruction()
 	if !strings.Contains(s, "code-review") || !strings.Contains(s, "Review code") {
 		t.Fatalf("playbook metadata missing: %q", s)
+	}
+	if !strings.Contains(s, "path: vendor/code-review") {
+		t.Fatalf("playbook path missing, LLM has nothing to load with: %q", s)
+	}
+	if !strings.Contains(s, "path: release") {
+		t.Fatalf("playbook without Path should fall back to its name: %q", s)
 	}
 	if strings.Contains(s, "STEP: run linter") {
 		t.Fatalf("playbook content should not be injected: %q", s)
