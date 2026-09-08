@@ -345,7 +345,17 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// the guarantee provider-agnostic and ensures the matching tool_result
 	// reuses the same id via the tracker.
 	w.ensureToolCallIDs(finalMsg)
-	w.transcript.Apply(transcript.AssistantOutputPatch{Message: appliedMsg})
+	// Only persist the round when the applied message actually carries
+	// content. A meta response that contained nothing but a tool call
+	// collapses to an empty assistant message after stripToolCalls; the
+	// meta op edits the transcript itself, so there is nothing meaningful to
+	// keep. Persisting an empty message is worse than skipping it:
+	// json:"content,omitempty" drops the empty slice, it restores as nil,
+	// and every later request built from this snapshot is rejected upstream
+	// with a 400 (the worker is wedged until state is wiped).
+	if len(appliedMsg.Content) > 0 {
+		w.transcript.Apply(transcript.AssistantOutputPatch{Message: appliedMsg})
+	}
 
 	// Budget check: record the round's usage and act on thresholds
 	// (soft: remind, hard: emit the context.compress convention event).

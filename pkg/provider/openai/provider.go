@@ -308,13 +308,21 @@ func buildMessages(ctx *llm.Context) []chatMessage {
 	}
 
 	for _, m := range ctx.Messages {
-		msgs = append(msgs, messageToChat(m))
+		cm, ok := messageToChat(m)
+		if !ok {
+			// Skip a message with neither content nor tool calls: it is an
+			// invalid OpenAI message (400) that would poison every request
+			// built from this snapshot. See messageToChat for how such a
+			// message can appear in legacy state.
+			continue
+		}
+		msgs = append(msgs, cm)
 	}
 
 	return msgs
 }
 
-func messageToChat(m llm.Message) chatMessage {
+func messageToChat(m llm.Message) (chatMessage, bool) {
 	cm := chatMessage{Role: string(m.Role)}
 
 	// Tool result messages carry tool_call_id.
@@ -335,7 +343,18 @@ func messageToChat(m llm.Message) chatMessage {
 	}
 
 	cm.Content = contentToPayload(m.Content)
-	return cm
+
+	// An assistant message that is empty after conversion — no visible
+	// content, no tool calls, no reasoning — is rejected by upstream with a
+	// 400, which would poison every request built from the same snapshot.
+	// Such a message can survive in legacy state: a meta round whose only
+	// tool call was stripped collapses into an empty assistant message
+	// (content,omitempty restores it as nil). Drop it rather than ship it so
+	// a wedged worker can come back up instead of staying dead.
+	if cm.Role == string(llm.RoleAssistant) && cm.Content == "" && len(cm.ToolCalls) == 0 && cm.ReasoningContent == "" {
+		return chatMessage{}, false
+	}
+	return cm, true
 }
 
 func contentToToolCalls(blocks []llm.ContentBlock) []chatToolCall {
