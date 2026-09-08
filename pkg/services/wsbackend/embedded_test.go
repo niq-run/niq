@@ -136,3 +136,27 @@ func TestBashStreamForwardsLines(t *testing.T) {
 		}
 	}
 }
+
+// TestBashCreatesMissingCwd verifies that a command whose working directory
+// does not yet exist still runs: runBash must create the cwd (mirroring `cd`
+// into a not-yet-existing directory) instead of failing with a cryptic
+// "fork/exec /bin/sh: no such file or directory" from the chdir step.
+func TestBashCreatesMissingCwd(t *testing.T) {
+	mount := t.TempDir()
+	b := NewEmbeddedBackend([]string{mount})
+	missing := filepath.Join(mount, "nope", "yet")
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("precondition: cwd %q should not exist", missing)
+	}
+
+	r, err := b.Bash(context.Background(), "pwd", missing, BashLimits{MaxBytes: 1024})
+	if err != nil {
+		t.Fatalf("Bash with missing cwd: %v", err)
+	}
+	if !strings.Contains(r.Stdout, missing) {
+		t.Fatalf("command did not run in the created cwd; stdout=%q", r.Stdout)
+	}
+	if fi, err := os.Stat(missing); err != nil || !fi.IsDir() {
+		t.Fatalf("missing cwd was not created: %v", err)
+	}
+}

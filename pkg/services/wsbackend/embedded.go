@@ -446,6 +446,61 @@ func (b *EmbeddedBackend) BashStream(ctx context.Context, command, cwd string, o
 	return b.runBash(ctx, command, cwd, onLine, limits)
 }
 
+// shellPath is the POSIX shell used to run bash commands, resolved once (and
+// verified executable) so every Bash call uses a shell that actually execs on
+// this host instead of blindly trusting that bare `sh` resolves to a working
+// binary. This matters on systems where `sh` exists in $PATH but fails to
+// execve (e.g. a chroot/container whose /bin/sh dynamic loader is missing, or
+// NixOS without a working /bin/sh).
+var (
+	shellPath     string
+	shellPathOnce sync.Once
+)
+
+// resolveShell returns a path to a working POSIX `sh`. It prefers the shell
+// found via $PATH, then falls back to a list of well-known absolute
+// locations, verifying each candidate actually execs a trivial command. The
+// first candidate that runs successfully is cached and returned. An empty
+// string means no working shell could be found.
+func resolveShell() string {
+	shellPathOnce.Do(func() {
+		// PATH-resolved `sh` first, then by absolute location.
+		candidates := []string{"sh"}
+		if p, err := exec.LookPath("sh"); err == nil {
+			candidates = append(candidates, p)
+		}
+		candidates = append(candidates,
+			"/bin/sh",
+			"/usr/bin/sh",
+			"/sbin/sh",
+			"/usr/sbin/sh",
+			"/run/current-system/sw/bin/sh", // NixOS
+			"/bin/bash",
+			"/usr/bin/bash",
+		)
+		for _, c := range candidates {
+			if c == "" {
+				continue
+			}
+			// A path that exists but whose dynamic loader is missing
+			// (common in chroots/containers) passes LookPath yet fails
+			// execve — only an actual run proves it works.
+			if err := exec.Command(c, "-c", "true").Run(); err != nil {
+				log.Printf("[wsbackend] shell probe failed: %q: %v", c, err)
+				continue
+			}
+			log.Printf("[wsbackend] shell probe ok: %q", c)
+			shellPath = c
+			return
+		}
+		// Nothing verified; fall back to the bare name so the failure
+		// surfaces with a consistent, debuggable message.
+		log.Printf("[wsbackend] no working POSIX shell found among candidates")
+		shellPath = "sh"
+	})
+	return shellPath
+}
+
 // runBash is the shared execution core for Bash and BashStream. It runs
 // `sh -c command` with the whole process in its own process group (so a kill
 // reaches every descendant, not just the shell), captures each stream through
@@ -467,7 +522,28 @@ func (b *EmbeddedBackend) runBash(ctx context.Context, command, cwd string, onLi
 		cwd = resolvedCwd
 	}
 
-	cmd := exec.Command("sh", "-c", command)
+	sh := resolveShell()
+	if sh == "" {
+		return BashResult{}, fmt.Errorf("no working POSIX shell found to run commands")
+	}
+	// The command runs with cmd.Dir = cwd. If that directory is missing the
+	// kernel fails the exec at the chdir step with a confusing
+	// "fork/exec /bin/sh: no such file or directory". cwd has already been
+	// validated to lie inside a mount, so create it (mirroring `cd` into a
+	// not-yet-existing directory) rather than failing cryptically.
+	if fi, err := os.Stat(cwd); err != nil {
+		if !os.IsNotExist(err) {
+			return BashResult{}, fmt.Errorf("stat cwd %q: %w", cwd, err)
+		}
+		if mkErr := os.MkdirAll(cwd, 0o755); mkErr != nil {
+			return BashResult{}, fmt.Errorf("cwd %q does not exist and could not be created: %w", cwd, mkErr)
+		}
+		log.Printf("[wsbackend] bash: created missing cwd %q", cwd)
+	} else if !fi.IsDir() {
+		return BashResult{}, fmt.Errorf("cwd %q exists but is not a directory", cwd)
+	}
+	log.Printf("[wsbackend] bash: shell=%q cwd=%q", sh, cwd)
+	cmd := exec.Command(sh, "-c", command)
 	cmd.Dir = cwd
 	// Own process group: killing the group reaps every descendant, so a
 	// backgrounded subprocess cannot outlive the command's deadline.
@@ -483,6 +559,8 @@ func (b *EmbeddedBackend) runBash(ctx context.Context, command, cwd string, onLi
 	}
 
 	if err := cmd.Start(); err != nil {
+		_, stillExists := os.Stat(cwd)
+		log.Printf("[wsbackend] bash start failed: shell=%q cwd=%q cwdExists=%v err=%v", sh, cwd, stillExists, err)
 		return BashResult{}, fmt.Errorf("start: %w", err)
 	}
 

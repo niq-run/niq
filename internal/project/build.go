@@ -232,6 +232,16 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		// The default mount ({project}/workspace) is seeded from a template
+		// but never created on disk, so ensure each mount exists before the
+		// backend uses it as the bash cwd — otherwise commands fail with a
+		// confusing "fork/exec /bin/sh: no such file or directory" from the
+		// chdir step.
+		for _, m := range mounts {
+			if err := os.MkdirAll(m, 0o755); err != nil {
+				log.Printf("[project] workspace %s: create mount %q: %v", id, m, err)
+			}
+		}
 		return workspace.New(workspace.Config{
 			ID:       id,
 			Bus:      ch,
