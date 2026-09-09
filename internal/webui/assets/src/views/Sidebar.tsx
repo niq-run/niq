@@ -521,8 +521,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               title={projRunning === false ? t('projects.stopped') : project}
               className="btn-hover"
               style={{
-                flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', padding: '4px 8px',
-                color: colors.textDim, fontSize: fontSizes.sm + 1, borderRadius: 3,
+                flex: 1, minWidth: 0, display: 'flex', alignItems: 'center',
+                padding: '2px 8px', lineHeight: '20px',
+                border: '1px solid ' + colors.border, borderRadius: 3,
+                color: colors.textDim, fontSize: fontSizes.sm + 1,
                 cursor: projRunning !== undefined ? 'pointer' : 'default', userSelect: 'none',
               }}
             >
