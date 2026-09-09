@@ -1,10 +1,10 @@
 /* ── Markdown content styles ── */
 
 [data-theme="dark"] .md-content code {
-  background: #323232; color: #e6c7a0;
+  background: #353535; color: #e6c7a0;
 }
 [data-theme="light"] .md-content code {
-  background: #e9e9e9; color: #c88;
+  background: #e6e6e6; color: #c88;
 }
 .md-content code {
   padding: 1px 5px; border-radius: 3px; font-size: 12px;
@@ -39,15 +39,15 @@
   padding: 6px 10px; text-align: left;
 }
 [data-theme="dark"] .md-content th {
-  background: #323232; color: #e0e0e0; font-weight: bold;
+  background: #353535; color: #e0e0e0; font-weight: bold;
 }
 [data-theme="light"] .md-content th {
-  background: #f1f1f1; color: #1a1a1a; font-weight: bold;
+  background: #f0f0f0; color: #1a1a1a; font-weight: bold;
 }
 [data-theme="dark"] .md-content td { color: #ccc; }
 [data-theme="light"] .md-content td { color: #333; }
-[data-theme="dark"] .md-content tr:nth-child(even) td { background: #282828; }
-[data-theme="light"] .md-content tr:nth-child(even) td { background: #f4f4f4; }
+[data-theme="dark"] .md-content tr:nth-child(even) td { background: #2b2b2b; }
+[data-theme="light"] .md-content tr:nth-child(even) td { background: #f2f2f2; }
 
 /* ── Decision option hover ── */
 .decision-opt {
@@ -115,10 +115,10 @@
   animation: niq-spin 0.7s linear infinite;
 }
 /* ── Event table row hover / selected ──
-   Mirror the palette: dark bgLighter #2a2a2a, light bgLighter #eee;
+   Mirror the palette: dark bgLighter #353535, light bgLighter #e6e6e6;
    accentBg dark rgba(60,120,180,0.15), light rgba(60,120,180,0.1). */
-[data-theme="dark"] .event-row:hover td { background: #323232; }
-[data-theme="light"] .event-row:hover td { background: #e9e9e9; }
+[data-theme="dark"] .event-row:hover td { background: #353535; }
+[data-theme="light"] .event-row:hover td { background: #e6e6e6; }
 [data-theme="dark"] .event-row.selected td { background: rgba(60,120,180,0.15); }
 [data-theme="light"] .event-row.selected td { background: rgba(60,120,180,0.1); }
 
