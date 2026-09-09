@@ -105,6 +105,9 @@ export default function App() {
   const [inputMode, setInputMode] = useState('default')
   const [attachments, setAttachments] = useState<StagedAttachment[]>([])
   const [sending, setSending] = useState(false)
+  // Bumped on each send; TalkView watches it to re-pin and scroll to the bottom
+  // even if the user had scrolled up before sending.
+  const [sendPulse, setSendPulse] = useState(0)
   const [mentionKey, setMentionKey] = useState(0)
   const [filterWorkers, setFilterWorkers] = useState<Set<string>>(new Set())
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
@@ -146,9 +149,6 @@ export default function App() {
   // Mirrors autoScrollRef for rendering: the scroll-to-bottom button shows
   // while the list isn't pinned to the bottom.
   const [eventsAtBottom, setEventsAtBottom] = useState(true)
-  // When the events view (re)mounts / reconnects, the initial population should
-  // land at the bottom instantly; only later live updates smooth-scroll.
-  const eventsMountedAt = useRef(0)
 
   // ── Mode: control (no project attached) vs project. In control mode only the
   // projects surface is usable; talk/events/workers need an attached project, so
@@ -281,7 +281,6 @@ export default function App() {
       seenRef.current.clear()
       setDeliveries({})
       deliveriesRef.current = {}
-      eventsMountedAt.current = Date.now()
     }
     setSelectedEventId(null)
     setDetailEvt(null)
@@ -392,6 +391,8 @@ export default function App() {
   const sendMessage = useCallback(() => {
     if (!input.trim() || sending) return
     setSending(true)
+    // Returning to the live bottom: bump the signal TalkView listens for.
+    setSendPulse(p => p + 1)
     // Parse @mention for targeting a specific worker.
     let msgTarget = ''
     let msgText = input
@@ -597,12 +598,13 @@ export default function App() {
 
   // ── Events list auto-scroll ──
   // Layout effect (before paint) so the initial load lands directly at the
-  // bottom instead of painting the top first. Smooth-scroll only for later
-  // live updates; the first ~1s after mount is instant.
+  // bottom instead of painting the top first. When pinned to the bottom we
+  // keep the bottom edge anchored with an INSTANT pin (never smooth): the
+  // backend pushes live updates periodically and a smooth re-scroll on each
+  // burst reads as a visible stutter. Newest rows just push older ones up.
   useLayoutEffect(() => {
     if (autoScrollRef.current && listRef.current) {
-      const animated = Date.now() - eventsMountedAt.current > 1000
-      listRef.current.scrollTo({ top: listRef.current.scrollHeight, behavior: animated ? 'smooth' : 'auto' })
+      listRef.current.scrollTop = listRef.current.scrollHeight
     }
   }, [events])
 
@@ -779,6 +781,7 @@ export default function App() {
               responseOnly={viewSettings.responseOnly}
               isMobile={isMobile}
               onDecide={handleDecide}
+              scrollToBottomSignal={sendPulse}
             />
 
             <TalkInput
@@ -888,7 +891,7 @@ export default function App() {
             )}
 
             <div key="events" className="fade-in" style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
-              <div key={streamKey} ref={listRef} onScroll={handleScroll} className="fade-in" style={{ flex: 1, minWidth: 0, overflow: 'auto', fontSize: fontSizes.md, padding: '0 24px 16px 24px' }}>
+              <div key={streamKey} ref={listRef} onScroll={handleScroll} className="fade-in" style={{ flex: 1, minWidth: 0, overflow: 'auto', fontSize: fontSizes.md, padding: '0 24px 16px 24px', overflowAnchor: 'none' }}>
                 {events.length > 0 && <div ref={sentinelRef} style={{ height: 1 }} />}
                 {/* min-width lets the wide fixed columns scroll horizontally on
                     narrow (phone) viewports instead of collapsing. */}

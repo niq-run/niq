@@ -35,6 +35,10 @@ interface TalkViewProps {
   // Inline quick-approve for approval.request cards: forwards the human's
   // verdict to the HIW (App wires it to the decisions API).
   onDecide?: (id: string, approved: boolean, note?: string) => void
+  // Bumped by App each time the user sends a message. Sending is a strong
+  // "return to the live bottom" signal: even if the user had scrolled up to
+  // read, we re-engage the follow and scroll to the newest content.
+  scrollToBottomSignal?: number
 }
 
 // StreamTrace is one in-flight reason trace being accumulated from
@@ -121,6 +125,40 @@ function computeToolPartials(events: EventPayload[], talkWorkers: Set<string>, d
   return map
 }
 
+// GrowingHeight animates the height of its child so that when the child's
+// content grows (e.g. a streaming delta batch adds several lines at once), the
+// block expands smoothly over a short transition instead of instantly. It
+// measures the child's natural (unclipped) height and drives the wrapper height
+// through a CSS transition, so growth appears as a continuous push rather than
+// an abrupt reflow. It clocks out of the animation on the FIRST render (and
+// whenever previously unmounted, since we start with a fixed px height) — the
+// first measurement sets the height without animating so nothing flashes open.
+//
+// While this is in play, the caller's pin-to-bottom loop (see the rAF loop in
+// TalkView) follows the expanding wrapper each frame, so the content above
+// slides up in lockstep with the growth. This is the mechanism that turns a
+// multi-line batch into a smooth upward push instead of a "roll".
+function GrowingHeight({ children, durationMs = 180 }: { children: ReactNode; durationMs?: number }) {
+  const innerRef = useRef<HTMLDivElement>(null)
+  const [h, setH] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const el = innerRef.current
+    if (!el) return
+    setH(el.scrollHeight || 0)
+  })
+  return (
+    <div
+      style={{
+        height: h ?? 'auto',
+        overflow: 'hidden',
+        transition: h != null ? `height ${durationMs}ms ease` : 'none',
+      }}
+    >
+      <div ref={innerRef} style={{ display: 'flow-root' }}>{children}</div>
+    </div>
+  )
+}
+
 // ── Worker name label (avatar) ──
 // Only reason workers are mentionable: they get the hover @ and a click-to-@
 // action. Other speakers' avatars are plain labels (no @). The human worker id
@@ -165,7 +203,7 @@ function WorkerBadge({ id, show, humanId, isReason, onMention, displayName }: {
   )
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal }: TalkViewProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   // Left-side bubbles are wider on phones (90%) and keep the original 70% on
@@ -217,13 +255,18 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // while the conversation isn't pinned to the bottom.
   const [atBottom, setAtBottom] = useState(true)
   const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set())
-  const prevEventCount = useRef(0)
-  const prevStreamLen = useRef(0)
-  const hasInitialScrolled = useRef(false)
-  // The first ~second after mounting is the initial population (e.g. after
-  // switching to the Talk view): scrolls are instant so the page does not
-  // animate from top to bottom. Real-time pushes after that smooth-scroll.
-  const mountedAt = useRef(Date.now())
+
+  // A bumped scrollToBottomSignal (a send happened) means: re-pin and jump to
+  // the bottom, overriding any sticky "user scrolled up" state.
+  const lastScrollSignal = useRef(scrollToBottomSignal)
+  useEffect(() => {
+    if (scrollToBottomSignal === lastScrollSignal.current) return
+    lastScrollSignal.current = scrollToBottomSignal
+    autoScrollRef.current = true
+    setAtBottom(true)
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [scrollToBottomSignal])
 
   const toggleExpanded = (key: string) => {
     setExpandedContent(prev => {
@@ -326,45 +369,55 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   }, [events, streamingMode, talkWorkers, deliveries])
 
 
+  // Follow-to-bottom on content growth.
+  // The loop runs for the life of the view but ONLY ever writes scrollTop when
+  // the content height has actually changed: it compares scrollHeight against
+  // the previous frame and does nothing when it is static. That keeps the view
+  // from being locked — in a quiet stretch (between stream bursts, or idle with
+  // no streaming) there is no per-frame write, so scrolling is completely free;
+  // it also means no need to gate on "actively streaming", so both a sent user
+  // message and a stream batch arriving are followed to the bottom. When the
+  // user scrolls up, autoScrollRef flips false and the loop leaves their
+  // reading position alone.
   useEffect(() => {
-    const count = relevantEvents.length
-    const streamLen = streamingTraces.reduce((s, t) => s + t.thinking.length + t.text.length, 0) +
-      Object.values(toolPartials).reduce((s, p) => s + p.length, 0)
-    if (!hasInitialScrolled.current) {
-      hasInitialScrolled.current = true
-      prevEventCount.current = count
-      prevStreamLen.current = streamLen
-      // Initial render: land at the bottom instantly, no animation.
-      if (scrollRef.current) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    let raf = 0
+    let lastHeight = scrollRef.current?.scrollHeight ?? 0
+    const tick = () => {
+      raf = requestAnimationFrame(tick)
+      const sc = scrollRef.current
+      if (!sc) return
+      const h = sc.scrollHeight
+      if (h === lastHeight) return // nothing grew this frame -> leave scroll alone
+      lastHeight = h
+      // Only follow while pinned to the bottom; if the user scrolled up to read,
+      // autoScrollRef is false and we leave their reading position alone.
+      if (autoScrollRef.current) {
+        sc.scrollTop = sc.scrollHeight
       }
-      return
     }
-    const grew = count > prevEventCount.current || streamLen > prevStreamLen.current
-    if (grew && autoScrollRef.current && scrollRef.current) {
-      const animated = Date.now() - mountedAt.current > 1000
-      setTimeout(() => {
-        const el = scrollRef.current
-        if (autoScrollRef.current && el) {
-          // When already pinned to the bottom, follow new content instantly —
-          // a smooth scroll from the bottom reads as a stutter/re-scroll.
-          const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
-          el.scrollTo({ top: el.scrollHeight, behavior: animated && !nearBottom ? 'smooth' : 'auto' })
-        }
-      }, 0)
-    }
-    prevEventCount.current = count
-    prevStreamLen.current = streamLen
-  }, [relevantEvents, streamingTraces, toolPartials])
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [])
 
-  	const handleScroll = useCallback(() => {
-  		const el = scrollRef.current
-  		if (!el) return
-  		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
-  		autoScrollRef.current = atBottom
-  		// Drives the scroll-to-bottom button; React bails out when unchanged.
-  		setAtBottom(atBottom)
-  	}, [])
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    // Button visibility: hide when within a small window of the bottom.
+    const atBottom = dist < 50
+    // Follow latch: once the user scrolls up (leaving the true bottom), release
+    // the pin and do NOT re-engage until they reach the actual bottom again
+    // (or press the jump-to-bottom button). The tiny epsilon (<4px) means any
+    // upward scroll from the bottom frees the view immediately, so a slow drag
+    // is never dragged back down by the follow loop.
+    if (dist < 4) {
+      autoScrollRef.current = true
+    } else {
+      autoScrollRef.current = false
+    }
+    // Drives the scroll-to-bottom button; React bails out when unchanged.
+    setAtBottom(atBottom)
+  }, [])
 
   	const scrollToBottom = useCallback(() => {
   		autoScrollRef.current = true
@@ -1056,7 +1109,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               setExpandedContent(new Set())
             }
           }}
-          style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px' }}
+          style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px', overflowAnchor: 'none' }}
         >
         {nodes}
         {!responseOnly && streamingTraces.map(({ traceId, thinking, text, workerId, lastTs, thinkingDone, textDone }) => {
@@ -1082,11 +1135,20 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
                 <WorkerBadge id={workerId} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
                 <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, fontStyle: 'italic' }}>● streaming</span>
               </div>
+              {/* Height transition: when a delta batch adds several lines at
+                  once, GrowingHeight expands the block smoothly, and the rAF
+                  pin loop above follows each frame — so earlier content is
+                  pushed up as a continuous motion instead of an abrupt
+                  reflow/roll. */}
               {showThinking && (
-                <ThinkingBlock evt={synthetic('reason.thinking', thinking)} defaultExpanded={thinkingExpanded} compact={compactMode} />
+                <GrowingHeight>
+                  <ThinkingBlock evt={synthetic('reason.thinking', thinking)} defaultExpanded={thinkingExpanded} compact={compactMode} />
+                </GrowingHeight>
               )}
               {showText && (
-                <ResponseBlock evt={synthetic('reason.response', text)} />
+                <GrowingHeight>
+                  <ResponseBlock evt={synthetic('reason.response', text)} />
+                </GrowingHeight>
               )}
             </div>
           )

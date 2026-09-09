@@ -168,7 +168,11 @@ func (w *BaseReasonWorker) consumeStream(reasonCtx context.Context, stream *llm.
 		partialText     string
 	)
 
-	const batchInterval = time.Second
+	// Deltas are huddled into periodic batch events, so the webui streams live
+	// text in coarse chunks rather than per-token. 3s keeps the back-and-forth
+	// between the reason worker and the UI low while still feeling live for a
+	// human reading the output; flush cadence is the only "sync" here.
+	const batchInterval = 3 * time.Second
 	ticker := time.NewTicker(batchInterval)
 	defer ticker.Stop()
 
@@ -218,7 +222,7 @@ func (w *BaseReasonWorker) consumeStream(reasonCtx context.Context, stream *llm.
 			streamDone = true
 
 		case <-ticker.C:
-			// 5s elapsed: flush accumulated deltas as batch events.
+			// Interval elapsed (3s): flush accumulated deltas as batch events.
 			flushBatches()
 
 		case evt, ok := <-stream.C():
