@@ -169,10 +169,12 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     const val = e.target.value
     onInputChange(val)
 
-    // Detect if we're typing an @mention
+    // Detect if we're typing an @mention. Worker ids may contain `-`, `.`, `_`
+    // (the same charset used when declaring workers), so the token is /[\w.-]/,
+    // not just /\w/.
     const cursorPos = e.target.selectionStart
     const beforeCursor = val.slice(0, cursorPos)
-    const atMatch = beforeCursor.match(/@(\w*)$/)
+    const atMatch = beforeCursor.match(/@([\w.-]*)$/)
     if (atMatch) {
       setPickerOpen(true)
       setPickerMode('mention')
@@ -187,7 +189,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     const cursorPos = textareaRef.current?.selectionStart ?? input.length
     const beforeCursor = input.slice(0, cursorPos)
     const afterCursor = input.slice(cursorPos)
-    const atMatch = beforeCursor.match(/^(.*)@\w*$/)
+    const atMatch = beforeCursor.match(/^(.*)@[\w.-]*$/)
     if (atMatch) {
       const newVal = atMatch[1] + '@' + id + ' ' + afterCursor
       onInputChange(newVal)
@@ -224,18 +226,24 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     }
 
     if (pickerOpen && !composing) {
+      // Use the same pickable set the dropdown renders (archived/suspended reason
+      // workers excluded), so Enter commits exactly the highlighted option.
       const list = pickerMode === 'mention'
-        ? reasonWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery))
-        : reasonWorkers
-      if ((e.ctrlKey && e.key.toLowerCase() === 'n') || e.key === 'ArrowDown') {
-        e.preventDefault()
-        setMentionIndex(i => Math.min(i + 1, list.length - 1))
-        return
-      }
-      if ((e.ctrlKey && e.key.toLowerCase() === 'p') || e.key === 'ArrowUp') {
-        e.preventDefault()
-        setMentionIndex(i => Math.max(i - 1, 0))
-        return
+        ? reasonWorkers.filter(w => !archived.has(w.id) && w.state !== 'suspended' && w.id.toLowerCase().includes(mentionQuery))
+        : reasonWorkers.filter(w => !archived.has(w.id) && w.state !== 'suspended')
+      // Arrow/ctrl+n/p cycle through the options (wrapping at both ends).
+      if (list.length > 0) {
+        const n = list.length
+        if ((e.ctrlKey && e.key.toLowerCase() === 'n') || e.key === 'ArrowDown') {
+          e.preventDefault()
+          setMentionIndex(i => (i + 1) % n)
+          return
+        }
+        if ((e.ctrlKey && e.key.toLowerCase() === 'p') || e.key === 'ArrowUp') {
+          e.preventDefault()
+          setMentionIndex(i => (i - 1 + n) % n)
+          return
+        }
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         if (list.length > 0) {
@@ -256,9 +264,10 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   }
 
   // Parse current @mention target for display. Matches an @mention at any
-  // position (not only at the start), showing the most recent one.
+  // position (not only at the start), showing the most recent one. Worker ids
+  // may contain `-`, `.`, `_`, so the token is /[\w.-]/.
   const currentTarget = useMemo(() => {
-    const matches = [...input.matchAll(/@(\w+)/g)]
+    const matches = [...input.matchAll(/@([\w.-]+)/g)]
     if (matches.length === 0) return null
     const last = matches[matches.length - 1]
     const w = reasonWorkers.find(r => r.id === last[1])
@@ -336,11 +345,21 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
               activeIndex={mentionIndex}
               onSelect={commitPicker}
               onActivate={(i) => setMentionIndex(i)}
-              footer={pickerMode !== 'mention' ? {
+              footer={{
                 label: t('picker.broadcast'),
                 checked: !shownTarget,
-                onChoose: () => { onClearMentionTarget(); setPickerOpen(false) },
-              } : undefined}
+                onChoose: () => {
+                  if (pickerMode === 'mention') {
+                    // Cancelling an in-progress @mention: strip the trailing
+                    // "@word" so nothing is left in the text. Same charset as
+                    // the other mention parsers: /[\w.-]/.
+                    onInputChange(input.replace(/@[\w.-]*$/, ''))
+                  } else {
+                    onClearMentionTarget()
+                  }
+                  setPickerOpen(false)
+                },
+              }}
             />
           </div>
         )}

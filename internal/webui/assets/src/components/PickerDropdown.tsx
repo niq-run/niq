@@ -57,7 +57,14 @@ export default function PickerDropdown({
   // Rows rely on the CSS :hover for their hover background. We must NOT paint
   // an inline `background` (not even `transparent`) on unhighlighted rows, or it
   // would override the class :hover rule.
-  const highlightBg = colors.bgChip
+  //
+  // The keyboard-active row (ctrl+n/p / arrow keys) uses the SAME subtle
+  // overlay as the CSS :hover rule (.picker-row:hover) so that navigating looks
+  // exactly like hovering — the two states are visually identical. Using an
+  // opaque chip color here would render the active row differently from hover
+  // (darker than the panel in dark mode, ~invisible in light mode), which is
+  // what made it look wrong until the row was hovered.
+  const highlightBg = 'rgba(128,128,128,0.15)'
 
   // Mobile: the picker becomes a centered dialog (it cannot fit an anchored
   // dropdown beside the trigger on a phone). Desktop keeps the anchored panel

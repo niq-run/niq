@@ -117,6 +117,12 @@ export default function App() {
   const [deliveries, setDeliveries] = useState<Record<string, string[]>>({})
   const [talkWorkers, setTalkWorkers] = useState<Set<string>>(new Set())
   const [mentionTarget, setMentionTarget] = useState('')
+  // Becomes true once the user picks a talk target explicitly (via the target
+  // picker, an @mention badge, or a typed @mention at send). The sidebar worker
+  // selector auto-defaults the target to the single selected worker only while
+  // this is false — after a manual choice, that choice sticks and the sidebar
+  // stops overriding it.
+  const targetUserSetRef = useRef(false)
   // Talk view settings (moved from TalkView's header to the sidebar), persisted
   // to localStorage so they survive reloads / new sessions.
   const [viewSettings, setViewSettings] = useState<ViewSettings>(loadViewSettings)
@@ -403,6 +409,7 @@ export default function App() {
       if (reasonWorkers.some(r => r.id === mentioned)) {
         msgTarget = mentioned
         msgText = mentionMatch[2]
+        targetUserSetRef.current = true
         setMentionTarget(mentioned) // persist the @ target for the next message
       }
     }
@@ -441,14 +448,20 @@ export default function App() {
     }
   }, [workers, mentionTarget, talkWorkers])
 
+  // Sidebar worker selector (talk view): multi-select toggle, as before. On each
+  // selection change, if the resulting selection is exactly one worker, that
+  // single worker also becomes the default talk target — but only until the
+  // user has manually picked a target; afterwards the manual choice wins and
+  // the sidebar no longer overrides it.
   const toggleWorker = useCallback((id: string) => {
-    setTalkWorkers(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }, [])
+    const next = new Set(talkWorkers)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setTalkWorkers(next)
+    if (!targetUserSetRef.current && next.size === 1) {
+      setMentionTarget(id)
+    }
+  }, [talkWorkers])
 
   const selectEvent = useCallback((id: string) => {
     setSelectedEventId(prev => {
@@ -772,7 +785,7 @@ export default function App() {
               talkWorkers={talkWorkers}
               onTraceClick={handleTraceClick}
               onLoadMore={loadMore}
-              onMention={(id) => { setInput(prev => prev + '@' + id + ' '); setMentionTarget(id); setMentionKey(k => k + 1) }}
+              onMention={(id) => { targetUserSetRef.current = true; setInput(prev => prev + '@' + id + ' '); setMentionTarget(id); setMentionKey(k => k + 1) }}
               deliveries={deliveries}
               workerTypes={workerTypes}
               thinkingExpanded={viewSettings.thinkingExpanded}
@@ -796,8 +809,8 @@ export default function App() {
               archived={archived}
               mentionKey={mentionKey}
               mentionTarget={mentionTarget}
-              onClearMentionTarget={() => setMentionTarget('')}
-              onSelectTarget={(id) => setMentionTarget(id)}
+              onClearMentionTarget={() => { targetUserSetRef.current = true; setMentionTarget('') }}
+              onSelectTarget={(id) => { targetUserSetRef.current = true; setMentionTarget(id) }}
               isMobile={isMobile}
               attachments={attachments}
               onAttachmentsChange={setAttachments}
