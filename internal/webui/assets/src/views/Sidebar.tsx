@@ -225,6 +225,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // Footer project menu: opened by clicking the project name in the bottom
   // row; closes on any click outside the menu and its trigger.
   const [projMenuOpen, setProjMenuOpen] = useState(false)
+  // Hover state of the project block, for the hover-only border (a transparent
+  // border is laid out in the resting state so the block never shifts).
+  const [projBlockHover, setProjBlockHover] = useState(false)
   useEffect(() => {
     if (!projMenuOpen) return
     const close = () => setProjMenuOpen(false)
@@ -518,12 +521,17 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 if (projRunning === undefined) return
                 setProjMenuOpen(v => !v)
               }}
+              onMouseEnter={() => setProjBlockHover(true)}
+              onMouseLeave={() => setProjBlockHover(false)}
               title={projRunning === false ? t('projects.stopped') : project}
               className="btn-hover"
               style={{
                 flex: 1, minWidth: 0, display: 'flex', alignItems: 'center',
                 padding: '2px 8px', lineHeight: '20px',
-                border: '1px solid ' + colors.border, borderRadius: 3,
+                // Border appears on hover / while the menu is open; it is laid
+                // out transparently otherwise so nothing shifts.
+                border: '1px solid ' + (projBlockHover || projMenuOpen ? colors.border : 'transparent'),
+                borderRadius: 3,
                 color: colors.textDim, fontSize: fontSizes.sm + 1,
                 cursor: projRunning !== undefined ? 'pointer' : 'default', userSelect: 'none',
                 // While the menu is open the block fuses with it: same panel
