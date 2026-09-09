@@ -218,8 +218,8 @@ export default function App() {
   }
 
   // Sidebar footer project menu: restart / stop the attached project from the
-  // control plane, same semantics as the projects page. Restart reuses the
-  // start redirect (the project may come back on a different webui port).
+  // control plane, same semantics as the projects page. Restart just reloads
+  // the page in place once the call returns; no port-hop is needed.
   // Stop intentionally leaves the page stale — the stopped banner offers the
   // way back. Errors surface inside the menu.
   const [projBusy, setProjBusy] = useState<'' | 'stop' | 'restart'>('')
@@ -229,11 +229,12 @@ export default function App() {
     setProjBusy('restart')
     setProjActionErr('')
     try {
-      goToProjectWebui(await restartProject(projectName))
+      await restartProject(projectName)
+      window.location.reload()
     } catch (e) {
       setProjActionErr((e as Error)?.message || 'restart failed')
+      setProjBusy('')
     }
-    setProjBusy('')
   }
   const stopCurrentProject = async () => {
     if (!projectName || projBusy) return
