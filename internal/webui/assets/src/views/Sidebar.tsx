@@ -531,13 +531,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 // Border appears on hover / while the menu is open; it is laid
                 // out transparently otherwise so nothing shifts.
                 border: '1px solid ' + (projBlockHover || projMenuOpen ? colors.border : 'transparent'),
-                borderRadius: 3,
                 color: colors.textDim, fontSize: fontSizes.sm + 1,
                 cursor: projRunning !== undefined ? 'pointer' : 'default', userSelect: 'none',
                 // While the menu is open the block fuses with it: same panel
-                // background, square top corners — the block's own top border
-                // becomes the separator between menu and handle.
-                ...(projMenuOpen ? { background: colors.bgLight, borderTopLeftRadius: 0, borderTopRightRadius: 0 } : {}),
+                // background — the block's own top border becomes the separator
+                // between menu and handle.
+                ...(projMenuOpen ? { background: colors.bgLight } : {}),
               }}
             >
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
@@ -550,8 +549,8 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 onClick={(e) => e.stopPropagation()}
                 style={{
                   position: 'absolute', left: 0, right: 0, bottom: '100%', zIndex: 60,
-                  background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 6,
-                  borderBottom: 'none', borderBottomLeftRadius: 0, borderBottomRightRadius: 0,
+                  background: colors.bgLight, border: '1px solid ' + colors.border,
+                  borderBottom: 'none',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.15)', padding: 8,
                   display: 'flex', flexDirection: 'column', gap: 4,
                 }}
