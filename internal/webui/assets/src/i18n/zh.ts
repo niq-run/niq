@@ -40,6 +40,7 @@ export const zh: Record<StringKey, string> = {
   'sidebar.lang.tooltip': '切换语言',
   'sidebar.resize.tooltip': '拖动调整宽度，双击重置',
   'sidebar.close': '关闭',
+  'sidebar.logo.tooltip': '右键反转配色',
 
   // ── 主题与语言切换 ──
   'theme.light': '浅色',

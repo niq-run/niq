@@ -39,6 +39,7 @@ export const en = {
   'sidebar.lang.tooltip': 'switch language',
   'sidebar.resize.tooltip': 'drag to resize, double-click to reset',
   'sidebar.close': 'close',
+  'sidebar.logo.tooltip': 'right-click to invert colours',
 
   // ── Theme + language toggles ──
   'theme.light': 'light',

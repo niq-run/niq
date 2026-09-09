@@ -133,6 +133,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const logoRef = useRef<HTMLSpanElement>(null)
 
   const onLogoPointerDown = (e: ReactPointerEvent) => {
+    // Only the primary button drags the logo; the right button is reserved for
+    // the invert-colors context action on the band.
+    if (e.button !== 0) return
     // A click cycle may be holding its end frame via the Web Animations API;
     // cancel it so the CSS transform fully owns the drag.
     logoRef.current?.getAnimations().forEach(a => a.cancel())
@@ -228,6 +231,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // Hover state of the project block, for the hover-only border (a transparent
   // border is laid out in the resting state so the block never shifts).
   const [projBlockHover, setProjBlockHover] = useState(false)
+
+  // Right-click on the logo band inverts the band's colours: the background
+  // takes the logo's accent colour and the logo takes the page background.
+  const [logoInverted, setLogoInverted] = useState(false)
   useEffect(() => {
     if (!projMenuOpen) return
     const close = () => setProjMenuOpen(false)
@@ -337,11 +344,19 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           Bleeds to the sidebar's edges (negating the root padding) so its
           overflow clips the logo exactly at the right divider instead of
           letting it paint over the main content area. */}
-      <div style={{ flexShrink: 0, overflow: 'hidden', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`, borderBottom: '1px solid ' + colors.border, height: VIEW_HEADER_HEIGHT, display: 'flex', alignItems: 'center' }}>
+      <div
+        onContextMenu={(e) => { e.preventDefault(); setLogoInverted(v => !v) }}
+        title={t('sidebar.logo.tooltip')}
+        style={{
+          flexShrink: 0, overflow: 'hidden', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`,
+          borderBottom: '1px solid ' + colors.border, height: VIEW_HEADER_HEIGHT, display: 'flex', alignItems: 'center',
+          background: logoInverted ? colors.accent : 'transparent', transition: 'background 0.2s ease',
+        }}
+      >
       {/* Logo + project name — clicking anywhere here plays the single-click
           cycle (a drag in the logo suppresses it). */}
       <div style={{ flex: 1, minWidth: 0 }} onClick={onLogoClick}>
-        <h2 ref={logoWrapRef} style={{ margin: '0 0 0 -3px', lineHeight: 1, color: colors.accent, fontSize: 36, fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace", fontWeight: 'bold' }}>
+        <h2 ref={logoWrapRef} style={{ margin: '0 0 0 -3px', lineHeight: 1, color: logoInverted ? colors.bg : colors.accent, fontSize: 36, fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace", fontWeight: 'bold', transition: 'color 0.2s ease' }}>
           <span
             ref={logoRef}
             onPointerDown={onLogoPointerDown}
