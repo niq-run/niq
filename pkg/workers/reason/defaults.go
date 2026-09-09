@@ -99,12 +99,6 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		handleContextOp(w, evt, compactDirective)
 	})
 
-	// The context ops are self-editing: a call rewrites this worker's own
-	// transcript, so the mechanism excludes them from it (see
-	// BaseReasonWorker.RegisterTranscriptEditEvent).
-	w.RegisterTranscriptEditEvent(reasonBase.TypeContextCompress)
-	w.RegisterTranscriptEditEvent(TypeContextRotate)
-
 	// Program management: query or mutate this worker's instruction/playbook
 	// list. Deliberately NOT SelfOnly — the list is meant to be edited by other
 	// authorized workers (e.g. webui-hiw); bus permissions gate who may send
@@ -235,13 +229,24 @@ func handleWorkerInfo(w *reasonBase.BaseReasonWorker, callID, toolName, callerID
 
 // handleContextOp responds to a context.compress / context.rotate request: it
 // is the default worker's context strategy. It shrinks the transcript itself
-// (compactTranscript) and, because the mechanism fired the event but cannot
-// observe this async work, books the completion here: it answers with
-// request.completed / request.failed echoing the request's id and schedules
-// the next round via TryReason. overrideDirective is the program-provided
-// summarizer prompt (empty for the built-in fallback); the requester may
-// additionally carry a directive (compress focus) or a carry (rotate) in the
-// payload, and both are appended to the resolved compaction directive.
+// (compactTranscript).
+//
+// Two paths: when the request carries a tool call id (the model called the
+// compress/rotate tool), the call is already tracked as a normal tool with its
+// placeholder in the transcript — the replace with the placeholder survives the
+// edit because compaction keeps the last keepTail messages — so the handler
+// replies with a self-directed request.completed echoing that id. That resolves
+// the tracked request through the ordinary tool-result pairing (filling the
+// placeholder and setting needReason), scheduling the next round naturally.
+// When the request has no tool call id (the mechanism auto-fired
+// context.compress under hard budget pressure), it does not go through the tool
+// machinery at all: it compacts and broadcasts request.completed only for
+// observation, leaving the transcript untouched by any tool marker, and
+// schedules the next round directly via TryReason.
+// overrideDirective is the program-provided summarizer prompt (empty for the
+// built-in fallback); the requester may additionally carry a directive (compress
+// focus) or a carry (rotate) in the payload, and both are appended to the
+// resolved compaction directive.
 func handleContextOp(w *reasonBase.BaseReasonWorker, evt event.Event, overrideDirective string) {
 	isRotate := evt.Type == TypeContextRotate
 	traceID := evt.TraceID
@@ -257,16 +262,36 @@ func handleContextOp(w *reasonBase.BaseReasonWorker, evt event.Event, overrideDi
 		directive = directive + "\nCarry into the new episode: " + carry
 	}
 
+	// The model-invoked path carries the compress/rotate tool call id in
+	// RequestId; the auto-fired event (hard budget) has none.
+	callID := evt.RequestId
+
 	go func() {
 		err := compactTranscript(w, context.Background(), isRotate, directive)
 		log.Printf("[reason %s] context op %s done: %v", w.ID(), evt.Type, err)
+		if callID != "" {
+			// Model-invoked: resolve the already-tracked request via the normal
+			// pairing (fills the placeholder that survived the edit); the
+			// resolution's needReason schedules the next round.
+			if err != nil {
+				w.ReplyFailed(w.ID(), callID, err.Error(), traceID)
+				return
+			}
+			label := "compress"
+			if isRotate {
+				label = "rotate"
+			}
+			w.ReplyCompleted(w.ID(), callID, compactionNote(label), traceID)
+			return
+		}
+		// Auto-fired (hard budget): no tool call, so no pairing — broadcast a
+		// completion only for observation; the transcript sees no tool marker.
 		typ := event.TypeRequestCompleted
 		payload := map[string]any{"error": fmt.Sprintf("%v", err)}
 		if err != nil {
 			typ = event.TypeRequestFailed
 		}
 		done := event.New(typ, w.ID(), payload)
-		done.RequestId = evt.RequestId
 		done.TraceID = traceID
 		_ = w.Channel.Broadcast(context.Background(), done)
 		w.TryReason(context.Background())

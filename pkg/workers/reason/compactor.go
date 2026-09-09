@@ -16,7 +16,6 @@ import (
 
 	llm "github.com/niq-run/niq/core/llm"
 	"github.com/niq-run/niq/pkg/reason"
-	"github.com/niq-run/niq/pkg/reason/transcript"
 )
 
 // FallbackCompactDirective is the built-in summarizer system prompt used when
@@ -33,8 +32,9 @@ verbose tool output. Output only the summary, in a compact structured form.`
 // rotate is true it starts a fresh context keeping only this turn's own pair
 // (context.rotate). The summarize call runs without the mechanism lock; the
 // transcript self-buffers concurrent Apply inputs during the edit and merges
-// them on commit. On success a note is appended so the model knows the
-// operation ran and does not re-decide to compress every round.
+// them on commit. The last keepTail messages are preserved, so a compress/rotate
+// tool pair already in the tail (its placeholder) survives the edit and is
+// filled by the normal tool-result resolution when the op replies.
 func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, rotate bool, directive string) error {
 	t := w.Transcript()
 	msgs := t.BeginEdit()
@@ -63,20 +63,13 @@ func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, rotate b
 	t.CommitEdit(digest, keepTail)
 	log.Printf("[reason] transcript compacted (rotate=%t, keepTail=%d, digest=%d chars, update=%v)",
 		rotate, keepTail, len(digest), previousDigest != "")
-
-	label := "compress"
-	if rotate {
-		label = "rotate"
-	}
-	t.Apply(transcript.InputPatch{Messages: []llm.Message{{
-		Role:    llm.RoleUser,
-		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: compactionNote(label)}},
-	}}})
 	return nil
 }
 
-// compactionNote is the transcript message appended after a successful
-// compaction so the model can proceed instead of re-deciding to compress.
+// compactionNote is the human-readable description of a completed compaction,
+// used as the tool result text the model sees for the compress/rotate pair (and
+// the completion echoed to observers) — so it knows the operation ran and does
+// not re-decide to compress every round.
 func compactionNote(label string) string {
 	if label == "rotate" {
 		return "[system] episode rotated: history was compacted into a carried digest and a fresh context started. Continue the task."

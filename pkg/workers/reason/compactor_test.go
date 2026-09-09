@@ -241,10 +241,12 @@ func firstText(m llm.Message) string {
 	return m.Content[0].Text
 }
 
-// TestCompactionAppendsNote verifies a successful compaction appends a
-// completion note to the transcript, so the model knows the operation ran and
-// does not re-decide to compress every round.
-func TestCompactionAppendsNote(t *testing.T) {
+// TestCompactionAutoPathNoToolMarker verifies the auto-fired compress path (a
+// context.compress event with no tool call id) rewrites the transcript to a
+// digest head but records NO tool marker: the model did not call the tool, so
+// the completion is for observation only and the transcript carries no
+// compress tool pair.
+func TestCompactionAutoPathNoToolMarker(t *testing.T) {
 	prov := &summarizeProvider{summarized: "s1",
 		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
 	seed := []llm.Message{
@@ -257,13 +259,25 @@ func TestCompactionAppendsNote(t *testing.T) {
 
 	waitCond(t, 2*time.Second, func() bool {
 		msgs := w.Messages()
+		if len(msgs) == 0 {
+			return false
+		}
+		// A digest head was applied.
+		if !strings.HasPrefix(firstText(msgs[0]), "[context digest]") {
+			return false
+		}
+		// No assistant context_compress tool_call was recorded.
 		for _, m := range msgs {
-			if strings.Contains(firstText(m), "context compressed") {
-				return true
+			if m.Role == llm.RoleAssistant {
+				for _, b := range m.Content {
+					if b.Type == llm.ContentToolCall && b.ToolName == "context_compress" {
+						return false
+					}
+				}
 			}
 		}
-		return false
-	}, "compaction note to be appended")
+		return true
+	}, "auto compress to apply a digest with no compress tool pair")
 }
 
 // TestMetaCompressViaUpdateRequested verifies the compress meta operation,
@@ -290,6 +304,80 @@ func TestMetaCompressViaUpdateRequested(t *testing.T) {
 		}
 		return false
 	}, "compress to apply a digest head")
+}
+
+// compressFlowProvider drives the three LLM touchpoints of a model-invoked
+// compress round: the reasoning stream first returns a context_compress tool
+// call, the summarizer (Complete) returns the digest text, and the follow-up
+// round returns a plain reply.
+type compressFlowProvider struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *compressFlowProvider) Complete(_ context.Context, req *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	return &llm.CompletionResponse{Message: llm.Message{Role: llm.RoleAssistant,
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "DIGEST compressed"}}}}, nil
+}
+
+func (p *compressFlowProvider) CompleteStream(_ context.Context, _ *llm.CompletionRequest) (*llm.EventStream, error) {
+	p.mu.Lock()
+	p.calls++
+	n := p.calls
+	p.mu.Unlock()
+	var msg llm.Message
+	if n == 1 {
+		msg = llm.Message{Role: llm.RoleAssistant, StopReason: "tool_calls",
+			Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolName: "context_compress"}}}
+	} else {
+		msg = llm.Message{Role: llm.RoleAssistant, StopReason: "stop",
+			Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "done"}}}
+	}
+	es := llm.NewEventStream()
+	es.Push(llm.EventTextStart{})
+	es.Push(llm.EventTextEnd{})
+	es.End(msg)
+	return es, nil
+}
+
+func (p *compressFlowProvider) ListModels(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
+
+// TestMetaCompressRecordsToolPair verifies the model-invoked compress path
+// records a real tool pair in the compressed transcript — an assistant
+// context_compress tool_call followed by a matching tool result — via the
+// ordinary placeholder + tracker pairing. The compress tool call is kept in the
+// transcript and its placeholder survives compaction (keepTail), then the
+// self request.completed resolution fills it.
+func TestMetaCompressRecordsToolPair(t *testing.T) {
+	prov := &compressFlowProvider{}
+	w, ch, cancel := startWorker(t, prov)
+	defer cancel()
+
+	// Self-ready first (FIFO), so context_compress resolves through discovery;
+	// then the input that triggers the reasoning round.
+	ch.in <- event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+		"worker_id": w.ID(),
+		"watch":     w.ExtensionEntries(),
+	})
+	ch.in <- event.New(event.TypeWorkerInput, "webui-hiw", map[string]any{"text": "compact please", "input_mode": "default"})
+
+	waitCond(t, 2*time.Second, func() bool {
+		msgs := w.Messages()
+		// Find an assistant context_compress tool_call paired with its result.
+		for i := range msgs {
+			if msgs[i].Role != llm.RoleAssistant {
+				continue
+			}
+			if msgs[i].Content[0].Type == llm.ContentToolCall && msgs[i].Content[0].ToolName == "context_compress" {
+				return i+1 < len(msgs) && msgs[i+1].Role == llm.RoleToolResult &&
+					msgs[i+1].ToolCallID == msgs[i].Content[0].ToolCallID
+			}
+		}
+		return false
+	}, "compress tool pair (assistant tool_call + tool result) to be recorded")
 }
 
 // TestMetaRotateViaUpdateRequested verifies the rotate meta operation runs
