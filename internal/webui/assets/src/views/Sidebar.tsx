@@ -1,4 +1,4 @@
-import { useState, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
@@ -15,6 +15,16 @@ interface SidebarProps {
   onToggleViewSetting: (k: ViewSettingKey) => void
   mode: 'control' | 'project'
   project?: string
+  // Attached project lifecycle for the footer menu: running state from the
+  // control-plane poll, in-flight stop/restart op, the banner's start op, and
+  // the three actions (same semantics as the projects page rows).
+  projRunning?: boolean
+  projBusy?: '' | 'stop' | 'restart'
+  projStarting?: boolean
+  projActionErr?: string
+  onProjectStart?: () => void
+  onProjectStop?: () => void
+  onProjectRestart?: () => void
   archived: Set<string>
   panel: 'projects' | 'templates' | 'providers' | null
   onSelectPanel: (p: 'projects' | 'templates' | 'providers') => void
@@ -37,7 +47,7 @@ function loadSidebarWidth(): number {
   return Math.min(Math.max(v, MIN_SIDEBAR_WIDTH), Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.5))
 }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0 }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0 }: SidebarProps) {
   const { dark, toggle, colors } = useTheme()
   const { lang, setLang, t } = useI18n()
   // Hovered sidebar option (non-toggle, non-checkbox rows) — shows a full-width
@@ -211,6 +221,16 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     }
     onNavigate()
   }
+
+  // Footer project menu: opened by clicking the project name in the bottom
+  // row; closes on any click outside the menu and its trigger.
+  const [projMenuOpen, setProjMenuOpen] = useState(false)
+  useEffect(() => {
+    if (!projMenuOpen) return
+    const close = () => setProjMenuOpen(false)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [projMenuOpen])
 
   // Desktop: a fixed left column. Mobile: an off-canvas drawer (fixed,
   // translated off-screen when closed) that overlays the main area.
@@ -487,14 +507,65 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       </div>
 
       {/* Fixed footer: current project on the left, theme + language toggles
-          on the right — stays put when the options scroll. */}
+          on the right — stays put when the options scroll. The row reads as
+          two blocks: hovering the project name lights up the left half only. */}
       <div style={{ flexShrink: 0, marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
         {mode === 'project' && project && (
-          <div
-            title={project}
-            style={{ flex: 1, minWidth: 0, alignSelf: 'stretch', display: 'flex', alignItems: 'center', padding: '0 8px', color: colors.textDim, fontSize: fontSizes.sm + 1, overflow: 'hidden' }}
-          >
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
+          <div style={{ flex: 1, minWidth: 0, position: 'relative', alignSelf: 'stretch', display: 'flex' }}>
+            <div
+              onClick={(e) => {
+                e.stopPropagation()
+                if (projRunning === undefined) return
+                setProjMenuOpen(v => !v)
+              }}
+              title={projRunning === false ? t('projects.stopped') : project}
+              className="btn-hover"
+              style={{
+                flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', padding: '4px 8px',
+                color: colors.textDim, fontSize: fontSizes.sm + 1, borderRadius: 3,
+                cursor: projRunning !== undefined ? 'pointer' : 'default', userSelect: 'none',
+              }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
+            </div>
+            {/* Lifecycle menu, opening upward from the footer. Mirrors the
+                projects page rows: running → restart/stop, stopped → start,
+                with a spinner while an op is in flight and inline errors. */}
+            {projMenuOpen && projRunning !== undefined && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position: 'absolute', left: 0, bottom: '100%', marginBottom: 6, zIndex: 60,
+                  background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 6,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)', padding: 8, minWidth: 130,
+                  display: 'flex', flexDirection: 'column', gap: 4,
+                }}
+              >
+                {projBusy ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, color: colors.textDim, padding: '3px 8px' }}>
+                    <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
+                    {projBusy === 'stop' ? t('projects.stopping') : t('projects.restarting')}
+                  </span>
+                ) : projRunning ? (
+                  <>
+                    <span onClick={onProjectRestart} className="btn-hover" style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, borderRadius: 2, padding: '3px 8px', userSelect: 'none' }}>
+                      {t('projects.restart')}
+                    </span>
+                    <span onClick={onProjectStop} className="btn-hover" style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.toolFailed, borderRadius: 2, padding: '3px 8px', userSelect: 'none' }}>
+                      {t('projects.stop')}
+                    </span>
+                  </>
+                ) : (
+                  <span onClick={onProjectStart} className="btn-hover" style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, borderRadius: 2, padding: '3px 8px', display: 'inline-flex', alignItems: 'center', gap: 6, userSelect: 'none' }}>
+                    {projStarting && <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />}
+                    {projStarting ? t('projects.starting') : t('projects.start')}
+                  </span>
+                )}
+                {projActionErr && (
+                  <span style={{ color: colors.toolFailed, fontSize: fontSizes.xs, padding: '0 8px', wordBreak: 'break-all' }}>{projActionErr}</span>
+                )}
+              </div>
+            )}
           </div>
         )}
         <div

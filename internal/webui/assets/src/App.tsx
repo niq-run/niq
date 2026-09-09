@@ -17,9 +17,9 @@ import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
-import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject } from './services/api'
+import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject } from './services/api'
 import { attachmentBlock } from './components/talk-utils'
-import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
+import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, ProjectStartResult, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
 
 // Talk view settings are persisted to localStorage so toggles survive reloads.
 const VIEW_SETTINGS_KEY = 'niq.view-settings'
@@ -190,26 +190,61 @@ export default function App() {
   // Start the current project from a stale page: the start call blocks until
   // the project's WebUI port listens, so success means the page can go back.
   // Same origin → reload; the project came back on a different port → hop.
+  // Point the page at the project's WebUI after a control-plane start/restart:
+  // hop when it came back on a different port, reload when same-origin.
+  const goToProjectWebui = (r: ProjectStartResult) => {
+    if (r.webui_url) {
+      try {
+        const target = new URL(r.webui_url)
+        if (target.host !== window.location.host) {
+          window.location.href = r.webui_url
+          return
+        }
+      } catch { /* relative or malformed: fall through to reload */ }
+    }
+    window.location.reload()
+  }
+
   const startCurrentProject = async () => {
     if (!projectName || startingProj) return
     setStartingProj(true)
     setStartProjErr('')
     try {
-      const r = await startProject(projectName)
-      if (r.webui_url) {
-        try {
-          const target = new URL(r.webui_url)
-          if (target.host !== window.location.host) {
-            window.location.href = r.webui_url
-            return
-          }
-        } catch { /* relative or malformed: fall through to reload */ }
-      }
-      window.location.reload()
+      goToProjectWebui(await startProject(projectName))
     } catch (e) {
       setStartProjErr((e as Error)?.message || 'start failed')
     }
     setStartingProj(false)
+  }
+
+  // Sidebar footer project menu: restart / stop the attached project from the
+  // control plane, same semantics as the projects page. Restart reuses the
+  // start redirect (the project may come back on a different webui port).
+  // Stop intentionally leaves the page stale — the stopped banner offers the
+  // way back. Errors surface inside the menu.
+  const [projBusy, setProjBusy] = useState<'' | 'stop' | 'restart'>('')
+  const [projActionErr, setProjActionErr] = useState('')
+  const restartCurrentProject = async () => {
+    if (!projectName || projBusy) return
+    setProjBusy('restart')
+    setProjActionErr('')
+    try {
+      goToProjectWebui(await restartProject(projectName))
+    } catch (e) {
+      setProjActionErr((e as Error)?.message || 'restart failed')
+    }
+    setProjBusy('')
+  }
+  const stopCurrentProject = async () => {
+    if (!projectName || projBusy) return
+    setProjBusy('stop')
+    setProjActionErr('')
+    try {
+      await stopProject(projectName)
+    } catch (e) {
+      setProjActionErr((e as Error)?.message || 'stop failed')
+    }
+    setProjBusy('')
   }
 
   useEffect(() => {
@@ -702,6 +737,13 @@ export default function App() {
         onToggleViewSetting={toggleViewSetting}
         mode={mode}
         project={projectName}
+        projRunning={projRunning}
+        projBusy={projBusy}
+        projStarting={startingProj}
+        projActionErr={projActionErr}
+        onProjectStart={startCurrentProject}
+        onProjectStop={stopCurrentProject}
+        onProjectRestart={restartCurrentProject}
         panel={panel}
         onSelectPanel={setPanel}
         archived={archived}
