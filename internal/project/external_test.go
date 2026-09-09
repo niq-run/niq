@@ -45,7 +45,7 @@ func waitMarker(t *testing.T, path string, min int, timeout time.Duration) {
 func TestUnmanagedSupervisorRestartAndStop(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "runs.log")
 	sv := testSupervisor()
-	spec := ProjectWorker{
+	spec := WorkerConfig{
 		ID: "crashy", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo run >> " + marker + "; exit 1"},
 	}
@@ -73,7 +73,7 @@ func TestUnmanagedSupervisorRestartAndStop(t *testing.T) {
 func TestUnmanagedSupervisorManualRestart(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "runs.log")
 	sv := testSupervisor()
-	spec := ProjectWorker{
+	spec := WorkerConfig{
 		ID: "svc", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo run >> " + marker + "; sleep 60"},
 	}
@@ -94,7 +94,7 @@ func TestUnmanagedSupervisorManualRestart(t *testing.T) {
 func TestUnmanagedSupervisorShutdown(t *testing.T) {
 	sv := testSupervisor()
 	for _, id := range []string{"a", "b"} {
-		if err := sv.Start(ProjectWorker{ID: id, Type: "x", Command: []string{"/bin/sh", "-c", "sleep 60"}}); err != nil {
+		if err := sv.Start(WorkerConfig{ID: id, Type: "x", Command: []string{"/bin/sh", "-c", "sleep 60"}}); err != nil {
 			t.Fatalf("Start %s: %v", id, err)
 		}
 	}
@@ -122,7 +122,7 @@ func TestUnmanagedSupervisorShutdown(t *testing.T) {
 func TestUnmanagedSupervisorSingleInstance(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "runs.log")
 	sv := testSupervisor()
-	spec := ProjectWorker{
+	spec := WorkerConfig{
 		ID: "lark", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo run >> " + marker + "; sleep 60"},
 	}
@@ -157,7 +157,7 @@ func TestUnmanagedSupervisorStdoutLog(t *testing.T) {
 	sv.initialDelay = 10 * time.Millisecond
 	sv.maxDelay = 30 * time.Millisecond
 	sv.stableAfter = time.Hour
-	spec := ProjectWorker{
+	spec := WorkerConfig{
 		ID: "lark", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo hello-from-worker; sleep 1"},
 	}
@@ -193,7 +193,7 @@ func TestUnmanagedSupervisorStateDir(t *testing.T) {
 	sv.initialDelay = 10 * time.Millisecond
 	sv.maxDelay = 30 * time.Millisecond
 	sv.stableAfter = time.Hour
-	spec := ProjectWorker{
+	spec := WorkerConfig{
 		ID: "lark", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo \"$NIQ_STATE_DIR\" > $NIQ_STATE_DIR/where.log; sleep 60"},
 	}
@@ -238,7 +238,7 @@ func findStatus(sts []UnmanagedStatus, id string) *UnmanagedStatus {
 // declared allow lists.
 func TestProvisionUnmanaged(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	p, err := CreateProject("proj", &TemplateConfig{Workers: []WorkerConfig{
+	p, err := CreateProject("proj", "", &TemplateConfig{Workers: []WorkerConfig{
 		{Type: "mcp", ID: "ext", Managed: boolPtr(false), Command: []string{"npx", "x"}, Subscriptions: []SubscriptionSpec{{Type: "*"}}},
 	}})
 	if err != nil {

@@ -246,6 +246,7 @@ export const zh: Record<StringKey, string> = {
   'templates.create.sourceProject': '从项目导出',
   'templates.create.sourceTemplateHint': '原样复制所选模板文件。',
   'templates.create.sourceProjectHint': '将项目的工作单元配置导出为可编辑草稿，保存前不会写盘。',
+  'templates.create.includeProgram': '携带 program（复制项目的 programs 与 program 配置）',
   'templates.create.id': '模板 id',
   'templates.create.submit': '创建',
   'templates.create.saving': '创建中…',

@@ -85,15 +85,14 @@ type WorkerCreated struct {
 
 // WorkerDeclCreator creates a worker declaration on the spot from a
 // project.WorkerConfig-shaped JSON body: it persists the declaration into
-// project.json (seeding a managed worker's authoritative config.json) and
-// launches it — external workers directly, managed ones via the returned
-// Spawn payload. Implemented by the assembly layer; nil disables
+// project.json and launches it — external workers directly, managed ones via
+// the returned Spawn payload. Implemented by the assembly layer; nil disables
 // POST /api/workers/create.
 type WorkerDeclCreator interface {
 	Create(body json.RawMessage) (WorkerCreated, error)
 	// ManagedSpawn returns the spawn-event payload for a declared managed
-	// worker (read from its config.json). managed is false when the id is not
-	// a declared managed worker.
+	// worker (built from its project.json declaration). managed is false when
+	// the id is not a declared managed worker.
 	ManagedSpawn(id string) (spawn map[string]any, managed bool, err error)
 }
 
@@ -214,9 +213,9 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	mux.HandleFunc("POST /api/workers/{id}/stop", s.handleUnmanagedStop)
 	mux.HandleFunc("POST /api/workers/{id}/restart", s.handleUnmanagedRestart)
 
-	// Create a worker on the spot: persist a declaration into project.json
-	// (seeding a managed worker's config.json) and launch it — external
-	// workers directly, managed ones via the host worker's spawn event.
+	// Create a worker on the spot: persist a declaration into project.json and
+	// launch it — external workers directly, managed ones via the host worker's
+	// spawn event.
 	mux.HandleFunc("POST /api/workers/create", s.handleWorkerCreate)
 
 	// Delete a worker: stop it, revoke its bus identity, remove its persisted

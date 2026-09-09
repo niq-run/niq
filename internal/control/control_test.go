@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -66,7 +65,7 @@ func TestControlBasicAuthLoopbackOpen(t *testing.T) {
 
 func TestControlContextAndList(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("alpha", fakeTemplate()); err != nil {
+	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +133,7 @@ func TestControlTemplates(t *testing.T) {
 // returns 409 before any subprocess is launched.
 func TestControlCreateRejectsDuplicate(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("taken", fakeTemplate()); err != nil {
+	if _, err := project.CreateProject("taken", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	base := newControl(t)
@@ -202,7 +201,7 @@ func TestControlTemplateCloneDelete(t *testing.T) {
 	if strings.Contains(body, "t1") {
 		t.Fatalf("templates still has t1: %s", body)
 	}
-	_ = os.RemoveAll(filepath.Join(project.TemplatesDir(), "t1.json"))
+	_ = os.RemoveAll(project.TemplateDir(project.TemplatesDir(), "t1"))
 }
 
 // TestControlStopNotRunning asserts stopping a project with no live process
@@ -243,7 +242,7 @@ func TestControlStartProjectNotFound(t *testing.T) {
 // template), updating it (PUT), and the validation paths.
 func TestControlTemplateFromProject(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("alpha", fakeTemplate()); err != nil {
+	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	base := newControl(t)
@@ -269,7 +268,7 @@ func TestControlTemplateFromProject(t *testing.T) {
 	if code != 200 || !strings.Contains(body, `"niq"`) || !strings.Contains(body, "volcan-ark") {
 		t.Fatalf("preview status=%d body=%s", code, body)
 	}
-	if _, err := os.Stat(filepath.Join(project.TemplatesDir(), "t1.json")); err == nil {
+	if _, err := os.Stat(project.TemplatePath(project.TemplatesDir(), "t1")); err == nil {
 		t.Fatal("preview must not write a template file")
 	}
 

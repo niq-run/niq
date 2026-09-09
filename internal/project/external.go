@@ -61,7 +61,7 @@ type UnmanagedSupervisor struct {
 }
 
 type procState struct {
-	spec    ProjectWorker
+	spec    WorkerConfig
 	ctx     context.Context
 	cancel  context.CancelFunc
 	alive   bool
@@ -96,7 +96,7 @@ func NewUnmanagedSupervisor(busURL, workersRoot string, logf func(string, ...any
 // kills any existing (possibly stale) child for that id, then launches fresh.
 // The process is supervised: an unexpected exit restarts it with exponential
 // backoff.
-func (s *UnmanagedSupervisor) Start(spec ProjectWorker) error {
+func (s *UnmanagedSupervisor) Start(spec WorkerConfig) error {
 	if len(spec.Command) == 0 {
 		return fmt.Errorf("unmanaged worker %s: command is required", spec.ID)
 	}
@@ -306,7 +306,7 @@ func (s *UnmanagedSupervisor) logOutput(id string) *os.File {
 	return w
 }
 
-func (s *UnmanagedSupervisor) buildEnv(spec ProjectWorker) []string {
+func (s *UnmanagedSupervisor) buildEnv(spec WorkerConfig) []string {
 	env := os.Environ()
 	env = append(env,
 		envBusURL+"="+s.busURL,
@@ -348,7 +348,7 @@ func nextBackoff(d, max time.Duration) time.Duration {
 // generates and persists a credential on first launch (reusing it afterwards —
 // the bus only recognizes credentials) and registers the worker's identity with
 // the registry. It mutates spec.Credential when generating a fresh one.
-func provisionUnmanaged(registry corebus.IdentityRegistry, projectID string, spec *ProjectWorker) error {
+func provisionUnmanaged(registry corebus.IdentityRegistry, projectID string, spec *WorkerConfig) error {
 	if spec.Credential == "" {
 		cred, err := randomCredential()
 		if err != nil {

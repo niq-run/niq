@@ -3,7 +3,6 @@ package project
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -44,7 +43,7 @@ func exportTemplate() *TemplateConfig {
 func TestExportProjectTemplateRoundTrip(t *testing.T) {
 	setupProjectsRoot(t)
 	src := exportTemplate()
-	if _, err := CreateProject("alpha", src); err != nil {
+	if _, err := CreateProject("alpha", "", src); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 
@@ -58,7 +57,7 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 		t.Fatalf("SaveProject: %v", err)
 	}
 
-	out, err := ExportProjectTemplate("alpha")
+	out, err := ExportProjectTemplate("alpha", false)
 	if err != nil {
 		t.Fatalf("ExportProjectTemplate: %v", err)
 	}
@@ -122,20 +121,100 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 	}
 }
 
-// TestExportProjectTemplateMissingConfig verifies a managed worker without a
-// config.json fails the export (with the id) instead of exporting a hollow
-// worker.
-func TestExportProjectTemplateMissingConfig(t *testing.T) {
+// TestExportProjectTemplatePrograms verifies the withProgram switch: a reason
+// worker's programs param is lifted into Programs only when asked for.
+func TestExportProjectTemplatePrograms(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := CreateProject("alpha", fakeTemplate()); err != nil {
+	if _, err := CreateProject("alpha", "", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if err := os.Remove(filepath.Join(ProjectDir("alpha"), "workers", "niq", "config.json")); err != nil {
-		t.Fatalf("remove config: %v", err)
+	if err := AppendWorkerDecl("alpha", WorkerConfig{Type: "reason", ID: "niq", Params: map[string]any{
+		"programs": []any{map[string]any{
+			"name": "review", "content_type": "playbook", "content": "# Review\n...",
+		}},
+	}}); err != nil {
+		t.Fatalf("AppendWorkerDecl: %v", err)
 	}
-	_, err := ExportProjectTemplate("alpha")
-	if err == nil || !strings.Contains(err.Error(), "niq") {
-		t.Fatalf("want an error naming the worker, got %v", err)
+
+	out, err := ExportProjectTemplate("alpha", true)
+	if err != nil {
+		t.Fatalf("ExportProjectTemplate(with program): %v", err)
+	}
+	if len(out.Workers[0].Programs) != 1 || out.Workers[0].Programs[0].Name != "review" ||
+		out.Workers[0].Programs[0].ContentType != "playbook" {
+		t.Fatalf("programs = %+v, want [review/playbook]", out.Workers[0].Programs)
+	}
+
+	out, err = ExportProjectTemplate("alpha", false)
+	if err != nil {
+		t.Fatalf("ExportProjectTemplate(no program): %v", err)
+	}
+	if len(out.Workers[0].Programs) != 0 {
+		t.Fatalf("programs leaked without the flag: %+v", out.Workers[0].Programs)
+	}
+}
+
+// TestExportProjectPrograms verifies the programs resources are copied into a
+// template directory, and a project without programs is a no-op.
+func TestExportProjectPrograms(t *testing.T) {
+	setupProjectsRoot(t)
+	if _, err := CreateProject("alpha", "", nil); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	tmplDir := t.TempDir()
+	copied, err := ExportProjectPrograms("alpha", tmplDir)
+	if err != nil || copied {
+		t.Fatalf("no-programs project: copied=%v err=%v, want false/nil", copied, err)
+	}
+
+	src := ProjectProgramsDir("alpha")
+	if err := os.MkdirAll(filepath.Join(src, "review"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "review", "SKILL.md"), []byte("---\nname: review\n---\n# Review"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	copied, err = ExportProjectPrograms("alpha", tmplDir)
+	if err != nil || !copied {
+		t.Fatalf("copy: copied=%v err=%v, want true/nil", copied, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(tmplDir, "programs", "review", "SKILL.md"))
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("programs not copied: %v", err)
+	}
+}
+
+// TestExportProjectTemplateRawParams verifies a declaration carrying a raw
+// params map — how a worker spawned at runtime is declared — exports the keys
+// the template can express and drops the rest.
+func TestExportProjectTemplateRawParams(t *testing.T) {
+	setupProjectsRoot(t)
+	if _, err := CreateProject("alpha", "", nil); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if err := AppendWorkerDecl("alpha", WorkerConfig{Type: "reason", ID: "spawned", Params: map[string]any{
+		"instruction": "do x", "model": "m", "goal": "ship it",
+	}}); err != nil {
+		t.Fatalf("AppendWorkerDecl: %v", err)
+	}
+	out, err := ExportProjectTemplate("alpha", false)
+	if err != nil {
+		t.Fatalf("ExportProjectTemplate: %v", err)
+	}
+	var w WorkerConfig
+	for _, x := range out.Workers {
+		if x.ID == "spawned" {
+			w = x
+		}
+	}
+	if w.ID == "" {
+		t.Fatalf("spawned worker missing from export: %+v", out.Workers)
+	}
+	if w.Instruction != "do x" || w.Model != "m" {
+		t.Fatalf("exported = %+v, want instruction/model lifted from params", w)
+	}
+	if w.Params != nil {
+		t.Fatalf("params leaked into the template: %v", w.Params)
 	}
 }
 
@@ -143,10 +222,10 @@ func TestExportProjectTemplateMissingConfig(t *testing.T) {
 // workers is an error, not an empty template file.
 func TestExportProjectTemplateEmpty(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := CreateProject("alpha", nil); err != nil {
+	if _, err := CreateProject("alpha", "", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if _, err := ExportProjectTemplate("alpha"); err == nil {
+	if _, err := ExportProjectTemplate("alpha", false); err == nil {
 		t.Fatal("exporting a workerless project should fail")
 	}
 }

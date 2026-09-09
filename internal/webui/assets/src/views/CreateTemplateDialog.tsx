@@ -11,13 +11,16 @@ interface CreateTemplateDialogProps {
   // From a template: the clone lands on disk immediately.
   onCreated: (id: string) => void
   // From a project: the export opens as an editable draft in the drawer.
-  onDraft: (id: string, body: any) => void
+  // fromProject/includeProgram ride along and take effect when the draft is
+  // saved (the programs/ resources are copied at that point).
+  onDraft: (id: string, body: any, opts: { fromProject: string; includeProgram: boolean }) => void
 }
 
 // CreateTemplateDialog is the templates-view "new template" form, styled after
 // the workers' create dialog: a centered overlay. The source is either another
-// template (a raw file clone, immediate) or an existing project (its worker
-// configurations open as an editable draft in the drawer).
+// template (a whole-directory clone, immediate) or an existing project (its
+// worker configurations open as an editable draft in the drawer, optionally
+// carrying the project's programs).
 export default function CreateTemplateDialog({ open, templates, projects, onClose, onCreated, onDraft }: CreateTemplateDialogProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
@@ -25,6 +28,7 @@ export default function CreateTemplateDialog({ open, templates, projects, onClos
   const [id, setId] = useState('')
   const [copyFrom, setCopyFrom] = useState('')
   const [fromProject, setFromProject] = useState('')
+  const [includeProgram, setIncludeProgram] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
 
@@ -73,8 +77,8 @@ export default function CreateTemplateDialog({ open, templates, projects, onClos
         await createTemplate(trimmed, src)
         onCreated(trimmed)
       } else {
-        const preview = await fetchTemplatePreview(src)
-        onDraft(trimmed, preview)
+        const preview = await fetchTemplatePreview(src, includeProgram)
+        onDraft(trimmed, preview, { fromProject: src, includeProgram })
       }
     } catch (e) {
       setNote(t('templates.error.create', { id: trimmed }))
@@ -150,6 +154,19 @@ export default function CreateTemplateDialog({ open, templates, projects, onClos
             </select>
           )}
         </div>
+
+        {/* From a project only: carry the project's programs into the template. */}
+        {source === 'project' && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, cursor: 'pointer', userSelect: 'none' }}>
+            <input
+              type="checkbox"
+              checked={includeProgram}
+              onChange={e => setIncludeProgram(e.target.checked)}
+              style={{ margin: 0, accentColor: colors.accent }}
+            />
+            <span style={{ fontSize: fontSizes.sm, color: colors.textDim }}>{t('templates.create.includeProgram')}</span>
+          </label>
+        )}
 
         {note && (
           <div style={{ fontSize: fontSizes.sm, color: colors.toolFailed, marginBottom: 10, lineHeight: 1.5, wordBreak: 'break-all' }}>{note}</div>

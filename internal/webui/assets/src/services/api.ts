@@ -63,20 +63,33 @@ export async function createTemplate(id: string, copyFrom: string): Promise<void
 
 // fetchTemplatePreview returns the template a project would export (its worker
 // configurations re-expressed) WITHOUT creating anything — the UI shows it as
-// an editable draft.
-export async function fetchTemplatePreview(projectId: string): Promise<any> {
-  const res = await fetch(CONTROL + `/api/projects/${encodeURIComponent(projectId)}/template-preview`)
+// an editable draft. includeProgram additionally carries the reason worker's
+// programs param (the programs/ resources are copied when the draft is saved).
+export async function fetchTemplatePreview(projectId: string, includeProgram = false): Promise<any> {
+  const q = includeProgram ? '?include_program=1' : ''
+  const res = await fetch(CONTROL + `/api/projects/${encodeURIComponent(projectId)}/template-preview` + q)
   if (!res.ok) throw new Error('template preview failed: ' + res.status)
   return res.json()
 }
 
 // createTemplateBody creates a new on-disk template from a full (edited)
-// template body.
-export async function createTemplateBody(id: string, template: any): Promise<void> {
+// template body. When the draft was exported from a project with the
+// include-program flag, the save also copies the project's programs/ resources
+// into the new template directory.
+export async function createTemplateBody(
+  id: string,
+  template: any,
+  opts?: { fromProject?: string; includeProgram?: boolean },
+): Promise<void> {
+  const body: Record<string, unknown> = { id, template }
+  if (opts?.fromProject) {
+    body.from_project = opts.fromProject
+    body.include_program = !!opts.includeProgram
+  }
   const res = await fetch(CONTROL + '/api/templates', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, template }),
+    body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(await errText(res, 'create template failed'))
 }

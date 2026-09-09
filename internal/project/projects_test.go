@@ -29,7 +29,7 @@ func TestCreateLoadListProject(t *testing.T) {
 	setupProjectsRoot(t)
 	root := ProjectsRoot()
 
-	if _, err := CreateProject("alpha", fakeTemplate()); err != nil {
+	if _, err := CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 	// project.json + directory should exist under projects/<alpha>.
@@ -42,25 +42,29 @@ func TestCreateLoadListProject(t *testing.T) {
 		t.Fatalf("project = %+v, want id alpha", p)
 	}
 
-	// Each template worker's authoritative config.json is seeded.
+	// Each template worker is declared with its full config in project.json.
+	created, err := LoadProject("alpha")
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
 	for _, id := range []string{"default-hiw", "niq"} {
-		cfg, ok := readWorkerConfig(ProjectDir("alpha"), id)
+		wc, ok := FindWorker(created, id)
 		if !ok {
-			t.Fatalf("worker %s config.json not seeded", id)
+			t.Fatalf("worker %s not declared", id)
 		}
-		if cfg.Type == "" {
-			t.Fatalf("worker %s config has no type", id)
+		if wc.Type == "" {
+			t.Fatalf("worker %s declaration has no type", id)
 		}
 	}
-	// The reason worker's template params (provider/model) carried over.
-	if cfg, ok := readWorkerConfig(ProjectDir("alpha"), "niq"); ok {
-		if cfg.Params["provider"] != "volcan-ark" {
-			t.Fatalf("niq provider = %v, want volcan-ark", cfg.Params["provider"])
+	// The reason worker's template config (provider/model) carried over.
+	if wc, ok := FindWorker(created, "niq"); ok {
+		if wc.Provider != "volcan-ark" || wc.Model != "deepseek-v4-flash" {
+			t.Fatalf("niq provider/model = %v/%v, want volcan-ark/deepseek-v4-flash", wc.Provider, wc.Model)
 		}
 	}
 
 	// Duplicate create must fail.
-	if _, err := CreateProject("alpha", fakeTemplate()); err == nil {
+	if _, err := CreateProject("alpha", "", fakeTemplate()); err == nil {
 		t.Fatal("expected error creating duplicate project")
 	}
 
@@ -78,37 +82,35 @@ func TestCreateLoadListProject(t *testing.T) {
 }
 
 // TestCreateProjectExpandsPlaceholder verifies the {project} template
-// placeholder is resolved once, at config.json seeding time — the persisted
-// config carries real paths and the runtime never sees it.
+// placeholder is resolved once, when the declaration is instantiated into
+// project.json — the runtime never sees it.
 func TestCreateProjectExpandsPlaceholder(t *testing.T) {
 	setupProjectsRoot(t)
 	tpl := &TemplateConfig{Workers: []WorkerConfig{
 		{Type: "workspace", ID: "ws", Mounts: []string{"~/.niq/projects/{project}/workspace"}},
 	}}
-	if _, err := CreateProject("alpha", tpl); err != nil {
+	if _, err := CreateProject("alpha", "", tpl); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	cfg, ok := readWorkerConfig(ProjectDir("alpha"), "ws")
+	p, err := LoadProject("alpha")
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	wc, ok := FindWorker(p, "ws")
 	if !ok {
-		t.Fatal("ws config.json not seeded")
+		t.Fatal("ws not declared in project.json")
 	}
-	raw, _ := cfg.Params["mounts"].([]any)
-	mounts := make([]string, 0, len(raw))
-	for _, m := range raw {
-		s, _ := m.(string)
-		mounts = append(mounts, s)
+	if len(wc.Mounts) != 1 || wc.Mounts[0] != "~/.niq/projects/alpha/workspace" {
+		t.Fatalf("declared mounts = %v, want [~/.niq/projects/alpha/workspace]", wc.Mounts)
 	}
-	if len(mounts) != 1 || mounts[0] != "~/.niq/projects/alpha/workspace" {
-		t.Fatalf("seeded mounts = %v, want [~/.niq/projects/alpha/workspace]", mounts)
-	}
-	if strings.Contains(fmt.Sprint(cfg.Params["mounts"]), "{project}") {
-		t.Fatalf("placeholder leaked into seeded config: %v", cfg.Params["mounts"])
+	if strings.Contains(fmt.Sprint(wc.Mounts), "{project}") {
+		t.Fatalf("placeholder leaked into the declaration: %v", wc.Mounts)
 	}
 }
 
 func TestSaveProjectMutatesArchived(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := CreateProject("beta", fakeTemplate()); err != nil {
+	if _, err := CreateProject("beta", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := LoadProject("beta")
@@ -138,33 +140,68 @@ func TestCreateProjectUnmanagedWorker(t *testing.T) {
 		{Type: "mcp", ID: "mcp-fs", Managed: boolPtr(false),
 			Command: []string{"npx", "mcp-fs"}, Env: map[string]string{"K": "V"}, Cwd: "/tmp"},
 	}}
-	if _, err := CreateProject("gamma", tmpl); err != nil {
+	if _, err := CreateProject("gamma", "", tmpl); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := LoadProject("gamma")
 	if len(p.Workers) != 2 {
 		t.Fatalf("workers = %d, want 2", len(p.Workers))
 	}
-	var mcp *ProjectWorker
+	var mcp *WorkerConfig
 	for i := range p.Workers {
 		if p.Workers[i].ID == "mcp-fs" {
 			mcp = &p.Workers[i]
 		}
 	}
-	if mcp == nil || mcp.Managed {
+	if mcp == nil || isManagedWorker(*mcp) {
 		t.Fatalf("mcp-fs entry = %+v, want unmanaged", mcp)
 	}
 	if len(mcp.Command) != 2 || mcp.Cwd != "/tmp" || mcp.Env["K"] != "V" {
 		t.Fatalf("mcp-fs launch spec = %+v", mcp)
 	}
-	// The managed worker still gets its authoritative worker-dir config.
-	if _, ok := readWorkerConfig(ProjectDir("gamma"), "niq"); !ok {
-		t.Fatal("niq config not seeded to worker dir")
+	// The managed worker is declared in project.json, not in a worker dir.
+	if wc, ok := FindWorker(p, "niq"); !ok || !isManagedWorker(wc) {
+		t.Fatalf("niq declaration = %+v, want managed", wc)
 	}
-	// Unmanaged workers are not seeded to the worker dir.
+	// Unmanaged workers are the only ones handed to the supervisor.
 	unm := UnmanagedWorkers(p)
 	if len(unm) != 1 || unm[0].ID != "mcp-fs" {
 		t.Fatalf("UnmanagedWorkers = %+v", unm)
+	}
+}
+
+// TestCreateProjectSeedsTemplatePrograms verifies a named template's programs
+// resources are copied into the new project's programs/ directory.
+func TestCreateProjectSeedsTemplatePrograms(t *testing.T) {
+	setupProjectsRoot(t)
+	tmplDir := TemplateDir(TemplatesDir(), "prog")
+	if err := os.MkdirAll(TemplateDir(tmplDir, ""), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(TemplatePath(TemplatesDir(), "prog"), []byte(`{"workers":[{"type":"reason","id":"niq"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	prog := filepath.Join(tmplDir, "programs", "review")
+	if err := os.MkdirAll(prog, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prog, "SKILL.md"), []byte("---\nname: review\n---\n# Review"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := CreateProject("alpha", "prog", nil); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(ProjectProgramsDir("alpha"), "review", "SKILL.md"))
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("template programs not seeded into project: %v", err)
+	}
+	// A project created without a template name gets nothing copied.
+	if _, err := CreateProject("beta", "", nil); err != nil {
+		t.Fatalf("CreateProject(beta): %v", err)
+	}
+	if _, err := os.Stat(ProjectProgramsDir("beta")); !os.IsNotExist(err) {
+		t.Fatalf("project without a template should have no programs dir, err=%v", err)
 	}
 }
 

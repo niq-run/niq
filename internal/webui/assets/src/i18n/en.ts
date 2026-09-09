@@ -257,6 +257,7 @@ export const en = {
   'templates.create.sourceProject': 'From project',
   'templates.create.sourceTemplateHint': 'Copies the selected template file as-is.',
   'templates.create.sourceProjectHint': "Exports the project's worker configurations as an editable draft — nothing is written until you save.",
+  'templates.create.includeProgram': 'Include programs (copy the project\'s programs dir and program config)',
   'templates.create.id': 'template id',
   'templates.create.submit': 'Create',
   'templates.create.saving': 'Creating…',

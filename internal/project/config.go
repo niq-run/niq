@@ -11,16 +11,17 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/worker"
 )
 
-//go:embed preset/*.json
+//go:embed preset
 var presetFS embed.FS
 
 // TemplateConfig is the top-level structure of a project template file: the
@@ -119,8 +120,8 @@ type WorkerConfig struct {
 	Mounts []string `json:"mounts,omitempty"`
 	// Approver is the worker boundary-expansion approval requests go to
 	// (workspace workers; default webui-hiw, empty disables the flow).
-	Approver  string            `json:"approver,omitempty"`
-	Archived  bool              `json:"archived,omitempty"`
+	Approver string `json:"approver,omitempty"`
+	Archived bool   `json:"archived,omitempty"`
 	// Managed marks the worker as host-managed (in-process, worker dir is the
 	// config authority). nil or true = managed; false = an external process
 	// launched by the project via Command/Env/Cwd.
@@ -129,11 +130,31 @@ type WorkerConfig struct {
 	Command    []string          `json:"command,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
 	Cwd        string            `json:"cwd,omitempty"`
+	// Params holds the raw type-specific construction params — the wire
+	// format every builder reads and the general escape hatch: spawn-time
+	// extras (goal/brief/programs/context tuning) and third-party worker
+	// types' private keys have no typed field. It overlays the typed fields
+	// above: on the same key, Params wins (see workerParams).
+	Params map[string]any `json:"params,omitempty"`
+	// Programs holds a reason worker's spawn-time program seeds (inline
+	// "skills" the worker loads at start). Only carried when an export is
+	// asked to include programs.
+	Programs []ProgramSpec `json:"programs,omitempty"`
 }
 
-// LoadPreset loads a built-in template by name (without the .json suffix).
+// ProgramSpec is one entry of a reason worker's programs param: an inline
+// program seed with its content. It is the template-level spelling of the
+// params entry build.go's parsePrograms reads.
+type ProgramSpec struct {
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"` // instruction | playbook
+	Description string `json:"description,omitempty"`
+	Content     string `json:"content,omitempty"`
+}
+
+// LoadPreset loads a built-in template by name (the directory under preset/).
 func LoadPreset(name string) (*TemplateConfig, error) {
-	raw, err := presetFS.ReadFile("preset/" + name + ".json")
+	raw, err := presetFS.ReadFile("preset/" + name + "/template.json")
 	if err != nil {
 		return nil, fmt.Errorf("project: preset %q not found", name)
 	}
@@ -156,22 +177,24 @@ func ValidateTemplate(raw []byte) (*TemplateConfig, error) {
 	return parseConfig(raw)
 }
 
-// TemplatesDir returns the on-disk template directory under the shared
-// "common" layer: ~/.niq/common/templates. Templates are seeded here from the
-// built-ins on first run and become user-editable files from then on.
+// A template is a directory under the shared "common" layer
+// (~/.niq/common/templates/<name>/): template.json holds the worker set, an
+// optional programs/ subdirectory carries the program resources the workers
+// reference. Templates are seeded here from the built-ins on first run and
+// become user-editable files from then on.
 func TemplatesDir() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".niq", "common", "templates")
 }
 
 // SeedTemplates copies the built-in preset templates to dir, but only when dir
-// has no .json yet (first-run seeding). Idempotent, best-effort on empty dirs.
+// holds no template yet (first-run seeding). Idempotent, best-effort on empty
+// dirs.
 func SeedTemplates(dir string) error {
 	if dir == "" {
 		return nil
 	}
-	existing, _ := filepath.Glob(filepath.Join(dir, "*.json"))
-	if len(existing) > 0 {
+	if names, _ := ListTemplatesIn(dir); len(names) > 0 {
 		return nil // already seeded: never clobber user-edited templates
 	}
 	entries, err := presetFS.ReadDir("preset")
@@ -182,21 +205,62 @@ func SeedTemplates(dir string) error {
 		return fmt.Errorf("project: mkdir templates %s: %w", dir, err)
 	}
 	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
 		name := e.Name()
-		raw, err := presetFS.ReadFile("preset/" + name)
+		sub, err := fs.Sub(presetFS, "preset/"+name)
 		if err != nil {
 			continue
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), raw, 0644); err != nil {
+		if err := os.CopyFS(filepath.Join(dir, name), sub); err != nil {
 			log.Printf("[project] seed template %s: %v", name, err)
 		}
 	}
 	return nil
 }
 
-// TemplatePath returns the on-disk path of a template file under the templates dir.
+// TemplateDir returns the on-disk directory of a template under the templates
+// dir.
+func TemplateDir(dir, name string) string {
+	return filepath.Join(dir, sanitizeID(name))
+}
+
+// TemplatePath returns the path of a template's template.json under the
+// templates dir.
 func TemplatePath(dir, name string) string {
-	return filepath.Join(dir, name+".json")
+	return filepath.Join(TemplateDir(dir, name), "template.json")
+}
+
+// TemplateProgramsDir returns the path of a template's programs/ resources.
+func TemplateProgramsDir(dir, name string) string {
+	return filepath.Join(TemplateDir(dir, name), "programs")
+}
+
+// ListTemplatesIn returns the template names found in dir: subdirectories that
+// hold a template.json, sorted.
+func ListTemplatesIn(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, e.Name(), "template.json")); err == nil {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// CopyDir recursively copies src to dst (dst must not exist). Used to clone
+// templates — template.json and programs/ travel together.
+func CopyDir(src, dst string) error {
+	return os.CopyFS(dst, os.DirFS(src))
 }
 
 // ReadTemplateRaw returns the raw JSON for a template, preferring the on-disk
@@ -207,19 +271,14 @@ func ReadTemplateRaw(dir, name string) ([]byte, error) {
 			return b, nil
 		}
 	}
-	return presetFS.ReadFile("preset/" + name + ".json")
+	return presetFS.ReadFile("preset/" + name + "/template.json")
 }
 
-// ListTemplates returns the available project template names (without the
-// .json suffix), preferring the on-disk common/templates dir (seeded + user
-// editable) and falling back to the embedded built-ins.
+// ListTemplates returns the available project template names, preferring the
+// on-disk common/templates dir (seeded + user editable) and falling back to
+// the embedded built-ins.
 func ListTemplates() ([]string, error) {
-	if files, err := filepath.Glob(filepath.Join(TemplatesDir(), "*.json")); err == nil && len(files) > 0 {
-		names := make([]string, 0, len(files))
-		for _, f := range files {
-			names = append(names, strings.TrimSuffix(filepath.Base(f), ".json"))
-		}
-		sort.Strings(names)
+	if names, err := ListTemplatesIn(TemplatesDir()); err == nil && len(names) > 0 {
 		return names, nil
 	}
 	entries, err := presetFS.ReadDir("preset")
@@ -228,7 +287,9 @@ func ListTemplates() ([]string, error) {
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		names = append(names, strings.TrimSuffix(e.Name(), ".json"))
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
 	}
 	sort.Strings(names)
 	return names, nil
@@ -297,7 +358,46 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 	if wc.Approver != "" {
 		p["approver"] = wc.Approver
 	}
+	if len(wc.Programs) > 0 {
+		arr := make([]any, len(wc.Programs))
+		for i, prog := range wc.Programs {
+			m := map[string]any{"name": prog.Name, "content_type": prog.ContentType}
+			if prog.Description != "" {
+				m["description"] = prog.Description
+			}
+			if prog.Content != "" {
+				m["content"] = prog.Content
+			}
+			arr[i] = m
+		}
+		p["programs"] = arr
+	}
 	return p
+}
+
+// workerParams returns the params map a worker is actually built from: the
+// typed fields lowered to params, overlaid with Params. The typed fields are
+// the authored view (template, WebUI form); Params is what the builders read
+// and the only place arbitrary per-type keys can live — so it wins.
+func workerParams(wc WorkerConfig) map[string]any {
+	p := workerConfigParams(wc)
+	for k, v := range wc.Params {
+		p[k] = v
+	}
+	return p
+}
+
+// spawnConfig lowers a declared worker into the workerhost-level config.
+func spawnConfig(wc WorkerConfig) worker.WorkerConfig {
+	return worker.WorkerConfig{ID: wc.ID, Type: wc.Type, Params: workerParams(wc)}
+}
+
+// declFromSpawn turns a runtime-spawned worker's config into a project.json
+// declaration. The params map is stored verbatim — it is the only place
+// arbitrary per-type keys (spawn-time goal/brief/programs, third-party worker
+// types) can live; the typed fields stay empty.
+func declFromSpawn(cfg worker.WorkerConfig) WorkerConfig {
+	return WorkerConfig{Type: cfg.Type, ID: cfg.ID, Params: cfg.Params}
 }
 
 func validateWorkers(cfg *TemplateConfig) (*TemplateConfig, error) {

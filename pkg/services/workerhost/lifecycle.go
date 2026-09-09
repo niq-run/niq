@@ -42,6 +42,7 @@ type WorkerService struct {
 	builders  map[string]Builder
 	store     WorkerStore     // optional; nil disables persistence
 	protected map[string]bool // essential worker ids: cannot be suspended/destroyed
+	onSpawn   func(cfg worker.WorkerConfig) error
 	mu        sync.Mutex
 }
 
@@ -58,6 +59,16 @@ func (s *WorkerService) SetStore(store WorkerStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.store = store
+}
+
+// SetSpawnHook sets the callback invoked after a worker is created: the
+// declaring layer (project) uses it to persist the declaration of a worker
+// spawned at runtime, so it survives a restart. Recovery does not go through
+// it — declared workers are already on disk.
+func (s *WorkerService) SetSpawnHook(fn func(cfg worker.WorkerConfig) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSpawn = fn
 }
 
 // RegisterBuilder registers a Builder for a worker type. CreateWorker dispatches
@@ -81,7 +92,18 @@ func (s *WorkerService) CreateWorker(ctx context.Context, cfg worker.WorkerConfi
 	if err != nil {
 		return fmt.Errorf("workerhost: build %q: %w", cfg.ID, err)
 	}
-	return s.spawn(ctx, spec)
+	if err := s.spawn(ctx, spec); err != nil {
+		return err
+	}
+	// The worker is running; let the declaring layer record it (a project
+	// appends it to project.json). Recovery never comes through here, and a
+	// declaration that is already there is left alone.
+	if s.onSpawn != nil {
+		if err := s.onSpawn(cfg); err != nil {
+			log.Printf("[workerhost] declare worker %s: %v", cfg.ID, err)
+		}
+	}
+	return nil
 }
 
 // spawn connects, builds and starts a worker from a SpawnSpec, then records it.
@@ -109,9 +131,6 @@ func (s *WorkerService) spawn(ctx context.Context, spec worker.SpawnSpec) error 
 		state:  worker.StateRunning,
 	})
 	if s.store != nil {
-		if err := s.store.SaveConfig(spec.Config); err != nil {
-			log.Printf("[workerhost] persist config %s: %v", spec.ID(), err)
-		}
 		if err := s.store.SaveState(spec.ID(), worker.StateRunning, nil); err != nil {
 			log.Printf("[workerhost] persist state %s: %v", spec.ID(), err)
 		}
@@ -169,9 +188,6 @@ func (s *WorkerService) RestoreAndRun(ctx context.Context, cfg worker.WorkerConf
 	})
 	s.mu.Unlock()
 	if s.store != nil {
-		if err := s.store.SaveConfig(spec.Config); err != nil {
-			log.Printf("[workerhost] persist config %s: %v", spec.ID(), err)
-		}
 		if err := s.store.SaveState(spec.ID(), worker.StateRunning, snapshot); err != nil {
 			log.Printf("[workerhost] persist state %s: %v", spec.ID(), err)
 		}
@@ -441,8 +457,8 @@ func (s *WorkerService) Worker(id string) (worker.ManagedWorker, bool) {
 	return nil, false
 }
 
-// LoadAllWorkers returns every persisted worker record from the store.
-func (s *WorkerService) LoadAllWorkers() ([]WorkerRecord, error) {
+// LoadAllWorkers returns every persisted worker state record from the store.
+func (s *WorkerService) LoadAllWorkers() ([]StateRecord, error) {
 	if s.store == nil {
 		return nil, nil
 	}
@@ -484,6 +500,10 @@ func (s *WorkerService) RestoreSuspended(cfg worker.WorkerConfig, snapshot []byt
 // RecoverOptions parameterizes RecoverAll: which workers must exist and run,
 // and which must be suspended regardless of their persisted state.
 type RecoverOptions struct {
+	// Workers is the declared worker set to recover, with its config. The
+	// store only holds runtime state, so the definition comes from here; a
+	// persisted state without a declaration is an orphan and is skipped.
+	Workers []worker.WorkerConfig
 	// Essential workers must exist and run: created fresh when absent from the
 	// store, restored to running even when persisted suspended. Their ids are
 	// protected — SuspendWorker and DestroyWorker refuse them.
@@ -494,8 +514,8 @@ type RecoverOptions struct {
 	Suspend []string
 }
 
-// RecoverAll restores the whole worker set from the store: every persisted
-// worker is re-materialized per its state (running → restore+run, suspended →
+// RecoverAll restores the whole worker set: every declared worker is
+// re-materialized per its persisted state (running → restore+run, suspended →
 // suspended), then the Essential/Suspend overrides are applied. It is the
 // single startup entry point — the assembly layer only boots the service.
 func (s *WorkerService) RecoverAll(ctx context.Context, opts RecoverOptions) error {
@@ -503,7 +523,7 @@ func (s *WorkerService) RecoverAll(ctx context.Context, opts RecoverOptions) err
 	if err != nil {
 		return fmt.Errorf("workerhost: load all: %w", err)
 	}
-	byID := map[string]WorkerRecord{}
+	byID := map[string]StateRecord{}
 	for _, rec := range recs {
 		byID[rec.ID] = rec
 	}
@@ -523,7 +543,7 @@ func (s *WorkerService) RecoverAll(ctx context.Context, opts RecoverOptions) err
 	}
 
 	restored := map[string]bool{}
-	restoreOne := func(id string, cfg worker.WorkerConfig, rec WorkerRecord, forceRun bool) error {
+	restoreOne := func(id string, cfg worker.WorkerConfig, rec StateRecord, forceRun bool) error {
 		restored[id] = true
 		if !forceRun && suspended[id] {
 			return s.RestoreSuspended(cfg, rec.Snapshot)
@@ -540,7 +560,7 @@ func (s *WorkerService) RecoverAll(ctx context.Context, opts RecoverOptions) err
 	for _, cfg := range opts.Essential {
 		rec, ok := byID[cfg.ID]
 		if !ok {
-			if err := s.CreateWorker(ctx, cfg); err != nil {
+			if err := s.RestoreAndRun(ctx, cfg, nil); err != nil {
 				return fmt.Errorf("workerhost: recover essential %q: %w", cfg.ID, err)
 			}
 			restored[cfg.ID] = true
@@ -551,13 +571,18 @@ func (s *WorkerService) RecoverAll(ctx context.Context, opts RecoverOptions) err
 		}
 	}
 
-	for id, rec := range byID {
-		if restored[id] {
+	for _, cfg := range opts.Workers {
+		if restored[cfg.ID] {
 			continue
 		}
-		cfg := worker.WorkerConfig{ID: rec.ID, Type: rec.Type, Params: rec.Params}
-		if err := restoreOne(id, cfg, rec, false); err != nil {
-			log.Printf("[workerhost] recover worker %s: %v", id, err)
+		rec, ok := byID[cfg.ID]
+		if !ok {
+			// Declared but never started: no persisted state yet means a
+			// fresh start, not a suspended one.
+			rec = StateRecord{ID: cfg.ID, State: worker.StateRunning}
+		}
+		if err := restoreOne(cfg.ID, cfg, rec, false); err != nil {
+			log.Printf("[workerhost] recover worker %s: %v", cfg.ID, err)
 		}
 	}
 	return nil

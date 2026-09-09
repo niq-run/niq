@@ -33,29 +33,23 @@ func (f *fakeWorker) Stop() error                         { return nil }
 func (f *fakeWorker) Snapshot() ([]byte, error)           { return f.snap, nil }
 func (f *fakeWorker) Restore(state []byte) error          { f.restored = state; return nil }
 
-// memoryStore is an in-memory WorkerStore for tests.
+// memoryStore is an in-memory WorkerStore for tests. It only holds runtime
+// state — the definitions come from the caller on recovery.
 type memoryStore struct {
-	recs map[string]WorkerRecord
+	recs map[string]StateRecord
 }
 
-func newMemoryStore() *memoryStore { return &memoryStore{recs: map[string]WorkerRecord{}} }
-
-func (m *memoryStore) SaveConfig(cfg worker.WorkerConfig) error {
-	rec := m.recs[cfg.ID]
-	rec.ID, rec.Type, rec.Params = cfg.ID, cfg.Type, cfg.Params
-	m.recs[cfg.ID] = rec
-	return nil
-}
+func newMemoryStore() *memoryStore { return &memoryStore{recs: map[string]StateRecord{}} }
 
 func (m *memoryStore) SaveState(id string, state worker.WorkerState, snapshot []byte) error {
 	rec := m.recs[id]
-	rec.State, rec.Snapshot = state, snapshot
+	rec.ID, rec.State, rec.Snapshot = id, state, snapshot
 	m.recs[id] = rec
 	return nil
 }
 
-func (m *memoryStore) LoadAll() ([]WorkerRecord, error) {
-	var out []WorkerRecord
+func (m *memoryStore) LoadAll() ([]StateRecord, error) {
+	var out []StateRecord
 	for _, r := range m.recs {
 		out = append(out, r)
 	}
@@ -159,12 +153,15 @@ func TestRecoverAllRespectsPersistedState(t *testing.T) {
 	svc.SetStore(store)
 	built := registerFakeBuilder(svc)
 
-	store.SaveConfig(worker.WorkerConfig{ID: "run-w", Type: "fake", Params: map[string]any{"p": 1}})
+	// Only the runtime state is persisted; the declaration is the caller's.
 	store.SaveState("run-w", worker.StateRunning, []byte("snap-run"))
-	store.SaveConfig(worker.WorkerConfig{ID: "susp-w", Type: "fake"})
 	store.SaveState("susp-w", worker.StateSuspended, []byte("snap-susp"))
 
-	if err := svc.RecoverAll(context.Background(), RecoverOptions{}); err != nil {
+	declared := []worker.WorkerConfig{
+		{ID: "run-w", Type: "fake", Params: map[string]any{"p": 1}},
+		{ID: "susp-w", Type: "fake"},
+	}
+	if err := svc.RecoverAll(context.Background(), RecoverOptions{Workers: declared}); err != nil {
 		t.Fatalf("RecoverAll: %v", err)
 	}
 
@@ -196,12 +193,11 @@ func TestRecoverAllEssentialAndSuspend(t *testing.T) {
 	_ = registerFakeBuilder(svc)
 
 	// webui-hiw persisted as suspended (defensive) + a worker persisted running.
-	store.SaveConfig(worker.WorkerConfig{ID: "webui-hiw", Type: "fake"})
 	store.SaveState("webui-hiw", worker.StateSuspended, []byte("snap-hiw"))
-	store.SaveConfig(worker.WorkerConfig{ID: "idle", Type: "fake"})
 	store.SaveState("idle", worker.StateRunning, []byte("snap-idle"))
 
 	opts := RecoverOptions{
+		Workers:   []worker.WorkerConfig{{ID: "idle", Type: "fake"}},
 		Essential: []worker.WorkerConfig{{ID: "webui-hiw", Type: "fake"}, {ID: "absent-essential", Type: "fake"}},
 		Suspend:   []string{"idle"},
 	}
@@ -230,7 +226,6 @@ func TestProtectedWorkersCannotBeSuspendedOrDestroyed(t *testing.T) {
 	svc.SetStore(store)
 	registerFakeBuilder(svc)
 
-	store.SaveConfig(worker.WorkerConfig{ID: "essential-w", Type: "fake"})
 	store.SaveState("essential-w", worker.StateRunning, nil)
 
 	if err := svc.RecoverAll(context.Background(), RecoverOptions{
@@ -245,7 +240,6 @@ func TestProtectedWorkersCannotBeSuspendedOrDestroyed(t *testing.T) {
 		t.Fatal("DestroyWorker on protected worker should fail")
 	}
 	// A non-essential worker is not protected.
-	store.SaveConfig(worker.WorkerConfig{ID: "plain", Type: "fake"})
 	store.SaveState("plain", worker.StateRunning, nil)
 	if err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "plain", Type: "fake"}); err != nil {
 		t.Fatalf("create plain: %v", err)
@@ -263,10 +257,11 @@ func TestRestoreSuspendedKeepsSnapshot(t *testing.T) {
 	svc.SetStore(store)
 	built := registerFakeBuilder(svc)
 
-	store.SaveConfig(worker.WorkerConfig{ID: "w", Type: "fake"})
 	store.SaveState("w", worker.StateSuspended, []byte("snap-w"))
 
-	if err := svc.RecoverAll(context.Background(), RecoverOptions{}); err != nil {
+	if err := svc.RecoverAll(context.Background(), RecoverOptions{
+		Workers: []worker.WorkerConfig{{ID: "w", Type: "fake"}},
+	}); err != nil {
 		t.Fatalf("RecoverAll: %v", err)
 	}
 	if err := svc.ResumeWorker(context.Background(), "w"); err != nil {

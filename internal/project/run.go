@@ -113,6 +113,7 @@ func RunProject(opts ProjectRunOptions) error {
 		ProgramsRoot: filepath.Join(projDir, "programs"),
 		ProjDir:      projDir,
 		UploadDir:    p.UploadDir,
+		Workers:      p.Workers,
 		BusAddr:      busAddr,
 		WebUIAddr:    webUIAddr,
 		WebUIAuth:    opts.WebUIAuth,
@@ -135,16 +136,17 @@ type assemblyOptions struct {
 	IDDir        string
 	StateDir     string
 	ProgramsRoot string
-	ProjDir      string // ~/.niq/projects/<id>; anchors the webui upload dir
-	UploadDir    string // optional upload_dir override from the project config
-	BusAddr      string // "" disables the HTTP bus
-	WebUIAddr    string // "" disables the WebUI
-	WebUIAuth    string // optional user:pass basic-auth spec for the WebUI ("" = disabled)
+	ProjDir      string         // ~/.niq/projects/<id>; anchors the webui upload dir
+	UploadDir    string         // optional upload_dir override from the project config
+	Workers      []WorkerConfig // the declared worker set: recovery + spawn input
+	BusAddr      string         // "" disables the HTTP bus
+	WebUIAddr    string         // "" disables the WebUI
+	WebUIAuth    string         // optional user:pass basic-auth spec for the WebUI ("" = disabled)
 	Banner       string
 	OnResolved   func(bus, webui string)
 	ContextInfo  webui.ContextInfo
-	EventsDB     string          // SQLite event store path (empty = in-memory)
-	Unmanaged    []ProjectWorker // external processes to launch after the bus is up
+	EventsDB     string         // SQLite event store path (empty = in-memory)
+	Unmanaged    []WorkerConfig // external processes to launch after the bus is up
 }
 
 // webuiHIWID is the project-owned hiw worker that drives the WebUI. It is
@@ -251,13 +253,25 @@ func runAssembly(opts assemblyOptions) error {
 	}
 	RegisterBuilders(buildCtx, workerSvc)
 
-	// Gate startup on an LLM provider when any persisted worker needs one.
-	if err := providerpkg.EnsureLLMConfigured(workerSvc); err != nil {
+	// The declared worker set is the recovery input: config comes from
+	// project.json, runtime state (and snapshot) from the store.
+	declared := make([]worker.WorkerConfig, 0, len(opts.Workers))
+	for _, wc := range opts.Workers {
+		if isManagedWorker(wc) {
+			declared = append(declared, spawnConfig(wc))
+		}
+	}
+	workerSvc.SetSpawnHook(func(cfg worker.WorkerConfig) error {
+		return AppendWorkerDecl(opts.ContextInfo.Project, declFromSpawn(cfg))
+	})
+
+	// Gate startup on an LLM provider when any declared worker needs one.
+	if err := providerpkg.EnsureLLMConfigured(declared); err != nil {
 		return err
 	}
 
-	// Recover the whole worker set from the store. webui-hiw is only ensured
-	// when the WebUI runs; when it does not, an existing webui-hiw is suspended.
+	// Recover the whole worker set. webui-hiw is only ensured when the WebUI
+	// runs; when it does not, an existing webui-hiw is suspended.
 	webUIOn := opts.WebUIAddr != ""
 	var essential []worker.WorkerConfig
 	var suspend []string
@@ -266,7 +280,7 @@ func runAssembly(opts assemblyOptions) error {
 	} else {
 		suspend = []string{webuiHIWID}
 	}
-	if err := workerSvc.RecoverAll(ctx, workerhost.RecoverOptions{Essential: essential, Suspend: suspend}); err != nil {
+	if err := workerSvc.RecoverAll(ctx, workerhost.RecoverOptions{Workers: declared, Essential: essential, Suspend: suspend}); err != nil {
 		return fmt.Errorf("project: recover workers: %w", err)
 	}
 
@@ -505,7 +519,7 @@ func (a *webuiUnmanagedAdapter) Start(id string) error {
 	if !ok {
 		return fmt.Errorf("worker %s not found", id)
 	}
-	if spec.Managed {
+	if isManagedWorker(spec) {
 		return fmt.Errorf("worker %s is managed, not an external process", id)
 	}
 	if err := provisionUnmanaged(a.registry, a.projectID, &spec); err != nil {
@@ -558,8 +572,9 @@ func (a *webuiUnmanagedAdapter) Declared() []webui.UnmanagedStatus {
 	}
 	var out []webui.UnmanagedStatus
 	for _, spec := range p.Workers {
-		st := webui.UnmanagedStatus{ID: spec.ID, Type: spec.Type, Managed: spec.Managed, State: "stopped"}
-		if !spec.Managed && running[spec.ID] {
+		managed := isManagedWorker(spec)
+		st := webui.UnmanagedStatus{ID: spec.ID, Type: spec.Type, Managed: managed, State: "stopped"}
+		if !managed && running[spec.ID] {
 			st.State = "running"
 			st.Alive = true
 		}

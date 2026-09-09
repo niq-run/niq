@@ -92,15 +92,15 @@ func TestWorkspaceSuspendResume(t *testing.T) {
 	}
 }
 
-// TestSpawnedWorkerSurvivesRestart verifies that a spawned (non-config) worker,
-// once persisted, is re-materialized as suspended after a process restart.
+// TestSpawnedWorkerSurvivesRestart verifies a worker's runtime state survives a
+// restart: the store keeps its (suspended) state, and recovery re-materializes
+// it from the declaration the calling layer hands back.
 func TestSpawnedWorkerSurvivesRestart(t *testing.T) {
 	bc, svc, storeDir := newTestEngine(t)
 	ctx := context.Background()
 
-	if err := svc.CreateWorker(ctx, worker.WorkerConfig{
-		Type: "workspace", Params: map[string]any{"mounts": []string{t.TempDir()}},
-	}); err != nil {
+	cfg := worker.WorkerConfig{Type: "workspace", Params: map[string]any{"mounts": []string{t.TempDir()}}}
+	if err := svc.CreateWorker(ctx, cfg); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	wsID := firstWorkerOfType(svc, "workspace")
@@ -132,12 +132,14 @@ func TestSpawnedWorkerSurvivesRestart(t *testing.T) {
 		t.Fatalf("worker %s not persisted", wsID)
 	}
 
-	// RestoreSuspended re-materializes it as suspended (not running).
-	if err := svc2.RestoreSuspended(worker.WorkerConfig{ID: wsID, Type: "workspace", Params: recParams(svc2, wsID)}, nil); err != nil {
-		t.Fatalf("restore: %v", err)
+	// Recovery re-materializes it as suspended (not running) — the declaration
+	// is what a project keeps in project.json.
+	cfg.ID = wsID
+	if err := svc2.RecoverAll(ctx, workerhost.RecoverOptions{Workers: []worker.WorkerConfig{cfg}}); err != nil {
+		t.Fatalf("recover: %v", err)
 	}
 	if info := workerStatus(svc2, wsID); info.State != worker.StateSuspended {
-		t.Fatalf("expected suspended after restore, got %s", info.State)
+		t.Fatalf("expected suspended after recovery, got %s", info.State)
 	}
 
 	// It can be resumed on the fresh service.
@@ -147,16 +149,6 @@ func TestSpawnedWorkerSurvivesRestart(t *testing.T) {
 	if info := workerStatus(svc2, wsID); info.State != worker.StateRunning {
 		t.Fatalf("expected running after resume, got %s", info.State)
 	}
-}
-
-func recParams(svc *workerhost.WorkerService, id string) map[string]any {
-	recs, _ := svc.LoadAllWorkers()
-	for _, r := range recs {
-		if r.ID == id {
-			return r.Params
-		}
-	}
-	return nil
 }
 
 func firstWorkerOfType(svc *workerhost.WorkerService, typ string) string {

@@ -15,13 +15,17 @@ func TestSeedTemplates(t *testing.T) {
 	if err := SeedTemplates(dir); err != nil {
 		t.Fatalf("SeedTemplates: %v", err)
 	}
-	// The default template should be present, as JSON.
-	raw, err := os.ReadFile(filepath.Join(dir, "default.json"))
+	// The default template should be present, as a template directory.
+	raw, err := os.ReadFile(filepath.Join(dir, "default", "template.json"))
 	if err != nil {
-		t.Fatalf("expected default.json after seed: %v", err)
+		t.Fatalf("expected default/template.json after seed: %v", err)
 	}
 	if len(raw) == 0 {
-		t.Fatal("seeded default.json is empty")
+		t.Fatal("seeded default template.json is empty")
+	}
+	names, _ := ListTemplatesIn(dir)
+	if len(names) != 1 || names[0] != "default" {
+		t.Fatalf("ListTemplatesIn = %v, want [default]", names)
 	}
 
 	// Seed again with a prior present dir: must not write anything new or error.
@@ -64,12 +68,13 @@ func TestLoadTemplatePrefersDisk(t *testing.T) {
 		t.Fatalf("fallback template workers = %d, want %d", len(fromEmbed.Workers), len(def.Workers))
 	}
 
-	// Seed, then overwrite default.json on disk with a minimal, distinct template.
+	// Seed, then overwrite default/template.json on disk with a minimal,
+	// distinct template.
 	if err := SeedTemplates(dir); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	minimal := `{"workers":[{"type":"reason","id":"solo"}]}`
-	if err := os.WriteFile(filepath.Join(dir, "default.json"), []byte(minimal), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "default", "template.json"), []byte(minimal), 0644); err != nil {
 		t.Fatal(err)
 	}
 	fromDisk, err := LoadTemplate(dir, "default")

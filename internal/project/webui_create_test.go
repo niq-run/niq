@@ -17,7 +17,7 @@ import (
 func newDeclCreator(t *testing.T) (*webuiDeclCreator, *UnmanagedSupervisor) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	if _, err := CreateProject("proj", nil); err != nil {
+	if _, err := CreateProject("proj", "", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(t.TempDir(), "id", "identities.json"))
@@ -33,9 +33,9 @@ func newDeclCreator(t *testing.T) (*webuiDeclCreator, *UnmanagedSupervisor) {
 	}, sv
 }
 
-// TestDeclCreatorManaged verifies a managed declaration is persisted as a
-// light project.json entry, its authoritative config.json is seeded from the
-// form body, and the spawn payload carries the flattened builder params.
+// TestDeclCreatorManaged verifies a managed declaration is persisted with its
+// full config in project.json, and the spawn payload carries the flattened
+// builder params.
 func TestDeclCreatorManaged(t *testing.T) {
 	c, _ := newDeclCreator(t)
 	created, err := c.Create(json.RawMessage(`{"type":"reason","id":"r1","instruction":"do x","model":"m"}`))
@@ -54,19 +54,11 @@ func TestDeclCreatorManaged(t *testing.T) {
 	if !ok {
 		t.Fatal("declaration not persisted")
 	}
-	if !spec.Managed || len(spec.Command) != 0 {
-		t.Fatalf("declaration = %+v, want a light managed entry", spec)
+	if !isManagedWorker(spec) || len(spec.Command) != 0 {
+		t.Fatalf("declaration = %+v, want a managed entry", spec)
 	}
-
-	cfg, ok := readWorkerConfig(ProjectDir("proj"), "r1")
-	if !ok {
-		t.Fatal("config.json not seeded")
-	}
-	if cfg.Type != "reason" {
-		t.Fatalf("config type = %q", cfg.Type)
-	}
-	if cfg.Params["instruction"] != "do x" || cfg.Params["model"] != "m" {
-		t.Fatalf("config params = %v", cfg.Params)
+	if spec.Type != "reason" || spec.Instruction != "do x" || spec.Model != "m" {
+		t.Fatalf("declaration = %+v, want the form's config", spec)
 	}
 
 	// Spawn payload: {type,id} plus the flattened params.
@@ -75,7 +67,7 @@ func TestDeclCreatorManaged(t *testing.T) {
 		t.Fatalf("spawn payload = %v", created.Spawn)
 	}
 
-	// ManagedSpawn rebuilds the same payload from config.json.
+	// ManagedSpawn rebuilds the same payload from the declaration.
 	payload, managed, err := c.ManagedSpawn("r1")
 	if err != nil || !managed {
 		t.Fatalf("ManagedSpawn = (%v, %v, %v)", payload, managed, err)
@@ -104,7 +96,7 @@ func TestDeclCreatorExternal(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec, ok := FindWorker(p, "e1")
-	if !ok || spec.Managed || len(spec.Command) == 0 {
+	if !ok || isManagedWorker(spec) || len(spec.Command) == 0 {
 		t.Fatalf("declaration = %+v, want an external entry with command", spec)
 	}
 	if spec.Credential == "" {

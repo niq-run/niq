@@ -13,14 +13,14 @@ import (
 	"github.com/niq-run/niq/pkg/services/workerhost"
 )
 
-// FileWorkerStore persists workers under a root directory, one subdirectory
-// per worker:
+// FileWorkerStore persists managed workers' runtime state under a root
+// directory, one subdirectory per worker:
 //
-//	<root>/<workerID>/config.json   — definition (authoritative)
-//	<root>/<workerID>/state.json    — {"state": "...", "snapshot": {…}}
+//	<root>/<workerID>/state.json   — {"state": "...", "snapshot": {…}}
 //
-// The root is the project's workers/ dir, so config.json doubles as the
-// authoritative per-worker definition read by the assembly layer.
+// The worker's definition (id/type/params) is not stored here: it lives in the
+// declaring layer's project.json, which hands it back on recovery. The root is
+// the project's workers/ dir.
 type FileWorkerStore struct {
 	root string
 }
@@ -35,21 +35,6 @@ func NewFileWorkerStore(root string) (*FileWorkerStore, error) {
 
 func (s *FileWorkerStore) dir(id string) string {
 	return filepath.Join(s.root, sanitizeID(id))
-}
-
-func (s *FileWorkerStore) SaveConfig(cfg worker.WorkerConfig) error {
-	dir := s.dir(cfg.ID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("workerhost: mkdir %s: %w", dir, err)
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("workerhost: marshal config %s: %w", cfg.ID, err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), data, 0644); err != nil {
-		return fmt.Errorf("workerhost: write config %s: %w", cfg.ID, err)
-	}
-	return nil
 }
 
 func (s *FileWorkerStore) SaveState(id string, state worker.WorkerState, snapshot []byte) error {
@@ -77,27 +62,26 @@ func (s *FileWorkerStore) SaveState(id string, state worker.WorkerState, snapsho
 	return nil
 }
 
-func (s *FileWorkerStore) LoadAll() ([]workerhost.WorkerRecord, error) {
+// LoadAll returns the persisted state of every worker that has one. Workers
+// declared but never started have no state.json yet and are simply absent —
+// RecoverAll treats them as fresh starts.
+func (s *FileWorkerStore) LoadAll() ([]workerhost.StateRecord, error) {
 	entries, err := os.ReadDir(s.root)
 	if err != nil {
 		return nil, fmt.Errorf("workerhost: read store root: %w", err)
 	}
-	var recs []workerhost.WorkerRecord
+	var recs []workerhost.StateRecord
 	for _, de := range entries {
 		if !de.IsDir() {
 			continue
 		}
 		id := de.Name()
-		cfg, err := readConfigFile(filepath.Join(s.root, id, "config.json"))
+		state, snapshot, err := readStateFile(filepath.Join(s.root, id, "state.json"))
 		if err != nil {
-			// Skip unreadable workers rather than failing the whole load.
 			continue
 		}
-		state, snapshot, _ := readStateFile(filepath.Join(s.root, id, "state.json"))
-		recs = append(recs, workerhost.WorkerRecord{
-			ID:       cfg.ID,
-			Type:     cfg.Type,
-			Params:   cfg.Params,
+		recs = append(recs, workerhost.StateRecord{
+			ID:       id,
 			State:    state,
 			Snapshot: snapshot,
 		})
@@ -112,18 +96,6 @@ func (s *FileWorkerStore) Delete(id string) error {
 type stateFile struct {
 	State    worker.WorkerState `json:"state"`
 	Snapshot json.RawMessage    `json:"snapshot,omitempty"`
-}
-
-func readConfigFile(path string) (worker.WorkerConfig, error) {
-	var cfg worker.WorkerConfig
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return cfg, err
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
 }
 
 func readStateFile(path string) (worker.WorkerState, []byte, error) {

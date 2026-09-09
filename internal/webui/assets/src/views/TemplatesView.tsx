@@ -34,9 +34,12 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
   // ── drawer editor state ──
   // jsonText is what the user types; tmpl is its last valid parse and the
   // object saved to disk. The save button stays blocked while the text does
-  // not parse.
+  // not parse. draftSource keeps the export origin (from-project drafts copy
+  // the project's programs/ on first save when draftProgram is set).
   const [draftId, setDraftId] = useState('')
   const [isNew, setIsNew] = useState(false)
+  const [draftSource, setDraftSource] = useState('')
+  const [draftProgram, setDraftProgram] = useState(false)
   const [tmpl, setTmpl] = useState<any>(null)
   const [jsonText, setJsonText] = useState('')
   const [jsonError, setJsonError] = useState('')
@@ -47,9 +50,11 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
   const [drawerWidth, setDrawerWidth] = useState(() =>
     Math.max(420, Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.4)))
 
-  const openEditor = (body: any, name: string, draft: boolean) => {
+  const openEditor = (body: any, name: string, draft: boolean, source = '', program = false) => {
     setDraftId(name)
     setIsNew(draft)
+    setDraftSource(source)
+    setDraftProgram(program)
     setTmpl(body)
     setJsonText(JSON.stringify(body, null, 2))
     setJsonError('')
@@ -69,6 +74,8 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
   const closeDrawer = () => {
     setSelected(null)
     setTmpl(null)
+    setDraftSource('')
+    setDraftProgram(false)
     setJsonText('')
     setJsonError('')
     setSaveError('')
@@ -125,14 +132,16 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
     setSaveError('')
     try {
       if (isNew) {
-        await createTemplateBody(id, tmpl)
+        await createTemplateBody(id, tmpl, { fromProject: draftSource, includeProgram: draftProgram })
       } else {
         await updateTemplate(draftId, tmpl)
       }
       try { setTemplates(await fetchTemplates()) } catch { /* usePolling retries */ }
-      // A saved draft becomes a saved template: the name locks and the next
-      // save goes through PUT.
+      // A saved draft becomes a saved template: the name locks, the next save
+      // goes through PUT, and the export origin no longer matters.
       setIsNew(false)
+      setDraftSource('')
+      setDraftProgram(false)
       setDraftId(id)
       setSaved(true)
       setSelected(id)
@@ -431,9 +440,9 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
           try { setTemplates(await fetchTemplates()) } catch { /* usePolling retries */ }
           setSelected(id)
         }}
-        onDraft={(id, body) => {
+        onDraft={(id, body, opts) => {
           setShowCreate(false)
-          openEditor(body, id, true)
+          openEditor(body, id, true, opts.fromProject, opts.includeProgram)
         }}
       />
 

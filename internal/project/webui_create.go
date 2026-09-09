@@ -10,8 +10,7 @@ import (
 )
 
 // webuiDeclCreator implements webui.WorkerDeclCreator: it persists a worker
-// declaration from the WebUI's create form into project.json — seeding a
-// managed worker's authoritative config.json — and launches it. External
+// declaration from the WebUI's create form into project.json and launches it.
 // workers are provisioned and started here; managed workers come back with a
 // spawn-event payload that the WebUI server sends to the host worker, so the
 // spawn rides the auditable bus instead of a direct worker-service call.
@@ -61,18 +60,15 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 	wc = instantiateWorker(wc, c.projectID)
 
 	if isManagedWorker(wc) {
-		// The builder reads everything from Params, so the authoritative
-		// config.json (seeded from the form) is the whole story; the
-		// project.json entry stays a light reference, like CreateProject's.
-		if err := seedWorkerConfig(ProjectDir(c.projectID), wc); err != nil {
-			return webui.WorkerCreated{}, err
-		}
-		p.Workers = append(p.Workers, ProjectWorker{ID: wc.ID, Type: wc.Type, Managed: true})
+		// The declaration carries the whole config, so persisting it is all
+		// it takes for the worker to survive a restart; the spawn payload
+		// rides the bus and the host worker creates the live instance.
+		p.Workers = append(p.Workers, wc)
 		if err := SaveProject(p); err != nil {
 			return webui.WorkerCreated{}, err
 		}
 		payload := map[string]any{"type": wc.Type, "id": wc.ID}
-		for k, v := range workerConfigParams(wc) {
+		for k, v := range workerParams(wc) {
 			payload[k] = v
 		}
 		return webui.WorkerCreated{ID: wc.ID, Type: wc.Type, Managed: true, Spawn: payload}, nil
@@ -81,35 +77,26 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 	if len(wc.Command) == 0 {
 		return webui.WorkerCreated{}, fmt.Errorf("command is required for an external worker")
 	}
-	spec := ProjectWorker{
-		ID:            wc.ID,
-		Type:          wc.Type,
-		Command:       wc.Command,
-		Env:           wc.Env,
-		Cwd:           wc.Cwd,
-		Subscriptions: wc.Subscriptions,
-		Publish:       wc.Publish,
-	}
-	p.Workers = append(p.Workers, spec)
+	p.Workers = append(p.Workers, wc)
 	if err := SaveProject(p); err != nil {
 		return webui.WorkerCreated{}, err
 	}
-	if err := provisionUnmanaged(c.registry, c.projectID, &spec); err != nil {
+	if err := provisionUnmanaged(c.registry, c.projectID, &wc); err != nil {
 		return webui.WorkerCreated{}, err
 	}
 	if c.supervisor == nil {
 		return webui.WorkerCreated{}, fmt.Errorf("worker creation requires a bus")
 	}
-	if err := c.supervisor.Start(spec); err != nil {
+	if err := c.supervisor.Start(wc); err != nil {
 		return webui.WorkerCreated{}, err
 	}
 	return webui.WorkerCreated{ID: wc.ID, Type: wc.Type}, nil
 }
 
 // ManagedSpawn returns the spawn-event payload for a declared managed worker,
-// built from its authoritative config.json. managed is false when the id is
-// not a declared managed worker (the caller falls through to the external
-// start path).
+// built from its project.json declaration. managed is false when the id is not
+// a declared managed worker (the caller falls through to the external start
+// path).
 func (c *webuiDeclCreator) ManagedSpawn(id string) (map[string]any, bool, error) {
 	if c.projectID == "" {
 		return nil, false, fmt.Errorf("worker creation requires a project")
@@ -118,16 +105,12 @@ func (c *webuiDeclCreator) ManagedSpawn(id string) (map[string]any, bool, error)
 	if err != nil {
 		return nil, false, err
 	}
-	spec, ok := FindWorker(p, id)
-	if !ok || !spec.Managed {
+	wc, ok := FindWorker(p, id)
+	if !ok || !isManagedWorker(wc) {
 		return nil, false, nil
 	}
-	cfg, ok := readWorkerConfig(ProjectDir(c.projectID), id)
-	if !ok {
-		return nil, false, fmt.Errorf("worker %s: config.json missing; cannot spawn", id)
-	}
-	payload := map[string]any{"type": cfg.Type, "id": cfg.ID}
-	for k, v := range cfg.Params {
+	payload := map[string]any{"type": wc.Type, "id": wc.ID}
+	for k, v := range workerParams(wc) {
 		payload[k] = v
 	}
 	return payload, true, nil

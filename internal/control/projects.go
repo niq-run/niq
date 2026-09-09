@@ -135,7 +135,7 @@ func (c *Control) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Reque
 		stdhttp.Error(w, "unknown template: "+body.Template, 400)
 		return
 	}
-	if _, err := project.CreateProject(body.ID, tmpl); err != nil {
+	if _, err := project.CreateProject(body.ID, body.Template, tmpl); err != nil {
 		stdhttp.Error(w, err.Error(), 409)
 		return
 	}

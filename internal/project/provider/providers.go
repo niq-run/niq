@@ -10,22 +10,18 @@ import (
 	"time"
 
 	llm "github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/core/worker"
 	"github.com/niq-run/niq/pkg/reason"
-	"github.com/niq-run/niq/pkg/services/workerhost"
 )
 
 // EnsureLLMConfigured gates project startup on an LLM provider being configured
-// when the persisted worker set includes a reason worker. On a missing or
+// when the declared worker set includes a reason worker. On a missing or
 // empty config it seeds the example provider.json and returns an actionable
 // error, so the project exits before any worker starts.
-func EnsureLLMConfigured(svc *workerhost.WorkerService) error {
-	recs, err := svc.LoadAllWorkers()
-	if err != nil {
-		return err
-	}
+func EnsureLLMConfigured(cfgs []worker.WorkerConfig) error {
 	needsLLM := false
-	for _, rec := range recs {
-		if rec.Type == "reason" {
+	for _, cfg := range cfgs {
+		if cfg.Type == "reason" {
 			needsLLM = true
 			break
 		}

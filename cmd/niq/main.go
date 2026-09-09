@@ -98,7 +98,7 @@ func runProject(args []string) error {
 		if err != nil {
 			return err
 		}
-		p, err := project.CreateProject(id, tmpl)
+		p, err := project.CreateProject(id, *templateName, tmpl)
 		if err != nil {
 			return err
 		}
