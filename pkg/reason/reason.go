@@ -384,7 +384,17 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 		log.Printf("[reason %s] no thinking blocks in response (content_blocks=%d)", w.ID(), len(finalMsg.Content))
 	}
 
+	// Publish the round's text (if any) as a durable reason.response before
+	// dispatching tool calls in a MIXED round (text + tool call). The streamed
+	// text_delta events are transient and never persisted, so such a round
+	// would otherwise lose its leading text on replay. Every completed LLM call
+	// is one reasoning round, so reason.end fires here too (the tool calls that
+	// follow belong to later rounds, each of which starts its own reason.start).
 	if len(toolCalls) > 0 {
+		if hasTextBlock(finalMsg) {
+			w.broadcastResponse(finalMsg, traceID)
+		}
+		w.broadcastReasonEnd(traceID, StopReason(finalMsg.StopReason))
 		w.handleToolCalls(ctx, toolCalls, traceID)
 		return
 	}
@@ -398,6 +408,18 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 
 	// calls tryReason again to catch overlapping events.
 	w.tryReason(ctx)
+}
+
+// hasTextBlock reports whether a message carries any text content block.
+// Mirrors broadcastResponse's content selection so the condition gates exactly
+// what broadcastResponse would emit.
+func hasTextBlock(msg llm.Message) bool {
+	for _, b := range msg.Content {
+		if b.Type == llm.ContentText && b.Text != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // handleContextBudget updates the token ledger from a completed round's final

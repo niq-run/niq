@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/llm"
@@ -206,6 +207,65 @@ func TestFinalMessageReturns(t *testing.T) {
 	if msg.StopReason != "stop" {
 		t.Fatalf("stop_reason = %q, want stop", msg.StopReason)
 	}
+}
+
+// mixedRoundProvider returns a message that carries BOTH text and a tool call
+// in one round, so the leading text must be published as a durable
+// reason.response before the tool call is dispatched.
+type mixedRoundProvider struct {
+	msg llm.Message
+}
+
+func (p *mixedRoundProvider) Complete(context.Context, *llm.CompletionRequest) (*llm.CompletionResponse, error) {
+	return &llm.CompletionResponse{Message: p.msg}, nil
+}
+
+func (p *mixedRoundProvider) CompleteStream(_ context.Context, _ *llm.CompletionRequest) (*llm.EventStream, error) {
+	es := llm.NewEventStream()
+	es.Push(llm.EventTextStart{})
+	es.Push(llm.EventTextEnd{})
+	es.End(p.msg)
+	return es, nil
+}
+
+func (p *mixedRoundProvider) ListModels(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
+
+// TestMixedRoundPublishesLeadingText verifies that when a single reasoning round
+// contains both text and a tool call, the leading text is published as a durable
+// reason.response (so it survives replay) rather than only existing as transient
+// text_delta events that are never persisted.
+func TestMixedRoundPublishesLeadingText(t *testing.T) {
+	const lead = "leading note that must be persisted"
+	prov := &mixedRoundProvider{msg: llm.Message{
+		Role: llm.RoleAssistant, StopReason: "tool_calls",
+		Content: []llm.ContentBlock{
+			{Type: llm.ContentText, Text: lead},
+			{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "context_compress", ToolArguments: "{}"},
+		},
+	}}
+	_, ch, _ := startWorker(t, prov)
+
+	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "go", "input_mode": "default"})
+
+	waitCond(t, 2*time.Second, func() bool {
+		for _, evt := range ch.eventsOf("reason.response") {
+			payload := evt.Payload["content"]
+			arr, ok := payload.([]any)
+			if !ok || len(arr) == 0 {
+				continue
+			}
+			if s, ok := arr[0].(string); ok && s == lead {
+				return true
+			}
+		}
+		return false
+	}, "mixed round to publish its leading text as reason.response")
+
+	// Each completed LLM call ends one reasoning round; with the worker parked on
+	// the pending tool result there will be exactly one reason.end so far.
+	waitCond(t, 2*time.Second, func() bool {
+		return len(ch.eventsOf("reason.end")) >= 1
+	}, "tool-call round to emit reason.end")
 }
 
 // TestTranscriptEditCallAndStripToolCalls moved to pkg/worker/reason:
