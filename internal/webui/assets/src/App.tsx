@@ -293,6 +293,10 @@ export default function App() {
   const streamKey = view === 'events'
     ? 'events-' + [...filterWorkers].sort().join(',') + '-' + [...filterRoles].sort().join(',') + '-' + traceFilter
     : 'all'
+  // Mirrors streamKey for async callbacks (the history fetch) to detect that
+  // their stream was torn down while the request was in flight.
+  const streamKeyRef = useRef(streamKey)
+  streamKeyRef.current = streamKey
 
   useEffect(() => {
     // No project → no event stream.
@@ -309,15 +313,18 @@ export default function App() {
     }
     const url = projectBase + `/api/stream?${params}`
 
-    // The events view clears its timeline immediately on entry (worker/trace
-    // filter changes the scope) so no stale rows flash before history arrives.
-    if (view === 'events') {
-      setEvents([])
-      eventsRef.current = []
-      seenRef.current.clear()
-      setDeliveries({})
-      deliveriesRef.current = {}
-    }
+    // Any streamKey change clears the timeline immediately — the incoming
+    // stream has a different scope, so no stale rows may flash before history
+    // arrives. This covers entering/leaving the events view and its filter
+    // changes alike: switching back to talk from a filtered events stream
+    // must rebuild the full timeline, not keep the filtered leftovers
+    // (otherwise the tail shows stale rows and whole stretches in between
+    // are missing).
+    setEvents([])
+    eventsRef.current = []
+    seenRef.current.clear()
+    setDeliveries({})
+    deliveriesRef.current = {}
     setSelectedEventId(null)
     setDetailEvt(null)
     setDetailStack([])
@@ -328,6 +335,7 @@ export default function App() {
     // already delivered events — including the watermark event itself — and a
     // wipe would drop them. The merged result is the same clean, correctly-
     // ordered timeline a rebuild would produce.
+    const myKey = streamKey
     const loadInitialHistory = async (watermark: string) => {
       if (!watermark) return
       noMoreRef.current = false
@@ -341,8 +349,10 @@ export default function App() {
         // events consumed between connect and this response are newer than
         // the history page and would be lost to a wipe. mergeEvents dedupes
         // by id and sorts, so the result is the clean timeline a rebuild
-        // would produce.
+        // would produce. The streamKey guard drops responses from a torn-
+        // down stream, so a slow fetch can't pollute the successor timeline.
         const older = (await loadEventsBefore(watermark, limit, workers, trace, roles)) as EventPayload[]
+        if (streamKeyRef.current !== myKey) return
         const filtered = older.filter((e) => e.type !== 'event.delivered')
         const merged = mergeEvents(eventsRef.current, filtered)
         eventsRef.current = merged
