@@ -98,12 +98,12 @@ const dark: Palette = {
 }
 
 const light: Palette = {
-  bg: '#f0f0f0',
-  bgLight: '#e0e0e0',
-  bgLighter: '#d6d6d6',
-  bgChip: '#e6e6e6',
-  border: '#c8c8c8',
-  borderLight: '#d0d0d0',
+  bg: '#ebebeb',
+  bgLight: '#dbdbdb',
+  bgLighter: '#d1d1d1',
+  bgChip: '#e0e0e0',
+  border: '#c3c3c3',
+  borderLight: '#cdcdcd',
   text: '#1a1a1a',
   textMuted: '#333',
   textDim: '#666',
@@ -128,10 +128,10 @@ const light: Palette = {
   eventRowTime: '#909090',
   eventRowTarget: '#1b5e20',
   eventRowSummary: '#1b5e20',
-  detailBg: '#e8e8e8',
+  detailBg: '#e3e3e3',
   detailLabel: '#888',
   detailValue: '#444',
-  detailBorder: '#c8c8c8',
+  detailBorder: '#c3c3c3',
 }
 
 interface ThemeCtx {

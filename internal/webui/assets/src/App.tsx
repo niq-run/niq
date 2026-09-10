@@ -100,7 +100,7 @@ export default function App() {
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>('talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
-  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | 'programs' | null>(null)
+  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(null)
   const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
   const [inputMode, setInputMode] = useState('default')
@@ -788,12 +788,12 @@ export default function App() {
             <strong style={{ fontSize: fontSizes.md, color: colors.text }}>
               {panel === 'templates' ? t('sidebar.templates')
                 : panel === 'providers' ? t('sidebar.providers')
-                : panel === 'programs' ? t('sidebar.programs')
                 : panel === 'projects' ? t('sidebar.projects')
                 : mode !== 'project' ? t('sidebar.projects')
                 : view === 'talk' ? t('nav.talk')
                 : view === 'events' ? t('nav.events')
                 : view === 'approvals' ? t('nav.approvals')
+                : view === 'programs' ? t('sidebar.programs')
                 : t('nav.workers')}
             </strong>
           </div>
@@ -818,15 +818,17 @@ export default function App() {
           </div>
         )}
         {mode !== 'project' ? (
-          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : panel === 'programs' ? <ProgramsView /> : <ProjectsView onGoToProviders={() => setPanel('providers')} />
+          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => setPanel('providers')} />
         ) : panel === 'templates' ? (
           <TemplatesView isMobile={isMobile} />
         ) : panel === 'providers' ? (
           <ProvidersView />
-        ) : panel === 'programs' ? (
-          <ProgramsView project={projectName} />
         ) : panel === 'projects' ? (
           <ProjectsView />
+        ) : view === 'programs' ? (
+          <div key="programs" className="fade-in" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <ProgramsView project={projectName} isMobile={isMobile} />
+          </div>
         ) : view === 'talk' ? (
           <div key="talk" className="fade-in" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <TalkView

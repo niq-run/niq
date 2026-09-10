@@ -5,6 +5,7 @@ import type {
   CreateWorkerResult,
   EventPayload,
   EventPattern,
+  ProgramDetail,
   ProjectInfo,
   ProjectStartResult,
   ProgramInfo,
@@ -389,6 +390,35 @@ export async function fetchPrograms(): Promise<ProgramInfo[]> {
   const res = await fetch(p('/api/programs'))
   if (!res.ok) throw new Error('fetch programs failed: ' + res.status)
   return res.json()
+}
+
+// fetchProgramDetail returns one program's full detail via the program worker
+// (metadata + entry body + sub-content paths).
+export async function fetchProgramDetail(name: string): Promise<ProgramDetail> {
+  const res = await fetch(p(`/api/programs/${encodeURIComponent(name)}`))
+  if (!res.ok) throw new Error((await res.text()).trim() || 'fetch program failed: ' + res.status)
+  return res.json()
+}
+
+// updateProgram edits a program's metadata (content type / description / tags)
+// and its entry body via the program worker (upsert + write).
+export async function updateProgram(
+  name: string,
+  meta: { content_type?: string; description?: string; tags?: string[] },
+  body: string,
+): Promise<void> {
+  const res = await fetch(p(`/api/programs/${encodeURIComponent(name)}`), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...meta, body }),
+  })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'update failed: ' + res.status)
+}
+
+// deleteProgram removes a program and its sub-contents via the program worker.
+export async function deleteProgram(name: string): Promise<void> {
+  const res = await fetch(p(`/api/programs/${encodeURIComponent(name)}`), { method: 'DELETE' })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'delete failed: ' + res.status)
 }
 
 export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = '', roles: string[] = [], request = ''): Promise<any[]> {

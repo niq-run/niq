@@ -1107,9 +1107,18 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           ref={scrollRef}
           onScroll={handleScroll}
           onClick={(e) => {
-            // Clicking blank space (the container itself) collapses any expanded
-            // tool call/result blocks.
-            if (e.target === scrollRef.current && expandedContent.size > 0) {
+            // Clicking blank space collapses any expanded tool call/result
+            // blocks. Every message is a direct child of the scroller; a
+            // message's actual content is always nested one level deeper.
+            // So a click whose target is the scroller itself or one of its
+            // direct children landed on empty background (the gutters beside
+            // a bubble, the gaps between messages, the trailing padding),
+            // while a click on any real content hits a deeper element.
+            if (expandedContent.size === 0) return
+            const el = e.target as Element
+            const scroller = scrollRef.current
+            if (!scroller) return
+            if (el === scroller || el.parentElement === scroller) {
               setExpandedContent(new Set())
             }
           }}

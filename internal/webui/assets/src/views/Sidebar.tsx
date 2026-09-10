@@ -26,8 +26,8 @@ interface SidebarProps {
   onProjectStop?: () => void
   onProjectRestart?: () => void
   archived: Set<string>
-  panel: 'projects' | 'templates' | 'providers' | 'programs' | null
-  onSelectPanel: (p: 'projects' | 'templates' | 'providers' | 'programs') => void
+  panel: 'projects' | 'templates' | 'providers' | null
+  onSelectPanel: (p: 'projects' | 'templates' | 'providers') => void
   // Mobile drawer mode: the sidebar slides in from the left and overlays the
   // main area; open toggles it, onNavigate is called after any navigation so
   // the caller can close the drawer.
@@ -69,7 +69,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
 
   // View labels must be computed inside the component (not module-level) so
   // they re-render when the language changes.
-  const VIEW_LABELS: Record<ViewMode, string> = { talk: t('nav.talk'), approvals: t('nav.approvals'), events: t('nav.events'), workers: t('nav.workers') }
+  const VIEW_LABELS: Record<ViewMode, string> = {
+    talk: t('nav.talk'),
+    approvals: t('nav.approvals'),
+    events: t('nav.events'),
+    workers: t('nav.workers'),
+    programs: t('sidebar.programs'),
+  }
 
   // ── Logo drag: the logo can be dragged sideways and springs back. Dragging
   // it all the way right toggles a mirror flip that plays out while the logo
@@ -413,9 +419,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       ))}
 
       {/* Worker selector list — hidden in the workers view (the main area IS
-          the worker list there). Its separator is hidden too, so switching to
-          the workers view doesn't leave a stray line. */}
-      {view !== 'workers' && (
+          the worker list there) and in the programs view (program browsing
+          needs no worker filter). Its separator is hidden too, so switching to
+          those views doesn't leave a stray line. */}
+      {view !== 'workers' && view !== 'programs' && (
         <>
           <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
           <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.workerSelector')}</strong>
@@ -521,14 +528,6 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         style={{ ...hoverStyle('providers'), cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
       >
         {t('sidebar.providers')}{panel === 'providers' ? ' \u25C9' : ''}
-      </div>
-      <div
-        onClick={() => { onSelectPanel('programs'); onNavigate() }}
-        onMouseEnter={() => setHoverId('programs')}
-        onMouseLeave={() => setHoverId(null)}
-        style={{ ...hoverStyle('programs'), cursor: 'pointer', color: panel === 'programs' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
-      >
-        {t('sidebar.programs')}{panel === 'programs' ? ' \u25C9' : ''}
       </div>
 
       </div>

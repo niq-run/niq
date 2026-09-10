@@ -113,7 +113,7 @@ export interface ApprovalListResult {
   approvals: ApprovalEntry[]
 }
 
-export type ViewMode = 'talk' | 'events' | 'approvals' | 'workers'
+export type ViewMode = 'talk' | 'events' | 'approvals' | 'workers' | 'programs'
 
 // StagedAttachment is one attachment composed in the talk input, appended to
 // the input text as an <attachment> block on send. Images ride inline as
@@ -159,6 +159,19 @@ export interface ProgramInfo {
   tags?: string[]
   locked?: boolean
   contents?: number
+}
+
+// ProgramDetail is the full content view of one program (metadata + entry
+// body + sub-content paths), as served by GET /api/programs/{name}.
+export interface ProgramDetail {
+  name: string
+  content_type?: string
+  form_type?: string
+  description?: string
+  tags?: string[]
+  locked?: boolean
+  body: string
+  contents?: string[]
 }
 
 // ProjectStartResult is what {id}/start returns so the UI can redirect.

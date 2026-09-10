@@ -190,6 +190,7 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 	type resultItem struct {
 		Name        string   `json:"name"`
 		ContentType string   `json:"content_type"`
+		FormType    string   `json:"form_type,omitempty"`
 		Description string   `json:"description"`
 		Tags        []string `json:"tags"`
 		Locked      bool     `json:"locked"`
@@ -201,6 +202,7 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 		item := resultItem{
 			Name:        p.Name,
 			ContentType: string(p.ContentType),
+			FormType:    string(p.EntryContent.FormType),
 			Description: p.Description,
 			Tags:        p.Tags,
 			Locked:      p.Locked,

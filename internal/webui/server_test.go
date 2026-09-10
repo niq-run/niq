@@ -155,63 +155,49 @@ func TestWebUIContextProjectMode(t *testing.T) {
 	}
 }
 
-// stubLister implements ProgramLister with a fixed result, for the handler test.
-type stubLister struct {
-	ps  []ProgramSummary
-	err error
-}
-
-func (l stubLister) ListPrograms() ([]ProgramSummary, error) { return l.ps, l.err }
-
-// TestHandleListPrograms verifies GET /api/programs echoes the wired lister
-// and replies with an empty list when none is attached.
+// TestHandleListPrograms verifies GET /api/programs degrades to an empty list
+// when the program worker is not on the bus (e.g. a project without one) — the
+// endpoint is data-plane driven, so there is nothing to list offline.
 func TestHandleListPrograms(t *testing.T) {
-	start := func() (*Server, string, context.CancelFunc) {
-		ctx, cancel := context.WithCancel(context.Background())
-		s := New(nil, nil, nil, nil, nil, ":0", false)
-		addr, err := s.Bind()
-		if err != nil {
-			t.Fatalf("Bind: %v", err)
-		}
-		done := make(chan error, 1)
-		go func() { done <- s.Start(ctx) }()
-		t.Cleanup(func() { cancel(); <-done })
-		return s, addr, cancel
-	}
-	get := func(addr string) ([]ProgramSummary, error) {
-		resp, err := http.Get("http://" + addr + "/api/programs")
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		var out []ProgramSummary
-		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-			return nil, err
-		}
-		return out, nil
-	}
-
-	// No lister wired → empty list.
-	_, addr, _ := start()
-	got, err := get(addr)
+	ctx, cancel := context.WithCancel(context.Background())
+	s := New(nil, nil, nil, nil, nil, ":0", false)
+	addr, err := s.Bind()
 	if err != nil {
-		t.Fatalf("GET programs (no lister): %v", err)
+		t.Fatalf("Bind: %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("expected empty list without a lister, got %d", len(got))
-	}
+	done := make(chan error, 1)
+	go func() { done <- s.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
 
-	// With lister → returned verbatim.
-	s, addr, _ := start()
-	s.SetProgramLister(stubLister{ps: []ProgramSummary{
-		{Name: "strict", ContentType: "instruction", FormType: "script", Contents: 2},
-	}})
-	got, err = get(addr)
+	resp, err := http.Get("http://" + addr + "/api/programs")
 	if err != nil {
 		t.Fatalf("GET programs: %v", err)
 	}
-	if len(got) != 1 || got[0].Name != "strict" || got[0].ContentType != "instruction" {
-		t.Fatalf("programs = %+v, want the lister's program", got)
+	defer resp.Body.Close()
+	var got []ProgramSummary
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty list with no program worker, got %d", len(got))
+	}
+}
+
+// TestParseProgramSearch verifies the list /api/programs reshape of the program
+// worker's search answer (its "result" JSON) counts sub-contents.
+func TestParseProgramSearch(t *testing.T) {
+	s := &Server{}
+	reply := event.New(event.TypeRequestCompleted, "program", map[string]any{
+		"result": `[{"name":"strict","content_type":"instruction","form_type":"script","description":"d","tags":["a"],"locked":true,"contents":["strict/rules.md"]}]`,
+	})
+	var out []ProgramSummary
+	s.parseProgramSearch(reply, &out)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 program, got %d", len(out))
+	}
+	p := out[0]
+	if p.Name != "strict" || p.FormType != "script" || p.Contents != 1 || p.Locked != true {
+		t.Fatalf("parsed %+v, want strict/script/1/locked", p)
 	}
 }
 

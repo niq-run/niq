@@ -37,6 +37,7 @@ import (
 	eventbusapi "github.com/niq-run/niq/pkg/eventbus/api"
 	reasonBase "github.com/niq-run/niq/pkg/reason"
 	"github.com/niq-run/niq/pkg/services/workerhost"
+	programBase "github.com/niq-run/niq/pkg/workers/program"
 	"github.com/niq-run/niq/pkg/workers/hiw"
 	workspaceBase "github.com/niq-run/niq/pkg/workers/workspace"
 )
@@ -61,13 +62,15 @@ type ArchivedStore interface {
 	SetArchived(id string, v bool) error
 }
 
-// ProgramSummary is a read-only summary of one Program under the attached
-// project — what the WebUI program browser lists. It mirrors
-// project.ProgramView.
-//
-// ProgramLister returns a project's program summaries. It is implemented by
-// the assembly layer (backed by the project's programs/ directory); nil
-// disables the endpoint (it replies with an empty list).
+// programWorkerID is the bus address of the program worker — the data-plane
+// authority for every program (list/search/load/upsert/write/delete). The
+// WebUI talks to it over the event bus exactly like the worker detail panel
+// talks to workspace/reason workers: send a tool event, correlate the
+// request.* reply by trace id, and reshape it for the UI.
+const programWorkerID = "program"
+
+// ProgramSummary is a read-only summary of one Program for the program
+// browser list, reshaped from the program worker's search answer.
 type ProgramSummary struct {
 	Name        string   `json:"name"`
 	ContentType string   `json:"content_type,omitempty"`
@@ -75,11 +78,20 @@ type ProgramSummary struct {
 	Description string   `json:"description,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Locked      bool     `json:"locked,omitempty"`
-	Contents    int      `json:"contents,omitempty"`
+	Contents    int      `json:"contents"` // number of sub-contents
 }
 
-type ProgramLister interface {
-	ListPrograms() ([]ProgramSummary, error)
+// ProgramDetail is a Program's full content view for the program editor,
+// reshaped from the program worker's search + load answers.
+type ProgramDetail struct {
+	Name        string   `json:"name"`
+	ContentType string   `json:"content_type,omitempty"`
+	FormType    string   `json:"form_type,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Locked      bool     `json:"locked,omitempty"`
+	Body        string   `json:"body"`
+	Contents    []string `json:"contents,omitempty"` // sub-content paths
 }
 
 // UnmanagedStatus is a read-only view of a worker declared in project.json.
@@ -154,7 +166,6 @@ type Server struct {
 	ctxMu       sync.RWMutex
 	context     ContextInfo
 	archived    ArchivedStore
-	programs    ProgramLister
 	unmngd      UnmanagedController
 	declCreator WorkerDeclCreator
 	declRemover WorkerDeclRemover
@@ -279,8 +290,12 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// or a project instance, and where the control plane lives.
 	mux.HandleFunc("GET /api/context", s.handleContext)
 
-	// Programs: browse the programs under the attached project.
+	// Programs: browse, read, edit and delete programs via the program
+	// worker's bus tools (search/load/upsert/write/delete).
 	mux.HandleFunc("GET /api/programs", s.handleListPrograms)
+	mux.HandleFunc("GET /api/programs/{name}", s.handleGetProgram)
+	mux.HandleFunc("PUT /api/programs/{name}", s.handleUpdateProgram)
+	mux.HandleFunc("DELETE /api/programs/{name}", s.handleDeleteProgram)
 
 	// Archived workers: which workers are hidden from the selector (by default),
 	// and toggling that flag (persisted in the project.json worker definitions).
@@ -365,12 +380,6 @@ func (s *Server) SetWorkerDeclCreator(c WorkerDeclCreator) {
 	s.declCreator = c
 }
 
-// SetProgramLister attaches the per-project program lister backing the
-// program browser (nil disables the endpoint — it then replies empty).
-func (s *Server) SetProgramLister(l ProgramLister) {
-	s.programs = l
-}
-
 // SetContext records the mode context the single SPA should render in. Safe to
 // call from the project assembly after construction and before Start.
 func (s *Server) SetContext(ctx ContextInfo) {
@@ -438,22 +447,241 @@ func (s *Server) uploadDir() string {
 	return filepath.Join(os.TempDir(), "niq-uploads")
 }
 
-// handleListPrograms returns the programs under the attached project (empty
-// list when no lister is wired or the project has no program space).
-func (s *Server) handleListPrograms(w http.ResponseWriter, r *http.Request) {
-	var list []ProgramSummary = []ProgramSummary{}
-	if s.programs != nil {
-		if ps, err := s.programs.ListPrograms(); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		} else if len(ps) > 0 {
-			list = ps
-		}
+// programWorkerOnline reports whether the program worker is on the bus. The
+// program endpoints degrade gracefully (empty list / offline) when it isn't —
+// e.g. a project configured without a program worker.
+func (s *Server) programWorkerOnline() bool {
+	if s.engine == nil {
+		return false
 	}
-	json.NewEncoder(w).Encode(list)
+	online, wtype := s.workerOnline(programWorkerID)
+	return online && wtype == "program"
 }
 
-// handleGetArchived returns the archived-worker ids (empty store → empty list).
+// askProgram publishes one program-worker tool event (search/load/upsert/write/
+// delete) and waits for the correlated request.completed / request.failed reply,
+// exactly as the workspace/reason endpoints do.
+func (s *Server) askProgram(ctx context.Context, opts *programTool, args map[string]any) (event.Event, error) {
+	return s.ask(ctx, programWorkerID, event.New(opts.Type, "webui-hiw", args),
+		event.TypeRequestCompleted, event.TypeRequestFailed)
+}
+
+// programTool carries one bus call. The event type IS the tool the worker
+// serves (search/load/upsert/write/delete); parseProgram uses payload "result".
+type programTool struct {
+	Type event.EventType
+}
+
+// requestFailedErr extracts a program worker's request.failed message, or ""
+// when the reply completed.
+func requestFailedErr(evt event.Event) string {
+	if evt.Type != event.TypeRequestFailed {
+		return ""
+	}
+	if msg, _ := evt.Payload["error"].(string); msg != "" && msg != "<nil>" {
+		return msg
+	}
+	return "request rejected by program worker"
+}
+
+// programErrStatus maps a program worker's failure message onto an HTTP status:
+// locked → 403, not-found → 404, otherwise 400 (the worker owns the semantic).
+func programErrStatus(msg string) int {
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "locked"):
+		return http.StatusForbidden
+	case strings.Contains(lower, "not found"), strings.Contains(lower, "not exist"):
+		return http.StatusNotFound
+	default:
+		return http.StatusBadRequest
+	}
+}
+
+// parseProgramSearch reshapes the program worker's search answer (a JSON array
+// of {name, content_type, form_type, description, tags, locked, contents[]})
+// into ProgramSummary rows for the browser list.
+type searchResultItem struct {
+	Name        string   `json:"name"`
+	ContentType string   `json:"content_type,omitempty"`
+	FormType    string   `json:"form_type,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Locked      bool     `json:"locked,omitempty"`
+	Contents    []string `json:"contents,omitempty"`
+}
+
+func (s *Server) parseProgramSearch(evt event.Event, out *[]ProgramSummary) {
+	if res, _ := evt.Payload["result"].(string); res != "" {
+		var items []searchResultItem
+		if err := json.Unmarshal([]byte(res), &items); err == nil {
+			for _, it := range items {
+				*out = append(*out, ProgramSummary{
+					Name:        it.Name,
+					ContentType: it.ContentType,
+					FormType:    it.FormType,
+					Description: it.Description,
+					Tags:        it.Tags,
+					Locked:      it.Locked,
+					Contents:    len(it.Contents),
+				})
+			}
+		}
+	}
+}
+
+// handleListPrograms lists the attached project's programs by asking the
+// program worker (search). A project without a program worker gets an empty
+// list.
+func (s *Server) handleListPrograms(w http.ResponseWriter, r *http.Request) {
+	out := []ProgramSummary{}
+	if s.programWorkerOnline() {
+		reply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeSearch}, map[string]any{"query": ""})
+		if err == nil {
+			s.parseProgramSearch(reply, &out)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// handleGetProgram returns one program's full detail (metadata + entry body +
+// sub-content paths) by asking the program worker search + load.
+func (s *Server) handleGetProgram(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.programWorkerOnline() {
+		http.Error(w, "program worker offline", http.StatusServiceUnavailable)
+		return
+	}
+
+	// 1) metadata + sub-contents from search(query=name); pick the exact match.
+	searchReply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeSearch}, map[string]any{"query": name})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	if msg := requestFailedErr(searchReply); msg != "" {
+		http.Error(w, msg, programErrStatus(msg))
+		return
+	}
+	var items []searchResultItem
+	if res, _ := searchReply.Payload["result"].(string); res != "" {
+		_ = json.Unmarshal([]byte(res), &items)
+	}
+	var found *searchResultItem
+	for i := range items {
+		if items[i].Name == name {
+			found = &items[i]
+			break
+		}
+	}
+	if found == nil {
+		http.Error(w, "program not found", http.StatusNotFound)
+		return
+	}
+
+	// 2) entry body from load(path=name).
+	loadReply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeLoad}, map[string]any{"path": name})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	out := ProgramDetail{
+		Name:        found.Name,
+		ContentType: found.ContentType,
+		FormType:    found.FormType,
+		Description: found.Description,
+		Tags:        found.Tags,
+		Locked:      found.Locked,
+		Contents:    found.Contents,
+	}
+	if msg := requestFailedErr(loadReply); msg != "" {
+		http.Error(w, msg, programErrStatus(msg))
+		return
+	}
+	if body, _ := loadReply.Payload["result"].(string); body != "" {
+		out.Body = body
+	}
+	if out.Contents == nil {
+		out.Contents = []string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// handleUpdateProgram replaces a program's metadata and entry body via the
+// program worker's upsert (metadata) + write (entry body) tools. Locked
+// programs are refused by the worker.
+func (s *Server) handleUpdateProgram(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.programWorkerOnline() {
+		http.Error(w, "program worker offline", http.StatusServiceUnavailable)
+		return
+	}
+	var in struct {
+		ContentType string   `json:"content_type"`
+		Description string   `json:"description"`
+		Tags        []string `json:"tags"`
+		Body        string   `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Metadata first (upsert), then the entry body (write) — two correlated
+	// bus round trips, faithful to the program worker's separation.
+	upsertArgs := map[string]any{"name": name, "content_type": in.ContentType, "description": in.Description}
+	if in.Tags != nil {
+		tags := make([]any, 0, len(in.Tags))
+		for _, tag := range in.Tags {
+			tags = append(tags, tag)
+		}
+		upsertArgs["tags"] = tags
+	}
+	reply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeUpsert}, upsertArgs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	if msg := requestFailedErr(reply); msg != "" {
+		http.Error(w, msg, programErrStatus(msg))
+		return
+	}
+
+	reply, err = s.askProgram(r.Context(), &programTool{Type: programBase.TypeWrite}, map[string]any{"path": name, "content": in.Body})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	if msg := requestFailedErr(reply); msg != "" {
+		http.Error(w, msg, programErrStatus(msg))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+// handleDeleteProgram removes a program and its sub-contents via the program
+// worker's delete tool.
+func (s *Server) handleDeleteProgram(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.programWorkerOnline() {
+		http.Error(w, "program worker offline", http.StatusServiceUnavailable)
+		return
+	}
+	reply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeDelete}, map[string]any{"path": name})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	if msg := requestFailedErr(reply); msg != "" {
+		http.Error(w, msg, programErrStatus(msg))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleGetArchived(w http.ResponseWriter, r *http.Request) {
 	if s.archived == nil {
 		json.NewEncoder(w).Encode([]string{})
