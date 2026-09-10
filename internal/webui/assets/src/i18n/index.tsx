@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { en } from './en'
 import { zh } from './zh'
 
@@ -42,20 +42,24 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     document.documentElement.lang = lang
   }, [lang])
 
-  const setLang = (l: Lang) => {
+  // setLang is memoized so its identity is stable across renders (consumers
+  // may use it in dependency arrays); it persists the choice to localStorage.
+  const setLang = useCallback((l: Lang) => {
     setLangState(l)
     try {
       globalThis.localStorage?.setItem(STORAGE_KEY, l)
     } catch {
       // ignore persistence failure (e.g. private mode)
     }
-  }
+  }, [])
 
-  const t = (key: StringKey, vars?: Vars): string => {
+  // t is memoized so its identity is stable across renders; consumers may use
+  // it in useMemo/useEffect dependency arrays without recomputing every render.
+  const t = useCallback((key: StringKey, vars?: Vars): string => {
     // Missing key falls back to English; never show the raw key name.
     const s = (lang === 'zh' ? zh : en)[key] ?? en[key]
     return interpolate(s, vars)
-  }
+  }, [lang])
 
   return <Ctx.Provider value={{ lang, setLang, t }}>{children}</Ctx.Provider>
 }
