@@ -238,6 +238,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   //   (a) a system worker (non-reason, non-hiw) -> that reason worker
   //   (c) another reason worker -> that reason worker, but only when that
   //       worker is the SINGLE currently selected talk worker
+  // Self-directed envelopes are the worker's own actions and stay left: the
+  // request convention sends a worker's own tool calls (send_message,
+  // context.compress, ...) to the worker itself, so worker_id == target.
   // Everything else — reason<->reason outside the single-select case, or a
   // message with no (non-reason) target — goes to the left.
   const isRightAligned = (evt: EventPayload): boolean => {
@@ -246,6 +249,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     if (evt.worker_id === humanId) return true
     const target = evt.target_worker_id
     if (!target || !isReason(target)) return false
+    if (target === evt.worker_id) return false // self-directed: own tool call
     if (!isReason(evt.worker_id)) return true // (a) system -> reason
     return talkWorkers.size === 1 && talkWorkers.has(target) // (c)
   }
