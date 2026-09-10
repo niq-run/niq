@@ -153,11 +153,27 @@ function getInitialDark(): boolean {
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [isDark, setIsDark] = useState(getInitialDark)
 
+  // Follow live OS theme switches, but only while the user has not made an
+  // explicit choice — a stored 'niq-theme' is authoritative.
   useEffect(() => {
-    globalThis.localStorage?.setItem('niq-theme', isDark ? 'dark' : 'light')
-  }, [isDark])
+    if (!globalThis.matchMedia) return
+    const mq = globalThis.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = (e: MediaQueryListEvent) => {
+      let pinned = false
+      try { pinned = !!globalThis.localStorage?.getItem('niq-theme') } catch { /* ignore */ }
+      if (!pinned) setIsDark(e.matches)
+    }
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
 
-  const toggle = useCallback(() => setIsDark(d => !d), [])
+  // Persist only explicit choices: the system fallback must not pin the
+  // last-observed value into localStorage.
+  const toggle = useCallback(() => setIsDark(d => {
+    const next = !d
+    globalThis.localStorage?.setItem('niq-theme', next ? 'dark' : 'light')
+    return next
+  }), [])
   return (
     <ThemeContext.Provider value={{ dark: isDark, toggle, colors: isDark ? dark : light }}>
       {children}

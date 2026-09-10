@@ -20,10 +20,14 @@ const Ctx = createContext<I18nCtx | null>(null)
 function readInitialLang(): Lang {
   try {
     const v = globalThis.localStorage?.getItem(STORAGE_KEY)
-    return v === 'zh' || v === 'en' ? v : 'en'
+    if (v === 'zh' || v === 'en') return v
   } catch {
-    return 'en'
+    // ignore persistence failure (e.g. private mode)
   }
+  // No explicit choice yet: follow the system language (Chinese → zh,
+  // everything else → en).
+  const sys = globalThis.navigator?.language
+  return sys?.toLowerCase().startsWith('zh') ? 'zh' : 'en'
 }
 
 function interpolate(s: string, vars?: Vars): string {
