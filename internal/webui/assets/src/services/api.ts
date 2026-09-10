@@ -26,6 +26,7 @@ export const CONTROL = 'http://127.0.0.1:9527'
 // when developing against a specific project instance.
 let API_BASE = ''
 export function setApiBase(base: string) { API_BASE = base }
+export function getApiBase(): string { return API_BASE }
 function p(path: string): string { return API_BASE + path }
 
 // fetchContext reports the SPA mode (control or project) and the control URL.

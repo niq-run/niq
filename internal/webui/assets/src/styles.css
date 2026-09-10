@@ -1,16 +1,29 @@
 /* ── Markdown content styles ── */
 
-[data-theme="dark"] .md-content code {
+[data-theme="dark"] .md-content code:not(pre code):not(div code) {
   background: #404040; color: #e6c7a0;
 }
-[data-theme="light"] .md-content code {
-  background: #d1d1d1; color: #a1455c;
+[data-theme="light"] .md-content code:not(pre code):not(div code) {
+  background: #c3c3c3; color: #a1455c;
 }
-.md-content code {
+.md-content code:not(pre code):not(div code) {
   padding: 1px 5px; border-radius: 3px; font-size: 12px;
 }
+/* Language-less fenced blocks render as <pre><code> and read as a solid,
+   neutral panel — clearly distinct from the inline chip above. Language-
+   tagged blocks are rendered by the syntax highlighter (a <div> with its own
+   theme) and are excluded by the `:not(div code)` selector. */
 .md-content pre {
   padding: 10px; border-radius: 4px; overflow-x: auto; margin: 8px 0;
+}
+[data-theme="dark"] .md-content pre {
+  background: #333; color: #d9d9d9;
+}
+[data-theme="light"] .md-content pre {
+  background: #cdcdcd; color: #333;
+}
+.md-content pre code {
+  background: none; color: inherit; padding: 0;
 }
 .md-content p { margin: 0 0 8px 0; }
 .md-content p:last-child { margin: 0; }

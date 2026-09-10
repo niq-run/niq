@@ -4,7 +4,7 @@ import { useI18n } from '../i18n'
 import { usePolling } from '../hooks/usePolling'
 import ViewHeader from '../components/ViewHeader'
 import ResizablePanel from '../components/ResizablePanel'
-import { fetchPrograms, fetchProgramDetail, updateProgram, deleteProgram } from '../services/api'
+import { getApiBase, fetchPrograms, fetchProgramDetail, updateProgram, deleteProgram } from '../services/api'
 import type { ProgramDetail, ProgramInfo } from '../types'
 
 const MOBILE_TOP_BAR_HEIGHT = 44
@@ -28,8 +28,10 @@ export default function ProgramsView({ project, isMobile }: ProgramsViewProps) {
   const [drawerWidth, setDrawerWidth] = useState(() =>
     Math.max(440, Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.42)))
 
-  // Poll the attached project for its programs. No project → no request.
-  usePolling<ProgramInfo[]>(project ? '/api/programs' : '', 5000, setPrograms, !!project)
+  // Poll the attached project for its programs, prefixed with its base URL so
+  // it hits the project's own address (like /api/stream) rather than a
+  // control plane. No project → no request.
+  usePolling<ProgramInfo[]>(project ? getApiBase() + '/api/programs' : '', 5000, setPrograms, !!project)
 
   const refresh = useCallback(async () => {
     if (!project) return
@@ -59,15 +61,14 @@ export default function ProgramsView({ project, isMobile }: ProgramsViewProps) {
               {t('programs.empty')}
             </div>
           ) : (
-            <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: fontSizes.md }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
               <thead>
                 <tr style={{ textAlign: 'left', color: colors.textDimmed, fontSize: fontSizes.xs }}>
-                  <th style={{ padding: '6px 12px' }}>{t('programs.col.name')}</th>
-                  <th style={{ padding: '6px 12px' }}>{t('programs.col.form')}</th>
-                  <th style={{ padding: '6px 12px' }}>{t('programs.col.contentType')}</th>
-                  <th style={{ padding: '6px 12px' }}>{t('programs.col.description')}</th>
-                  <th style={{ padding: '6px 12px' }}>{t('programs.col.tags')}</th>
-                  <th style={{ padding: '6px 12px' }}>{t('programs.col.contents')}</th>
+                  <th style={{ ...listHeaderCell(colors), width: 200 }}>{t('programs.col.name')}</th>
+                  <th style={{ ...listHeaderCell(colors), width: 96 }}>{t('programs.col.form')}</th>
+                  <th style={{ ...listHeaderCell(colors), width: 96 }}>{t('programs.col.contentType')}</th>
+                  <th style={{ ...listHeaderCell(colors) }}>{t('programs.col.description')}</th>
+                  <th style={{ ...listHeaderCell(colors), width: 80 }}>{t('programs.col.contents')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -81,19 +82,13 @@ export default function ProgramsView({ project, isMobile }: ProgramsViewProps) {
                       background: selected?.name === p.name ? colors.bgLight : undefined,
                     }}
                   >
-                    <td style={{ padding: '8px 12px', color: p.locked ? colors.accent : colors.text, fontWeight: p.locked ? 'bold' : 'normal' }}>
+                    <td style={{ ...listCell(), color: p.locked ? colors.accent : colors.text, fontWeight: p.locked ? 'bold' : 'normal' }}>
                       {p.name}
-                      {p.locked && <Chip label={t('programs.locked')} colors={colors} />}
                     </td>
-                    <td style={{ padding: '8px 12px', color: colors.textDim }}>{formLabel(t, p.form_type)}</td>
-                    <td style={{ padding: '8px 12px', color: colors.textDim }}>{contentTypeLabel(t, p.content_type)}</td>
-                    <td style={{ padding: '8px 12px', color: colors.textMuted }}>{p.description}</td>
-                    <td style={{ padding: '8px 12px' }}>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                        {(p.tags || []).map((tag) => <Chip key={tag} label={tag} colors={colors} />)}
-                      </div>
-                    </td>
-                    <td style={{ padding: '8px 12px', color: colors.textDim }}>
+                    <td style={{ ...listCell(), color: colors.textDim }}>{formLabel(t, p.form_type)}</td>
+                    <td style={{ ...listCell(), color: colors.textDim }}>{contentTypeLabel(t, p.content_type)}</td>
+                    <td style={{ ...listCell(), color: colors.textMuted }} title={p.description} >{p.description}</td>
+                    <td style={{ ...listCell(), color: colors.textDim, textAlign: 'right' }}>
                       {p.contents !== undefined ? String(p.contents) : ''}
                     </td>
                   </tr>
@@ -118,16 +113,16 @@ export default function ProgramsView({ project, isMobile }: ProgramsViewProps) {
   )
 }
 
-// A tiny colored chip for tags / locked flags.
-function Chip({ label, colors }: { label: string; colors: any }) {
-  return (
-    <span style={{
-      display: 'inline-block', marginLeft: 6, padding: '1px 7px', borderRadius: 3,
-      border: '1px solid ' + colors.border, color: colors.textDim, fontSize: fontSizes.xs,
-    }}>
-      {label}
-    </span>
-  )
+// listCell: every data cell is nowrap with an ellipsis on overflow, so the
+// name/form/type columns hold their width and long values truncate instead of
+// wrapping at narrow viewport widths.
+function listCell(): React.CSSProperties {
+  return { padding: '8px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 0 }
+}
+
+// listHeaderCell: header cells stay on one line too.
+function listHeaderCell(colors: any): React.CSSProperties {
+  return { padding: '6px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 }
 
 function formLabel(t: (k: any) => string, f?: string): string {
