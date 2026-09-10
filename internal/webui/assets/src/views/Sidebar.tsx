@@ -486,10 +486,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             <>
               <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
               <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.viewSettings')}</strong>
-              <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} mobile={isMobile} size={optSize} />
-              <ToggleRow label={t('view.toggle.compactMode')} on={viewSettings.compactMode} onToggle={() => onToggleViewSetting('compactMode')} colors={colors} mobile={isMobile} size={optSize} />
-              <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} mobile={isMobile} size={optSize} />
-              <ToggleRow label={t('view.toggle.responseOnly')} on={viewSettings.responseOnly} onToggle={() => onToggleViewSetting('responseOnly')} colors={colors} mobile={isMobile} size={optSize} />
+              <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+              <ToggleRow label={t('view.toggle.compactMode')} on={viewSettings.compactMode} onToggle={() => onToggleViewSetting('compactMode')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+              <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+              <ToggleRow label={t('view.toggle.responseOnly')} on={viewSettings.responseOnly} onToggle={() => onToggleViewSetting('responseOnly')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
             </>
           )}
         </>
@@ -660,7 +660,7 @@ function CheckBox({ active, accent, bg, border, size = 13, style }: { active: bo
 }
 
 // A labeled switch row (the pill toggle), shared by the view settings.
-function ToggleRow({ label, on, onToggle, colors, mobile = false, size = fontSizes.sm }: { label: string; on: boolean; onToggle: () => void; colors: Palette; mobile?: boolean; size?: number }) {
+function ToggleRow({ label, on, onToggle, colors, dark, mobile = false, size = fontSizes.sm }: { label: string; on: boolean; onToggle: () => void; colors: Palette; dark: boolean; mobile?: boolean; size?: number }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: mobile ? 14 : 8, padding: mobile ? '4px 0' : undefined }}>
       <span style={{ color: colors.textDim, fontSize: size }}>{label}</span>
@@ -682,7 +682,9 @@ function ToggleRow({ label, on, onToggle, colors, mobile = false, size = fontSiz
             width: 14,
             height: 14,
             borderRadius: 7,
-            background: '#fff',
+            // Knob: soft off-white in light mode (not harsh pure white) and a
+            // dark grey in dark mode so it sits on the track instead of glaring.
+            background: dark ? '#3a3a3a' : '#ececec',
             position: 'absolute',
             top: 2,
             left: on ? 16 : 2,

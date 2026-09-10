@@ -19,6 +19,16 @@ interface CollapsibleCodeProps {
   onWrapChange?: (v: boolean) => void
 }
 
+// hex → rgba so the fold gradient can fade into the real card background
+// colour instead of a hardcoded white/black that no longer matches the theme.
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '')
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
 // A code block with the same affordances as the tool bodies in the Talk view:
 // a soft-wrap toggle and — for long bodies — a clipped preview with an
 // expand/collapse control. Self-contained so any detail panel can drop it in.
@@ -33,6 +43,10 @@ export default function CollapsibleCode({ code, language = 'json', foldThreshold
   const foldable = code.length > foldThreshold
   const folded = foldable && !expanded
   const hlStyle = dark ? vscDarkPlus : oneLight
+  // The folded clip fades into the card surface it sits on, not a stark
+  // black/white; bgLight is the shared card/message background colour.
+  const foldBase = hexToRgba(colors.bgLight, 1)
+  const foldClear = hexToRgba(colors.bgLight, 0)
   // react-syntax-highlighter puts its own white-space on the <code> element,
   // so the wrap toggle must be applied there too, not just on the <pre>.
   const codeWrapStyle: React.CSSProperties = { whiteSpace: wrap ? 'pre-wrap' : 'pre', wordBreak: wrap ? 'break-word' : 'normal' }
@@ -76,9 +90,7 @@ export default function CollapsibleCode({ code, language = 'json', foldThreshold
               position: 'absolute', left: 0, right: 0, bottom: 0,
               height: folded ? 56 : 'auto',
               background: folded
-                ? (dark
-                    ? 'linear-gradient(to top, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0) 100%)'
-                    : 'linear-gradient(to top, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0) 100%)')
+                ? `linear-gradient(to top, ${foldBase} 0%, ${foldClear} 100%)`
                 : 'transparent',
               display: 'flex', alignItems: folded ? 'flex-end' : 'center', justifyContent: 'center',
               padding: folded ? '0 0 8px' : '8px 0 0',
