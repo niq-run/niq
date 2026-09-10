@@ -61,6 +61,27 @@ type ArchivedStore interface {
 	SetArchived(id string, v bool) error
 }
 
+// ProgramSummary is a read-only summary of one Program under the attached
+// project — what the WebUI program browser lists. It mirrors
+// project.ProgramView.
+//
+// ProgramLister returns a project's program summaries. It is implemented by
+// the assembly layer (backed by the project's programs/ directory); nil
+// disables the endpoint (it replies with an empty list).
+type ProgramSummary struct {
+	Name        string   `json:"name"`
+	ContentType string   `json:"content_type,omitempty"`
+	FormType    string   `json:"form_type,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Locked      bool     `json:"locked,omitempty"`
+	Contents    int      `json:"contents,omitempty"`
+}
+
+type ProgramLister interface {
+	ListPrograms() ([]ProgramSummary, error)
+}
+
 // UnmanagedStatus is a read-only view of a worker declared in project.json.
 // Managed flags host-managed declarations; the state of a managed declaration
 // is always "stopped" — only the worker service knows a live lifecycle.
@@ -133,6 +154,7 @@ type Server struct {
 	ctxMu       sync.RWMutex
 	context     ContextInfo
 	archived    ArchivedStore
+	programs    ProgramLister
 	unmngd      UnmanagedController
 	declCreator WorkerDeclCreator
 	declRemover WorkerDeclRemover
@@ -257,6 +279,9 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// or a project instance, and where the control plane lives.
 	mux.HandleFunc("GET /api/context", s.handleContext)
 
+	// Programs: browse the programs under the attached project.
+	mux.HandleFunc("GET /api/programs", s.handleListPrograms)
+
 	// Archived workers: which workers are hidden from the selector (by default),
 	// and toggling that flag (persisted in the project.json worker definitions).
 	mux.HandleFunc("GET /api/archived", s.handleGetArchived)
@@ -340,6 +365,12 @@ func (s *Server) SetWorkerDeclCreator(c WorkerDeclCreator) {
 	s.declCreator = c
 }
 
+// SetProgramLister attaches the per-project program lister backing the
+// program browser (nil disables the endpoint — it then replies empty).
+func (s *Server) SetProgramLister(l ProgramLister) {
+	s.programs = l
+}
+
 // SetContext records the mode context the single SPA should render in. Safe to
 // call from the project assembly after construction and before Start.
 func (s *Server) SetContext(ctx ContextInfo) {
@@ -405,6 +436,21 @@ func (s *Server) uploadDir() string {
 		return filepath.Join(s.projectDir, "uploads")
 	}
 	return filepath.Join(os.TempDir(), "niq-uploads")
+}
+
+// handleListPrograms returns the programs under the attached project (empty
+// list when no lister is wired or the project has no program space).
+func (s *Server) handleListPrograms(w http.ResponseWriter, r *http.Request) {
+	var list []ProgramSummary = []ProgramSummary{}
+	if s.programs != nil {
+		if ps, err := s.programs.ListPrograms(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		} else if len(ps) > 0 {
+			list = ps
+		}
+	}
+	json.NewEncoder(w).Encode(list)
 }
 
 // handleGetArchived returns the archived-worker ids (empty store → empty list).

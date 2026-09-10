@@ -8,6 +8,7 @@ import WorkerDetail from './views/WorkerDetail'
 import ProjectsView from './views/ProjectsView'
 import TemplatesView from './views/TemplatesView'
 import ProvidersView from './views/ProvidersView'
+import ProgramsView from './views/ProgramsView'
 import ViewHeader from './components/ViewHeader'
 import ApprovalsView from './views/ApprovalsView'
 import TalkInput from './components/TalkInput'
@@ -99,7 +100,7 @@ export default function App() {
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>('talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
-  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(null)
+  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | 'programs' | null>(null)
   const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
   const [inputMode, setInputMode] = useState('default')
@@ -787,6 +788,7 @@ export default function App() {
             <strong style={{ fontSize: fontSizes.md, color: colors.text }}>
               {panel === 'templates' ? t('sidebar.templates')
                 : panel === 'providers' ? t('sidebar.providers')
+                : panel === 'programs' ? t('sidebar.programs')
                 : panel === 'projects' ? t('sidebar.projects')
                 : mode !== 'project' ? t('sidebar.projects')
                 : view === 'talk' ? t('nav.talk')
@@ -816,11 +818,13 @@ export default function App() {
           </div>
         )}
         {mode !== 'project' ? (
-          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => setPanel('providers')} />
+          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : panel === 'programs' ? <ProgramsView /> : <ProjectsView onGoToProviders={() => setPanel('providers')} />
         ) : panel === 'templates' ? (
           <TemplatesView isMobile={isMobile} />
         ) : panel === 'providers' ? (
           <ProvidersView />
+        ) : panel === 'programs' ? (
+          <ProgramsView project={projectName} />
         ) : panel === 'projects' ? (
           <ProjectsView />
         ) : view === 'talk' ? (

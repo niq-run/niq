@@ -26,8 +26,8 @@ interface SidebarProps {
   onProjectStop?: () => void
   onProjectRestart?: () => void
   archived: Set<string>
-  panel: 'projects' | 'templates' | 'providers' | null
-  onSelectPanel: (p: 'projects' | 'templates' | 'providers') => void
+  panel: 'projects' | 'templates' | 'providers' | 'programs' | null
+  onSelectPanel: (p: 'projects' | 'templates' | 'providers' | 'programs') => void
   // Mobile drawer mode: the sidebar slides in from the left and overlays the
   // main area; open toggles it, onNavigate is called after any navigation so
   // the caller can close the drawer.
@@ -489,14 +489,15 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       )}
       </>)}
 
-      {/* Projects — the 4th category: project + template management. For a
-          project instance it is a jump/start hop to other projects; in control
-          mode it is the only usable thing. In control mode no section precedes
-          it, so the leading divider is skipped. */}
+      {/* Resources — the management category: project + template + provider +
+          program browsing. For a project instance the first rows are a
+          jump/start hop to other projects; in control mode this is the only
+          usable section. In control mode no section precedes it, so the leading
+          divider is skipped. */}
       {mode === 'project' && (
         <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
       )}
-      <strong style={{ marginTop: mode === 'project' ? 0 : 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.projects')}</strong>
+      <strong style={{ marginTop: mode === 'project' ? 0 : 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.resources')}</strong>
       <div
         onClick={() => { onSelectPanel('projects'); onNavigate() }}
         onMouseEnter={() => setHoverId('projects')}
@@ -520,6 +521,14 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         style={{ ...hoverStyle('providers'), cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
       >
         {t('sidebar.providers')}{panel === 'providers' ? ' \u25C9' : ''}
+      </div>
+      <div
+        onClick={() => { onSelectPanel('programs'); onNavigate() }}
+        onMouseEnter={() => setHoverId('programs')}
+        onMouseLeave={() => setHoverId(null)}
+        style={{ ...hoverStyle('programs'), cursor: 'pointer', color: panel === 'programs' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
+      >
+        {t('sidebar.programs')}{panel === 'programs' ? ' \u25C9' : ''}
       </div>
 
       </div>

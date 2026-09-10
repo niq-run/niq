@@ -10,6 +10,8 @@ export const en = {
   'sidebar.workerSelector': 'Worker Selector',
   'sidebar.viewSettings': 'View Settings',
   'sidebar.projects': 'Projects',
+  'sidebar.resources': 'Resources',
+  'sidebar.programs': 'Programs',
   'sidebar.providers': 'Providers',
   'providers.title': 'Model providers',
   'providers.tab.visual': 'Visual editing',
@@ -250,6 +252,20 @@ export const en = {
   'projects.start': 'Start',
 
   'project.stoppedBanner': 'this project is not running',
+  // ── Programs view ──
+  'programs.title': 'Programs',
+  'programs.noProject': 'Open or start a project to browse its programs.',
+  'programs.empty': 'No programs yet. Add a PROGRAM.md (or SKILL.md) under the project\'s programs/ directory.',
+  'programs.locked': 'locked',
+  'programs.col.name': 'name',
+  'programs.col.form': 'form',
+  'programs.col.contentType': 'type',
+  'programs.col.description': 'description',
+  'programs.col.tags': 'tags',
+  'programs.col.contents': 'contents',
+  'programs.contentType.playbook': 'playbook',
+  'programs.contentType.instruction': 'instruction',
+
   // ── Templates view ──
   'templates.title': 'Templates',
   'templates.create': 'New template',

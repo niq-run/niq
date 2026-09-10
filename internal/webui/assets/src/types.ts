@@ -149,6 +149,18 @@ export interface ProjectInfo {
   running?: boolean
 }
 
+// ProgramInfo is a read-only summary of one program under the attached
+// project, as served by /api/programs.
+export interface ProgramInfo {
+  name: string
+  content_type?: string
+  form_type?: string
+  description?: string
+  tags?: string[]
+  locked?: boolean
+  contents?: number
+}
+
 // ProjectStartResult is what {id}/start returns so the UI can redirect.
 export interface ProjectStartResult {
   project?: string

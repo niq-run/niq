@@ -155,6 +155,66 @@ func TestWebUIContextProjectMode(t *testing.T) {
 	}
 }
 
+// stubLister implements ProgramLister with a fixed result, for the handler test.
+type stubLister struct {
+	ps  []ProgramSummary
+	err error
+}
+
+func (l stubLister) ListPrograms() ([]ProgramSummary, error) { return l.ps, l.err }
+
+// TestHandleListPrograms verifies GET /api/programs echoes the wired lister
+// and replies with an empty list when none is attached.
+func TestHandleListPrograms(t *testing.T) {
+	start := func() (*Server, string, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.Background())
+		s := New(nil, nil, nil, nil, nil, ":0", false)
+		addr, err := s.Bind()
+		if err != nil {
+			t.Fatalf("Bind: %v", err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- s.Start(ctx) }()
+		t.Cleanup(func() { cancel(); <-done })
+		return s, addr, cancel
+	}
+	get := func(addr string) ([]ProgramSummary, error) {
+		resp, err := http.Get("http://" + addr + "/api/programs")
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		var out []ProgramSummary
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+
+	// No lister wired → empty list.
+	_, addr, _ := start()
+	got, err := get(addr)
+	if err != nil {
+		t.Fatalf("GET programs (no lister): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty list without a lister, got %d", len(got))
+	}
+
+	// With lister → returned verbatim.
+	s, addr, _ := start()
+	s.SetProgramLister(stubLister{ps: []ProgramSummary{
+		{Name: "strict", ContentType: "instruction", FormType: "script", Contents: 2},
+	}})
+	got, err = get(addr)
+	if err != nil {
+		t.Fatalf("GET programs: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "strict" || got[0].ContentType != "instruction" {
+		t.Fatalf("programs = %+v, want the lister's program", got)
+	}
+}
+
 func TestBasicAuthNonLoopback(t *testing.T) {
 	s := New(nil, nil, nil, nil, nil, ":0", false)
 	s.SetBasicAuth("alice", "s3cret")

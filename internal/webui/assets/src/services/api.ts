@@ -7,6 +7,7 @@ import type {
   EventPattern,
   ProjectInfo,
   ProjectStartResult,
+  ProgramInfo,
   ProviderListResult,
   ProviderSwitchResult,
   PublishPattern,
@@ -381,6 +382,13 @@ export async function decideApproval(id: string, approved: boolean, note = ''): 
     body: JSON.stringify({ approved, note }),
   })
   if (!res.ok) throw new Error((await res.text()).trim() || 'decision failed: ' + res.status)
+}
+
+// fetchPrograms lists the programs under the attached project.
+export async function fetchPrograms(): Promise<ProgramInfo[]> {
+  const res = await fetch(p('/api/programs'))
+  if (!res.ok) throw new Error('fetch programs failed: ' + res.status)
+  return res.json()
 }
 
 export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = '', roles: string[] = [], request = ''): Promise<any[]> {

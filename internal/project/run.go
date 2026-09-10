@@ -325,6 +325,7 @@ func runAssembly(opts assemblyOptions) error {
 					}
 					if opts.ContextInfo.Project != "" {
 						s.SetArchivedStore(projectArchiver{id: opts.ContextInfo.Project})
+						s.SetProgramLister(webuiProgramLister{id: opts.ContextInfo.Project})
 					}
 					if supervisor != nil {
 						s.SetUnmanagedController(&webuiUnmanagedAdapter{
@@ -483,6 +484,24 @@ func resolvePort(addr string) int {
 		return n
 	}
 	return 0
+}
+
+// webuiProgramLister implements webui.ProgramLister for a specific project, so
+// the project WebUI can browse the programs under its programs/ directory.
+type webuiProgramLister struct {
+	id string
+}
+
+func (l webuiProgramLister) ListPrograms() ([]webui.ProgramSummary, error) {
+	ps, err := ListPrograms(l.id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webui.ProgramSummary, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, webui.ProgramSummary(p))
+	}
+	return out, nil
 }
 
 // webuiDeclRemover implements webui.WorkerDeclRemover for a specific project,

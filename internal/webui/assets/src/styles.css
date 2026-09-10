@@ -1,10 +1,10 @@
 /* ── Markdown content styles ── */
 
 [data-theme="dark"] .md-content code {
-  background: #373737; color: #e6c7a0;
+  background: #404040; color: #e6c7a0;
 }
 [data-theme="light"] .md-content code {
-  background: #e4e4e4; color: #c88;
+  background: #d6d6d6; color: #c88;
 }
 .md-content code {
   padding: 1px 5px; border-radius: 3px; font-size: 12px;
@@ -22,32 +22,32 @@
 [data-theme="light"] .md-content h1, [data-theme="light"] .md-content h2, [data-theme="light"] .md-content h3,
 [data-theme="light"] .md-content strong { color: #1a1a1a; }
 [data-theme="dark"] .md-content blockquote {
-  border-left: 3px solid #4a4a4a; color: #aaa;
+  border-left: 3px solid #525252; color: #aaa;
 }
 [data-theme="light"] .md-content blockquote {
-  border-left: 3px solid #d6d6d6; color: #666;
+  border-left: 3px solid #c8c8c8; color: #666;
 }
 .md-content blockquote { margin: 8px 0; padding: 4px 12px; }
 .md-content table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
 [data-theme="dark"] .md-content th, [data-theme="dark"] .md-content td {
-  border: 1px solid #4a4a4a;
+  border: 1px solid #525252;
 }
 [data-theme="light"] .md-content th, [data-theme="light"] .md-content td {
-  border: 1px solid #d6d6d6;
+  border: 1px solid #c8c8c8;
 }
 .md-content th, .md-content td {
   padding: 6px 10px; text-align: left;
 }
 [data-theme="dark"] .md-content th {
-  background: #373737; color: #e0e0e0; font-weight: bold;
+  background: #404040; color: #e0e0e0; font-weight: bold;
 }
 [data-theme="light"] .md-content th {
-  background: #eeeeee; color: #1a1a1a; font-weight: bold;
+  background: #e0e0e0; color: #1a1a1a; font-weight: bold;
 }
 [data-theme="dark"] .md-content td { color: #ccc; }
 [data-theme="light"] .md-content td { color: #333; }
-[data-theme="dark"] .md-content tr:nth-child(even) td { background: #2d2d2d; }
-[data-theme="light"] .md-content tr:nth-child(even) td { background: #f0f0f0; }
+[data-theme="dark"] .md-content tr:nth-child(even) td { background: #383838; }
+[data-theme="light"] .md-content tr:nth-child(even) td { background: #e8e8e8; }
 
 /* ── Decision option hover ── */
 .decision-opt {
@@ -115,10 +115,10 @@
   animation: niq-spin 0.7s linear infinite;
 }
 /* ── Event table row hover / selected ──
-   Mirror the palette: dark bgLighter #373737, light bgLighter #e4e4e4;
+   Mirror the palette: dark bgLighter #404040, light bgLighter #d6d6d6;
    accentBg dark rgba(60,120,180,0.15), light rgba(60,120,180,0.1). */
-[data-theme="dark"] .event-row:hover td { background: #373737; }
-[data-theme="light"] .event-row:hover td { background: #e4e4e4; }
+[data-theme="dark"] .event-row:hover td { background: #404040; }
+[data-theme="light"] .event-row:hover td { background: #d6d6d6; }
 [data-theme="dark"] .event-row.selected td { background: rgba(60,120,180,0.15); }
 [data-theme="light"] .event-row.selected td { background: rgba(60,120,180,0.1); }
 
