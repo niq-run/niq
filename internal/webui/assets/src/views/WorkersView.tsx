@@ -103,6 +103,8 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
           <tr style={{ textAlign: 'left', color: colors.textDimmed, fontSize: fontSizes.xs }}>
             <th style={{ padding: '6px 6px', width: 170, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>{t('workers.col.workerId')}</th>
             <th style={{ padding: '6px 6px', width: 110, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>{t('workers.col.type')}</th>
+            <th style={{ padding: '6px 6px', width: 150, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('workers.col.tags.tooltip')}>{t('workers.col.tags')}</th>
+            <th style={{ padding: '6px 6px', width: 200, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('workers.col.description.tooltip')}>{t('workers.col.description')}</th>
             <th style={{ padding: '6px 6px', width: 90, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('workers.col.connection.tooltip')}>{t('workers.col.connection')}</th>
             <th style={{ padding: '6px 6px', width: 120, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('workers.col.lifecycle.tooltip')}>{t('workers.col.lifecycle')}</th>
             <th style={{ padding: '6px 6px', width: 120, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('workers.col.managed.tooltip')}>{t('workers.col.managed')}</th>
@@ -139,6 +141,26 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                 <td style={cell}>
                   {w.type ? (
                     <span style={{ ...tag, color: typeColor, background: typeColor + '1f', border: '1px solid ' + typeColor + '55' }}>{w.type}</span>
+                  ) : (
+                    <span style={{ color: colors.textDimmed }}>{'\u2014'}</span>
+                  )}
+                </td>
+                {/* Tags: raw slash-path values (also drive picker grouping). */}
+                <td style={cell}>
+                  {w.tags && w.tags.length > 0 ? (
+                    <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {w.tags.map(t => (
+                        <span key={t} style={{ fontSize: fontSizes.xs, color: colors.textDim, background: colors.bgChip, border: '1px solid ' + colors.border, borderRadius: 8, padding: '0 7px', lineHeight: '16px', whiteSpace: 'nowrap' }}>{'#' + t}</span>
+                      ))}
+                    </span>
+                  ) : (
+                    <span style={{ color: colors.textDimmed }}>{'\u2014'}</span>
+                  )}
+                </td>
+                {/* Description: a short purpose note, truncated in its column. */}
+                <td style={cell}>
+                  {w.description ? (
+                    <span title={w.description} style={{ color: colors.textDim }}>{w.description}</span>
                   ) : (
                     <span style={{ color: colors.textDimmed }}>{'\u2014'}</span>
                   )}

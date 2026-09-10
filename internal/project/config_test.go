@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/niq-run/niq/core/event"
+	"github.com/niq-run/niq/core/worker"
 )
 
 // TestSeedTemplates verifies first-run seeding populates an empty templates
@@ -176,5 +177,29 @@ func TestPublishSpecs(t *testing.T) {
 	got := publishPatterns(src["publish"])
 	if len(got) != 2 || got[0].Target != "*" || got[1].Target != "ws-1" {
 		t.Fatalf("publishPatterns = %+v, want [* @ws-1]", got)
+	}
+}
+
+func TestDeclFromSpawnCarriesMeta(t *testing.T) {
+	cfg := worker.WorkerConfig{
+		ID:          "oncall",
+		Type:        "reason",
+		Params:      map[string]any{"id": "oncall", "type": "reason"},
+		Tags:        []string{"work", "ops/backup"},
+		Description: "值班专用",
+	}
+	decl := declFromSpawn(cfg)
+	if decl.ID != "oncall" || decl.Type != "reason" {
+		t.Fatalf("decl base = %+v", decl)
+	}
+	if len(decl.Tags) != 2 || decl.Tags[0] != "work" || decl.Tags[1] != "ops/backup" {
+		t.Fatalf("decl tags = %#v", decl.Tags)
+	}
+	if decl.Description != "值班专用" {
+		t.Fatalf("decl description = %q", decl.Description)
+	}
+	// Params stay verbatim (construction params only).
+	if decl.Params["tags"] != nil || decl.Params["description"] != nil {
+		t.Fatalf("display metadata leaked into params: %+v", decl.Params)
 	}
 }

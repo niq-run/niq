@@ -276,6 +276,17 @@ export async function createWorker(body: Record<string, unknown>): Promise<Creat
   return res.json()
 }
 
+// updateWorkerMeta updates a worker's display metadata (tags / description),
+// persisted to its project.json declaration and reflected live in the UI (no
+// restart). Tags are sent as an array (empty = clear), description always sent.
+export async function updateWorkerMeta(id: string, tags: string[], description: string): Promise<void> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/meta`), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tags, description }),
+  })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'update metadata failed: ' + res.status)
+}
 // updateWorkerAllow edits a worker's allow lists on the bus registry. Either
 // list may be omitted to keep its current value. SubscribeAllow patterns may
 // carry the optional source restriction ({type, source_id}).

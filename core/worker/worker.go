@@ -58,6 +58,13 @@ type WorkerConfig struct {
 	Type string `json:"type"`
 	// Params holds type-specific construction parameters.
 	Params map[string]any `json:"params,omitempty"`
+	// Tags are slash-path hierarchy labels used to group the worker in the
+	// WebUI's selector (e.g. "ops/backup"). Purely display metadata — not
+	// handed to builders. Set from a spawn request when provided.
+	Tags []string `json:"tags,omitempty"`
+	// Description is a short human-readable purpose note for the worker.
+	// Display metadata only, not a construction param.
+	Description string `json:"description,omitempty"`
 }
 
 // SpawnSpec describes how to construct and connect a managed worker.

@@ -4,7 +4,7 @@ import { useI18n } from '../i18n'
 import { type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
 import SendEventForm from '../components/SendEventForm'
-import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, updateWorkerAllow } from '../services/api'
+import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, updateWorkerAllow, updateWorkerMeta } from '../services/api'
 
 interface WorkerDetailProps {
   worker: WorkerInfo
@@ -16,9 +16,12 @@ interface WorkerDetailProps {
   archived: Set<string>
   onToggleArchived: (id: string) => void
   onDeleted: (id: string) => void
+  // Called after a display-metadata edit so the caller refreshes the worker
+  // list and this detail reflects the change immediately.
+  onRefresh?: () => void
 }
 
-export default function WorkerDetail({ worker, allWorkers, watch, onClose, archived, onToggleArchived, onDeleted }: WorkerDetailProps) {
+export default function WorkerDetail({ worker, allWorkers, watch, onClose, archived, onToggleArchived, onDeleted, onRefresh }: WorkerDetailProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const suspended = worker.managed && worker.state === 'suspended'
@@ -29,6 +32,11 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
     ? (declStopped ? t('worker.stopped') : suspended ? t('worker.suspended') : t('worker.running'))
     : '\u2014'
   const typeColor = worker.type ? getWorkerTypeColor(worker.type, colors) : colors.textDimmed
+  // Display metadata (tags / description) inline editing.
+  const [editingMeta, setEditingMeta] = useState(false)
+  const [metaNote, setMetaNote] = useState('')
+  const [draftTags, setDraftTags] = useState('')
+  const [draftDesc, setDraftDesc] = useState('')
   const [editingSub, setEditingSub] = useState(false)
   const [subNote, setSubNote] = useState('')
   const [editingPub, setEditingPub] = useState(false)
@@ -48,6 +56,22 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
       setConfirmDel(false)
     } finally {
       setDelBusy(false)
+    }
+  }
+
+  // Save edits to a worker's display metadata (tags / description). These are
+  // WebUI-management fields persisted to the declaration; the running worker
+  // ignores them, so no live operation follows. onRefresh reloads the worker
+  // list so the UI reflects the change immediately.
+  const saveMeta = async () => {
+    setMetaNote('')
+    const tags = draftTags.split(',').map(x => x.trim()).filter(Boolean)
+    try {
+      await updateWorkerMeta(worker.id, tags, draftDesc.trim())
+      setEditingMeta(false)
+      onRefresh?.()
+    } catch (e) {
+      setMetaNote((e as Error)?.message || 'save failed')
     }
   }
 
@@ -126,14 +150,60 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
       <div style={{ padding: 14 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '5px 16px', alignItems: 'baseline' }}>
-              <DetailRow label={t('wd.id')} value={worker.id} colors={colors} />
-              <DetailRow label={t('wd.type')} value={worker.type || '(none)'} colors={colors} />
-              <DetailRow label={t('wd.connection')} value={connection} colors={colors} />
-              <DetailRow label={t('wd.lifecycle')} value={lifecycle} colors={colors} />
-              <DetailRow label={t('wd.managed')} value={worker.managed ? t('wd.yes') : t('wd.no')} colors={colors} />
-              <DetailRow label={t('wd.credential')} value={worker.credential || '\u2014'} colors={colors} />
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ color: colors.detailLabel, fontSize: fontSizes.sm, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('wd.meta.label')}</span>
+              {/* Edit toggles an inline editor for tags / description. Opening
+                  it hydrates the drafts from the current values. */}
+              <span
+                onClick={() => { if (!editingMeta) { setDraftTags((worker.tags || []).join(', ')); setDraftDesc(worker.description || ''); setMetaNote('') } setEditingMeta(v => !v) }}
+                className="btn-hover"
+                style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, marginLeft: 'auto', userSelect: 'none' }}
+              >
+                {editingMeta ? t('wd.meta.cancel') : t('wd.meta.edit')}
+              </span>
             </div>
+            {editingMeta ? (
+              <div style={{ maxWidth: 340 }}>
+                <div style={{ marginBottom: 8 }}>
+                  <label style={{ display: 'block', fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 3 }}>{t('wd.meta.tags')}</label>
+                  <input
+                    value={draftTags}
+                    onChange={e => setDraftTags(e.target.value)}
+                    placeholder="ops/backup, work"
+                    style={{ width: '100%', boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', color: colors.text, fontSize: fontSizes.sm, outline: 'none' }}
+                  />
+                  <div style={{ fontSize: fontSizes.xs, color: colors.detailLabel, marginTop: 3, lineHeight: 1.4 }}>{t('wd.meta.tags.hint')}</div>
+                </div>
+                <div style={{ marginBottom: 8 }}>
+                  <label style={{ display: 'block', fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 3 }}>{t('wd.meta.desc')}</label>
+                  <input
+                    value={draftDesc}
+                    onChange={e => setDraftDesc(e.target.value)}
+                    style={{ width: '100%', boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', color: colors.text, fontSize: fontSizes.sm, outline: 'none' }}
+                  />
+                </div>
+                {metaNote && <div style={{ fontSize: fontSizes.sm, color: colors.toolFailed, marginBottom: 8, lineHeight: 1.4 }}>{metaNote}</div>}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <span onClick={saveMeta} className="btn-hover" style={{ cursor: 'pointer', border: '1px solid ' + colors.accent, borderRadius: 3, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}>{t('wd.meta.save')}</span>
+                  <span onClick={() => setEditingMeta(false)} className="btn-hover" style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 3, padding: '3px 12px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}>{t('wd.meta.cancel')}</span>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '5px 16px', alignItems: 'baseline' }}>
+                <DetailRow label={t('wd.id')} value={worker.id} colors={colors} />
+                <DetailRow label={t('wd.type')} value={worker.type || '(none)'} colors={colors} />
+                {(worker.tags && worker.tags.length > 0) && (
+                  <DetailRow label={t('wd.tags')} value={'#' + worker.tags.join('  #')} colors={colors} />
+                )}
+                {worker.description && (
+                  <DetailRow label={t('wd.description')} value={worker.description} colors={colors} />
+                )}
+                <DetailRow label={t('wd.connection')} value={connection} colors={colors} />
+                <DetailRow label={t('wd.lifecycle')} value={lifecycle} colors={colors} />
+                <DetailRow label={t('wd.managed')} value={worker.managed ? t('wd.yes') : t('wd.no')} colors={colors} />
+                <DetailRow label={t('wd.credential')} value={worker.credential || '\u2014'} colors={colors} />
+              </div>
+            )}
           </div>
 
           <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>

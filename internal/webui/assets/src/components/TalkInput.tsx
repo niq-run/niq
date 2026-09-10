@@ -227,10 +227,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
 
     if (pickerOpen && !composing) {
       // Use the same pickable set the dropdown renders (archived/suspended reason
-      // workers excluded), so Enter commits exactly the highlighted option.
-      const list = pickerMode === 'mention'
-        ? reasonWorkers.filter(w => !archived.has(w.id) && w.state !== 'suspended' && w.id.toLowerCase().includes(mentionQuery))
-        : reasonWorkers.filter(w => !archived.has(w.id) && w.state !== 'suspended')
+      // workers excluded, group headers inert), so Enter commits exactly the
+      // highlighted option.
+      const list = pickerGroup.workers
       // Arrow/ctrl+n/p cycle through the options (wrapping at both ends).
       if (list.length > 0) {
         const n = list.length
@@ -290,9 +289,62 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
 
   // Archived or suspended reason workers are not mentionable / targetable.
   const pickableWorkers = reasonWorkers.filter(w => !archived.has(w.id) && w.state !== 'suspended')
-  const pickList = (pickerOpen && pickerMode === 'mention')
+  // Mention mode narrows by the typed query; target mode shows everything.
+  const pickableShown = (pickerMode === 'mention')
     ? pickableWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery))
     : pickableWorkers
+
+  // Build the picker's grouped option list. Reason workers are grouped by
+  // their primary (first) tag's top-level path segment — a slash tag nests
+  // visually via indentation, so "ops/backup" and "ops/analytics" sit under
+  // an "ops" header at the right depth. Workers without tags fall into a
+  // trailing "other" group. Group headers are inert; they never consume the
+  // keyboard-active slot, so navigation stays on the worker rows only.
+  const pickerGroup = useMemo(() => {
+    const opts: PickerOption[] = []
+    const workers: WorkerInfo[] = []
+    let lastGroup: string | null = null
+    const emitGroup = (g: string) => {
+      if (g !== lastGroup) {
+        opts.push({ id: '__grp_' + g, label: g, isGroup: true })
+        lastGroup = g
+      }
+    }
+    const tagged = pickableShown.filter(w => (w.tags?.length ?? 0) > 0)
+      .slice().sort((a, b) => a.tags![0].localeCompare(b.tags![0]))
+    const untagged = pickableShown.filter(w => !w.tags?.length)
+    for (const w of tagged) {
+      const primary = w.tags![0]
+      const segs = primary.split('/')
+      emitGroup(segs[0])
+      const indent = Math.min(segs.length - 1, 3)
+      const secondary = w.description || primary
+      opts.push({
+        id: w.id,
+        label: w.id,
+        sublabel: w.type,
+        indent,
+        hint: secondary,
+        description: secondary,
+      })
+      workers.push(w)
+    }
+    if (untagged.length) {
+      emitGroup(t('picker.group.untagged'))
+      for (const w of untagged) {
+        opts.push({ id: w.id, label: w.id, sublabel: w.type, description: w.description })
+        workers.push(w)
+      }
+    }
+    // The highlighted worker row's index within the option list (group
+    // headers don't count for keyboard navigation).
+    let activeOptionIndex = -1
+    if (workers[mentionIndex]) {
+      activeOptionIndex = opts.findIndex(o => !o.isGroup && o.id === workers[mentionIndex].id)
+    }
+    return { opts, workers, activeOptionIndex }
+  }, [pickableShown, mentionIndex, t])
+  const pickList = pickerGroup.opts
 
   // Persistent target: a specific reason worker, or '' (broadcast).
   const persistentTarget = mentionTarget && reasonWorkers.some(r => r.id === mentionTarget) ? mentionTarget : ''
@@ -340,11 +392,15 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           <div style={{ position: 'absolute', left: 0, bottom: '100%', marginBottom: 4, zIndex: 100 }}>
             <PickerDropdown
               header={pickerMode === 'mention' ? t('picker.mention') : t('picker.target')}
-              options={pickList.map(w => ({ id: w.id, label: w.id, sublabel: w.type }))}
+              options={pickList}
               selectedId={pickerMode === 'target' ? (shownTarget || undefined) : undefined}
-              activeIndex={mentionIndex}
+              activeIndex={pickerGroup.activeOptionIndex}
               onSelect={commitPicker}
-              onActivate={(i) => setMentionIndex(i)}
+              onActivate={(i) => {
+                // Map the option index back to the worker it selects: group
+                // headers are skipped (they are inert structure).
+                setMentionIndex(pickerGroup.opts.slice(0, i + 1).filter(o => !o.isGroup).length - 1)
+              }}
               footer={{
                 label: t('picker.broadcast'),
                 checked: !shownTarget,

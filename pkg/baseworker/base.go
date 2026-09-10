@@ -12,6 +12,7 @@ package baseworker
 import (
 	"context"
 	"log"
+	"strings"
 
 	corebus "github.com/niq-run/niq/core/bus"
 
@@ -166,4 +167,38 @@ func ArgInt(args map[string]any, key string, def int) int {
 		return int(n)
 	}
 	return def
+}
+
+// ArgStrings returns the string values of a tool argument as a slice, or nil
+// when absent. Accepts a JSON array of strings, an array of any, or a single
+// comma-separated string (e.g. tags from the spawn tool).
+func ArgStrings(args map[string]any, key string) []string {
+	v, ok := args[key]
+	if !ok {
+		return nil
+	}
+	switch items := v.(type) {
+	case string:
+		if strings.TrimSpace(items) == "" {
+			return nil
+		}
+		var out []string
+		for _, s := range strings.Split(items, ",") {
+			if t := strings.TrimSpace(s); t != "" {
+				out = append(out, t)
+			}
+		}
+		return out
+	case []string:
+		return items
+	case []any:
+		var out []string
+		for _, it := range items {
+			if s, ok := it.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out
+	}
+	return nil
 }

@@ -122,6 +122,14 @@ type WorkerConfig struct {
 	// (workspace workers; default webui-hiw, empty disables the flow).
 	Approver string `json:"approver,omitempty"`
 	Archived bool   `json:"archived,omitempty"`
+	// Tags are a slash-path hierarchy used to group workers in the WebUI
+	// worker selector, so a large worker swarm stays navigable (e.g.
+	// "ops/backup", "service/analytics/etl"). Purely display metadata:
+	// never passed to the worker as construction params.
+	Tags []string `json:"tags,omitempty"`
+	// Description is a short human-readable note explaining what the worker
+	// is for. Display metadata only; not a construction param.
+	Description string `json:"description,omitempty"`
 	// Managed marks the worker as host-managed (in-process, worker dir is the
 	// config authority). nil or true = managed; false = an external process
 	// launched by the project via Command/Env/Cwd.
@@ -395,9 +403,11 @@ func spawnConfig(wc WorkerConfig) worker.WorkerConfig {
 // declFromSpawn turns a runtime-spawned worker's config into a project.json
 // declaration. The params map is stored verbatim — it is the only place
 // arbitrary per-type keys (spawn-time goal/brief/programs, third-party worker
-// types) can live; the typed fields stay empty.
+// types) can live. Display metadata (tags / description) from the spawn request
+// is carried on typed fields for the WebUI selector/filter.
 func declFromSpawn(cfg worker.WorkerConfig) WorkerConfig {
-	return WorkerConfig{Type: cfg.Type, ID: cfg.ID, Params: cfg.Params}
+	return WorkerConfig{Type: cfg.Type, ID: cfg.ID, Params: cfg.Params,
+		Tags: cfg.Tags, Description: cfg.Description}
 }
 
 func validateWorkers(cfg *TemplateConfig) (*TemplateConfig, error) {

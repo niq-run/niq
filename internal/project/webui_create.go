@@ -3,6 +3,7 @@ package project
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/internal/webui"
@@ -41,6 +42,9 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 	}
 	if sanitizeID(wc.ID) != wc.ID {
 		return webui.WorkerCreated{}, fmt.Errorf("id may only contain letters, digits, '-', '_', '.'")
+	}
+	if err := validateWorkerMeta(wc); err != nil {
+		return webui.WorkerCreated{}, err
 	}
 
 	p, err := LoadProject(c.projectID)
@@ -91,6 +95,31 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 		return webui.WorkerCreated{}, err
 	}
 	return webui.WorkerCreated{ID: wc.ID, Type: wc.Type}, nil
+}
+
+// validateWorkerMeta checks a worker's display metadata (tags / description)
+// from the create form. Tags form a slash-path hierarchy, so each segment may
+// carry letters, digits and '_-.'; the slash is the path separator. Segments
+// must be non-empty (no "//", no leading/trailing slash). Description is free
+// text but trimmed; empty values are dropped.
+func validateWorkerMeta(wc WorkerConfig) error {
+	for _, t := range wc.Tags {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			return fmt.Errorf("tags may not be empty")
+		}
+		for _, seg := range strings.Split(t, "/") {
+			if seg == "" {
+				return fmt.Errorf("tag %q: empty segment (no leading/trailing/double slash)", t)
+			}
+			for _, r := range seg {
+				if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
+					return fmt.Errorf("tag %q: segments may only contain letters, digits, '-', '_', '.'", t)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // ManagedSpawn returns the spawn-event payload for a declared managed worker,

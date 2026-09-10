@@ -50,6 +50,15 @@ func (w *HostWorker) registerExtensions() {
 				"type":        "string",
 				"description": "Worker that approves boundary-expansion requests (when type=workspace). Defaults to webui-hiw; empty disables the approval flow.",
 			},
+			"tags": map[string]any{
+				"type":        "array",
+				"description": "Optional slash-path labels that group this worker in the WebUI selector (e.g. [\"ops/backup\", \"work\"]). Display metadata only; carried to the declaration so it can be found and filtered-by in the UI. A comma-separated string is also accepted.",
+				"items": map[string]any{"type": "string"},
+			},
+			"description": map[string]any{
+				"type":        "string",
+				"description": "Optional short note explaining what this worker is for. Display metadata only.",
+			},
 		}),
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
@@ -105,7 +114,21 @@ func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (string, error) {
 		return "", fmt.Errorf("type is required")
 	}
 	id := baseworker.ArgString(tc.Args, "id")
-	cfg := worker.WorkerConfig{ID: id, Type: typ, Params: tc.Args}
+
+	// Lift display metadata (tags / description) out of the construction
+	// params so builders never see them: they travel on typed fields and land
+	// in the project.json declaration for the WebUI selector/filter.
+	tags := baseworker.ArgStrings(tc.Args, "tags")
+	desc := baseworker.ArgString(tc.Args, "description")
+	params := tc.Args
+	if tags != nil {
+		delete(params, "tags")
+	}
+	if desc != "" {
+		delete(params, "description")
+	}
+
+	cfg := worker.WorkerConfig{ID: id, Type: typ, Params: params, Tags: tags, Description: desc}
 	if err := w.engine.CreateWorker(context.Background(), cfg); err != nil {
 		return "", err
 	}

@@ -47,6 +47,11 @@ export interface WorkerInfo {
   state?: string
   unmanaged?: boolean
   unmanaged_state?: string // "running" | "stopped" (unmanaged only)
+  // Display metadata from the worker declaration: tags form a slash-path
+  // hierarchy used to group workers in the target picker, and description
+  // is a short purpose note shown as a dimmed second line.
+  tags?: string[]
+  description?: string
 }
 
 // CreateWorkerResult is what POST /api/workers/create returns.

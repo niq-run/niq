@@ -8,6 +8,12 @@ export interface PickerOption {
   hint?: string
   // Optional short description rendered as a dimmed second line.
   description?: string
+  // isGroup marks a non-selectable group header (e.g. a tag group in the
+  // worker target picker). Group headers are inert rows for structure only.
+  isGroup?: boolean
+  // indent is the left padding depth for nesting under a group, mapping
+  // slash-path tag depth to visual indentation.
+  indent?: number
 }
 
 export interface PickerFooter {
@@ -115,6 +121,31 @@ export default function PickerDropdown({
       {options.map((opt, i) => {
         const selected = selectedId !== undefined && selectedId === opt.id
         const active = activeIndex === i
+        // Group headers are inert structural rows: no selection, no hover
+        // affordance, no check column.
+        if (opt.isGroup) {
+          return (
+            <div
+              key={opt.id}
+              className="picker-group"
+              style={{
+                padding: '8px 12px 2px 12px',
+                fontSize: fontSizes.xs,
+                color: colors.textDimmed,
+                fontWeight: 600,
+                letterSpacing: '0.02em',
+                textTransform: 'uppercase',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                userSelect: 'none',
+              }}
+            >
+              {opt.label}
+            </div>
+          )
+        }
+        const padLeft = 12 + (opt.indent ?? 0) * 12
         return (
           <div
             key={opt.id}
@@ -123,7 +154,7 @@ export default function PickerDropdown({
             onClick={() => onSelect(opt.id)}
             onMouseEnter={() => onActivate?.(i)}
             style={{
-              padding: '7px 12px',
+              padding: `7px 12px 7px ${padLeft}px`,
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',

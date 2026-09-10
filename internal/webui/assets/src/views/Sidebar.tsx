@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useRef, useEffect, useMemo, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
+import WorkerPickerModal from '../components/WorkerPickerModal'
+import TagFilterDropdown from '../components/TagFilterDropdown'
 
 interface SidebarProps {
   view: ViewMode
@@ -54,6 +56,11 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // row highlight. Excludes the view-setting switches and the worker-selector
   // checkbox rows.
   const [hoverId, setHoverId] = useState<string | null>(null)
+  // Expanded picker modal for the worker selector (open on the expand button).
+  const [showWorkerPicker, setShowWorkerPicker] = useState(false)
+  // Multi-select tag filter applied to the inline selector list (and inherited
+  // by the expanded picker).
+  const [filterTags, setFilterTags] = useState<string[]>([])
   const hoverStyle = (id: string): CSSProperties => ({
     background: hoverId === id ? colors.bgLight : 'transparent',
     // Full-width row highlight that bleeds to the sidebar edges. The options
@@ -230,6 +237,23 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     }
     onNavigate()
   }
+
+  // The worker-selector rows shown inline and in the expanded picker: reason
+  // workers when choosing whom to talk to, all workers when filtering events,
+  // archived ones always hidden.
+  const selectorWorkers = workers.filter(w => (view !== 'talk' || w.type === 'reason') && !archived.has(w.id))
+  const selectorSelected = view === 'talk' ? talkWorkers : filterWorkers
+
+  // Tag multi-select filter for the selector list. A worker is kept when it
+  // carries any of the selected tags (OR).
+  const selectorTags = useMemo(() => {
+    const set = new Set<string>()
+    for (const w of selectorWorkers) for (const tag of w.tags || []) set.add(tag)
+    return [...set].sort()
+  }, [selectorWorkers])
+  const shownSelectorWorkers = filterTags.length === 0
+    ? selectorWorkers
+    : selectorWorkers.filter(w => (w.tags || []).some(tag => filterTags.includes(tag)))
 
   // Footer project menu: opened by clicking the project name in the bottom
   // row; closes on any click outside the menu and its trigger.
@@ -425,8 +449,34 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       {view !== 'workers' && view !== 'programs' && (
         <>
           <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
-          <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.workerSelector')}</strong>
-          {workers.filter(w => (view !== 'talk' || w.type === 'reason') && !archived.has(w.id)).map((w) => {
+          <strong style={{ display: 'block', color: colors.text, fontSize: fontSizes.xl, marginBottom: 8 }}>{t('sidebar.workerSelector')}</strong>
+          {/* Control row: the compact multi-select tag filter takes 2/3 of the
+              width, the expand (opens the picker modal) button takes 1/3.
+              Expand shows text, not an icon. */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', marginBottom: 11 }}>
+            <div style={{ flex: '2 1 0', minWidth: 0 }}>
+              <TagFilterDropdown
+                fill
+                tags={selectorTags}
+                selected={filterTags}
+                onToggle={(tag) => setFilterTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
+                onClear={() => setFilterTags([])}
+              />
+            </div>
+            {selectorWorkers.length > 1 && (
+              <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex' }}>
+                <span
+                  onClick={() => setShowWorkerPicker(true)}
+                  title={t('sidebar.workerSelector.expand')}
+                  className="btn-hover"
+                  style={{ flex: 1, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: fontSizes.xs, lineHeight: '20px', padding: '0 6px' }}
+                >
+                  {t('sidebar.workerSelector.expandShort')}
+                </span>
+              </div>
+            )}
+          </div>
+          {shownSelectorWorkers.map((w) => {
             const isActive = view === 'talk'
               ? talkWorkers.has(w.id)
               : filterWorkers.has(w.id)
@@ -620,6 +670,23 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         </div>
       </div>
       </div>
+
+      {/* Expanded worker picker: searchable, tag-grouped modal opened by the
+          selector's expand button. It toggles the same selection as the inline
+          checklist. */}
+      {showWorkerPicker && (
+        <WorkerPickerModal
+          title={t('sidebar.workerSelector')}
+          // The expanded view shows the full selectable set with its own search
+          // + tag filter — it is the pimarily where you find and pick workers,
+          // so it must not be pre-narrowed by the inline sidebar filter.
+          workers={selectorWorkers}
+          selected={selectorSelected}
+          onToggle={(id) => { if (view === 'talk') onToggleWorker(id); else onToggleFilterWorker(id) }}
+          onClose={() => setShowWorkerPicker(false)}
+          isMobile={isMobile}
+        />
+      )}
     </>
   )
 }

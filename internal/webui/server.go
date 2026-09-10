@@ -169,6 +169,10 @@ type Server struct {
 	unmngd      UnmanagedController
 	declCreator WorkerDeclCreator
 	declRemover WorkerDeclRemover
+	metaUpdater WorkerMetaUpdater
+	workerMeta  map[string]WorkerMeta
+
+	metaMu sync.RWMutex
 
 	// Uploads: projectDir is the on-disk project directory
 	// (~/.niq/projects/<id>), uploadDir an optional config override
@@ -225,6 +229,10 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// Suspend / resume a host-managed worker (via the host worker's tools).
 	mux.HandleFunc("POST /api/workers/{id}/suspend", s.handleSuspend)
 	mux.HandleFunc("POST /api/workers/{id}/resume", s.handleResume)
+
+	// Update a worker's display metadata (tags / description): a pure
+	// declaration edit persisted to project.json + the in-memory workerMeta.
+	mux.HandleFunc("PUT /api/workers/{id}/meta", s.handleUpdateWorkerMeta)
 
 	// Model provider: read and switch a reason worker's active LLM provider.
 	// These go over the bus as worker.query / worker.update and wait for the
@@ -977,12 +985,52 @@ func sanitizeFileName(name string) string {
 	return out
 }
 
+// WorkerMeta is the display metadata (tags, description) of a worker
+// declaration. It is injected by the assembly layer from project.json and
+// merged into WorkerView for the UI.
+type WorkerMeta struct {
+	Tags        []string `json:"tags,omitempty"`
+	Description string   `json:"description,omitempty"`
+}
+
+// WorkerMetaUpdater persists a worker's display metadata (tags / description)
+// to the declaration storage (project.json). Implemented by the assembly
+// layer; nil disables PUT /api/workers/{id}/meta.
+type WorkerMetaUpdater interface {
+	UpdateWorkerMeta(id string, meta WorkerMeta) error
+}
+
+// SetWorkerMetaUpdater attaches the metadata persistence (nil disables the
+// endpoint).
+func (s *Server) SetWorkerMetaUpdater(u WorkerMetaUpdater) {
+	s.metaUpdater = u
+}
+
+// SetWorkerMeta stores the declared workers' display metadata (id ⇒ tags /
+// description). It is read-only for the server; call it once with the project's
+// declaration map at setup. nil clears it.
+func (s *Server) SetWorkerMeta(m map[string]WorkerMeta) {
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	s.workerMeta = m
+}
+
+// workerMetaFor returns the display metadata for a worker id, or zero values.
+func (s *Server) workerMetaFor(id string) WorkerMeta {
+	s.metaMu.RLock()
+	defer s.metaMu.RUnlock()
+	return s.workerMeta[id]
+}
+
 // WorkerView is the unified view of a worker: its registered identity (from
 // the bus registry), its connection status, and — if host-managed — its
-// lifecycle state, or if external — its supervision state.
+// lifecycle state, or if external — its supervision state. Tags and a
+// description (from the worker declaration) ride along for display.
 type WorkerView struct {
 	ID             string                 `json:"id"`
 	Type           string                 `json:"type"`
+	Tags           []string               `json:"tags,omitempty"`
+	Description    string                 `json:"description,omitempty"`
 	Credential     string                 `json:"credential,omitempty"`
 	PublishAllow   []event.PublishPattern `json:"publish_allow,omitempty"`
 	SubscribeAllow []event.EventPattern   `json:"subscribe_allow,omitempty"`
@@ -1018,6 +1066,8 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		v := WorkerView{ID: id.WorkerID, Type: id.Type, Credential: id.Credential,
 			PublishAllow: id.PublishAllow, SubscribeAllow: id.SubscribeAllow,
 			Online: online[id.WorkerID]}
+		meta := s.workerMetaFor(id.WorkerID)
+		v.Tags, v.Description = meta.Tags, meta.Description
 		if state, ok := managed[id.WorkerID]; ok {
 			v.Managed = true
 			v.State = state
@@ -1035,8 +1085,10 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 	// Include managed workers whose identity is not yet registered (transient).
 	for _, wi := range s.workerSvc.ListWorkers("") {
 		if _, ok := s.registry.Lookup(wi.ID); !ok {
+			meta := s.workerMetaFor(wi.ID)
 			views = append(views, WorkerView{
 				ID: wi.ID, Type: wi.Type, Managed: true, State: string(wi.State), Online: online[wi.ID],
+				Tags: meta.Tags, Description: meta.Description,
 			})
 		}
 	}
@@ -1049,17 +1101,20 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.registry.Lookup(st.ID); ok {
 			continue
 		}
+		meta := s.workerMetaFor(st.ID)
 		if st.Managed {
 			if _, ok := managed[st.ID]; ok {
 				continue // the worker service owns it (running/suspended)
 			}
 			views = append(views, WorkerView{
 				ID: st.ID, Type: st.Type, Managed: true, State: "stopped",
+				Tags: meta.Tags, Description: meta.Description,
 			})
 			continue
 		}
 		views = append(views, WorkerView{
 			ID: st.ID, Type: st.Type, Unmanaged: true, UnmanagedState: st.State,
+			Tags: meta.Tags, Description: meta.Description,
 		})
 	}
 
@@ -1539,6 +1594,39 @@ func (s *Server) spawnManaged(w http.ResponseWriter, r *http.Request, payload ma
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(reply.Payload)
+}
+
+// handleUpdateWorkerMeta updates a worker's display metadata (tags /
+// description): the updater persists it to the declaration in project.json,
+// then the in-memory workerMeta map is refreshed so the sidebar/picker reflect
+// the change immediately (no restart). The body carries tags and description;
+// a missing list clears tags, a missing description clears it.
+func (s *Server) handleUpdateWorkerMeta(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.metaUpdater == nil {
+		http.Error(w, "worker metadata updates unavailable", 404)
+		return
+	}
+	var in struct {
+		Tags        []string `json:"tags"`
+		Description string   `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	meta := WorkerMeta{Tags: in.Tags, Description: in.Description}
+	if err := s.metaUpdater.UpdateWorkerMeta(id, meta); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.metaMu.Lock()
+	if s.workerMeta == nil {
+		s.workerMeta = map[string]WorkerMeta{}
+	}
+	s.workerMeta[id] = meta
+	s.metaMu.Unlock()
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
 // handleDeleteWorker permanently removes a worker: it stops the live process

@@ -113,6 +113,9 @@ export default function App() {
   const [filterWorkers, setFilterWorkers] = useState<Set<string>>(new Set())
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null)
+  // Worker shown in an in-place detail overlay (opened from the talk view by
+  // right-clicking a badge), without navigating to the workers view.
+  const [detailOverlayId, setDetailOverlayId] = useState<string | null>(null)
   const [detailWidth, setDetailWidth] = useState<number>(detailDefaultWidth)
   const detailDraggedRef = useRef(false)
   const [deliveries, setDeliveries] = useState<Record<string, string[]>>({})
@@ -520,6 +523,14 @@ export default function App() {
     setSelectedWorkerId(prev => prev === id ? null : id)
   }, [])
 
+  // Open a worker's detail page directly (e.g. right-click on a talk badge):
+  // select it and switch to the workers view, which renders the detail panel.
+  // Open a worker's detail page as an in-place overlay (e.g. right-click on a
+  // talk badge), without navigating away from the current view.
+  const openWorkerDetail = useCallback((id: string) => {
+    setDetailOverlayId(id)
+  }, [])
+
   // ResizablePanel reports width changes during drag; mark as dragged so the
   // 40%-of-viewport resize-follow stops applying.
   const handlePanelResize = useCallback((w: number) => {
@@ -837,6 +848,7 @@ export default function App() {
               onTraceClick={handleTraceClick}
               onLoadMore={loadMore}
               onMention={(id) => { setInput(prev => prev + '@' + id + ' '); setMentionTarget(id); setMentionKey(k => k + 1) }}
+              onOpenDetail={openWorkerDetail}
               deliveries={deliveries}
               workerTypes={workerTypes}
               thinkingExpanded={viewSettings.thinkingExpanded}
@@ -893,6 +905,7 @@ export default function App() {
                   						archived={archived}
                   						onToggleArchived={toggleArchived}
                   						onDeleted={(id) => { setSelectedWorkerId(null); refreshWorkers() }}
+                  						onRefresh={refreshWorkers}
                   					/>
                   				</MobileDetailPanel>
                   			  ) : (
@@ -905,6 +918,7 @@ export default function App() {
                   						archived={archived}
                   						onToggleArchived={toggleArchived}
                   						onDeleted={(id) => { setSelectedWorkerId(null); refreshWorkers() }}
+                  						onRefresh={refreshWorkers}
                   					/>
                 </ResizablePanel>
               )
@@ -1017,6 +1031,35 @@ export default function App() {
           </>
         )}
       </div>
+
+      {/* In-place worker detail overlay (opened from talk via right-click), so
+          the detail pops up over the current view instead of navigating away. */}
+      {(() => {
+        const w = detailOverlayId ? workers.find(x => x.id === detailOverlayId) : undefined
+        if (!w) return null
+        return (
+          <div
+            onClick={() => setDetailOverlayId(null)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{ width: 'min(780px, 100%)', height: 'min(86vh, 660px)', display: 'flex', flexDirection: 'column', background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.25)', overflow: 'hidden' }}
+            >
+              <WorkerDetail
+                worker={w}
+                allWorkers={workers}
+                watch={workerWatch[w.id] ?? []}
+                onClose={() => setDetailOverlayId(null)}
+                archived={archived}
+                onToggleArchived={toggleArchived}
+                onDeleted={(id) => { setDetailOverlayId(null); refreshWorkers() }}
+                onRefresh={refreshWorkers}
+              />
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

@@ -325,6 +325,8 @@ func runAssembly(opts assemblyOptions) error {
 					}
 					if opts.ContextInfo.Project != "" {
 						s.SetArchivedStore(projectArchiver{id: opts.ContextInfo.Project})
+						s.SetWorkerMeta(workerMetaFromDecl(opts.Workers))
+						s.SetWorkerMetaUpdater(webuiMetaUpdater{projectID: opts.ContextInfo.Project})
 					}
 					if supervisor != nil {
 						s.SetUnmanagedController(&webuiUnmanagedAdapter{
@@ -483,6 +485,38 @@ func resolvePort(addr string) int {
 		return n
 	}
 	return 0
+}
+
+// workerMetaFromDecl builds the WebUI's worker display-metadata map (id ⇒
+// tags / description) from the declared worker set, for the workers view and
+// the talk target picker. Only declared hosts carry metadata.
+func workerMetaFromDecl(workers []WorkerConfig) map[string]webui.WorkerMeta {
+	if len(workers) == 0 {
+		return nil
+	}
+	m := make(map[string]webui.WorkerMeta, len(workers))
+	for _, wc := range workers {
+		if wc.Tags == nil && wc.Description == "" {
+			continue
+		}
+		m[wc.ID] = webui.WorkerMeta{Tags: wc.Tags, Description: wc.Description}
+	}
+	return m
+}
+
+// webuiMetaUpdater implements webui.WorkerMetaUpdater: it persists a worker's
+// display metadata (tags / description) to its project.json declaration. Tags
+// are pure WebUI management metadata — the running worker ignores them, so
+// this is a declaration edit only, with no live worker operation.
+type webuiMetaUpdater struct {
+	projectID string
+}
+
+func (u webuiMetaUpdater) UpdateWorkerMeta(id string, meta webui.WorkerMeta) error {
+	if u.projectID == "" {
+		return fmt.Errorf("worker metadata update requires a project")
+	}
+	return UpdateWorkerMeta(u.projectID, id, meta.Tags, meta.Description)
 }
 
 // webuiDeclRemover implements webui.WorkerDeclRemover for a specific project,

@@ -132,6 +132,36 @@ func AppendWorkerDecl(projectID string, wc WorkerConfig) error {
 	return SaveProject(p)
 }
 
+// UpdateWorkerMeta updates a declared worker's display metadata (tags /
+// description) in project.json. These are WebUI-management fields, not runtime
+// state: the running worker ignores them, so no live worker operation is
+// needed — this is a pure declaration edit. The caller (WebUI server) also
+// refreshes its in-memory workerMeta so the change shows without a restart.
+// The worker must already be declared.
+func UpdateWorkerMeta(projectID, id string, tags []string, desc string) error {
+	probe := WorkerConfig{Tags: tags, Description: desc}
+	if err := validateWorkerMeta(probe); err != nil {
+		return err
+	}
+	p, err := LoadProject(projectID)
+	if err != nil {
+		return err
+	}
+	idx := -1
+	for i, w := range p.Workers {
+		if w.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("worker %s not found", id)
+	}
+	p.Workers[idx].Tags = append([]string(nil), tags...)
+	p.Workers[idx].Description = desc
+	return SaveProject(p)
+}
+
 // RemoveWorkerDecl removes a worker's declaration from a project's project.json
 // (persisted immediately). It only edits the declaration; it does not stop a
 // running process or touch the bus registry / state dirs.

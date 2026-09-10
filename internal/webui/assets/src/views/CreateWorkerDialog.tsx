@@ -41,6 +41,8 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
   const [envText, setEnvText] = useState('')
   const [subscriptions, setSubscriptions] = useState('')
   const [publish, setPublish] = useState('')
+  const [tags, setTags] = useState('')
+  const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
 
@@ -100,6 +102,11 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
       id: id.trim(),
       managed: !isExternal,
     }
+    // Display metadata: slash-path tags (grouping) + purpose note. Applies to
+    // every worker kind, managed or external; carried in the declaration.
+    const tagList = tags.split(',').map(x => x.trim()).filter(Boolean)
+    if (tagList.length > 0) body.tags = tagList
+    if (description.trim()) body.description = description.trim()
     if (!isExternal) {
       if (effType === 'reason') {
         if (instruction.trim()) body.instruction = instruction.trim()
@@ -208,6 +215,20 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
         <div style={field}>
           <label style={label}>{t('workers.create.id')}</label>
           <input style={input} value={id} onChange={e => setId(e.target.value)} placeholder="my-worker" />
+        </div>
+
+        {/* Display metadata: slash-path tags group the worker in the target
+            picker; the description says what it is for. Applies to all kinds. */}
+        <div style={field}>
+          <label style={label}>{t('workers.create.tags')}</label>
+          <input style={input} value={tags} onChange={e => setTags(e.target.value)} placeholder="ops/backup, service/analytics" />
+          <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+            {t('workers.create.tags.hint')}
+          </div>
+        </div>
+        <div style={field}>
+          <label style={label}>{t('workers.create.description')}</label>
+          <input style={input} value={description} onChange={e => setDescription(e.target.value)} placeholder={t('workers.create.description.placeholder')} />
         </div>
 
         {!isExternal && effType === 'reason' && (

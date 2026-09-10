@@ -22,6 +22,8 @@ interface TalkViewProps {
   onTraceClick: (traceId: string) => void
   onLoadMore?: () => void
   onMention?: (workerId: string) => void
+  // Right-clicking a worker badge opens its detail page.
+  onOpenDetail?: (workerId: string) => void
   deliveries: Record<string, string[]>
   humanId?: string
   workerTypes?: Record<string, string>
@@ -166,12 +168,13 @@ function GrowingHeight({ children, durationMs = 180 }: { children: ReactNode; du
 // renders — a component defined inside TalkView would be re-created on every
 // render, unmount/remount all badges, and drop the hover state (the @ would
 // flash and disappear even while the pointer stays put).
-function WorkerBadge({ id, show, humanId, isReason, onMention, displayName }: {
+function WorkerBadge({ id, show, humanId, isReason, onMention, onOpenDetail, displayName }: {
   id: string
   show: boolean
   humanId: string
   isReason: (id: string) => boolean
   onMention?: (id: string) => void
+  onOpenDetail?: (id: string) => void
   displayName: (id?: string) => string
 }) {
   const { colors } = useTheme()
@@ -183,11 +186,12 @@ function WorkerBadge({ id, show, humanId, isReason, onMention, displayName }: {
   return (
     <span
       onClick={(e) => { e.stopPropagation(); if (mentionable) onMention?.(id) }}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onOpenDetail?.(id) }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       className={mentionable ? 'badge-mention' : undefined}
       style={{
-        cursor: mentionable ? 'pointer' : 'default',
+        cursor: mentionable ? 'pointer' : (onOpenDetail ? 'context-menu' : 'default'),
         fontSize: fontSizes.xxl,
         color: colors.accent,
         fontWeight: 'bold',
@@ -203,7 +207,7 @@ function WorkerBadge({ id, show, humanId, isReason, onMention, displayName }: {
   )
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal }: TalkViewProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   // Left-side bubbles are wider on phones (90%) and keep the original 70% on
@@ -545,7 +549,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         		<div key={evt.id} data-evt-id={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
         		  {showBadge && (
         			<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
             </div>
           )}
          		  <div
@@ -639,7 +643,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       nodes.push(
         <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-            <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+            <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
           </div>
           <div
             style={{
@@ -685,7 +689,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
             </div>
           )}
           <div
@@ -731,7 +735,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
             </div>
           )}
           <div
@@ -814,7 +818,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         <div key={evt.id + '-thinking-' + thinkingExpanded} style={{ maxWidth: bubbleMax }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
             </div>
           )}
           <ThinkingBlock evt={evt} defaultExpanded={thinkingExpanded} compact={compactMode} />
@@ -828,7 +832,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         <div key={evt.id} data-evt-id={evt.id} style={{ maxWidth: bubbleMax }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
             </div>
           )}
           <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} quotedEvtId={ref?.evtId} onQuoteClick={scrollToEvent} />
@@ -854,7 +858,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         <div key={evt.id} data-evt-id={evt.id} style={{ marginTop: 16, marginBottom: compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
             </div>
           )}
           <div className={!isExpanded ? 'block-card' : undefined} style={{ maxWidth: alignRight ? '70%' : bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', border: '1px solid ' + colors.accent, padding: compactMode ? '4px 8px' : '6px 12px', fontSize: compactMode ? fontSizes.xs : fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
@@ -957,7 +961,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         <div key={evt.id} style={{ marginBottom: compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
           {showBadge && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
             </div>
           )}
           <div
@@ -1145,7 +1149,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           return (
             <div key={`stream-${traceId}`} style={{ maxWidth: bubbleMax, marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <WorkerBadge id={workerId} show={true} humanId={humanId} isReason={isReason} onMention={onMention} displayName={displayName} />
+                <WorkerBadge id={workerId} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
                 <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, fontStyle: 'italic' }}>● streaming</span>
               </div>
               {/* Height transition: when a delta batch adds several lines at
