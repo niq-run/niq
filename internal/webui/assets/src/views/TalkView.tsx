@@ -460,10 +460,17 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     const el = sentinelRef.current
     if (!el) return
     const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) {
-        topLockRef.current = true // keep viewport stable across the prepend
-        onLoadMore()
-      }
+      if (!entries[0].isIntersecting) return
+      // Guard against a runaway load loop: when nothing is visible to scroll to
+      // (timeline short/empty — e.g. recent events are all filtered out), the
+      // top sentinel stays in view and would otherwise fire onLoadMore
+      // forever, hammering the history endpoint. Only auto-load once the
+      // visible content actually overflows, so "reaching the top" is a real
+      // user scroll, not the empty state.
+      const sc = scrollRef.current
+      if (sc && sc.scrollHeight <= sc.clientHeight + 1) return
+      topLockRef.current = true // keep viewport stable across the prepend
+      onLoadMore()
     }, { rootMargin: '200px 0px' })
     observer.observe(el)
     return () => observer.disconnect()

@@ -695,9 +695,13 @@ export default function App() {
     const el = sentinelRef.current
     if (!el) return
     const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) {
-        loadMore()
-      }
+      if (!entries[0].isIntersecting) return
+      // Same runaway guard as the talk sentinel: only auto-load when the list
+      // actually overflows, so a short/empty (fully-filtered) timeline can't
+      // keep the top sentinel in view and page forever.
+      const list = listRef.current
+      if (list && list.scrollHeight <= list.clientHeight + 1) return
+      loadMore()
     }, { rootMargin: '200px 0px' })
     observer.observe(el)
     return () => observer.disconnect()
