@@ -9,21 +9,38 @@
 .md-content code:not(pre code):not(div code) {
   padding: 1px 5px; border-radius: 3px; font-size: 12px;
 }
-/* Language-less fenced blocks render as <pre><code> and read as a solid,
-   neutral panel — clearly distinct from the inline chip above. Language-
-   tagged blocks are rendered by the syntax highlighter (a <div> with its own
-   theme) and are excluded by the `:not(div code)` selector. */
+/* Fenced blocks: a single panel, clearly distinct from the inline chip.
+   The syntax highlighter renders its own inner <div> (with a white bg in
+   light mode); that would double up with the <pre> box below, so treat it as
+   transparent and let the <pre> own the one frame + background. Language-
+   tagged blocks keep their syntax colors (token spans), language-less ones
+   render as plain <pre><code>. */
 .md-content pre {
   padding: 10px; border-radius: 4px; overflow-x: auto; margin: 8px 0;
 }
 [data-theme="dark"] .md-content pre {
-  background: #333; color: #d9d9d9;
+  background: #222; color: #d9d9d9;
 }
 [data-theme="light"] .md-content pre {
-  background: #cdcdcd; color: #333;
+  background: #f7f7f7; color: #333;
 }
 .md-content pre code {
   background: none; color: inherit; padding: 0;
+}
+.md-content pre > div {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+/* oneLight paints a light-grey background on many token spans; in light
+   mode the block must read as one flat surface, so clear any background its
+   descendants add and let the <pre> colour win. (Dark keeps the theme's own
+   depth, so this is light-only.) */
+[data-theme="light"] .md-content pre > div * {
+  background: transparent !important;
+  background-color: transparent !important;
 }
 .md-content p { margin: 0 0 8px 0; }
 .md-content p:last-child { margin: 0; }
