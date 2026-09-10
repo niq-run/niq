@@ -279,25 +279,27 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 		query += " AND timestamp >= ?"
 		args = append(args, opts.Since)
 	}
-	// Order and paginate by the implicit rowid (insertion order). Events are
-	// appended as they occur, so rowid is the true chronological order and
-	// deterministic — unlike the second-resolution timestamp (and even the
-	// millisecond uuid time, since same-ms events still tie). Ordering by
-	// timestamp alone made same-second events (e.g. thinking then response)
-	// come back in a random/undefined order after restart, and timestamp-based
-	// pagination silently skipped same-second events at page boundaries.
+	// Order and paginate by (timestamp, id) — a total order on the event id,
+	// matching the client's sort. Do NOT page by rowid: events are persisted
+	// asynchronously, so rowid (insertion order) does not reliably match
+	// creation time, and pages began overlapping (duplicating rows and making
+	// the "before" cursor never advance). The composite key (timestamp, id) is
+	// deterministic and total (ids are unique), with id as the tiebreak so
+	// same-second events (e.g. thinking then response) page without skips.
 	if opts.AfterID != "" {
-		query += " AND rowid > (SELECT rowid FROM events WHERE id = ?)"
-		args = append(args, opts.AfterID)
+		query += ` AND (timestamp > (SELECT timestamp FROM events WHERE id = ?)
+				OR (timestamp = (SELECT timestamp FROM events WHERE id = ?) AND id > ?))`
+		args = append(args, opts.AfterID, opts.AfterID, opts.AfterID)
 	}
 	if opts.BeforeID != "" {
-		query += " AND rowid < (SELECT rowid FROM events WHERE id = ?)"
-		args = append(args, opts.BeforeID)
+		query += ` AND (timestamp < (SELECT timestamp FROM events WHERE id = ?)
+				OR (timestamp = (SELECT timestamp FROM events WHERE id = ?) AND id < ?))`
+		args = append(args, opts.BeforeID, opts.BeforeID, opts.BeforeID)
 	}
 	if opts.Desc {
-		query += " ORDER BY rowid DESC"
+		query += " ORDER BY timestamp DESC, id DESC"
 	} else {
-		query += " ORDER BY rowid ASC"
+		query += " ORDER BY timestamp ASC, id ASC"
 	}
 	if opts.Limit > 0 {
 		query += " LIMIT ?"

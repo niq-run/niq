@@ -127,6 +127,12 @@ function computeToolPartials(events: EventPayload[], talkWorkers: Set<string>, d
   return map
 }
 
+// MAX_TALK_BACKFILL caps how many history pages the talk view will page back
+// through when its timeline is empty (recent events all filtered out). Bounds
+// the backfill so a project with no real conversation can't spin: after this
+// many pages it gives up and shows the empty state.
+const MAX_TALK_BACKFILL = 30
+
 // GrowingHeight animates the height of its child so that when the child's
 // content grows (e.g. a streaming delta batch adds several lines at once), the
 // block expands smoothly over a short transition instead of instantly. It
@@ -475,6 +481,27 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     observer.observe(el)
     return () => observer.disconnect()
   }, [onLoadMore, events.length])
+
+  // Backfill: when history has loaded (events > 0) but nothing is visible in
+  // the talk timeline (all recent events are worker.* / filtered-out), page
+  // back a bounded number of times to surface the actual conversation. This
+  // must be throttled + capped — the old observer loop paged the whole history
+  // unboundedly — and stops itself once visible content appears or exhaustion
+  // makes onLoadMore a no-op.
+  const backfillPageRef = useRef(0)
+  useEffect(() => {
+    if (!onLoadMore || events.length === 0) return
+    if (relevantEvents.length > 0) {
+      backfillPageRef.current = 0 // found content; allow a fresh backfill later
+      return
+    }
+    if (backfillPageRef.current >= MAX_TALK_BACKFILL) return
+    const run = setTimeout(() => {
+      backfillPageRef.current++
+      onLoadMore()
+    }, 60)
+    return () => clearTimeout(run)
+  }, [events, relevantEvents.length, onLoadMore])
 
   // After older events are prepended at the top, nudge scrollTop down by the
   // amount the content grew so the visible frame doesn't jump.
