@@ -424,6 +424,33 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   const loadMoreRef = useRef(onLoadMore)
   loadMoreRef.current = onLoadMore
 
+  // Robust load-more viewport anchoring: instead of a one-shot "topLock"
+  // boolean (which unrelated content changes can consume prematurely), we pin a
+  // specific rendered event node to its on-screen offset. A history prepend
+  // always grows content strictly ABOVE the whole existing tree, so the whole
+  // old subtree shifts uniformly downward — re-pinning any existing node to its
+  // previous offset keeps the viewport stable, even if live bottom events land
+  // while the fetch is in flight.
+  const prependAnchorRef = useRef<{ id: string; offset: number } | null>(null)
+  const captureTopAnchor = () => {
+    const el = scrollRef.current
+    if (!el) return
+    // The topmost (smallest top) node carrying data-evt-id in the rendered
+    // content; prepended history always lands above it.
+    const nodes = el.querySelectorAll<HTMLElement>('[data-evt-id]')
+    let pick: HTMLElement | null = null
+    let pickTop = Infinity
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i] as HTMLElement
+      const nt = n.getBoundingClientRect().top
+      if (nt < pickTop) { pickTop = nt; pick = n }
+    }
+    const id = pick?.dataset?.evtId
+    if (!pick || !id) return
+    const ct = el.getBoundingClientRect().top
+    prependAnchorRef.current = { id, offset: pickTop - ct }
+  }
+
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
@@ -446,14 +473,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     // Early prefetch: as soon as the user approaches the top, start loading
     // older events while there is still scroll room, so the prepend lands
     // before the viewport reaches the earliest message (no stall at the top).
-    // el.scrollTop is the remaining distance to scroll up. topLockRef must be
-    // set *before* the fetch (exactly like the sentinel path) so the prepend
-    // layout effect anchors the viewport: otherwise the grown content above
-    // pushes the page down and it visibly jumps a few times. The prepend's
-    // correction pushes scrollTop past LOAD_EARLY_PX so this can't loop, and a
-    // non-overflowing (short) timeline is left to the backfill path.
+    // el.scrollTop is the remaining distance to scroll up. captureTopAnchor()
+    // pins a rendered node so the prepend keeps the viewport stable (the
+    // prepend's applied position pushes scrollTop past LOAD_EARLY_PX so this
+    // can't loop); a non-overflowing short timeline is left to the backfill.
     if (el.scrollTop < LOAD_EARLY_PX && el.scrollHeight > el.clientHeight + 1) {
-      topLockRef.current = true
+      captureTopAnchor()
       loadMoreRef.current?.()
     }
   }, [])
@@ -484,8 +509,6 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
 
   // Load more button at the top of the scrollable area
   const sentinelRef = useRef<HTMLDivElement>(null)
-  const topLockRef = useRef(false)          // a loadMore prepend is in flight
-  const prevScrollHeightRef = useRef(0)
   useEffect(() => {
     if (!onLoadMore || events.length === 0) return
     const el = sentinelRef.current
@@ -500,7 +523,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       // user scroll, not the empty state.
       const sc = scrollRef.current
       if (sc && sc.scrollHeight <= sc.clientHeight + 1) return
-      topLockRef.current = true // keep viewport stable across the prepend
+      captureTopAnchor() // pin a node so the prepend keeps the viewport stable
       onLoadMore()
     }, { rootMargin: '600px 0px' })
     observer.observe(el)
@@ -534,22 +557,29 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     if (backfillPageRef.current >= MAX_TALK_BACKFILL) return
     const run = setTimeout(() => {
       backfillPageRef.current++
+      captureTopAnchor()
       onLoadMore()
     }, 60)
     return () => clearTimeout(run)
   }, [events, relevantEvents.length, onLoadMore])
 
-  // After older events are prepended at the top, nudge scrollTop down by the
-  // amount the content grew so the visible frame doesn't jump.
+  // If a history prepend is in flight, pin the anchored node back to the
+  // on-screen offset it had when the load was issued. This runs on every
+  // relevant-events change; when the change is unrelated (e.g. a live bottom
+  // event landing first) the anchor's offset is unchanged and nothing scrolls,
+  // so the real prepend — which shoves the whole old tree down — is the one
+  // that gets corrected.
   useLayoutEffect(() => {
+    const a = prependAnchorRef.current
+    if (!a) return
+    prependAnchorRef.current = null
     const el = scrollRef.current
     if (!el) return
-    if (topLockRef.current) {
-      topLockRef.current = false
-      const grew = el.scrollHeight - prevScrollHeightRef.current
-      if (grew > 0) el.scrollTop = Math.max(0, el.scrollTop + grew)
-    }
-    prevScrollHeightRef.current = el.scrollHeight
+    const target = el.querySelector<HTMLElement>(`[data-evt-id="${CSS.escape(a.id)}"]`)
+    if (!target) return
+    const offNow = target.getBoundingClientRect().top - el.getBoundingClientRect().top
+    const delta = offNow - a.offset
+    if (delta !== 0) el.scrollTop += delta
   }, [relevantEvents])
 
   // Track the last DISPLAYED avatar's worker id. Avatars render for reason
