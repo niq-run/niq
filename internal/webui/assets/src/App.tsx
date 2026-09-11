@@ -302,6 +302,20 @@ export default function App() {
   const streamKeyRef = useRef(streamKey)
   streamKeyRef.current = streamKey
 
+  // The talk view's pagination scope: the reason workers it's currently
+  // watching. Passed to the events/before API (worker_id OR target OR
+  // recipient, the same envelope semantics as TalkView's relevantEvents) so
+  // older talk events page back directly over the conversation. Without this,
+  // entering the talk view (or selecting a worker) walks whole mostly
+  // system-noise history pages, firing a burst of requests and delaying first
+  // paint until the walk happens to reach a reason event.
+  const talkScope = useMemo(() => {
+    if (talkWorkers.size > 0) return [...talkWorkers]
+    const reason: string[] = []
+    for (const w of workers) if (w.type === 'reason') reason.push(w.id)
+    return reason
+  }, [talkWorkers, workers])
+
   useEffect(() => {
     // No project → no event stream.
     if (mode !== 'project') return
@@ -344,7 +358,7 @@ export default function App() {
       if (!watermark) return
       noMoreRef.current = false
       const limit = 30
-      const workers = view === 'events' ? [...filterWorkers] : []
+      const workers = view === 'events' ? [...filterWorkers] : view === 'talk' ? talkScope : []
       const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
       try {
@@ -654,7 +668,7 @@ export default function App() {
     try {
       const anchorEl = listRef.current
       const anchor = anchorEl ? { top: anchorEl.scrollTop, height: anchorEl.scrollHeight } : null
-      const workers = view === 'events' ? [...filterWorkers] : []
+      const workers = view === 'events' ? [...filterWorkers] : view === 'talk' ? talkScope : []
       const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
       const older = (await loadEventsBefore(events[0].id, 30, workers, trace, roles)) as EventPayload[]
@@ -669,7 +683,7 @@ export default function App() {
     } catch {} finally {
       loadingMoreRef.current = false
     }
-  }, [events, view, filterWorkers, filterRoles, traceFilter])
+  }, [events, view, filterWorkers, filterRoles, traceFilter, talkScope])
 
   // ── Events list auto-scroll ──
   // Layout effect (before paint) so the initial load lands directly at the
@@ -696,10 +710,12 @@ export default function App() {
   }, [events])
 
   // A new filter scope may have older events again — clear the exhausted flag
-  // set by a previous history walk.
+  // set by a previous history walk. talkWorkers is included because the talk
+  // view pages by its selection scope, so switching the selected worker must
+  // re-open its own history.
   useEffect(() => {
     noMoreRef.current = false
-  }, [view, filterWorkers, filterRoles, traceFilter])
+  }, [view, filterWorkers, filterRoles, traceFilter, talkScope])
 
   // Auto-load more events when scrolling to top.
   useEffect(() => {
