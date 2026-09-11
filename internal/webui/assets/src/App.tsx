@@ -491,17 +491,26 @@ export default function App() {
     }
   }, [workers, mentionTarget, talkWorkers])
 
-  // Sidebar worker selector (talk view): multi-select toggle, as before. On each
-  // selection change, if the resulting selection is exactly one worker, that
-  // single worker also becomes the talk target. A manually picked target sticks
-  // until the selection changes again — the sidebar only overrides on a change.
+  // Sidebar worker selector (talk view): multi-select toggle. On each selection
+  // change we keep the talk (mention) target aligned with the selection boundary
+  // cases the toggle can produce:
+  //   * single selection      -> target = that single worker
+  //   * empty selection       -> clear the target (no worker is watched; a stale
+  //                              target would silently keep routing sends/aborts)
+  //   * multi-selection       -> leave a manual target alone (it may point at a
+  //                              worker outside the watched set by design)
+  // The critical detail: when a deselect changes a pair {A,B} into the single B,
+  // the toggled id is the *removed* A — so the target must be the worker actually
+  // left in the set, i.e. next's sole element, not the toggled id.
   const toggleWorker = useCallback((id: string) => {
     const next = new Set(talkWorkers)
     if (next.has(id)) next.delete(id)
     else next.add(id)
     setTalkWorkers(next)
     if (next.size === 1) {
-      setMentionTarget(id)
+      setMentionTarget([...next][0])
+    } else if (next.size === 0) {
+      setMentionTarget('')
     }
   }, [talkWorkers])
 

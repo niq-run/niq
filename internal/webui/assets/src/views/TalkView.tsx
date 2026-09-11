@@ -419,16 +419,17 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
     // Button visibility: hide when within a small window of the bottom.
     const atBottom = dist < 50
-    // Follow latch: once the user scrolls up (leaving the true bottom), release
-    // the pin and do NOT re-engage until they reach the actual bottom again
-    // (or press the jump-to-bottom button). The tiny epsilon (<4px) means any
-    // upward scroll from the bottom frees the view immediately, so a slow drag
-    // is never dragged back down by the follow loop.
-    if (dist < 4) {
-      autoScrollRef.current = true
-    } else {
-      autoScrollRef.current = false
-    }
+    // Follow latch stays in lockstep with the jump-to-bottom button's hide
+    // window: while within 50px of the bottom the view is considered pinned,
+    // so it never gets stuck in the deadzone between the true bottom and
+    // where the button disappears. This matters because live content can push
+    // the bottom down *while* the user scrolls back toward it — if the latch
+    // only re-engaged inside a strict epsilon, a reader who reaches where they
+    // *think* the bottom is (button hidden, dist in 4..50) would never re-pin,
+    // and the newest events would silently stream without scrolling the view.
+    // Once beyond 50px the pin releases so a slow upward drag while reading is
+    // never dragged back down.
+    autoScrollRef.current = atBottom
     // Drives the scroll-to-bottom button; React bails out when unchanged.
     setAtBottom(atBottom)
   }, [])
@@ -482,16 +483,27 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return () => observer.disconnect()
   }, [onLoadMore, events.length])
 
-  // Backfill: when history has loaded (events > 0) but nothing is visible in
-  // the talk timeline (all recent events are worker.* / filtered-out), page
-  // back a bounded number of times to surface the actual conversation. This
-  // must be throttled + capped — the old observer loop paged the whole history
-  // unboundedly — and stops itself once visible content appears or exhaustion
-  // makes onLoadMore a no-op.
+  // Backfill: when history has loaded (events > 0) but the talk timeline is too
+  // short to overflow the container, page back a bounded number of times to
+  // surface the conversation. The top sentinel deliberately refuses to fire on a
+  // non-overflowing (even non-empty) timeline — otherwise an always-visible
+  // sentinel would auto-load forever — so this backfill is the only path that
+  // can grow a sparse timeline. Covers two shapes:
+  //   * nothing is visible at all (recent events are all worker.* / filtered),
+  //   * only a handful of the selected worker's events fit on screen — without
+  //     this, selecting a worker that has few *recent* events left the user
+  //     stuck on a short list they could never scroll past to reach the rest.
+  // It stops once the timeline overflows (the sentinel takes over manual
+  // pagination), or after MAX_TALK_BACKFILL pages, or when onLoadMore exhausts
+  // the store.
   const backfillPageRef = useRef(0)
   useEffect(() => {
     if (!onLoadMore || events.length === 0) return
-    if (relevantEvents.length > 0) {
+    // While the visible content overflows, the top sentinel drives manual
+    // pagination on scroll; don't also auto-load.
+    const sc = scrollRef.current
+    const overflows = sc ? sc.scrollHeight > sc.clientHeight + 1 : false
+    if (relevantEvents.length > 0 && overflows) {
       backfillPageRef.current = 0 // found content; allow a fresh backfill later
       return
     }
