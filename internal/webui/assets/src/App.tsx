@@ -22,6 +22,10 @@ import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRe
 import { attachmentBlock } from './components/talk-utils'
 import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, ProjectStartResult, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
 
+// How many history events the WebUI pages back per /api/events/before call
+// (both the initial watermark backfill and the load-more pagination).
+const HISTORY_PAGE = 100
+
 // Talk view settings are persisted to localStorage so toggles survive reloads.
 const VIEW_SETTINGS_KEY = 'niq.view-settings'
 const DEFAULT_VIEW_SETTINGS: ViewSettings = {
@@ -357,7 +361,7 @@ export default function App() {
     const loadInitialHistory = async (watermark: string) => {
       if (!watermark) return
       noMoreRef.current = false
-      const limit = 30
+      const limit = HISTORY_PAGE
       const workers = view === 'events' ? [...filterWorkers] : view === 'talk' ? talkScope : []
       const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
@@ -671,9 +675,9 @@ export default function App() {
       const workers = view === 'events' ? [...filterWorkers] : view === 'talk' ? talkScope : []
       const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
-      const older = (await loadEventsBefore(events[0].id, 30, workers, trace, roles)) as EventPayload[]
+      const older = (await loadEventsBefore(events[0].id, HISTORY_PAGE, workers, trace, roles)) as EventPayload[]
       // Fewer than a full page means the store has nothing older that matches.
-      if (older.length < 30) noMoreRef.current = true
+      if (older.length < HISTORY_PAGE) noMoreRef.current = true
       const filtered = older.filter((e) => e.type !== 'event.delivered')
       if (filtered.length === 0) return
       const merged = mergeEvents(eventsRef.current, filtered)
