@@ -446,10 +446,14 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     // Early prefetch: as soon as the user approaches the top, start loading
     // older events while there is still scroll room, so the prepend lands
     // before the viewport reaches the earliest message (no stall at the top).
-    // el.scrollTop is the remaining distance to scroll up; the prepend's scroll
-    // correction pushes it past LOAD_EARLY_PX so this can't loop, and a
+    // el.scrollTop is the remaining distance to scroll up. topLockRef must be
+    // set *before* the fetch (exactly like the sentinel path) so the prepend
+    // layout effect anchors the viewport: otherwise the grown content above
+    // pushes the page down and it visibly jumps a few times. The prepend's
+    // correction pushes scrollTop past LOAD_EARLY_PX so this can't loop, and a
     // non-overflowing (short) timeline is left to the backfill path.
     if (el.scrollTop < LOAD_EARLY_PX && el.scrollHeight > el.clientHeight + 1) {
+      topLockRef.current = true
       loadMoreRef.current?.()
     }
   }, [])
