@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/internal/niqhome"
 	"github.com/niq-run/niq/internal/project"
 	"github.com/niq-run/niq/internal/webui"
 )
@@ -28,8 +29,10 @@ func doGet(t *testing.T, url string) (int, string) {
 
 func setupProjectsRoot(t *testing.T) {
 	// Isolate the projects root under a temp ~/.niq by pointing HOME there,
-	// so tests never touch a real ~/.niq/projects.
+	// so tests never touch a real ~/.niq/projects. Ensure a stray NIQ_HOME
+	// can't override that relocation.
 	t.Setenv("HOME", t.TempDir())
+	_ = os.Unsetenv(niqhome.Env)
 }
 
 // fakeTemplate returns a small TemplateConfig usable as a project template.

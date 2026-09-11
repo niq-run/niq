@@ -6,15 +6,39 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/niq-run/niq/internal/niqhome"
 )
 
 func setupProjectsRoot(t *testing.T) string {
 	// Isolate the projects root under a temp ~/.niq by pointing HOME there,
-	// so tests never touch a real ~/.niq/projects.
+	// so tests never touch a real ~/.niq/projects. Ensure a stray NIQ_HOME
+	// can't override that relocation.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// Existing ProjectPath/ListProjects use os.UserHomeDir(), which reads $HOME.
+	_ = os.Unsetenv(niqhome.Env)
 	return filepath.Join(home, ".niq", "projects")
+}
+
+func TestProjectsRootHonorsNIQHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(niqhome.Env, filepath.Join(t.TempDir(), "custom-root"))
+
+	projects := ProjectsRoot()
+	if _, err := CreateProject("beta", "", fakeTemplate()); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if _, err := os.Stat(projects); err != nil {
+		t.Fatalf("ProjectsRoot not created under NIQ_HOME: %v", err)
+	}
+	if _, err := os.Stat(ProjectPath("beta")); err != nil {
+		t.Fatalf("project.json missing under NIQ_HOME: %v", err)
+	}
+	// The default ~/.niq must stay untouched.
+	if _, err := os.Stat(filepath.Join(home, ".niq")); !os.IsNotExist(err) {
+		t.Fatalf("default ~/.niq was touched: %v", err)
+	}
 }
 
 // fakeTemplate returns a small TemplateConfig usable as a project template.

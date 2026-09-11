@@ -13,6 +13,7 @@ import (
 	"github.com/niq-run/niq/core/llm"
 	programpkg "github.com/niq-run/niq/core/program"
 	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/internal/niqhome"
 	providerpkg "github.com/niq-run/niq/internal/project/provider"
 	"github.com/niq-run/niq/pkg/eventbus"
 	eventbusapi "github.com/niq-run/niq/pkg/eventbus/api"
@@ -428,8 +429,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 		root = mounts[0]
 	}
 	if root == "" {
-		home, _ := os.UserHomeDir()
-		root = filepath.Join(home, ".niq", "programs")
+		root = filepath.Join(niqhome.Root(), "programs")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {

@@ -1,4 +1,5 @@
-// Package provider loads LLM provider configuration from ~/.niq/provider.json.
+// Package provider loads LLM provider configuration from the niq config root
+// (see internal/niqhome) — by default ~/.niq/common/providers/provider.json.
 //
 // The file is optional. When present, the first provider is the default unless
 // the active field names a provider explicitly:
@@ -36,6 +37,7 @@ import (
 	"strings"
 
 	"github.com/niq-run/niq/core/llm"
+	"github.com/niq-run/niq/internal/niqhome"
 	"github.com/niq-run/niq/pkg/provider/anthropic"
 	"github.com/niq-run/niq/pkg/provider/openai"
 	"github.com/niq-run/niq/pkg/provider/openairesponses"
@@ -160,13 +162,13 @@ type Config struct {
 }
 
 // Path returns the provider config path. NIQ_PROVIDER_CONFIG overrides the
-// default ~/.niq/common/providers/provider.json.
+// location wholesale; otherwise it derives from the niq config root:
+// <root>/common/providers/provider.json (default root ~/.niq).
 func Path() string {
 	if p := os.Getenv("NIQ_PROVIDER_CONFIG"); p != "" {
 		return p
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".niq", "common", "providers", "provider.json")
+	return filepath.Join(niqhome.Root(), "common", "providers", "provider.json")
 }
 
 // Load reads the provider config. A missing file is not an error and returns

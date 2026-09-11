@@ -79,7 +79,11 @@ go test ./pkg/eventbus/ -count=1
 
 ## Data directory
 
-Runtime data lives under `~/.niq/`:
+Runtime data lives under `~/.niq/` by default. Set the `NIQ_HOME` environment
+variable to relocate this root to a custom directory (for a portable install,
+tests, or to keep state out of your home dir); `~`/`~/` in the value are
+expanded. `NIQ_AUTH_CONFIG` and `NIQ_PROVIDER_CONFIG` still override those two
+individual files wholesale, taking priority over `NIQ_HOME`.
 
 ```
 ~/.niq/

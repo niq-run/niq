@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/internal/control"
+	"github.com/niq-run/niq/internal/niqhome"
 	"github.com/niq-run/niq/internal/project"
 )
 
@@ -126,10 +127,9 @@ func runProject(args []string) error {
 	}
 }
 
-// setupLogging sends control-plane logs to ~/.niq/niq.log.
+// setupLogging sends control-plane logs to <niq root>/niq.log.
 func setupLogging() {
-	home, _ := os.UserHomeDir()
-	logDir := filepath.Join(home, ".niq")
+	logDir := niqhome.Root()
 	os.MkdirAll(logDir, 0755)
 	f, err := os.OpenFile(filepath.Join(logDir, "niq.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err == nil {

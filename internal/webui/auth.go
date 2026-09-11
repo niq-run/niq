@@ -8,25 +8,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/niq-run/niq/internal/niqhome"
 )
 
 // AuthConfig is the persisted basic-auth credentials used to protect both the
 // control plane and project WebUIs from non-loopback (remote) access. Stored in
-// plaintext JSON under ~/.niq/common/auth.json with owner-only permissions.
+// plaintext JSON under <niq root>/common/auth.json with owner-only permissions.
 type AuthConfig struct {
 	User string `json:"user"`
 	Pass string `json:"pass"`
 }
 
-// AuthPath returns the on-disk auth file: ~/.niq/common/auth.json. The
-// NIQ_AUTH_CONFIG environment variable overrides the location (useful for
-// tests and unusual installs).
+// AuthPath returns the on-disk auth file: <niq root>/common/auth.json. The
+// NIQ_AUTH_CONFIG environment variable overrides the location wholesale; the
+// root itself is set by NIQ_HOME (see internal/niqhome). Useful for tests and
+// unusual installs.
 func AuthPath() string {
 	if p := os.Getenv("NIQ_AUTH_CONFIG"); p != "" {
 		return p
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".niq", "common", "auth.json")
+	return filepath.Join(niqhome.Root(), "common", "auth.json")
 }
 
 // LoadAuth reads the persisted auth config. A missing file yields zero values;

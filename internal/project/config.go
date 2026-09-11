@@ -19,6 +19,7 @@ import (
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/internal/niqhome"
 )
 
 //go:embed preset
@@ -191,8 +192,7 @@ func ValidateTemplate(raw []byte) (*TemplateConfig, error) {
 // reference. Templates are seeded here from the built-ins on first run and
 // become user-editable files from then on.
 func TemplatesDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".niq", "common", "templates")
+	return filepath.Join(niqhome.Root(), "common", "templates")
 }
 
 // SeedTemplates copies the built-in preset templates to dir, but only when dir

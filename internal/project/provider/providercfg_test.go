@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/niq-run/niq/internal/niqhome"
 )
 
 func TestProviderConfigDefaultAndFind(t *testing.T) {
@@ -75,6 +77,7 @@ func TestProviderConfigPathOverride(t *testing.T) {
 	}
 
 	_ = os.Unsetenv("NIQ_PROVIDER_CONFIG")
+	_ = os.Unsetenv(niqhome.Env)
 	home, _ := os.UserHomeDir()
 	want := filepath.Join(home, ".niq", "common", "providers", "provider.json")
 	if got := Path(); got != want {

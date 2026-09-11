@@ -1,4 +1,4 @@
-// Project storage: each project lives under ~/.niq/projects/<id>/. project.json
+// Project storage: each project lives under <niq root>/projects/<id>/. project.json
 // carries the ports it last ran on, the archived-worker set and every worker
 // declaration (id/type/config) — it is the source of truth for which workers
 // exist. The workers/ directory holds only runtime state: workers/<id>/state.json
@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/niq-run/niq/internal/niqhome"
 )
 
 // ProjectPorts records the ports assigned to a project instance: its event-bus
@@ -35,10 +37,9 @@ type Project struct {
 	Workers   []WorkerConfig  `json:"workers,omitempty"`
 }
 
-// ProjectsRoot returns ~/.niq/projects (created lazily on write).
+// ProjectsRoot returns <niq root>/projects (created lazily on write).
 func ProjectsRoot() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".niq", "projects")
+	return filepath.Join(niqhome.Root(), "projects")
 }
 
 // ProjectDir returns the directory for a project id.
