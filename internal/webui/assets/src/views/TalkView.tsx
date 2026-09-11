@@ -530,28 +530,20 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return () => observer.disconnect()
   }, [onLoadMore, events.length])
 
-  // Backfill: when history has loaded (events > 0) but the talk timeline is too
-  // short to overflow the container, page back a bounded number of times to
-  // surface the conversation. The top sentinel deliberately refuses to fire on a
-  // non-overflowing (even non-empty) timeline — otherwise an always-visible
-  // sentinel would auto-load forever — so this backfill is the only path that
-  // can grow a sparse timeline. Covers two shapes:
-  //   * nothing is visible at all (recent events are all worker.* / filtered),
-  //   * only a handful of the selected worker's events fit on screen — without
-  //     this, selecting a worker that has few *recent* events left the user
-  //     stuck on a short list they could never scroll past to reach the rest.
-  // It stops once the timeline overflows (the sentinel takes over manual
-  // pagination), or after MAX_TALK_BACKFILL pages, or when onLoadMore exhausts
-  // the store.
+  // Backfill: when history has loaded (events > 0) but nothing relevant is
+  // visible yet (the recent window is all worker.* / filtered-out events), page
+  // back a bounded number of times so a real conversation surfaces. This is
+  // intentionally gated on "no relevant event is visible" rather than "the
+  // timeline is short": a populated-but-short timeline must not auto-load, or
+  // switching into the view (recent events may be few) would fire a burst of
+  // requests and fight the initial scroll-to-bottom. Once any relevant row shows
+  // up, the top sentinel takes over manual pagination once the content grows to
+  // overflow; until then it's capped at MAX_TALK_BACKFILL pages.
   const backfillPageRef = useRef(0)
   useEffect(() => {
     if (!onLoadMore || events.length === 0) return
-    // While the visible content overflows, the top sentinel drives manual
-    // pagination on scroll; don't also auto-load.
-    const sc = scrollRef.current
-    const overflows = sc ? sc.scrollHeight > sc.clientHeight + 1 : false
-    if (relevantEvents.length > 0 && overflows) {
-      backfillPageRef.current = 0 // found content; allow a fresh backfill later
+    if (relevantEvents.length > 0) {
+      backfillPageRef.current = 0 // found content; stop backfilling
       return
     }
     if (backfillPageRef.current >= MAX_TALK_BACKFILL) return
