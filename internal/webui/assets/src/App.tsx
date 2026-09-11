@@ -644,6 +644,9 @@ export default function App() {
   // moves out of view instead of staying pinned at the top.
   const pendingAnchorRef = useRef<{ top: number; height: number } | null>(null)
 
+  // LOAD_EARLY_PX: how far below the top the events list starts prefetching
+  // older events, so the page lands while there is still room to scroll.
+  const LOAD_EARLY_PX = 480
   const loadMore = useCallback(async () => {
     if (loadingMoreRef.current || noMoreRef.current) return
     if (events.length === 0) return
@@ -716,6 +719,11 @@ export default function App() {
     return () => observer.disconnect()
   }, [view, events.length, loadMore])
 
+  // Keep a current copy of loadMore for the stable handleScroll callback so
+  // that it can trigger an early prefetch without going stale.
+  const loadMoreRef = useRef(loadMore)
+  loadMoreRef.current = loadMore
+
   const handleScroll = useCallback(() => {
     const el = listRef.current
     if (!el) return
@@ -723,6 +731,14 @@ export default function App() {
     autoScrollRef.current = atBottom
     // Drives the scroll-to-bottom button; React bails out when unchanged.
     setEventsAtBottom(atBottom)
+    // Early prefetch: approach the top -> start loading older events while
+    // there is still scroll room, so the prepend lands before reaching the
+    // oldest row. scrollTop is the remaining distance upward; the prepend's
+    // anchor correction pushes it past LOAD_EARLY_PX so this can't loop, and a
+    // non-overflowing (short/empty) timeline is left to the sentinel/backfill.
+    if (el.scrollTop < LOAD_EARLY_PX && el.scrollHeight > el.clientHeight + 1) {
+      loadMoreRef.current?.()
+    }
   }, [])
 
   const workerTypes = useMemo(() => {

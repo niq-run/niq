@@ -133,6 +133,11 @@ function computeToolPartials(events: EventPayload[], talkWorkers: Set<string>, d
 // many pages it gives up and shows the empty state.
 const MAX_TALK_BACKFILL = 30
 
+// LOAD_EARLY_PX is how far below the top the view starts prefetching older
+// events, so the historical page lands while there is still room to scroll
+// instead of stalling exactly at the earliest message.
+const LOAD_EARLY_PX = 480
+
 // GrowingHeight animates the height of its child so that when the child's
 // content grows (e.g. a streaming delta batch adds several lines at once), the
 // block expands smoothly over a short transition instead of instantly. It
@@ -413,6 +418,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return () => cancelAnimationFrame(raf)
   }, [])
 
+  // Latest onLoadMore kept in a ref so the stable handleScroll callback can
+  // trigger an early prefetch with a fresh reference (onLoadMore is recreated
+  // on every events change; a useCallback([]) would close over a stale one).
+  const loadMoreRef = useRef(onLoadMore)
+  loadMoreRef.current = onLoadMore
+
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
@@ -432,6 +443,15 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     autoScrollRef.current = atBottom
     // Drives the scroll-to-bottom button; React bails out when unchanged.
     setAtBottom(atBottom)
+    // Early prefetch: as soon as the user approaches the top, start loading
+    // older events while there is still scroll room, so the prepend lands
+    // before the viewport reaches the earliest message (no stall at the top).
+    // el.scrollTop is the remaining distance to scroll up; the prepend's scroll
+    // correction pushes it past LOAD_EARLY_PX so this can't loop, and a
+    // non-overflowing (short) timeline is left to the backfill path.
+    if (el.scrollTop < LOAD_EARLY_PX && el.scrollHeight > el.clientHeight + 1) {
+      loadMoreRef.current?.()
+    }
   }, [])
 
   	const scrollToBottom = useCallback(() => {
