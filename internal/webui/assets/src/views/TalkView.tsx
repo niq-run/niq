@@ -433,6 +433,11 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // while the fetch is in flight.
   const prependAnchorRef = useRef<{ id: string; offset: number } | null>(null)
   const captureTopAnchor = () => {
+    // Only preserve a reading position. If the view is pinned to the bottom
+    // (fresh entry / following the live tail), prepending older content must
+    // keep us at the bottom (the follow loop handles that) — anchoring to a top
+    // node would instead freeze the view near the top and break the landing.
+    if (autoScrollRef.current) return
     const el = scrollRef.current
     if (!el) return
     // The topmost (smallest top) node carrying data-evt-id in the rendered
@@ -530,20 +535,28 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return () => observer.disconnect()
   }, [onLoadMore, events.length])
 
-  // Backfill: when history has loaded (events > 0) but nothing relevant is
-  // visible yet (the recent window is all worker.* / filtered-out events), page
-  // back a bounded number of times so a real conversation surfaces. This is
-  // intentionally gated on "no relevant event is visible" rather than "the
-  // timeline is short": a populated-but-short timeline must not auto-load, or
-  // switching into the view (recent events may be few) would fire a burst of
-  // requests and fight the initial scroll-to-bottom. Once any relevant row shows
-  // up, the top sentinel takes over manual pagination once the content grows to
-  // overflow; until then it's capped at MAX_TALK_BACKFILL pages.
+  // Backfill: when history has loaded (events > 0) but the rendered talk
+  // timeline does not fill the container, page back a bounded number of times
+  // so it grows. The top sentinel deliberately refuses to fire on a
+  // non-overflowing timeline (an always-visible sentinel would auto-load
+  // forever), so this is the only path that can grow it. It covers two shapes:
+  //   * nothing relevant is visible (recent window all worker.* / filtered),
+  //   * only a few of the watched workers' rows render (many received events
+  //     are filtered out) so the first pull is shorter than a screen — without
+  //     this you'd be stuck with no way to load older events, since there is
+  //     nothing to scroll and the sentinel/scroll-prefetch both require overflow.
+  // Each page is scoped to the watched workers, so it grows the conversation
+  // directly and terminates quickly (overflow, noMore, or MAX_TALK_BACKFILL)
+  // rather than flooding unscooped history.
   const backfillPageRef = useRef(0)
   useEffect(() => {
     if (!onLoadMore || events.length === 0) return
-    if (relevantEvents.length > 0) {
-      backfillPageRef.current = 0 // found content; stop backfilling
+    // While the visible content overflows, the top sentinel drives manual
+    // pagination on scroll; don't also auto-load.
+    const sc = scrollRef.current
+    const overflows = sc ? sc.scrollHeight > sc.clientHeight + 1 : false
+    if (relevantEvents.length > 0 && overflows) {
+      backfillPageRef.current = 0 // found enough content; sentinel takes over
       return
     }
     if (backfillPageRef.current >= MAX_TALK_BACKFILL) return
