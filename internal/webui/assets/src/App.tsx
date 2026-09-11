@@ -151,6 +151,7 @@ export default function App() {
   const eventsRef = useRef<EventPayload[]>([])
   const seenRef = useRef<Set<string>>(new Set())
   const deliveriesRef = useRef<Record<string, string[]>>({})
+  const watermarkRef = useRef('')
   const listRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -385,7 +386,7 @@ export default function App() {
     const es = new EventSource(url)
     // The server advertises the subscription watermark as a control event before
     // any data; we use it to kick off backwards pagination for history.
-    const onWatermark = (e: MessageEvent) => loadInitialHistory(e.data as string)
+    const onWatermark = (e: MessageEvent) => { watermarkRef.current = e.data as string; loadInitialHistory(e.data as string) }
     es.addEventListener('watermark', onWatermark)
     es.onmessage = (msg) => {
       const evt = JSON.parse(msg.data) as EventPayload
@@ -720,6 +721,37 @@ export default function App() {
   useEffect(() => {
     noMoreRef.current = false
   }, [view, filterWorkers, filterRoles, traceFilter, talkScope])
+
+  // Re-scope the talk recent window when the selected worker(s) change. The
+  // talk SSE stream key is always 'all' (so switching workers never tears down
+  // the connection), which means relevantEvents previously only filtered
+  // whatever was already loaded client-side — a worker whose events aren't in
+  // the loaded window would show nothing at all. This re-fetches a fresh recent
+  // page scoped to the new selection (from the stream watermark, i.e. the
+  // newest) and merges it in, so switching focus pulls that worker's real
+  // conversation. The join(key) guard also covers the initial load: until the
+  // workers poll resolves, talkScope is empty (key '') and the SSE prime loads
+  // unscoped; once it resolves here the scope key changes and we re-scope.
+  const lastTalkScope = useRef('')
+  useEffect(() => {
+    if (view !== 'talk') return
+    const key = talkScope.join(',')
+    if (key === lastTalkScope.current) return
+    lastTalkScope.current = key
+    noMoreRef.current = false
+    const anchor = watermarkRef.current || (eventsRef.current.length ? eventsRef.current[eventsRef.current.length - 1].id : '')
+    if (!anchor) return
+    ;(async () => {
+      try {
+        const older = (await loadEventsBefore(anchor, HISTORY_PAGE, talkScope, '', [])) as EventPayload[]
+        if (view !== 'talk') return
+        const filtered = older.filter((e) => e.type !== 'event.delivered')
+        const merged = mergeEvents(eventsRef.current, filtered)
+        eventsRef.current = merged
+        setEvents(merged)
+      } catch {}
+    })()
+  }, [view, talkScope])
 
   // Auto-load more events when scrolling to top.
   useEffect(() => {
