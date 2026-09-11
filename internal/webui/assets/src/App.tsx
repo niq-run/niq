@@ -711,7 +711,7 @@ export default function App() {
       const list = listRef.current
       if (list && list.scrollHeight <= list.clientHeight + 1) return
       loadMore()
-    }, { rootMargin: '200px 0px' })
+    }, { rootMargin: '600px 0px' })
     observer.observe(el)
     return () => observer.disconnect()
   }, [view, events.length, loadMore])

@@ -478,7 +478,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       if (sc && sc.scrollHeight <= sc.clientHeight + 1) return
       topLockRef.current = true // keep viewport stable across the prepend
       onLoadMore()
-    }, { rootMargin: '200px 0px' })
+    }, { rootMargin: '600px 0px' })
     observer.observe(el)
     return () => observer.disconnect()
   }, [onLoadMore, events.length])
