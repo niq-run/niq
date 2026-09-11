@@ -115,13 +115,30 @@ func (w *BaseWorker) ReplyCompleted(callerID, callID, result, traceID string) {
 // ReplyFailed answers a request caller with a request.failed error message,
 // echoing the request's id and propagating the trace ID.
 func (w *BaseWorker) ReplyFailed(callerID, callID, errMsg, traceID string) {
-	evt := event.New(event.TypeRequestFailed, w.ID(), map[string]any{
-		"error": errMsg,
-	})
+	w.replyResult(event.TypeRequestFailed, callerID, callID, map[string]any{"error": errMsg}, traceID, false)
+}
+
+// ReplyCompletedTransient is like ReplyCompleted but marks the reply Transient
+// (streamed live, not persisted). Read-only queries (program search/load,
+// provider list/current, mount.list, list_workers, ...) use this so their
+// results don't crowd durable history — the reply is still delivered live.
+func (w *BaseWorker) ReplyCompletedTransient(callerID, callID, result, traceID string) {
+	w.replyResult(event.TypeRequestCompleted, callerID, callID, map[string]any{"result": result}, traceID, true)
+}
+
+// ReplyFailedTransient is the Transient variant of ReplyFailed.
+func (w *BaseWorker) ReplyFailedTransient(callerID, callID, errMsg, traceID string) {
+	w.replyResult(event.TypeRequestFailed, callerID, callID, map[string]any{"error": errMsg}, traceID, true)
+}
+
+// replyResult forges and sends one request.* reply.
+func (w *BaseWorker) replyResult(typ event.EventType, callerID, callID string, payload map[string]any, traceID string, transient bool) {
+	evt := event.New(typ, w.ID(), payload)
 	evt.RequestId = callID
 	evt.TraceID = traceID
-	log.Printf("[baseworker] reply EMIT type=request.failed worker=%s caller=%s request_id=%s err_len=%d",
-		w.ID(), callerID, callID, len(errMsg))
+	evt.Transient = transient
+	log.Printf("[baseworker] reply EMIT type=%s worker=%s caller=%s request_id=%s transient=%v",
+		typ, w.ID(), callerID, callID, transient)
 	_ = w.Channel.Send(context.Background(), evt, callerID)
 }
 

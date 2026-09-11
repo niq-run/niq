@@ -119,6 +119,20 @@ func (w *BaseReasonWorker) sendToolRequests(target, callerID string, calls []llm
 		evt := event.New(cap.Event, callerID, argsMap)
 		evt.RequestId = tc.ToolCallID
 		evt.TraceID = traceID
+		// Read-only query tools stream live; their request/reply don't go into
+		// durable history (their serving worker also replies Transient).
+		evt.Transient = isReadTool(cap.Event)
 		_ = w.Channel.Send(context.Background(), evt, target)
 	}
+}
+
+// isReadTool reports whether a capability event is a read-only query (vs a
+// mutation that should stay durable). Matches the read tools' event types.
+func isReadTool(t event.EventType) bool {
+	switch t {
+	case "search", "load", "mount.list", "provider.list", "provider.current",
+		"list_workers", "get_worker_info", "program.query":
+		return true
+	}
+	return false
 }

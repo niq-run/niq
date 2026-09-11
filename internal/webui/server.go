@@ -470,8 +470,18 @@ func (s *Server) programWorkerOnline() bool {
 // delete) and waits for the correlated request.completed / request.failed reply,
 // exactly as the workspace/reason endpoints do.
 func (s *Server) askProgram(ctx context.Context, opts *programTool, args map[string]any) (event.Event, error) {
-	return s.ask(ctx, programWorkerID, event.New(opts.Type, "webui-hiw", args),
+	req := event.New(opts.Type, "webui-hiw", args)
+	if isProgramRead(opts.Type) {
+		req.Transient = true // read-only query: streamed live, not durable history
+	}
+	return s.ask(ctx, programWorkerID, req,
 		event.TypeRequestCompleted, event.TypeRequestFailed)
+}
+
+// isProgramRead reports whether a program tool is a read-only query (search /
+// load). Mutations (upsert/write/edit/delete) return false and stay durable.
+func isProgramRead(t event.EventType) bool {
+	return t == programBase.TypeSearch || t == programBase.TypeLoad
 }
 
 // programTool carries one bus call. The event type IS the tool the worker
@@ -889,8 +899,9 @@ func (s *Server) checkUploadCoverage(ctx context.Context) bool {
 		if idt, ok := s.registry.Lookup(id); !ok || idt.Type != "workspace" {
 			continue
 		}
-		reply, err := s.ask(ctx, id,
-			event.New(workspaceBase.TypeMountList, "webui-hiw", nil),
+		req := event.New(workspaceBase.TypeMountList, "webui-hiw", nil)
+		req.Transient = true // read-only query
+		reply, err := s.ask(ctx, id, req,
 			event.TypeRequestCompleted, event.TypeRequestFailed)
 		if err != nil || reply.Type == event.TypeRequestFailed {
 			continue // unreachable worker: not evidence of coverage
@@ -1288,8 +1299,9 @@ func (s *Server) handleWorkerProviders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reply, err := s.ask(r.Context(), id,
-		event.New(reasonBase.TypeProviderList, "webui-hiw", nil),
+	req := event.New(reasonBase.TypeProviderList, "webui-hiw", nil)
+	req.Transient = true // read-only query
+	reply, err := s.ask(r.Context(), id, req,
 		event.TypeRequestCompleted, event.TypeRequestFailed)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
@@ -1409,8 +1421,9 @@ func (s *Server) handleWorkerMounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reply, err := s.ask(r.Context(), id,
-		event.New(workspaceBase.TypeMountList, "webui-hiw", nil),
+	req := event.New(workspaceBase.TypeMountList, "webui-hiw", nil)
+	req.Transient = true // read-only query
+	reply, err := s.ask(r.Context(), id, req,
 		event.TypeRequestCompleted, event.TypeRequestFailed)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)

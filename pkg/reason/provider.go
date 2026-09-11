@@ -211,16 +211,17 @@ func (w *BaseReasonWorker) handleStatusQuery(evt event.Event) {
 			"model":    w.providerModel,
 		}
 	default:
-		w.ReplyFailed(evt.WorkerId, evt.RequestId,
+		w.ReplyFailedTransient(evt.WorkerId, evt.RequestId,
 			fmt.Sprintf("unknown provider query event: %q", evt.Type), evt.TraceID)
 		return
 	}
 	b, err := json.Marshal(snapshot)
 	if err != nil {
-		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
+		w.ReplyFailedTransient(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
 		return
 	}
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, string(b), evt.TraceID)
+	// Read-only query: its result is transient, not durable history.
+	w.ReplyCompletedTransient(evt.WorkerId, evt.RequestId, string(b), evt.TraceID)
 	log.Printf("[reason %s] provider query %s", w.ID(), evt.Type)
 }
 
