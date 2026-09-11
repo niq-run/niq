@@ -461,6 +461,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 selected={filterTags}
                 onToggle={(tag) => setFilterTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
                 onClear={() => setFilterTags([])}
+                // Match the trigger to the sibling expand button (and the worker
+                // rows below) so the whole selector reads at one size/height.
+                triggerSize={optSize}
+                triggerLine={optLine}
               />
             </div>
             {selectorWorkers.length > 1 && (
@@ -469,7 +473,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   onClick={() => setShowWorkerPicker(true)}
                   title={t('sidebar.workerSelector.expand')}
                   className="btn-hover"
-                  style={{ flex: 1, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: fontSizes.xs, lineHeight: '20px', padding: '0 6px' }}
+                  style={{ flex: 1, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '0 6px' }}
                 >
                   {t('sidebar.workerSelector.expandShort')}
                 </span>

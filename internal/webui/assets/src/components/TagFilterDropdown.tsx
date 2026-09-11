@@ -15,14 +15,24 @@ interface TagFilterDropdownProps {
   // 'input' matches the look/height of the modal's search input so both read
   // as peers on their own full-width rows.
   variant?: 'compact' | 'input'
+  // Sidebar unifority: the compact trigger can be told to render at the same
+  // font/line sizes as the worker rows and the expand button sitting beside it
+  // (they all use the sidebar's optSize/optLine). When omitted it falls back to
+  // the compact baseline (xs / 20px).
+  triggerSize?: number
+  triggerLine?: string
 }
 
 // TagFilterDropdown is the left-sidebar worker selector's compact multi-select
 // tag filter: a trigger showing the current selection state opens a dropdown
 // of tag checkboxes. The panel is height-capped and scrolls, so a long tag
 // list never makes the sidebar (or the dropdown) grow unboundedly tall.
-export default function TagFilterDropdown({ tags, selected, onToggle, onClear, fill = false, variant = 'compact' }: TagFilterDropdownProps) {
+export default function TagFilterDropdown({ tags, selected, onToggle, onClear, fill = false, variant = 'compact', triggerSize, triggerLine }: TagFilterDropdownProps) {
   const isInput = variant === 'input'
+  // Compact baseline when no peer sizes are supplied; the sidebar passes its
+  // optSize/optLine so the trigger matches the rows and expand button beside it.
+  const tSize = triggerSize ?? fontSizes.xs
+  const tLine = triggerLine ?? '20px'
   const { colors } = useTheme()
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -41,7 +51,7 @@ export default function TagFilterDropdown({ tags, selected, onToggle, onClear, f
   const active = selected.length > 0
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', margin: fill ? '2px 0 0' : '2px 0 10px', ...(fill ? { width: '100%' } : {}) }}>
+    <div ref={wrapRef} style={{ position: 'relative', margin: fill ? 0 : '2px 0 10px', ...(fill ? { width: '100%' } : {}) }}>
       {/* Trigger: shows the selection state; toggles the panel. */}
       <div
         onClick={(e) => { e.stopPropagation(); setOpen(v => !v) }}
@@ -53,8 +63,8 @@ export default function TagFilterDropdown({ tags, selected, onToggle, onClear, f
           alignItems: 'center',
           gap: 6,
           ...(fill ? { width: '100%', boxSizing: 'border-box', justifyContent: 'space-between' } : { maxWidth: '100%' }),
-          fontSize: fontSizes.xs,
-          lineHeight: '20px',
+          fontSize: isInput ? fontSizes.base : tSize,
+          lineHeight: isInput ? '1.4' : tLine,
           padding: '0 8px',
           borderRadius: 3,
           // 'input' variant peers with the search box: same font, padding,
@@ -70,7 +80,7 @@ export default function TagFilterDropdown({ tags, selected, onToggle, onClear, f
             ? `${t('sidebar.tagFilter.label')}: ${selected.length}`
             : t('sidebar.tagFilter.placeholder')}
         </span>
-        <span style={{ fontSize: isInput ? fontSizes.base : fontSizes.xs, color: colors.textDimmed, flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
+        <span style={{ fontSize: isInput ? fontSizes.base : tSize, color: colors.textDimmed, flexShrink: 0 }}>{open ? '▴' : '▾'}</span>
       </div>
 
       {/* Panel: height-capped, scrolls when many tags; width stretches when
