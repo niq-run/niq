@@ -52,6 +52,18 @@ interface TalkViewProps {
 // two, so the answer would appear only at the very end instead of live.
 type StreamTrace = { traceId: string; thinking: string; text: string; workerId: string; lastTs: number; thinkingDone: boolean; textDone: boolean }
 
+// matchesSelectedWorker reports whether an event's envelope involves one of the
+// currently selected talk workers (sender, target, or a recipient). With no
+// selection every event passes; the caller separately handles the "all reason
+// workers" scope. Shared by relevantEvents and the streaming accumulators so
+// the scope rule stays in exactly one place.
+function matchesSelectedWorker(evt: EventPayload, talkWorkers: Set<string>, deliveries: Record<string, string[]>): boolean {
+  if (talkWorkers.size === 0) return true
+  if (talkWorkers.has(evt.worker_id) || talkWorkers.has(evt.target_worker_id)) return true
+  const recipients = deliveries[evt.id] || evt.recipients
+  return !!recipients && recipients.some(r => talkWorkers.has(r))
+}
+
 // computeStreamingTraces accumulates reason.*_delta by trace_id. Each phase
 // (thinking / text) is dropped once its own terminal event arrives, and the
 // trace is removed from the list only when nothing live is left — so thinking
@@ -65,13 +77,8 @@ function computeStreamingTraces(events: EventPayload[], talkWorkers: Set<string>
         t !== 'reason.thinking' && t !== 'reason.response') continue
     const tid = evt.trace_id
     if (!tid) continue
-    // Respect the same talkWorkers filter as relevantEvents.
-    if (talkWorkers.size > 0) {
-      const recipients = deliveries[evt.id] || evt.recipients
-      if (!talkWorkers.has(evt.worker_id) &&
-          !talkWorkers.has(evt.target_worker_id) &&
-          !(recipients && recipients.some(r => talkWorkers.has(r)))) continue
-    }
+    // Respect the same talkWorkers scope as relevantEvents.
+    if (!matchesSelectedWorker(evt, talkWorkers, deliveries)) continue
     const entry = map[tid]
     if (!entry) {
       map[tid] = { thinking: '', text: '', workerId: evt.worker_id, lastTs: evt.timestamp, thinkingDone: false, textDone: false }
@@ -104,13 +111,8 @@ function computeToolPartials(events: EventPayload[], talkWorkers: Set<string>, d
     if (evt.type !== 'request.progressed') continue
     const callId = (evt.request_id as string) || ''
     if (!callId) continue
-    // Respect the same talkWorkers filter as relevantEvents.
-    if (talkWorkers.size > 0) {
-      const recipients = deliveries[evt.id] || evt.recipients
-      if (!talkWorkers.has(evt.worker_id) &&
-          !talkWorkers.has(evt.target_worker_id) &&
-          !(recipients && recipients.some(r => talkWorkers.has(r)))) continue
-    }
+    // Respect the same talkWorkers scope as relevantEvents.
+    if (!matchesSelectedWorker(evt, talkWorkers, deliveries)) continue
     const partial = (evt.payload?.partial as string) || ''
     map[callId] = (map[callId] || '') + partial
   }
@@ -363,30 +365,26 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return m
   }, [events])
 
-  // Streaming content (reason.*_delta and request.progressed) is recomputed
-  // whenever events change (see the effect below) — no client-side coalescing
-  // tick; the backend throttles delta bursts.
-  const eventsRef = useRef(events)
-  eventsRef.current = events
-  const [streamingTraces, setStreamingTraces] = useState<StreamTrace[]>([])
-  const [toolPartials, setToolPartials] = useState<Record<string, string>>({})
-
-  // Recompute streaming content whenever events change. The backend throttles
-  // delta bursts, so there is no client-side coalescing interval: the live
-  // streaming block tracks the latest deltas in real time and disappears the
-  // instant its terminal reason.* / request.* event lands (computeStreamingTraces
-  // already drops finalized traces), so it never lingers beside the full block.
-  useEffect(() => {
-    if (!streamingMode) {
-      setStreamingTraces([])
-      setToolPartials({})
-      return
-    }
-    const evs = eventsRef.current
-    setStreamingTraces(computeStreamingTraces(evs, talkWorkers, deliveries))
-    setToolPartials(computeToolPartials(evs, talkWorkers, deliveries))
-  }, [events, streamingMode, talkWorkers, deliveries])
-
+  // Streaming content (reason.*_delta and request.progressed) recomputed
+  // directly whenever its inputs change; empty when streamingMode is off. The
+  // backend throttles delta bursts, so no client-side coalescing interval.
+  const streamingTraces = useMemo<StreamTrace[]>(() => (
+    streamingMode ? computeStreamingTraces(events, talkWorkers, deliveries) : []
+  ), [events, talkWorkers, deliveries, streamingMode])
+  const toolPartials = useMemo<Record<string, string>>(() => (
+    streamingMode ? computeToolPartials(events, talkWorkers, deliveries) : {}
+  ), [events, talkWorkers, deliveries, streamingMode])
+  // Land at the newest row the instant the Talk view mounts, before the first
+  // paint. Returning to Talk from Workers/Approvals keeps the retained event
+  // list, so the scroller mounts already populated — without this pin it paints
+  // at the top and the follow loop snaps it to the bottom a frame later (the
+  // visible flicker). Coming back from Events clears + repopulates, so it
+  // mounts empty (scrollRef null here) and the follow loop handles the growth.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (el && autoScrollRef.current) el.scrollTop = el.scrollHeight
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Follow-to-bottom on content growth.
   // The loop runs for the life of the view but ONLY ever writes scrollTop when
@@ -456,6 +454,45 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     prependAnchorRef.current = { id, offset: pickTop - ct }
   }
 
+  // ── Unified load-more controller ──
+  // Two *independent* entry conditions both funnel into maybeLoadMore(), which
+  // is the single place that decides to call onLoadMore() and pre-captures the
+  // prepend anchor so the viewport stays stable:
+  //   - 'short'  : the rendered timeline doesn't fill the container (so nothing
+  //                is scrollable to trigger anything) → auto-fill, bounded.
+  //   - 'nearTop': the user scrolled toward the top of an overflowing list →
+  //                prefetch before reaching the earliest message.
+  // Guarding (a single in-flight latch + backfill cap) and anchoring live here
+  // instead of being scattered across handleScroll, an IntersectionObserver and
+  // a separate backfill effect that used to trip over each other.
+  const loadingRef = useRef(false)
+  const backfillCountRef = useRef(0)
+  const maybeLoadMore = (reason: 'short' | 'nearTop') => {
+    const sc = scrollRef.current
+    if (!sc || !loadMoreRef.current) return
+    const need = reason === 'short'
+      ? sc.scrollHeight <= sc.clientHeight + 1
+      : sc.scrollTop < LOAD_EARLY_PX
+    if (!need) {
+      if (reason === 'short') backfillCountRef.current = 0 // filled a screen again
+      return
+    }
+    // 'short' auto-fills but must not spin forever on a timeline that never
+    // grows to fill a screen.
+    if (reason === 'short' && backfillCountRef.current >= MAX_TALK_BACKFILL) return
+    if (loadingRef.current) return
+    loadingRef.current = true
+    if (reason === 'short') backfillCountRef.current++
+    else backfillCountRef.current = 0
+    captureTopAnchor() // keep the viewport stable across the prepend
+    loadMoreRef.current()
+    // Release the latch even if the response yields no new rendered rows, so a
+    // later scroll / re-render can still drive pagination.
+    setTimeout(() => { loadingRef.current = false }, 400)
+  }
+  const maybeLoadMoreRef = useRef(maybeLoadMore)
+  maybeLoadMoreRef.current = maybeLoadMore
+
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
@@ -475,17 +512,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     autoScrollRef.current = atBottom
     // Drives the scroll-to-bottom button; React bails out when unchanged.
     setAtBottom(atBottom)
-    // Early prefetch: as soon as the user approaches the top, start loading
-    // older events while there is still scroll room, so the prepend lands
-    // before the viewport reaches the earliest message (no stall at the top).
-    // el.scrollTop is the remaining distance to scroll up. captureTopAnchor()
-    // pins a rendered node so the prepend keeps the viewport stable (the
-    // prepend's applied position pushes scrollTop past LOAD_EARLY_PX so this
-    // can't loop); a non-overflowing short timeline is left to the backfill.
-    if (el.scrollTop < LOAD_EARLY_PX && el.scrollHeight > el.clientHeight + 1) {
-      captureTopAnchor()
-      loadMoreRef.current?.()
-    }
+    // Scroll-driven pagination: prefetch older events as the user approaches
+    // the top. The 'short' auto-fill is driven separately by the content effect.
+    maybeLoadMoreRef.current?.('nearTop')
   }, [])
 
   	const scrollToBottom = useCallback(() => {
@@ -512,61 +541,18 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
 
   const nodes: React.ReactNode[] = []
 
-  // Load more button at the top of the scrollable area
-  const sentinelRef = useRef<HTMLDivElement>(null)
+  // Content-driven 'short' auto-fill: whenever the rendered rows change (a live
+  // row, or a history page landing), re-evaluate whether the timeline fills the
+  // container and keep growing it if not (bounded by maybeLoadMore's backfill
+  // cap). This replaced the old IntersectionObserver sentinel + backfill effect.
   useEffect(() => {
     if (!onLoadMore || events.length === 0) return
-    const el = sentinelRef.current
-    if (!el) return
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries[0].isIntersecting) return
-      // Guard against a runaway load loop: when nothing is visible to scroll to
-      // (timeline short/empty — e.g. recent events are all filtered out), the
-      // top sentinel stays in view and would otherwise fire onLoadMore
-      // forever, hammering the history endpoint. Only auto-load once the
-      // visible content actually overflows, so "reaching the top" is a real
-      // user scroll, not the empty state.
-      const sc = scrollRef.current
-      if (sc && sc.scrollHeight <= sc.clientHeight + 1) return
-      captureTopAnchor() // pin a node so the prepend keeps the viewport stable
-      onLoadMore()
-    }, { rootMargin: '600px 0px' })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [onLoadMore, events.length])
-
-  // Backfill: when history has loaded (events > 0) but the rendered talk
-  // timeline does not fill the container, page back a bounded number of times
-  // so it grows. The top sentinel deliberately refuses to fire on a
-  // non-overflowing timeline (an always-visible sentinel would auto-load
-  // forever), so this is the only path that can grow it. It covers two shapes:
-  //   * nothing relevant is visible (recent window all worker.* / filtered),
-  //   * only a few of the watched workers' rows render (many received events
-  //     are filtered out) so the first pull is shorter than a screen — without
-  //     this you'd be stuck with no way to load older events, since there is
-  //     nothing to scroll and the sentinel/scroll-prefetch both require overflow.
-  // Each page is scoped to the watched workers, so it grows the conversation
-  // directly and terminates quickly (overflow, noMore, or MAX_TALK_BACKFILL)
-  // rather than flooding unscooped history.
-  const backfillPageRef = useRef(0)
-  useEffect(() => {
-    if (!onLoadMore || events.length === 0) return
-    // While the visible content overflows, the top sentinel drives manual
-    // pagination on scroll; don't also auto-load.
-    const sc = scrollRef.current
-    const overflows = sc ? sc.scrollHeight > sc.clientHeight + 1 : false
-    if (relevantEvents.length > 0 && overflows) {
-      backfillPageRef.current = 0 // found enough content; sentinel takes over
-      return
-    }
-    if (backfillPageRef.current >= MAX_TALK_BACKFILL) return
-    const run = setTimeout(() => {
-      backfillPageRef.current++
-      captureTopAnchor()
-      onLoadMore()
-    }, 60)
-    return () => clearTimeout(run)
-  }, [events, relevantEvents.length, onLoadMore])
+    // A fresh geometry settled — release the in-flight latch so maybeLoadMore
+    // can decide again based on the new state.
+    loadingRef.current = false
+    maybeLoadMoreRef.current?.('short')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relevantEvents])
 
   // If a history prepend is in flight, pin the anchored node back to the
   // on-screen offset it had when the load was issued. This runs on every
@@ -598,12 +584,6 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // Separator between title segments: a left border on each segment (instead
   // of a standalone "|"), so a wrapped line never ends with a dangling bar.
   const itemSep: CSSProperties = { borderLeft: '1px solid ' + colors.textDimmed, paddingLeft: 8 }
-
-  // Sentinel for auto-scroll-to-top loading
-  const sentinel = onLoadMore && events.length > 0 ? (
-    <div key="sentinel-top" ref={sentinelRef} style={{ height: 1 }} />
-  ) : null
-  if (sentinel) nodes.push(sentinel)
 
   for (const [i, evt] of relevantEvents.entries()) {
     if (isReasonBoundary(evt.type)) continue

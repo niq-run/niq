@@ -409,7 +409,11 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 function ProviderSection({ workerId }: { workerId: string }) {
   const { colors } = useTheme()
   const { t } = useI18n()
-  const [expanded, setExpanded] = useState(false)
+  // Default-expanded: this worker-specific section is the point of the reason
+  // worker's detail, so show it (and its current provider) without a click.
+  // Keyed by worker id in the parent, so opening a different worker remounts
+  // it fresh.
+  const [expanded, setExpanded] = useState(true)
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [current, setCurrent] = useState<ProviderSelection>({ provider: '', model: '' })
   const [selProvider, setSelProvider] = useState('')
@@ -592,10 +596,12 @@ function ProviderSection({ workerId }: { workerId: string }) {
 // directories (mount.add / mount.remove) over the bus. A UI add applies
 // directly — the workspace's default approver is this UI's HIW; with another
 // approver configured the request parks behind an approval and times out.
+// Default-expanded like ProviderSection, so worker-specific capability blocks
+// start open.
 function MountsSection({ workerId }: { workerId: string }) {
   const { colors } = useTheme()
   const { t } = useI18n()
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(true)
   const [mounts, setMounts] = useState<string[]>([])
   const [primary, setPrimary] = useState('')
   const [path, setPath] = useState('')
