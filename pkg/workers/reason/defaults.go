@@ -197,7 +197,7 @@ func handleListWorkers(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 		return
 	}
 
-	w.ReplyCompletedTransient(callerID, callID, string(b), traceID)
+	w.ReplyCompleted(callerID, callID, string(b), traceID)
 	log.Printf("[reason %s] list_workers → %d workers", w.ID(), len(snapshot))
 }
 
@@ -208,7 +208,7 @@ func handleListWorkers(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 func handleWorkerInfo(w *reasonBase.BaseReasonWorker, callID, toolName, callerID, traceID string, args map[string]any) {
 	target, _ := args["worker"].(string)
 	if target == "" {
-		w.ReplyFailedTransient(callerID, callID, "get_worker_info requires the 'worker' parameter (target worker ID)", traceID)
+		w.ReplyFailed(callerID, callID, "get_worker_info requires the 'worker' parameter (target worker ID)", traceID)
 		return
 	}
 	// Fresh data, same as list_workers: ask everyone to re-announce first.
@@ -218,16 +218,16 @@ func handleWorkerInfo(w *reasonBase.BaseReasonWorker, callID, toolName, callerID
 
 	info, ok := w.WorkerInfo(target)
 	if !ok {
-		w.ReplyFailedTransient(callerID, callID, fmt.Sprintf(
+		w.ReplyFailed(callerID, callID, fmt.Sprintf(
 			"unknown worker %q — call list_workers to see the known ids", target), traceID)
 		return
 	}
 	b, err := json.Marshal(info)
 	if err != nil {
-		w.ReplyFailedTransient(callerID, callID, fmt.Sprintf("get_worker_info could not serialize %q: %v", target, err), traceID)
+		w.ReplyFailed(callerID, callID, fmt.Sprintf("get_worker_info could not serialize %q: %v", target, err), traceID)
 		return
 	}
-	w.ReplyCompletedTransient(callerID, callID, string(b), traceID)
+	w.ReplyCompleted(callerID, callID, string(b), traceID)
 	log.Printf("[reason %s] get_worker_info → %s (%d tools)", w.ID(), target, len(info.Tools))
 }
 
@@ -314,12 +314,12 @@ func handleProgramQuery(w *reasonBase.BaseReasonWorker, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	b, err := json.Marshal(w.ProgramsLocked())
 	if err != nil {
-		w.ReplyFailedTransient(tc.CallerID, tc.CallID,
+		w.ReplyFailed(tc.CallerID, tc.CallID,
 			fmt.Sprintf("program.query could not serialize the program list: %v", err), tc.TraceID)
 		return
 	}
 	// Read-only query: its result is transient, not durable history.
-	w.ReplyCompletedTransient(tc.CallerID, tc.CallID, string(b), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, string(b), tc.TraceID)
 }
 
 // handleProgramUpdate serves the program.update tool: add or remove a single

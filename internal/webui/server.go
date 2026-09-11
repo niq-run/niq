@@ -1217,7 +1217,9 @@ const askTimeout = 20 * time.Second
 func (s *Server) ask(ctx context.Context, target string, evt event.Event, want ...event.EventType) (event.Event, error) {
 	traceID, _ := uuid.NewV7() // only fails if crypto/rand fails
 	tid := traceID.String()
-	evt.TraceID = tid // event.New leaves TraceID empty; we own correlation here
+	reqID, _ := uuid.NewV7()
+	evt.TraceID = tid   // event.New leaves TraceID empty; we own correlation here
+	evt.RequestId = reqID.String() // make every webui ask a proper request (the worker echoes it; the engine can correlate a transient request to its reply)
 
 	subCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

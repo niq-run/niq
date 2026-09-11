@@ -6,6 +6,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/event"
@@ -38,6 +39,13 @@ type Engine struct {
 	// in the event store — the exact gap behind "no reply in event query".
 	persistTotal   atomic.Uint64
 	persistDropped atomic.Uint64
+
+	// transientReqs maps a request_id → expiry for requests that were marked
+	// Transient (e.g. read-only queries the human UI initiates). A reply that
+	// echoes such a request_id is also treated as non-durable, propagating the
+	// request's transient nature to its response without touching workers.
+	trMu          sync.Mutex
+	transientReqs map[string]time.Time
 }
 
 // PersistStats returns cumulative persistence counters for observation.
@@ -49,9 +57,10 @@ func (e *Engine) PersistStats() (total, dropped uint64) {
 // store may be nil; if nil, events are not persisted.
 func NewEngine(registry corebus.IdentityRegistry, store store.AppendStore) *Engine {
 	return &Engine{
-		channels: make(map[string]corebus.BusSideChannel),
-		registry: registry,
-		store:    store,
+		channels:     make(map[string]corebus.BusSideChannel),
+		registry:     registry,
+		store:        store,
+		transientReqs: make(map[string]time.Time),
 	}
 }
 
@@ -267,7 +276,18 @@ func (e *Engine) OnEvent(fn func(event.Event)) {
 // (streaming deltas, partial tool output) are delivered live to observers but
 // not persisted, so they don't crowd real messages out of the replay window.
 func (e *Engine) persistEvent(ctx context.Context, evt event.Event) {
-	if e.store != nil && shouldPersist(evt) {
+	durable := shouldPersist(evt)
+	if evt.RequestId != "" {
+		if evt.Transient {
+			// A transient (read-only, human-UI) request: record it so its
+			// request_id-correlated reply is non-durable too.
+			e.noteTransientReq(evt.RequestId)
+		} else if durable && isReplyType(evt.Type) && e.isTransientReq(evt.RequestId) {
+			// Reply echoes a transient request's id: keep it live, out of history.
+			durable = false
+		}
+	}
+	if e.store != nil && durable {
 		e.persistTotal.Add(1)
 		if err := e.store.Append(ctx, evt); err != nil {
 			dropped := e.persistDropped.Add(1)
@@ -297,6 +317,34 @@ func (e *Engine) persistEvent(ctx context.Context, evt event.Event) {
 // (which is what pushed real conversations far back and broke pagination).
 func shouldPersist(evt event.Event) bool {
 	return !evt.Transient
+}
+
+// transientReqTTL bounds how long a transient request's id is remembered so its
+// reply stays non-durable. A reply arrives within seconds of its request, so
+// a short window is enough.
+const transientReqTTL = 30 * time.Second
+
+// noteTransientReq records a transient request's id (with an expiry) so a
+// later reply echoing it can be treated as non-durable.
+func (e *Engine) noteTransientReq(id string) {
+	e.trMu.Lock()
+	defer e.trMu.Unlock()
+	e.transientReqs[id] = time.Now().Add(transientReqTTL)
+}
+
+// isTransientReq reports whether the given request_id belonged to a transient
+// (non-durable) request. Prunes expired entries on each call.
+func (e *Engine) isTransientReq(id string) bool {
+	e.trMu.Lock()
+	defer e.trMu.Unlock()
+	now := time.Now()
+	for rid, exp := range e.transientReqs {
+		if now.After(exp) {
+			delete(e.transientReqs, rid)
+		}
+	}
+	_, ok := e.transientReqs[id]
+	return ok
 }
 
 // isReplyType reports whether an event is a request.* reply (completed/failed/

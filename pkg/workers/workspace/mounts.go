@@ -167,11 +167,11 @@ func (w *WorkspaceWorker) handleMountRemove(evt event.Event) {
 func (w *WorkspaceWorker) handleMountList(evt event.Event) {
 	mm, err := w.mountManager()
 	if err != nil {
-		w.ReplyFailedTransient(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
+		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
 		return
 	}
 	// Read-only query: its result is transient, not durable history.
-	w.ReplyCompletedTransient(evt.WorkerId, evt.RequestId, mountSnapshotJSON("", mm), evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshotJSON("", mm), evt.TraceID)
 }
 
 // mountManager probes the backend for the MountManager interface.

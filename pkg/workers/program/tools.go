@@ -181,7 +181,7 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 
 	progs, err := w.search(ctx, query, ct)
 	if err != nil {
-		w.ReplyFailedTransient(tc.CallerID, tc.CallID, fmt.Sprintf("search error: %v", err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("search error: %v", err), tc.TraceID)
 		return
 	}
 
@@ -216,11 +216,11 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 
 	b, err := json.Marshal(results)
 	if err != nil {
-		w.ReplyFailedTransient(tc.CallerID, tc.CallID, fmt.Sprintf("marshal error: %v", err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("marshal error: %v", err), tc.TraceID)
 		return
 	}
 
-	w.ReplyCompletedTransient(tc.CallerID, tc.CallID, string(b), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, string(b), tc.TraceID)
 	log.Printf("[program] search query=%q ct=%q → %d results", query, ctStr, len(results))
 }
 
@@ -229,7 +229,7 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 func (w *Worker) handleLoad(ctx context.Context, tc baseworker.ToolCall) {
 	contentPath, _ := tc.Args["path"].(string)
 	if contentPath == "" {
-		w.ReplyFailedTransient(tc.CallerID, tc.CallID, "path is required", tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "path is required", tc.TraceID)
 		return
 	}
 
@@ -237,11 +237,11 @@ func (w *Worker) handleLoad(ctx context.Context, tc baseworker.ToolCall) {
 	// frontmatter never reaches the caller.
 	raw, err := w.backend.Read(ctx, contentPath)
 	if err != nil {
-		w.ReplyFailedTransient(tc.CallerID, tc.CallID, fmt.Sprintf("read %s: %v", contentPath, err), tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("read %s: %v", contentPath, err), tc.TraceID)
 		return
 	}
 
-	w.ReplyCompletedTransient(tc.CallerID, tc.CallID, raw, tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, raw, tc.TraceID)
 	log.Printf("[program] load %s → %d chars", contentPath, len(raw))
 }
 

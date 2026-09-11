@@ -136,3 +136,28 @@ func TestShouldPersist(t *testing.T) {
 		t.Fatal("non-transient event should persist (presence exclusion is set at source)")
 	}
 }
+
+type recStore struct{ evts []event.Event }
+func (r *recStore) Append(_ context.Context, evts ...event.Event) error { r.evts = append(r.evts, evts...); return nil }
+func (r *recStore) List(_ context.Context, _ string, _ store.QueryOpts) ([]event.Event, error) { return nil, nil }
+
+func TestTransientRequestReplyPropagation(t *testing.T) {
+	st := &recStore{}
+	e := NewEngine(nil, st)
+
+	// Transient (human-UI read) request -> not persisted, but its id is noted.
+	e.persistEvent(context.Background(), event.Event{Type: "search", RequestId: "R1", Transient: true})
+	// Its reply carries no Transient flag but echoes R1 -> also not persisted.
+	e.persistEvent(context.Background(), event.Event{Type: event.TypeRequestCompleted, RequestId: "R1"})
+
+	// Non-transient request and its reply DO persist.
+	e.persistEvent(context.Background(), event.Event{Type: "search", RequestId: "R2"})
+	e.persistEvent(context.Background(), event.Event{Type: event.TypeRequestCompleted, RequestId: "R2"})
+
+	if len(st.evts) != 2 {
+		t.Fatalf("want 2 persisted (non-transient request+reply), got %d: %+v", len(st.evts), st.evts)
+	}
+	if st.evts[0].RequestId != "R2" || st.evts[1].RequestId != "R2" {
+		t.Fatalf("expected only the non-transient pair persisted, got %+v", st.evts)
+	}
+}
