@@ -128,6 +128,7 @@ func (e *Engine) broadcastGone(ctx context.Context, workerID string) {
 	evt := event.New(event.TypeWorkerGone, workerID, map[string]any{
 		"worker_id": workerID,
 	})
+	evt.Transient = true // presence: delivered live, not durable history
 	// The departed worker is excluded from its own broadcast (it cannot
 	// receive anyway — it is offline), but set it so a straggler reconnecting
 	// under the same id does not observe its own gone event.

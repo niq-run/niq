@@ -168,5 +168,6 @@ func (w *BaseWorker) AnnounceReady(workerType string, publishes []map[string]any
 	}
 	presence := event.New(event.TypeWorkerReady, w.ID(), payload)
 	presence.ExcludeWorkerID = w.ID()
+	presence.Transient = true // presence: delivered live, not durable history
 	_ = w.Channel.Broadcast(context.Background(), presence)
 }

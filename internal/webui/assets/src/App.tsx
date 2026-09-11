@@ -18,7 +18,7 @@ import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
-import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject } from './services/api'
+import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
 import { attachmentBlock } from './components/talk-utils'
 import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, ProjectStartResult, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
 
@@ -745,6 +745,26 @@ export default function App() {
     }
     return map
   }, [events])
+
+  // When a worker detail opens and we don't yet know its capabilities
+  // (worker.ready is streamed live but not persisted, so a fresh detail has no
+  // watch history to read), ask that worker on demand with a *directed*
+  // worker.discover. It re-announces its worker.ready, which rides the SSE
+  // back and populates workerWatch[id] — one worker, on demand, no broadcast.
+  const discoverAskedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const id = detailOverlayId || selectedWorkerId
+    if (!id) {
+      discoverAskedRef.current.clear()
+      return
+    }
+    if (workerWatch[id]?.length) return // already know its capabilities
+    if (discoverAskedRef.current.has(id)) return
+    discoverAskedRef.current.add(id)
+    const w = workers.find(x => x.id === id)
+    if (w && w.online === false) return // offline: don't spam
+    sendWorkerEvent(id, 'worker.discover', {}).catch(() => {})
+  }, [detailOverlayId, selectedWorkerId, workerWatch, workers])
 
   // Worker currently shown in the right-hand detail panel (workers view only).
   const selectedWorker = view === 'workers' ? workers.find(w => w.id === selectedWorkerId) : undefined

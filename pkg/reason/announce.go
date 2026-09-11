@@ -44,10 +44,12 @@ func (w *BaseReasonWorker) BroadcastReady() {
 	// is the self-directed round-trip through discovery — HandleWorkerReady
 	// treats it like any peer's announcement, so this worker's own capabilities
 	// flow through the same unified discovery pipeline as everyone else's.
-	_ = w.Channel.Send(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+	self := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"type":  "reason",
 		"watch": w.ExtensionEntries(),
-	}), w.ID())
+	})
+	self.Transient = true // presence: delivered live, not durable history
+	_ = w.Channel.Send(context.Background(), self, w.ID())
 }
 
 // ExtensionEntries renders every registered extension into the worker.ready

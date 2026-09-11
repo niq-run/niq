@@ -183,7 +183,9 @@ func handleSendMessage(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 // next call.
 func handleListWorkers(w *reasonBase.BaseReasonWorker, callID, toolName, callerID, traceID string, args map[string]any) {
 	// Trigger re-discovery so the next call gets fresh data.
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerDiscover, w.ID(), nil))
+	disc := event.New(event.TypeWorkerDiscover, w.ID(), nil)
+	disc.Transient = true // presence: live-only, not durable history
+	_ = w.Channel.Broadcast(context.Background(), disc)
 
 	snapshot := w.DiscoveredWorkers()
 	b, err := json.Marshal(snapshot)
@@ -210,7 +212,9 @@ func handleWorkerInfo(w *reasonBase.BaseReasonWorker, callID, toolName, callerID
 		return
 	}
 	// Fresh data, same as list_workers: ask everyone to re-announce first.
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerDiscover, w.ID(), nil))
+	disc := event.New(event.TypeWorkerDiscover, w.ID(), nil)
+	disc.Transient = true // presence: live-only, not durable history
+	_ = w.Channel.Broadcast(context.Background(), disc)
 
 	info, ok := w.WorkerInfo(target)
 	if !ok {

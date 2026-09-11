@@ -253,9 +253,11 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 	w.StartDurableLoop(runCtx)
 
 	w.BroadcastReady()
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerDiscover, w.ID(), map[string]any{
+	disc := event.New(event.TypeWorkerDiscover, w.ID(), map[string]any{
 		"worker_id": w.ID(),
-	}))
+	})
+	disc.Transient = true // presence: live-only, not durable history
+	_ = w.Channel.Broadcast(context.Background(), disc)
 
 	w.started = true
 	return nil

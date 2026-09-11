@@ -101,7 +101,9 @@ func (w *Worker) Start(ctx context.Context) error {
 
 	// Announce HIW's presence on the bus.
 	w.publishReady()
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerDiscover, w.ID(), nil))
+	disc := event.New(event.TypeWorkerDiscover, w.ID(), nil)
+	disc.Transient = true // presence: live-only, not durable history
+	_ = w.Channel.Broadcast(context.Background(), disc)
 
 	// The durable-change signal (baseworker) delivers the persistence
 	// callback off the event loop; no goroutine when nothing is installed.
