@@ -266,7 +266,7 @@ func (e *Engine) OnEvent(fn func(event.Event)) {
 // (streaming deltas, partial tool output) are delivered live to observers but
 // not persisted, so they don't crowd real messages out of the replay window.
 func (e *Engine) persistEvent(ctx context.Context, evt event.Event) {
-	if e.store != nil && !evt.Transient {
+	if e.store != nil && shouldPersist(evt) {
 		e.persistTotal.Add(1)
 		if err := e.store.Append(ctx, evt); err != nil {
 			dropped := e.persistDropped.Add(1)
@@ -287,6 +287,28 @@ func (e *Engine) persistEvent(ctx context.Context, evt event.Event) {
 	for _, fn := range e.onEvent {
 		fn(evt)
 	}
+}
+
+// systemPresence reports whether an event is pure bus-presence/discovery
+// chatter: worker.ready / worker.discover / worker.gone. These announce who is
+// online and what they serve — not conversation. They still stream live over
+// SSE (so peers and the UI keep seeing the roster) but are deliberately not
+// persisted, so they don't crowd real messages out of history or flood the
+// events/talk timeline with system noise (which is what made history paging and
+// the talk backfill struggle through thousands of ready/discover rows).
+func systemPresence(t event.EventType) bool {
+	switch t {
+	case event.TypeWorkerReady, event.TypeWorkerDiscover, event.TypeWorkerGone:
+		return true
+	}
+	return false
+}
+
+// shouldPersist reports whether an event should be written to the durable
+// store: nothing marked Transient (live-streaming only) and nothing that is
+// pure system presence/discovery chatter.
+func shouldPersist(evt event.Event) bool {
+	return !evt.Transient && !systemPresence(evt.Type)
 }
 
 // isReplyType reports whether an event is a request.* reply (completed/failed/

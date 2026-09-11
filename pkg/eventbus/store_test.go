@@ -117,3 +117,23 @@ func equal(a, b []string) bool {
 	}
 	return true
 }
+
+func TestShouldPersist(t *testing.T) {
+	// Normal conversation events persist.
+	if !shouldPersist(event.Event{Type: event.TypeWorkerInput}) {
+		t.Fatal("worker.input should persist")
+	}
+	if !shouldPersist(event.Event{Type: event.TypeRequestCompleted}) {
+		t.Fatal("request.completed should persist")
+	}
+	// System presence / discovery chatter does not persist.
+	for _, typ := range []event.EventType{event.TypeWorkerReady, event.TypeWorkerDiscover, event.TypeWorkerGone} {
+		if shouldPersist(event.Event{Type: typ}) {
+			t.Fatalf("%s should not persist", typ)
+		}
+	}
+	// Transient markers never persist regardless of type.
+	if shouldPersist(event.Event{Type: event.TypeWorkerInput, Transient: true}) {
+		t.Fatal("transient event should not persist")
+	}
+}
