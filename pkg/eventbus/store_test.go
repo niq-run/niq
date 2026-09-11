@@ -126,14 +126,13 @@ func TestShouldPersist(t *testing.T) {
 	if !shouldPersist(event.Event{Type: event.TypeRequestCompleted}) {
 		t.Fatal("request.completed should persist")
 	}
-	// System presence / discovery chatter does not persist.
-	for _, typ := range []event.EventType{event.TypeWorkerReady, event.TypeWorkerDiscover, event.TypeWorkerGone} {
-		if shouldPersist(event.Event{Type: typ}) {
-			t.Fatalf("%s should not persist", typ)
-		}
-	}
-	// Transient markers never persist regardless of type.
+	// Transient is the only thing that keeps an event out of durability;
+	// presence/discovery chatter (worker.ready / discover / gone) sets it at
+	// the source, so a bare type check here would wrongly persist it.
 	if shouldPersist(event.Event{Type: event.TypeWorkerInput, Transient: true}) {
 		t.Fatal("transient event should not persist")
+	}
+	if !shouldPersist(event.Event{Type: event.TypeWorkerReady}) {
+		t.Fatal("non-transient event should persist (presence exclusion is set at source)")
 	}
 }

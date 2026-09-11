@@ -290,26 +290,13 @@ func (e *Engine) persistEvent(ctx context.Context, evt event.Event) {
 	}
 }
 
-// systemPresence reports whether an event is pure bus-presence/discovery
-// chatter: worker.ready / worker.discover / worker.gone. These announce who is
-// online and what they serve — not conversation. They still stream live over
-// SSE (so peers and the UI keep seeing the roster) but are deliberately not
-// persisted, so they don't crowd real messages out of history or flood the
-// events/talk timeline with system noise (which is what made history paging and
-// the talk backfill struggle through thousands of ready/discover rows).
-func systemPresence(t event.EventType) bool {
-	switch t {
-	case event.TypeWorkerReady, event.TypeWorkerDiscover, event.TypeWorkerGone:
-		return true
-	}
-	return false
-}
-
 // shouldPersist reports whether an event should be written to the durable
-// store: nothing marked Transient (live-streaming only) and nothing that is
-// pure system presence/discovery chatter.
+// store. Only events not marked Transient are persisted; presence/discovery
+// chatter (worker.ready / discover / gone) and streaming deltas set Transient
+// at the source, so they stream live over SSE but never crowd durable history
+// (which is what pushed real conversations far back and broke pagination).
 func shouldPersist(evt event.Event) bool {
-	return !evt.Transient && !systemPresence(evt.Type)
+	return !evt.Transient
 }
 
 // isReplyType reports whether an event is a request.* reply (completed/failed/

@@ -291,12 +291,14 @@ func (w *Worker) SendEvent(ctx context.Context, evtType event.EventType, target 
 
 // publishReady announces HIW on the bus.
 func (w *Worker) publishReady() {
-	_ = w.Channel.Broadcast(context.Background(), event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+	ready := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 		"type":      "hiw",
 		"publishes": []map[string]any{
 			{"type": "worker.input", "description": "User input event"},
 			{"type": string(event.TypeApprovalDecision), "description": "Approval decision on a received approval.request"},
 		},
-	}))
+	})
+	ready.Transient = true // presence: delivered live, not durable history
+	_ = w.Channel.Broadcast(context.Background(), ready)
 }
