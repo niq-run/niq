@@ -323,6 +323,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const optLineNum = isMobile ? 40 : 20
   const optLine = optLineNum + 'px'
   const optPad = isMobile ? '4px 0' : undefined
+  // Worker selector list: cap at ~10 rows and scroll the rest so a long worker
+  // list never sprawls down the sidebar. optLineNum is the single-row line
+  // height; the +8 accounts for the row's bottom margin/padding.
+  const workerListMax = (optLineNum + 8) * 10
   // Horizontal content inset; mobile gets more breathing room on both sides.
   // The section dividers use a matching negative horizontal margin so they
   // stay edge-to-edge.
@@ -473,13 +477,16 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   onClick={() => setShowWorkerPicker(true)}
                   title={t('sidebar.workerSelector.expand')}
                   className="btn-hover"
-                  style={{ flex: 1, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '0 6px' }}
+                  style={{ flex: 1, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 6px' }}
                 >
                   {t('sidebar.workerSelector.expandShort')}
                 </span>
               </div>
             )}
           </div>
+          {/* Worker list, height-capped to ~10 rows; the rest scrolls so a long
+              list doesn't sprawl down the sidebar. */}
+          <div style={{ overflowY: 'auto', maxHeight: workerListMax }}>
           {shownSelectorWorkers.map((w) => {
             const isActive = view === 'talk'
               ? talkWorkers.has(w.id)
@@ -534,6 +541,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               </div>
             )
           })}
+          </div>
 
           {/* View Settings — talk view only */}
           {view === 'talk' && (

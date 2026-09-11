@@ -65,11 +65,11 @@ export default function TagFilterDropdown({ tags, selected, onToggle, onClear, f
           ...(fill ? { width: '100%', boxSizing: 'border-box', justifyContent: 'space-between' } : { maxWidth: '100%' }),
           fontSize: isInput ? fontSizes.base : tSize,
           lineHeight: isInput ? '1.4' : tLine,
-          padding: '0 8px',
+          padding: isInput ? '7px 9px' : '3px 8px',
           borderRadius: 3,
           // 'input' variant peers with the search box: same font, padding,
           // corner radius — a full-width row at equal height.
-          ...(isInput ? { fontSize: fontSizes.base, lineHeight: '1.4', padding: '7px 9px', borderRadius: 4 } : {}),
+          ...(isInput ? { fontSize: fontSizes.base, lineHeight: '1.4', borderRadius: 4 } : {}),
           color: active ? colors.accent : colors.textDim,
           border: '1px solid ' + (active ? colors.accent : colors.border),
           background: active ? colors.bgChip : undefined,
