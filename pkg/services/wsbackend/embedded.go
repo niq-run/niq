@@ -649,8 +649,20 @@ loop:
 		case <-ctx.Done():
 			flush()
 			killGroup(cmd)
+			// The pipes close as the killed subprocesses exit; wait for the
+			// readers so the bounded writers hold the full partial output before
+			// we assemble it — a timeout is reported WITH the output the command
+			// produced before it was killed, not as a bare deadline error.
+			wg.Wait()
 			_ = cmd.Wait()
-			return BashResult{}, ctx.Err()
+			return BashResult{
+				Stdout:     out.String(),
+				Stderr:     errOut.String(),
+				ExitCode:   -1, // killed (signal), not a normal exit
+				Truncated:  overflow.Load(),
+				TotalBytes: int(out.total.Load() + errOut.total.Load()),
+				TotalLines: int(out.lines.Load() + errOut.lines.Load()),
+			}, ctx.Err()
 		case <-doneCh:
 			for {
 				select {

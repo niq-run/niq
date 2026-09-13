@@ -80,6 +80,27 @@ func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 	}
 }
 
+// TestBashTimeoutPreservesPartialOutput verifies that when a command is killed
+// by the deadline, the output it produced before the kill is retained in the
+// returned result rather than dropped.
+func TestBashTimeoutPreservesPartialOutput(t *testing.T) {
+	b := NewEmbeddedBackend([]string{t.TempDir()})
+	// Emit a marker immediately, then block so the deadline fires mid-run.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	r, err := b.Bash(ctx, "printf 'partial-output-before-kill\\n'; sleep 30", "", BashLimits{})
+	if err != context.DeadlineExceeded {
+		t.Fatalf("err = %v, want DeadlineExceeded", err)
+	}
+	if !strings.Contains(r.Stdout, "partial-output-before-kill") {
+		t.Fatalf("partial stdout lost on timeout: %q", r.Stdout)
+	}
+	if r.ExitCode != -1 {
+		t.Fatalf("exit code = %d, want -1 (killed by signal)", r.ExitCode)
+	}
+}
+
 // TestBashKillsBackgroundChild verifies the process-group kill reaches a
 // backgrounded grandchild: a command that spawns a background sleep and then
 // waits must not leave the backgrounded process alive after the deadline.

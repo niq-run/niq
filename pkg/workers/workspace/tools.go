@@ -20,6 +20,11 @@ import (
 // argument: no caller can run a command longer than this, whatever they pass.
 const maxBashTimeoutSec = 300 // 5 minutes
 
+// defaultBashTimeoutSec is applied when a bash call does not pass a timeout.
+// A caller can override it per-call (capped at maxBashTimeoutSec) or pass 0
+// to disable the timeout entirely.
+const defaultBashTimeoutSec = 30
+
 func (w *WorkspaceWorker) buildHandlers() {
 	m := make(map[string]worker.ToolFunc)
 
@@ -87,7 +92,7 @@ func (w *WorkspaceWorker) buildHandlers() {
 			}
 			cwd, _ := args["cwd"].(string)
 
-			timeoutSec := backend.GetIntArg(args, "timeout", 0)
+			timeoutSec := backend.GetIntArg(args, "timeout", defaultBashTimeoutSec)
 			if timeoutSec > maxBashTimeoutSec {
 				timeoutSec = maxBashTimeoutSec
 			}
@@ -108,6 +113,18 @@ func (w *WorkspaceWorker) buildHandlers() {
 				result, err = bo.Bash(ctx, command, cwd, limits)
 			}
 			if err != nil {
+				// Interrupted before completion (timeout/cancel) is not an
+				// execution failure: the command was killed, but the partial
+				// output it already produced is still valuable — retain it
+				// alongside a clear notice rather than returning a bare
+				// context error.
+				if errors.Is(err, context.DeadlineExceeded) {
+					return fmt.Sprintf("command timed out after %ds and was killed (process group); partial output preserved:\n%s",
+						timeoutSec, backend.FormatBash(result)), nil
+				}
+				if errors.Is(err, context.Canceled) {
+					return "command was cancelled before completion; partial output preserved:\n" + backend.FormatBash(result), nil
+				}
 				return "", err
 			}
 			return backend.FormatBash(result), nil
@@ -221,11 +238,11 @@ func (w *WorkspaceWorker) registerExtensions() {
 			}, "required": []any{"path", "edits"}},
 		},
 		"bash": {
-			desc: "Run a shell command within the workspace. Returns exit code, stdout, and stderr. Output larger than 20KB is truncated to its head and tail. Supports optional timeout.",
+			desc: "Run a shell command within the workspace. Returns exit code, stdout, and stderr. Output larger than 20KB is truncated to its head and tail. On timeout the command is killed and the partial output is preserved alongside a timeout notice.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"command": map[string]any{"type": "string", "description": "The shell command to execute."},
 				"cwd":     map[string]any{"type": "string", "description": "Working directory. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory. Defaults to the primary mount."},
-				"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional, capped at 300)."},
+				"timeout": map[string]any{"type": "integer", "description": "Timeout in seconds (optional, defaults to 30, capped at 300; 0 disables the timeout)."},
 			}, "required": []any{"command"}},
 		},
 		"grep": {
@@ -258,6 +275,15 @@ func (w *WorkspaceWorker) registerExtensions() {
 		name := name
 		w.Register(baseworker.Extension{Event: event.EventType(name), Description: sp.desc, Parameters: sp.params}, func(evt event.Event) {
 			tc := baseworker.ParseToolCall(evt)
+			// bash can run for a long time (it spawns its own process group), so
+			// serve it on its own goroutine: it must not stall the worker's single
+			// event loop, and concurrent bash calls run in parallel. Other tools
+			// stay synchronous — they are fast and their ordering is exercised by
+			// tests.
+			if tc.Name == "bash" {
+				go w.dispatchHandler(ctx, tc)
+				return
+			}
 			w.dispatchHandler(ctx, tc)
 		})
 	}
