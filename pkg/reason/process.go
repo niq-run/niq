@@ -186,6 +186,18 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 				})
 			}
 		}
+		// A parked call resolved late — this is new information the model should
+		// incorporate, so wake a follow-up reason round. The case that surfaces
+		// this: an append/interrupt session parked a tool, the prompt round
+		// answered *without* its result (it was told the call was interrupted),
+		// and then the real result landed. Without waking, that stale
+		// "interrupted" answer is never corrected. Causes that mean a deliberate
+		// stop (abort, restart) stay quiet.
+		switch parked.ParkCause {
+		case requesttracker.PreemptCauseAbort, requesttracker.PreemptCauseRestart:
+		default:
+			w.needReason = true
+		}
 	}
 }
 

@@ -153,6 +153,52 @@ func TestLateToolResult(t *testing.T) {
 	}
 }
 
+// TestLateToolResultWakesReason verifies a late result for a call that an input
+// (append/interrupt) parked triggers a follow-up reason round: the prompt round
+// answered without the tool's outcome, and the arriving result should wake the
+// worker so it can incorporate the real result instead of leaving a stale
+// "interrupted" answer.
+func TestLateToolResultWakesReason(t *testing.T) {
+	w, _, _ := startWorker(t, &staticProvider{})
+	w.mu.Lock()
+	w.needReason = false
+	w.requestTracker.Add("workspace", []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"},
+	})
+	w.requestTracker.ParkAll(requesttracker.PreemptCauseInput) // append/interrupt parked it
+	w.mu.Unlock()
+
+	late := event.New(event.TypeRequestCompleted, "workspace", map[string]any{"result": "out"})
+	late.RequestId = "c1"
+	w.handleToolResult(late)
+
+	if !w.needReason {
+		t.Fatal("late result of an input-parked call should wake a follow-up reason round")
+	}
+}
+
+// TestLateToolResultAbortStaysQuiet verifies a late result for a call parked by
+// an explicit abort does NOT wake a round: the user asked to stop, so the
+// worker stays quiet until the next input.
+func TestLateToolResultAbortStaysQuiet(t *testing.T) {
+	w, _, _ := startWorker(t, &staticProvider{})
+	w.mu.Lock()
+	w.needReason = false
+	w.requestTracker.Add("workspace", []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"},
+	})
+	w.requestTracker.ParkAll(requesttracker.PreemptCauseAbort)
+	w.mu.Unlock()
+
+	late := event.New(event.TypeRequestCompleted, "workspace", map[string]any{"result": "out"})
+	late.RequestId = "c1"
+	w.handleToolResult(late)
+
+	if w.needReason {
+		t.Fatal("late result of an abort-parked call must NOT wake a reason round")
+	}
+}
+
 // TestInputAppendIsGentle verifies the "append" input_mode (level 2) does
 // not interrupt an in-flight reasoning call, but schedules the next round and
 // records the cause for parking.
