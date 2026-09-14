@@ -129,7 +129,7 @@ func TestHandleUpdateAllow(t *testing.T) {
 func TestWebUIContextProjectMode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := New(nil, nil, nil, nil, nil, ":0", false)
-	s.SetContext(ContextInfo{Mode: "project", Project: "mydemo", ControlURL: "http://127.0.0.1:9527"})
+	s.SetContext(ContextInfo{Mode: "project", Project: "mydemo"})
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -265,6 +265,46 @@ func TestBasicAuthDisabledBypassesAll(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if !hit || rr.Code != http.StatusOK {
 		t.Fatalf("disabled: hit=%v code=%d, want pass-through", hit, rr.Code)
+	}
+}
+
+// TestBasicAuthAppliesAfterNew asserts credentials configured *after* New()
+// gate the assembled handler. The project WebUI is built by New() and then
+// configured by setters (run.go calls SetBasicAuth once the server exists), so
+// a handler that captured the credentials at construction time would silently
+// serve remote peers without auth on a non-loopback bind.
+func TestBasicAuthAppliesAfterNew(t *testing.T) {
+	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s.SetContext(ContextInfo{Mode: "project", Project: "mydemo"})
+	s.SetBasicAuth("alice", "s3cret")
+
+	// Non-loopback without credentials → 401 + challenge.
+	req := httptest.NewRequest("GET", "/api/context", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	rr := httptest.NewRecorder()
+	s.server.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("no-cred code=%d, want 401", rr.Code)
+	}
+	if rr.Header().Get("WWW-Authenticate") == "" {
+		t.Fatal("no-cred: missing WWW-Authenticate header")
+	}
+
+	// With the configured credentials → served.
+	req = httptest.NewRequest("GET", "/api/context", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	req.SetBasicAuth("alice", "s3cret")
+	rr = httptest.NewRecorder()
+	s.server.Handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("good-cred code=%d, want 200", rr.Code)
+	}
+	var ci ContextInfo
+	if err := json.Unmarshal(rr.Body.Bytes(), &ci); err != nil {
+		t.Fatalf("decode context: %v", err)
+	}
+	if ci.Mode != "project" || ci.Project != "mydemo" {
+		t.Fatalf("context=%+v, want project/mydemo", ci)
 	}
 }
 

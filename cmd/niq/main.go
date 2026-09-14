@@ -160,7 +160,8 @@ func printUsage() {
 	fmt.Print(`niq - neural interface quantum
 
 Usage:
-  niq                       start the control plane (default :9527)
+  niq                       start the control plane (default :9527); its WebUI
+                            also serves every project at /p/<id>/
   niq control --addr :9527  start the control plane explicitly
   niq control --addr :9527 --auth user:pass
                             start the control plane, locking non-localhost

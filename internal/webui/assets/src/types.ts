@@ -138,11 +138,10 @@ export interface ViewSettings {
 export type ViewSettingKey = keyof ViewSettings
 
 // ContextInfo is what /api/context returns: which mode the SPA is in and, in
-// project (control_url) where to reach the control plane.
+// project mode, which project it is attached to.
 export interface ContextInfo {
   mode: 'control' | 'project'
   project?: string
-  control_url?: string
 }
 
 // ProjectInfo is a project's definition as exposed by the control-plane API.
@@ -179,10 +178,11 @@ export interface ProgramDetail {
   contents?: string[]
 }
 
-// ProjectStartResult is what {id}/start returns so the UI can redirect.
+// ProjectStartResult is what {id}/start returns so the UI can redirect. The UI
+// navigates to /p/<id>/ (see App.goToProjectWebui), so the ports are
+// informational only.
 export interface ProjectStartResult {
   project?: string
-  webui_url?: string
   webui_port?: number
   bus_port?: number
 }

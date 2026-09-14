@@ -18,9 +18,9 @@ import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
-import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, setApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
+import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
 import { attachmentBlock } from './components/talk-utils'
-import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, ProjectStartResult, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
+import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
 
 // How many history events the WebUI pages back per /api/events/before call
 // (both the initial watermark backfill and the load-more pagination).
@@ -33,7 +33,7 @@ const HISTORY_PAGE = 100
 // activeFollowingRef): when scrolled up to read, trimming is held so it can't
 // shift the reader's viewport, and older history is anyway reachable by
 // scrolling to the top, which triggers onLoadMore to page it back in.
-const MAX_EVENTS = 1500
+const MAX_EVENTS = 400
 
 // Per-reason-worker input mode, persisted to localStorage. The default is
 // append (level 2): the gentle mode that supplements the ongoing thought
@@ -211,22 +211,13 @@ export default function App() {
 
   // ── Mode: control (no project attached) vs project. In control mode only the
   // projects surface is usable; talk/events/workers need an attached project, so
-  // they are hidden and their SSE + polling are disabled. The projects API lives
-  // on the control plane — same-origin in control mode, via context.control_url
-  // from a project instance.
-  // A query-string ?project=<id>&port=<port> names a specific running project to
-  // develop against, so the whole UI talks to that project's own address (and
-  // can keep several projects open at once — the control API still goes to 9527).
-  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
-  const urlPort = urlParams.get('port')
-  const urlProject = urlParams.get('project')
-  const devProjectBase = urlPort ? 'http://127.0.0.1:' + urlPort : ''
-
-  const mode = devProjectBase !== '' ? 'project' : (context.mode === 'control' ? 'control' : 'project')
-  const projectBase = devProjectBase
-  // In dev (?project=&port=) we skip /api/context, so take the project name
-  // from the URL; otherwise it comes from the served webui's context.
-  const projectName = devProjectBase !== '' ? (urlProject || '') : context.project
+  // they are hidden and their SSE + polling are disabled. The control plane
+  // serves everything on its own origin — a project WebUI is reached through it
+  // at /p/<id>/ — so project management APIs live at the root (CONTROL) while a
+  // project's own APIs carry the /p/<id> base (see services/api.ts).
+  const mode = context.mode
+  const projectBase = getApiBase()
+  const projectName = context.project
 
   // Page title: append the attached project name when there is one.
   useEffect(() => {
@@ -247,29 +238,16 @@ export default function App() {
   }, mode === 'project' && projectName !== '')
 
   // Start the current project from a stale page: the start call blocks until
-  // the project's WebUI port listens, so success means the page can go back.
-  // Same origin → reload; the project came back on a different port → hop.
-  // Point the page at the project's WebUI after a control-plane start/restart:
-  // hop when it came back on a different port, reload when same-origin.
-  const goToProjectWebui = (r: ProjectStartResult) => {
-    if (r.webui_url) {
-      try {
-        const target = new URL(r.webui_url)
-        if (target.host !== window.location.host) {
-          window.location.href = r.webui_url
-          return
-        }
-      } catch { /* relative or malformed: fall through to reload */ }
-    }
-    window.location.reload()
-  }
-
+  // the project's WebUI is listening, so a successful return only needs the
+  // page reloaded — this page is already the project's own URL (/p/<id>/ when
+  // it is reached through the control plane).
   const startCurrentProject = async () => {
     if (!projectName || startingProj) return
     setStartingProj(true)
     setStartProjErr('')
     try {
-      goToProjectWebui(await startProject(projectName))
+      await startProject(projectName)
+      window.location.reload()
     } catch (e) {
       setStartProjErr((e as Error)?.message || 'start failed')
     }
@@ -308,13 +286,11 @@ export default function App() {
   }
 
   useEffect(() => {
-    setApiBase(projectBase)
-    // Unless a project+port was given in the URL, ask /api/context to learn the
-    // mode (dev proxy → 9527 control, or a served project webui answers locally).
-    if (devProjectBase === '') {
-      fetchContext().then(setContext).catch(() => {})
-    }
-  }, [projectBase, devProjectBase])
+    // Ask /api/context which mode this page is in: the control plane's own page
+    // answers "control", a project page (served under /p/<id>/) answers
+    // "project" with its id.
+    fetchContext().then(setContext).catch(() => {})
+  }, [])
 
   // Archived workers: hidden from the worker selector by default; toggled from
   // the workers view. State lives in the project's stream definitions.
@@ -471,9 +447,9 @@ export default function App() {
     // `streamKey` already encodes the events-view filter, so traceFilter is redundant here.
   }, [streamKey, mode, projectBase])
 
-  // ── Polling (only meaningful when a project is attached). The URL is
-  // prefixed with projectBase so in dev (?project=&port=) it hits the project's
-  // own address, not the dev/control port.
+  // ── Polling (only meaningful when a project is attached). The URL carries the
+  // project base so a project page reached through /p/<id>/ hits that project's
+  // own API rather than the control plane's.
   const workersURL = projectBase + '/api/workers'
   // Poll only while an agent view (not a management panel) is showing. The
   // immediate first load is required so the talk mention dropdown has the

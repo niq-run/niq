@@ -49,9 +49,8 @@ var embeddedAssets embed.FS
 // attached — only project management is available) or project (a specific
 // project is attached — talk/events run against it).
 type ContextInfo struct {
-	Mode       string `json:"mode"`                  // "control" | "project"
-	Project    string `json:"project,omitempty"`     // project id in project mode
-	ControlURL string `json:"control_url,omitempty"` // control-plane base URL (for project→control jumps)
+	Mode    string `json:"mode"`              // "control" | "project"
+	Project string `json:"project,omitempty"` // project id in project mode
 }
 
 // ArchivedStore reads/writes a project's archived-worker set (persisted in the
@@ -1854,11 +1853,17 @@ func cors(next http.Handler) http.Handler {
 
 // basicAuth protects the WebUI behind HTTP basic auth, but only for clients
 // that are not on the loopback interface: same-machine access (e.g. someone
-// with a shell on the box, or a local proxy) stays open, while remote peers
-// must authenticate. Pure OPTIONS preflight requests are passed through so
-// CORS works; the follow-up real request is still gated.
+// with a shell on the box) stays open, while remote peers must authenticate.
+// Credentials are read per request — the handler is built by New(), while
+// SetBasicAuth runs afterwards (the assembly calls it once the WebUI is
+// constructed), so capturing them here would silently disable auth.
 func (s *Server) basicAuth(next http.Handler) http.Handler {
-	return BasicAuth(s.authUser, s.authPass, next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authGate(w, r, s.authUser, s.authPass) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // BasicAuth wraps a handler with HTTP basic auth that applies only to
@@ -1868,18 +1873,27 @@ func (s *Server) basicAuth(next http.Handler) http.Handler {
 // the control-plane SPA.
 func BasicAuth(user, pass string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !authEnabled(user, pass) || isLoopbackRemote(r.RemoteAddr) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		gotUser, gotPass, ok := r.BasicAuth()
-		if !ok || !secureEqual(gotUser, user) || !secureEqual(gotPass, pass) {
-			w.Header().Set("WWW-Authenticate", `Basic realm="niq"`)
-			w.WriteHeader(http.StatusUnauthorized)
+		if !authGate(w, r, user, pass) {
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// authGate reports whether the request may proceed; when it may not it has
+// already answered 401 with a challenge. Auth is disabled entirely without
+// configured credentials, and loopback peers are always let through.
+func authGate(w http.ResponseWriter, r *http.Request, user, pass string) bool {
+	if !authEnabled(user, pass) || isLoopbackRemote(r.RemoteAddr) {
+		return true
+	}
+	gotUser, gotPass, ok := r.BasicAuth()
+	if !ok || !secureEqual(gotUser, user) || !secureEqual(gotPass, pass) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="niq"`)
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
 }
 
 // isLoopbackRemote reports whether the peer address is a loopback IP

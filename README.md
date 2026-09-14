@@ -53,7 +53,39 @@ niq project create my-project
 niq project run my-project
 ```
 
-Each project serves its own WebUI — use it to chat, watch the event flow and manage workers. Ports are assigned dynamically on first run and then persisted per project, so they stay stable across restarts (`--bus` / `--webui` override). `niq project list` shows each project's `webui` and `bus` ports.
+Each project serves its own WebUI on a loopback-only port, so it is never
+exposed by accident: open it through the control plane at
+**http://localhost:9527/p/&lt;id&gt;/**, which proxies to that project. Ports are
+assigned dynamically on first run and then persisted per project, so they stay
+stable across restarts (`--bus` / `--webui` override). `niq project list` shows
+each project's `webui` and `bus` ports.
+
+### Server deployment
+
+The control plane is the only port a deployment needs to expose: it serves the
+SPA, the project-management API and every project's WebUI (at `/p/<id>/`).
+Projects and the event bus bind loopback only, so they stay unreachable from
+outside even on a public machine.
+
+```sh
+niq --addr :9527 --auth alice:s3cret
+```
+
+Configure credentials before exposing the port: requests from any non-loopback
+address are then answered with a 401 until they authenticate, while requests from
+the machine itself stay password-free. `--auth` (control plane) and
+`--webui-auth` (a project started by hand) persist to and read from the same
+`~/.niq/common/auth.json`, so one pair of credentials covers everything. Without
+credentials remote callers are locked out entirely, and niq warns about the
+binding at startup.
+
+Basic auth sends the credentials on every request, so terminate TLS in front (or
+tunnel through SSH/WireGuard) before exposing niq to the open internet — niq
+itself speaks plain HTTP.
+
+After upgrading the binary, restart the running projects: their page and static
+assets are served by the control plane, and an old project process may reference
+asset files the new binary no longer contains.
 
 ### Model provider
 
@@ -76,6 +108,22 @@ ext/       external worker implementations (HTTP)
 go build ./... && go vet ./...
 go test ./pkg/eventbus/ -count=1
 ```
+
+The WebUI bundle is committed (it is `go:embed`-ed), so rebuild and commit it
+after changing anything under `internal/webui/assets/src`:
+
+```sh
+cd internal/webui/assets && npm run build
+```
+
+### Frontend development
+
+With the control plane running, the Vite dev server (`npm run dev` in
+`internal/webui/assets`, port 5173) proxies API traffic to :9527, so both pages
+work with HMR:
+
+- control plane UI: http://localhost:5173/
+- a project's UI: http://localhost:5173/p/&lt;id&gt;/ (that project must be running)
 
 ## Data directory
 

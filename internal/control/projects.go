@@ -167,7 +167,6 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"project":    id,
 			"already":    true,
-			"webui_url":  project.LocalhostURL(webui),
 			"webui_port": project.PortOf(webui),
 		})
 		return
@@ -205,7 +204,6 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 	webUI := waitWebUIReady(id)
 	json.NewEncoder(w).Encode(map[string]any{
 		"project":    id,
-		"webui_url":  project.LocalhostURL(webUI),
 		"webui_port": project.PortOf(webUI),
 		"bus_port":   resolvedBus(id),
 	})

@@ -75,7 +75,13 @@ status.
 |---|---|---|
 | Scope | in-process + HTTP loopback | HTTPS |
 | Data-plane auth | self-declared workerID | Token |
-| Control-plane auth | none | OpenAPI key |
+| Control-plane auth | none (loopback) | basic auth (`~/.niq/common/auth.json`) |
+
+The control plane's port is the single HTTP surface a deployment exposes: it
+serves the control-plane SPA and reverse-proxies each project's WebUI under
+`/p/<id>/`, while projects and the bus stay bound to loopback. Remote requests
+to it must present the configured basic-auth credentials; loopback requests are
+not challenged. See README "Server deployment".
 
 ### Key decisions already made
 

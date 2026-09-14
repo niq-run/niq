@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	stdhttp "net/http"
+	"net/http/httputil"
 	"os"
 	"os/signal"
 	"sync"
@@ -52,11 +53,13 @@ func RunControl(opts ControlOptions) error {
 
 // Control is the control-plane HTTP service.
 type Control struct {
-	addr       string
-	server     *stdhttp.Server
-	listener   net.Listener
-	bound      string
-	controlURL string
+	addr     string
+	server   *stdhttp.Server
+	listener net.Listener
+	bound    string
+
+	// proxy serves /p/<id>/* from each project's own loopback WebUI.
+	proxy *httputil.ReverseProxy
 
 	authUser string // basic-auth user for non-loopback access ("" = disabled)
 	authPass string
@@ -70,7 +73,11 @@ func NewControl(addr string) *Control {
 	if addr == "" {
 		addr = ":9527"
 	}
-	return &Control{addr: addr, controlURL: "http://localhost" + addr, procs: map[string]*os.Process{}}
+	return &Control{
+		addr:  addr,
+		proxy: newProjectProxy(),
+		procs: map[string]*os.Process{},
+	}
 }
 
 // SetBasicAuth enables HTTP basic auth for requests from non-loopback peers
@@ -106,7 +113,7 @@ func (c *Control) Start(ctx context.Context) error {
 	}
 	mux := stdhttp.NewServeMux()
 	mux.HandleFunc("GET /api/context", func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-		json.NewEncoder(w).Encode(webui.ContextInfo{Mode: "control", ControlURL: c.controlURL})
+		json.NewEncoder(w).Encode(webui.ContextInfo{Mode: "control"})
 	})
 	mux.HandleFunc("GET /api/templates", c.handleListTemplates)
 	mux.HandleFunc("GET /api/templates/{name}", c.handleTemplateDetail)
@@ -122,11 +129,18 @@ func (c *Control) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /api/projects/{id}/stop", c.handleStopProject)
 	mux.HandleFunc("POST /api/projects/{id}/restart", c.handleRestartProject)
 
+	// Project WebUIs are reached through the control plane (the only exposed
+	// port): /p/<id>/... is served from that project's own loopback WebUI.
+	mux.HandleFunc(projectPrefix+"{id}/", c.handleProjectProxy)
+
 	assets, err := webui.AssetsFS()
 	if err != nil {
 		return fmt.Errorf("control: assets: %w", err)
 	}
-	mux.Handle("GET /", stdhttp.FileServer(stdhttp.FS(assets)))
+	// Registered without a method so it cannot conflict with the all-methods
+	// /p/{id}/ proxy below ("GET /" vs "/p/{id}/" is ambiguous: the former has a
+	// narrower method but a wider path).
+	mux.Handle("/", stdhttp.FileServer(stdhttp.FS(assets)))
 
 	c.server = &stdhttp.Server{Handler: corsControl(webui.BasicAuth(c.authUser, c.authPass, mux))}
 	go func() {

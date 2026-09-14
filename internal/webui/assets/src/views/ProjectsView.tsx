@@ -7,8 +7,9 @@ import { CONTROL, fetchProjects, fetchTemplates, createProject, startProject, st
 import type { ProjectInfo } from '../types'
 
 // ProjectsView is the management surface shown in the control plane (and as a
-// jump/start hop from a project instance): list projects, start one, and follow
-// its WebUI URL. All control-plane calls go to the control server on :9527.
+// jump/start hop from a project instance): list projects, start one, and jump
+// into the project's WebUI. Control-plane calls are same-origin (CONTROL), since
+// the control plane serves both this page and every /p/<id>/ project page.
 interface ProjectsViewProps {
   onGoToProviders?: () => void
 }
@@ -237,7 +238,7 @@ export default function ProjectsView({ onGoToProviders }: ProjectsViewProps) {
               <>
                 {p.ports?.webui && (
                   <a
-                    href={`?project=${encodeURIComponent(p.id)}&port=${p.ports.webui}`}
+                    href={`/p/${encodeURIComponent(p.id)}/`}
                     target={'_blank'}
                     rel="noopener noreferrer"
                     style={{ color: colors.accent, fontSize: fontSizes.sm, textDecoration: 'none' }}

@@ -10,7 +10,7 @@ import BufferedInput, { envToText, textToMap } from '../components/BufferedInput
 // config layer) with the same dual view as the template editor: worker-style
 // cards over the common fields, plus the raw JSON. Providers are referenced by
 // name (the config's active field and runtime provider switches), so names
-// must be unique. All calls go to the control plane on :9527.
+// must be unique. All calls go to the control plane, same-origin (CONTROL).
 export default function ProvidersView() {
   const { dark, colors } = useTheme()
   const { t } = useI18n()

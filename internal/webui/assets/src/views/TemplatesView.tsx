@@ -17,7 +17,7 @@ const MOBILE_TOP_BAR_HEIGHT = 44
 // right-anchored drawer (ResizablePanel) holding the template editor — a
 // syntax-highlighted JSON editor over the whole template body. A template
 // exported from a project opens as an editable draft and only reaches disk on
-// save. All calls go to the control plane on :9527.
+// save. All calls go to the control plane, same-origin (CONTROL).
 export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()

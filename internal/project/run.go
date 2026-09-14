@@ -124,8 +124,6 @@ func RunProject(opts ProjectRunOptions) error {
 		ContextInfo: webui.ContextInfo{
 			Mode:    "project",
 			Project: opts.ProjectID,
-			// Project WebUI reaches the control plane for cross-project jumps.
-			ControlURL: "http://127.0.0.1:9527",
 		},
 	})
 }

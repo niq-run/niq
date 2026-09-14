@@ -15,17 +15,18 @@ import type {
   WorkerInfo,
 } from '../types'
 
-// Control-plane base: project management always talks to the control plane on
-// 9527 (dev server reaches it via the vite proxy when no base is set, or
-// directly cross-origin in a running project).
-export const CONTROL = 'http://127.0.0.1:9527'
+// Control-plane base: the control plane owns the origin for the whole product —
+// a project's WebUI is reached through it at /p/<id>/, never on the project's
+// own port — so its API always lives at the origin root.
+export const CONTROL = ''
 
-// API_BASE is the base all project-resource calls (talk/index, workers, events,
-// SSE, context) target. Empty means same-origin (a served project webui, or the
-// dev proxy toward the control/back end). The App sets it from ?project=&port=
-// when developing against a specific project instance.
-let API_BASE = ''
-export function setApiBase(base: string) { API_BASE = base }
+// API_BASE is the base all project-resource calls (talk/workers, events, SSE,
+// context) target. A project page is served at /p/<id>/ and must talk to
+// /p/<id>/api/… so the control plane forwards it to that project; anywhere else
+// (the control plane's own page, a project WebUI opened directly on its loopback
+// port) stays same-origin at the root.
+const pagePath = window.location.pathname.replace(/\/+$/, '')
+let API_BASE = /^\/p\/[^/]+$/.test(pagePath) ? pagePath : ''
 export function getApiBase(): string { return API_BASE }
 function p(path: string): string { return API_BASE + path }
 
