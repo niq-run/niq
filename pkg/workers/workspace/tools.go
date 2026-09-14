@@ -275,16 +275,15 @@ func (w *WorkspaceWorker) registerExtensions() {
 		name := name
 		w.Register(baseworker.Extension{Event: event.EventType(name), Description: sp.desc, Parameters: sp.params}, func(evt event.Event) {
 			tc := baseworker.ParseToolCall(evt)
-			// bash can run for a long time (it spawns its own process group), so
-			// serve it on its own goroutine: it must not stall the worker's single
-			// event loop, and concurrent bash calls run in parallel. Other tools
-			// stay synchronous — they are fast and their ordering is exercised by
-			// tests.
-			if tc.Name == "bash" {
-				go w.dispatchHandler(ctx, tc)
-				return
-			}
-			w.dispatchHandler(ctx, tc)
+			// Every tool runs on its own goroutine: none of them may stall the
+			// worker's single event loop, and concurrent tool calls execute in
+			// parallel. bash/grep/find spawn subprocesses (bash is essentially a
+			// sh -c "grep ..."), so this matters for them; the rest are fast local
+			// I/O but async costs nothing and keeps dispatch uniform. The worker
+			// and backend are safe for concurrent calls (guarded by w.mu / the
+			// backend's per-path locks; replies go through a thread-safe channel
+			// send).
+			go w.dispatchHandler(ctx, tc)
 		})
 	}
 

@@ -86,7 +86,7 @@ func (w *WorkspaceWorker) requestApproval(ctx context.Context, tc baseworker.Too
 	_, existsErr := os.Stat(escapedPath)
 	payload := jsonSafe(map[string]any{
 		"origin":       tc.CallerID, // who set this in motion (reason worker / human UI)
-		"requested_by": w.ID(), // the worker sending this approval request
+		"requested_by": w.ID(),      // the worker sending this approval request
 		"action":       "mount.add",
 		"tool":         tc.Name,
 		"path":         escapedPath,
@@ -178,8 +178,10 @@ func (w *WorkspaceWorker) handleApprovalDecision(ctx context.Context, evt event.
 
 	if pending.Name != "" {
 		// Re-run the original call — now inside the expanded boundary. It
-		// replies completed/failed to the original caller itself.
-		w.dispatchHandler(ctx, pending.toolCall())
+		// replies completed/failed to the original caller itself. Served on its
+		// own goroutine (like every tool dispatch) so re-running a long command
+		// here cannot stall the event loop.
+		go w.dispatchHandler(ctx, pending.toolCall())
 		return
 	}
 	w.ReplyCompleted(pending.CallerID, pending.CallID, mountSnapshotJSON("", mm), pending.TraceID)

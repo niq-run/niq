@@ -6,11 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/pkg/baseworker"
 	backend "github.com/niq-run/niq/pkg/services/wsbackend"
 )
+
+// testTimeout bounds waits on asynchronous tool dispatches in these tests.
+const testTimeout = 2 * time.Second
 
 // approvalHarness builds a worker over a single-mount backend with a stub
 // channel, plus an out-of-mount directory containing a file.
@@ -52,6 +56,8 @@ func mountsContain(mounts []string, dir string) bool {
 // lastTerminalReply returns the most recent request.completed/failed/rejected
 // reply ("" when none), ignoring non-answer traffic like the approval.request.
 func (s *stubChannel) lastTerminalReply() event.EventType {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := len(s.sent) - 1; i >= 0; i-- {
 		switch s.sent[i].Type {
 		case event.TypeRequestCompleted, event.TypeRequestFailed, event.TypeRequestRejected:
@@ -106,10 +112,16 @@ func TestApprovalDecisionApproved(t *testing.T) {
 	h.w.handleApprovalDecision(context.Background(), decision)
 
 	// The escaped path's directory is now mounted and the call completed.
+	// The re-dispatch runs on its own goroutine, so wait for its reply.
 	if !mountsContain(h.b.Mounts(), filepath.Dir(h.outsideFile)) {
 		t.Fatalf("mounts = %v, want %s", h.b.Mounts(), filepath.Dir(h.outsideFile))
 	}
+	if !h.ch.waitForReplyType(event.TypeRequestCompleted, testTimeout) {
+		t.Fatalf("no request.completed after approval re-dispatch")
+	}
+	h.ch.mu.Lock()
 	last := h.ch.sent[len(h.ch.sent)-1]
+	h.ch.mu.Unlock()
 	if last.Type != event.TypeRequestCompleted || last.RequestId != "caller-1-read" {
 		t.Fatalf("reply = %v request %s, want completed for the parked call", last.Type, last.RequestId)
 	}
@@ -313,7 +325,13 @@ func TestSnapshotCarriesModeAndPendings(t *testing.T) {
 	if !mountsContain(b2.Mounts(), filepath.Dir(h.outsideFile)) {
 		t.Fatalf("restored worker did not mount %s: %v", filepath.Dir(h.outsideFile), b2.Mounts())
 	}
-	if last := ch2.sent[len(ch2.sent)-1]; last.Type != event.TypeRequestCompleted {
+	if !ch2.waitForReplyType(event.TypeRequestCompleted, testTimeout) {
+		t.Fatalf("no request.completed after restore approval re-dispatch")
+	}
+	ch2.mu.Lock()
+	last := ch2.sent[len(ch2.sent)-1]
+	ch2.mu.Unlock()
+	if last.Type != event.TypeRequestCompleted {
 		t.Fatalf("reply after restore = %v, want completed", last.Type)
 	}
 }

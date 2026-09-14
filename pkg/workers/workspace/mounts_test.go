@@ -4,23 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/niq-run/niq/core/event"
 	backend "github.com/niq-run/niq/pkg/services/wsbackend"
 )
 
 // stubChannel satisfies corebus.WorkerSideChannel for handler tests; it
-// collects sent events so tests can assert on the reply.
+// collects sent events so tests can assert on the reply. Send may be called
+// from tool-dispatch goroutines, so the accumulated slices are mutex-guarded
+// and readers go through the locked helpers below.
 type stubChannel struct {
+	mu      sync.Mutex
 	sent    []event.Event
 	targets [][]string // per sent event: the directed targets
 }
 
 func (s *stubChannel) ID() string { return "stub" }
 func (s *stubChannel) Send(ctx context.Context, evt event.Event, targets ...string) error {
+	s.mu.Lock()
 	s.sent = append(s.sent, evt)
 	s.targets = append(s.targets, targets)
+	s.mu.Unlock()
 	return nil
 }
 func (s *stubChannel) Broadcast(ctx context.Context, evt event.Event) error { return nil }
@@ -32,10 +39,25 @@ func (s *stubChannel) Close() error { return nil }
 
 // lastReplyType returns the type of the most recent reply, or "".
 func (s *stubChannel) lastReplyType() event.EventType {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.sent) == 0 {
 		return ""
 	}
 	return s.sent[len(s.sent)-1].Type
+}
+
+// waitForReplyType polls until a reply of the wanted type is recorded (or
+// timeout elapses), for assertions on tool calls that dispatch asynchronously.
+func (s *stubChannel) waitForReplyType(want event.EventType, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if s.lastReplyType() == want {
+			return true
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return s.lastReplyType() == want
 }
 
 // TestSnapshotRestoreRoundtrip verifies that a runtime-modified mount set
