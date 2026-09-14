@@ -185,6 +185,17 @@ export default function App() {
   // Last scrollTop of the events list, to detect a manual up-scroll (the one
   // thing that turns the sticky follow switch off).
   const prevEventsScrollRef = useRef(0)
+  // True briefly after a user gesture on the events scroller; only such a
+  // gesture may turn the follow switch OFF (see TalkView for the rationale —
+  // the follow-loop's programmatic re-pins must never look like a manual
+  // scroll-up).
+  const eventsManualRef = useRef(false)
+  const eventsManualTimerRef = useRef(0)
+  const markEventsManual = useCallback(() => {
+    eventsManualRef.current = true
+    window.clearTimeout(eventsManualTimerRef.current)
+    eventsManualTimerRef.current = window.setTimeout(() => { eventsManualRef.current = false }, 400)
+  }, [])
   // The currently-visible list's sticky follow-to-bottom switch (true = pinned
   // / following the live tail). Both the talk and events scrollers report
   // through setActiveFollowing; the trim gate only runs while this is true so
@@ -852,7 +863,7 @@ export default function App() {
     // scroll, on again once the user gets back down to the bottom. Content
     // growth never flips it, so a message pushing the bottom past the old
     // threshold can't accidentally drop follow.
-    if (autoScrollRef.current && el.scrollTop < prev) {
+    if (autoScrollRef.current && eventsManualRef.current && el.scrollTop < prev) {
       autoScrollRef.current = false
     } else if (!autoScrollRef.current && el.scrollTop > prev && dist < 50) {
       autoScrollRef.current = true
@@ -1149,7 +1160,7 @@ export default function App() {
             )}
 
             <div key="events" className="fade-in" style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
-              <div key={streamKey} ref={listRef} onScroll={handleScroll} className="fade-in" style={{ flex: 1, minWidth: 0, overflow: 'auto', fontSize: fontSizes.md, padding: '0 24px 16px 24px', overflowAnchor: 'none' }}>
+              <div key={streamKey} ref={listRef} onScroll={handleScroll} onWheel={markEventsManual} onPointerDown={markEventsManual} onTouchStart={markEventsManual} className="fade-in" style={{ flex: 1, minWidth: 0, overflow: 'auto', fontSize: fontSizes.md, padding: '0 24px 16px 24px', overflowAnchor: 'none' }}>
                 {events.length > 0 && <div ref={sentinelRef} style={{ height: 1 }} />}
                 {/* min-width lets the wide fixed columns scroll horizontally on
                     narrow (phone) viewports instead of collapsing. */}

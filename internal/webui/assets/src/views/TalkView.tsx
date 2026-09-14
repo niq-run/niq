@@ -1,20 +1,17 @@
 import { useMemo, useRef, useEffect, useLayoutEffect, useCallback, useState, type ReactNode, type CSSProperties } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import ViewHeader from '../components/ViewHeader'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { makeMdComponents } from '../components/MarkdownComponents'
-import CollapsibleCode from '../components/CollapsibleCode'
 import ThinkingBlock from '../components/ThinkingBlock'
-import ViewHeader from '../components/ViewHeader'
 import ResponseBlock from '../components/ResponseBlock'
-import SystemReminderBlock from '../components/SystemReminderBlock'
-import {
-  getInputText, isToolEvent, isToolInvocation, isToolResult, isReasonBoundary,
-  toolContent, toolSummary, toolCallId,
-  formatTime, findReferencedInput, splitSystemReminder, parseAttachments,
-} from '../components/talk-utils'
+import { isReasonBoundary, isToolEvent, isToolInvocation, isToolResult } from '../components/talk-utils'
 import type { EventPayload } from '../types'
+import { useChatScroll } from './talk/useChatScroll'
+import {
+  WorkerBadge, RowBadge, InputRow, AbortRow, TimerReminderRow, TimeoutRow,
+  CancelRow, InterruptedRow, ThinkingRow, ResponseRow, ApprovalRow, ToolRow,
+  type RowCtx,
+} from './talk/rows'
 
 interface TalkViewProps {
   events: EventPayload[]
@@ -133,17 +130,6 @@ function computeToolPartials(events: EventPayload[], talkWorkers: Set<string>, d
   return map
 }
 
-// MAX_TALK_BACKFILL caps how many history pages the talk view will page back
-// through when its timeline is empty (recent events all filtered out). Bounds
-// the backfill so a project with no real conversation can't spin: after this
-// many pages it gives up and shows the empty state.
-const MAX_TALK_BACKFILL = 30
-
-// LOAD_EARLY_PX is how far below the top the view starts prefetching older
-// events, so the historical page lands while there is still room to scroll
-// instead of stalling exactly at the earliest message.
-const LOAD_EARLY_PX = 480
-
 // GrowingHeight animates the height of its child so that when the child's
 // content grows (e.g. a streaming delta batch adds several lines at once), the
 // block expands smoothly over a short transition instead of instantly. It
@@ -175,52 +161,6 @@ function GrowingHeight({ children, durationMs = 180 }: { children: ReactNode; du
     >
       <div ref={innerRef} style={{ display: 'flow-root' }}>{children}</div>
     </div>
-  )
-}
-
-// ── Worker name label (avatar) ──
-// Only reason workers are mentionable: they get the hover @ and a click-to-@
-// action. Other speakers' avatars are plain labels (no @). The human worker id
-// renders as "you". Defined at module scope so its identity is stable across
-// renders — a component defined inside TalkView would be re-created on every
-// render, unmount/remount all badges, and drop the hover state (the @ would
-// flash and disappear even while the pointer stays put).
-function WorkerBadge({ id, show, humanId, isReason, onMention, onOpenDetail, displayName }: {
-  id: string
-  show: boolean
-  humanId: string
-  isReason: (id: string) => boolean
-  onMention?: (id: string) => void
-  onOpenDetail?: (id: string) => void
-  displayName: (id?: string) => string
-}) {
-  const { colors } = useTheme()
-  const { t } = useI18n()
-  const [hover, setHover] = useState(false)
-  if (!show) return null
-  const isHuman = id === humanId
-  const mentionable = !isHuman && isReason(id) && !!onMention
-  return (
-    <span
-      onClick={(e) => { e.stopPropagation(); if (mentionable) onMention?.(id) }}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onOpenDetail?.(id) }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      className={mentionable ? 'badge-mention' : undefined}
-      style={{
-        cursor: mentionable ? 'pointer' : (onOpenDetail ? 'context-menu' : 'default'),
-        fontSize: fontSizes.xxl,
-        color: colors.accent,
-        fontWeight: 'bold',
-        fontFamily: 'monospace',
-      }}
-    >
-      {mentionable && (
-        <span style={{ display: 'inline-block', overflow: 'hidden', whiteSpace: 'nowrap', verticalAlign: 'bottom', maxWidth: hover ? '1ch' : 0, transition: 'max-width 0.18s' }}>@</span>
-      )}
-      {displayName(id)}
-      {mentionable && <span className="badge-tip">{t('badge.mention.tip')}</span>}
-    </span>
   )
 }
 
@@ -274,32 +214,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     if (!isReason(evt.worker_id)) return true // (a) system -> reason
     return talkWorkers.size === 1 && talkWorkers.has(target) // (c)
   }
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const autoScrollRef = useRef(true)
-  // Last scrollTop seen, to detect a manual up-scroll (the one thing that
-  // turns the sticky follow switch off).
-  const prevScrollRef = useRef(0)
-  // Latest onFollowChange kept in a ref so the stable handleScroll callback
-  // doesn't have to change when the prop does.
-  const onFollowChangeRef = useRef(onFollowChange)
-  onFollowChangeRef.current = onFollowChange
-  // Mirrors autoScrollRef for rendering: the scroll-to-bottom button shows
-  // while the conversation isn't pinned to the bottom.
-  const [atBottom, setAtBottom] = useState(true)
   const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set())
-
-  // A bumped scrollToBottomSignal (a send happened) means: re-pin and jump to
-  // the bottom, overriding any sticky "user scrolled up" state.
-  const lastScrollSignal = useRef(scrollToBottomSignal)
-  useEffect(() => {
-    if (scrollToBottomSignal === lastScrollSignal.current) return
-    lastScrollSignal.current = scrollToBottomSignal
-    autoScrollRef.current = true
-    setAtBottom(true)
-    onFollowChangeRef.current?.(true)
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [scrollToBottomSignal])
 
   const toggleExpanded = (key: string) => {
     setExpandedContent(prev => {
@@ -352,30 +267,22 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     })
   }, [events, talkWorkers, deliveries, workerTypes])
 
-  // request_id → terminal result event: the only pairing in the request
-  // protocol. A card picks up its answer from here (the result row itself is
-  // then skipped), so whether an event was answered is a lookup, not a guess.
-  const resultByRequestId = useMemo(() => {
-    const m: Record<string, EventPayload> = {}
+  // One pass over the events builds both request-pairing lookups: request_id →
+  // the terminal result event (so a card can show its answer), and
+  // request_id → the approval decision event (for inline approve/reject state).
+  // Kept as a single scan rather than two so the per-render work stays small.
+  const requestMaps = useMemo(() => {
+    const results: Record<string, EventPayload> = {}
+    const decisions: Record<string, EventPayload> = {}
     for (const evt of events) {
-      if (isToolResult(evt.type) && evt.request_id) {
-        m[evt.request_id] = evt
+      if (evt.request_id) {
+        if (isToolResult(evt.type)) results[evt.request_id] = evt
+        else if (evt.type === 'approval.decision') decisions[evt.request_id] = evt
       }
     }
-    return m
+    return { results, decisions }
   }, [events])
-
-  // approval.request's RequestId → its decision event, for the inline
-  // quick-approve state on the approval card.
-  const decisionByRequestId = useMemo(() => {
-    const m: Record<string, EventPayload> = {}
-    for (const evt of events) {
-      if (evt.type === 'approval.decision' && evt.request_id) {
-        m[evt.request_id] = evt
-      }
-    }
-    return m
-  }, [events])
+  const { results: resultByRequestId, decisions: decisionByRequestId } = requestMaps
 
   // Streaming content (reason.*_delta and request.progressed) recomputed
   // directly whenever its inputs change; empty when streamingMode is off. The
@@ -386,792 +293,91 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   const toolPartials = useMemo<Record<string, string>>(() => (
     streamingMode ? computeToolPartials(events, talkWorkers, deliveries) : {}
   ), [events, talkWorkers, deliveries, streamingMode])
-  // Land at the newest row the instant the Talk view mounts, before the first
-  // paint. Returning to Talk from Workers/Approvals keeps the retained event
-  // list, so the scroller mounts already populated — without this pin it paints
-  // at the top and the follow loop snaps it to the bottom a frame later (the
-  // visible flicker). Coming back from Events clears + repopulates, so it
-  // mounts empty (scrollRef null here) and the follow loop handles the growth.
-  useLayoutEffect(() => {
-    const el = scrollRef.current
-    if (el && autoScrollRef.current) el.scrollTop = el.scrollHeight
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // Follow-to-bottom on content growth.
-  // The loop runs for the life of the view but ONLY ever writes scrollTop when
-  // the content height has actually changed: it compares scrollHeight against
-  // the previous frame and does nothing when it is static. That keeps the view
-  // from being locked — in a quiet stretch (between stream bursts, or idle with
-  // no streaming) there is no per-frame write, so scrolling is completely free;
-  // it also means no need to gate on "actively streaming", so both a sent user
-  // message and a stream batch arriving are followed to the bottom. When the
-  // user scrolls up, autoScrollRef flips false and the loop leaves their
-  // reading position alone.
-  useEffect(() => {
-    let raf = 0
-    let lastHeight = scrollRef.current?.scrollHeight ?? 0
-    const tick = () => {
-      raf = requestAnimationFrame(tick)
-      const sc = scrollRef.current
-      if (!sc) return
-      const h = sc.scrollHeight
-      if (h === lastHeight) return // nothing grew this frame -> leave scroll alone
-      lastHeight = h
-      // Only follow while pinned to the bottom; if the user scrolled up to read,
-      // autoScrollRef is false and we leave their reading position alone.
-      if (autoScrollRef.current) {
-        sc.scrollTop = sc.scrollHeight
-      }
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [])
-
-  // Latest onLoadMore kept in a ref so the stable handleScroll callback can
-  // trigger an early prefetch with a fresh reference (onLoadMore is recreated
-  // on every events change; a useCallback([]) would close over a stale one).
-  const loadMoreRef = useRef(onLoadMore)
-  loadMoreRef.current = onLoadMore
-
-  // Robust load-more viewport anchoring: instead of a one-shot "topLock"
-  // boolean (which unrelated content changes can consume prematurely), we pin a
-  // specific rendered event node to its on-screen offset. A history prepend
-  // always grows content strictly ABOVE the whole existing tree, so the whole
-  // old subtree shifts uniformly downward — re-pinning any existing node to its
-  // previous offset keeps the viewport stable, even if live bottom events land
-  // while the fetch is in flight.
-  const prependAnchorRef = useRef<{ id: string; offset: number } | null>(null)
-  const captureTopAnchor = () => {
-    // Only preserve a reading position. If the view is pinned to the bottom
-    // (fresh entry / following the live tail), prepending older content must
-    // keep us at the bottom (the follow loop handles that) — anchoring to a top
-    // node would instead freeze the view near the top and break the landing.
-    if (autoScrollRef.current) return
-    const el = scrollRef.current
-    if (!el) return
-    // The topmost (smallest top) node carrying data-evt-id in the rendered
-    // content; prepended history always lands above it.
-    const nodes = el.querySelectorAll<HTMLElement>('[data-evt-id]')
-    let pick: HTMLElement | null = null
-    let pickTop = Infinity
-    for (let i = 0; i < nodes.length; i++) {
-      const n = nodes[i] as HTMLElement
-      const nt = n.getBoundingClientRect().top
-      if (nt < pickTop) { pickTop = nt; pick = n }
-    }
-    const id = pick?.dataset?.evtId
-    if (!pick || !id) return
-    const ct = el.getBoundingClientRect().top
-    prependAnchorRef.current = { id, offset: pickTop - ct }
-  }
-
-  // ── Unified load-more controller ──
-  // Two *independent* entry conditions both funnel into maybeLoadMore(), which
-  // is the single place that decides to call onLoadMore() and pre-captures the
-  // prepend anchor so the viewport stays stable:
-  //   - 'short'  : the rendered timeline doesn't fill the container (so nothing
-  //                is scrollable to trigger anything) → auto-fill, bounded.
-  //   - 'nearTop': the user scrolled toward the top of an overflowing list →
-  //                prefetch before reaching the earliest message.
-  // Guarding (a single in-flight latch + backfill cap) and anchoring live here
-  // instead of being scattered across handleScroll, an IntersectionObserver and
-  // a separate backfill effect that used to trip over each other.
-  const loadingRef = useRef(false)
-  const backfillCountRef = useRef(0)
-  const maybeLoadMore = (reason: 'short' | 'nearTop') => {
-    const sc = scrollRef.current
-    if (!sc || !loadMoreRef.current) return
-    const need = reason === 'short'
-      ? sc.scrollHeight <= sc.clientHeight + 1
-      : sc.scrollTop < LOAD_EARLY_PX
-    if (!need) {
-      if (reason === 'short') backfillCountRef.current = 0 // filled a screen again
-      return
-    }
-    // 'short' auto-fills but must not spin forever on a timeline that never
-    // grows to fill a screen.
-    if (reason === 'short' && backfillCountRef.current >= MAX_TALK_BACKFILL) return
-    if (loadingRef.current) return
-    loadingRef.current = true
-    if (reason === 'short') backfillCountRef.current++
-    else backfillCountRef.current = 0
-    captureTopAnchor() // keep the viewport stable across the prepend
-    loadMoreRef.current()
-    // Release the latch even if the response yields no new rendered rows, so a
-    // later scroll / re-render can still drive pagination.
-    setTimeout(() => { loadingRef.current = false }, 400)
-  }
-  const maybeLoadMoreRef = useRef(maybeLoadMore)
-  maybeLoadMoreRef.current = maybeLoadMore
-
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    const prev = prevScrollRef.current
-    // Sticky follow switch: it turns OFF only when the user explicitly scrolls
-    // UP (scrollTop decreased). Content growth never flips it — while following
-    // the follow loop only ever raises scrollTop, and the trim gate (see
-    // App.onFollowChange) means nothing shrinks above the viewport. It turns
-    // back ON only when the user scrolls back DOWN into the bottom window (or
-    // via the button / a sent message) — requiring an actual down movement
-    // prevents the off→on→off flicker right at the bottom, where a fresh
-    // up-scroll can still leave dist < 50.
-    if (autoScrollRef.current && el.scrollTop < prev) {
-      autoScrollRef.current = false
-    } else if (!autoScrollRef.current && el.scrollTop > prev && dist < 50) {
-      autoScrollRef.current = true
-    }
-    prevScrollRef.current = el.scrollTop
-    // Drives the scroll-to-bottom button; React bails out when unchanged.
-    setAtBottom(autoScrollRef.current)
-    onFollowChangeRef.current?.(autoScrollRef.current)
-    // Scroll-driven pagination: prefetch older events as the user approaches
-    // the top. The 'short' auto-fill is driven separately by the content effect.
-    maybeLoadMoreRef.current?.('nearTop')
-  }, [])
-
-   	const scrollToBottom = useCallback(() => {
-   		autoScrollRef.current = true
-   		setAtBottom(true)
-   		onFollowChangeRef.current?.(true)
-   		const el = scrollRef.current
-   		if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-   	}, [])
-
-	// Scroll to an event node if it is present in the current list; no-op when
-	// it is not (e.g. filtered out or loaded-on-request).
-	const scrollToEvent = useCallback((evtId: string) => {
-		const el = scrollRef.current
-		if (!el) return
-		const target = el.querySelector(`[data-evt-id="${CSS.escape(evtId)}"]`) as HTMLElement | null
-		if (!target) return
-		// Position relative to the scroll container (getBoundingClientRect is
-		// viewport-based and stable regardless of offsetParent), then scroll so
-		// the node's top sits just under the container top.
-		autoScrollRef.current = false
-		onFollowChangeRef.current?.(false)
-		const top = target.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 12
-		el.scrollTo({ top, behavior: 'smooth' })
-	}, [])
-
-  const nodes: React.ReactNode[] = []
-
-  // Content-driven 'short' auto-fill: whenever the rendered rows change (a live
-  // row, or a history page landing), re-evaluate whether the timeline fills the
-  // container and keep growing it if not (bounded by maybeLoadMore's backfill
-  // cap). This replaced the old IntersectionObserver sentinel + backfill effect.
-  useEffect(() => {
-    if (!onLoadMore || events.length === 0) return
-    // A fresh geometry settled — release the in-flight latch so maybeLoadMore
-    // can decide again based on the new state.
-    loadingRef.current = false
-    maybeLoadMoreRef.current?.('short')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relevantEvents])
-
-  // If a history prepend is in flight, pin the anchored node back to the
-  // on-screen offset it had when the load was issued. This runs on every
-  // relevant-events change; when the change is unrelated (e.g. a live bottom
-  // event landing first) the anchor's offset is unchanged and nothing scrolls,
-  // so the real prepend — which shoves the whole old tree down — is the one
-  // that gets corrected.
-  useLayoutEffect(() => {
-    const a = prependAnchorRef.current
-    if (!a) return
-    prependAnchorRef.current = null
-    const el = scrollRef.current
-    if (!el) return
-    const target = el.querySelector<HTMLElement>(`[data-evt-id="${CSS.escape(a.id)}"]`)
-    if (!target) return
-    const offNow = target.getBoundingClientRect().top - el.getBoundingClientRect().top
-    const delta = offNow - a.offset
-    if (delta !== 0) el.scrollTop += delta
-  }, [relevantEvents])
-
+const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToEvent } = useChatScroll({
+    relevantEvents, events, onLoadMore, scrollToBottomSignal, onFollowChange,
+  })
   // Track the last DISPLAYED avatar's worker id. Avatars render for reason
   // workers and the human; hidden workers (workspace, timer, ...) don't reset
   // the streak, so a single speaker's avatar stays until the speaker switches.
-  let lastAvatarId = ''
-
-  // Shared box metrics for tool-style blocks (tool calls, results, cancels).
+// ── Build rows ─────────────────────────────────────────────────────────
+  // Shared box metrics for tool-style blocks (also read by the row components).
   const tPad = compactMode ? '4px 8px' : '6px 12px'
   const tFontSize = compactMode ? fontSizes.xs : fontSizes.base
   // Separator between title segments: a left border on each segment (instead
   // of a standalone "|"), so a wrapped line never ends with a dangling bar.
   const itemSep: CSSProperties = { borderLeft: '1px solid ' + colors.textDimmed, paddingLeft: 8 }
 
-  for (const [i, evt] of relevantEvents.entries()) {
+  // Shared context handed to every row component: theme, i18n, layout metrics,
+  // the per-event lookups and the callbacks they need. Slicing it off the
+  // render keeps the row components self-contained and the main body short.
+  const ctx: RowCtx = {
+    dark, colors, t, isMobile, compactMode, thinkingExpanded, bubbleMax,
+    tPad, tFontSize, itemSep, humanId, displayName, isReason, directionOf,
+    expandedContent, toggleExpanded, onMention, onOpenDetail, onTraceClick, onDecide,
+    scrollToEvent, resultByRequestId, decisionByRequestId, toolPartials, allEvents: events,
+  }
+
+  const nodes: React.ReactNode[] = []
+
+  // The avatar streak is the only cross-row state: a row shows a speaker avatar
+  // only when the speaker changes (and never for the no-avatar notice types).
+  // We resolve it in a cheap prepass, then dispatch each surviving event to its
+  // row component — no per-type JSX lives in the main body anymore.
+  let lastAvatarId = ''
+  const rowFacts: { evt: EventPayload; alignRight: boolean; showBadge: boolean }[] = []
+  for (const evt of relevantEvents) {
     if (isReasonBoundary(evt.type)) continue
-    // Response-only mode: hide the intermediate process — thinking, reasoning
+    // Response-only mode hides the intermediate process — thinking, reasoning
     // interruptions, tool invocations (the domain-typed request starters) and
     // the request.* lifecycle (cancels). The reason.response / worker.input
     // terminal content is the only thing left visible.
     if (responseOnly && (evt.type === 'reason.thinking' || evt.type === 'reason.interrupted' || isToolEvent(evt.type) || isToolInvocation(evt.type))) continue
-
-    // A terminal result answers an invocation: it is merged into that
-    // invocation's card and never rendered as its own row. Skip it before the
-    // avatar bookkeeping below: its worker_id is the callee (lark, host, ...)
-    // and letting it advance the streak would break it invisibly, making the
-    // real speaker's next event re-show the avatar.
+    // A terminal result answers an invocation and is merged into that
+    // invocation's card; it never renders as its own row. Skipping it before
+    // the avatar bookkeeping also avoids its callee worker id advancing the
+    // streak invisibly.
     if (isToolResult(evt.type) && evt.request_id) continue
-
-    // Placement: one rule for every block (isRightAligned). A dedicated
-    // renderer may style an event its own way but never picks its own side.
     const alignRight = isRightAligned(evt)
-    // Show a worker-name avatar for reason workers, the human, and any
-    // right-aligned message (e.g. an external worker like the lark bridge
-    // speaking to a reason worker) so its identity is visible.
     const shouldShowAvatar = isReason(evt.worker_id) || evt.worker_id === humanId || alignRight
-    // Notice rows that render without an avatar (interrupted / cancelled) must
-    // not consume the streak either: nothing identifying the speaker is
-    // displayed, so a streak they set would be invisible.
     const showBadge = shouldShowAvatar && evt.worker_id !== lastAvatarId &&
       evt.type !== 'reason.interrupted' && evt.type !== 'request.cancel'
     if (showBadge) lastAvatarId = evt.worker_id
-
-    // worker.input
-    if (evt.type === 'worker.input') {
-      // Attachment blocks never enter the markdown: they render as chips
-      // (image thumbnails / file references) below the message text.
-      const parsed = parseAttachments(getInputText(evt))
-      const { reminder, content } = splitSystemReminder(parsed.text)
-      // The sending UI selects one of three input levels (interrupt / schedule /
-      // append). The event stores it as payload.input_mode; an absent field now
-      // means append (the reason worker's default stance — a gentle wake-up),
-      // and only an explicit "interrupt" cancels in-flight reasoning. Surface
-      // the mode as a small grey italic label on the bubble so the reader can
-      // tell the three apart.
-      const rawMode = (evt.payload?.input_mode as string) || 'append'
-      const modeKey =
-        rawMode === 'interrupt' ? 'interrupt'
-        : rawMode === 'schedule' ? 'schedule'
-        : 'append'
-      nodes.push(
-        		<div key={evt.id} data-evt-id={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
-        		  {showBadge && (
-        			<div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
-            </div>
-          )}
-         		  <div
-            			style={{
-            			  maxWidth: alignRight ? '70%' : bubbleMax,
-            			  minWidth: 0,
-            			  // inline-block both sides: shrink to content (capped) so a
-            			  // left-aligned broadcast message isn't always 70% wide.
-            			  display: 'inline-block',
-            			  textAlign: 'left',
-            			  background: colors.bgLight, // same card background as responses
-            			  border: '1px solid ' + colors.border,
-            			  padding: alignRight ? '10px 14px' : '6px 10px',
-            			  fontSize: alignRight ? fontSizes.base : fontSizes.sm,
-			            
-			            lineHeight: 1.5,
-            			  color: colors.text,
-            			  boxSizing: 'border-box',
-            			}}
-          >
-            {/* Message box title, styled like the avatar: sender@target. A
-                broadcast (no target) shows a "broadcast" label instead. */}
-            			<div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap' }}>
-              {evt.target_worker_id ? (
-                <>
-                  <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold' }}>
-                    {displayName(evt.worker_id)}
-                  </span>
-                  <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>@</span>
-                  <span style={{ fontSize: fontSizes.sm, color: colors.accent }}>{displayName(evt.target_worker_id)}</span>
-                </>
-              ) : (
-                <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold' }}>{t('talk.broadcast')}</span>
-              )}
-              {modeKey && (
-                <span
-                  title={t(`mode.${modeKey}.hint`)}
-                  style={{ fontSize: fontSizes.xs, color: colors.textDimmed, userSelect: 'none' }}
-                >
-                  {t(`mode.${modeKey}`)}
-                </span>
-              )}
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
-            </div>
-            <div className="md-content">
-              {reminder && <SystemReminderBlock reminder={reminder} />}
-              {content ? (
-                <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>{content}</Markdown>
-              ) : null}
-            </div>
-            {parsed.attachments.length > 0 && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
-                {parsed.attachments.map((a, i) => a.kind === 'image' ? (
-                  <img
-                    key={i}
-                    src={`data:${a.mime};base64,${a.data}`}
-                    alt={a.name || 'attachment'}
-                    style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 4, border: '1px solid ' + colors.border, display: 'block' }}
-                  />
-                ) : (
-                  <span
-                    key={i}
-                    title={a.path}
-                    style={{ fontSize: fontSizes.sm, color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 4, padding: '2px 8px' }}
-                  >
-                    {'\uD83D\uDCC4 ' + (a.name || a.path)}
-                  </span>
-                ))}
-              </div>
-            )}
-            {evt.trace_id && (
-              <div style={{ marginTop: 6, textAlign: alignRight ? 'right' : 'left' }}>
-                <span
-                  onClick={() => onTraceClick(evt.trace_id!)}
-                  style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.textDimmed, textDecoration: 'underline', textDecorationStyle: 'dotted' }}
-                  title={t('talk.trace.tooltip')}
-                >
-                  {t('talk.trace')}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      )
-      continue
-    }
-
-    // worker.abort — the human cancelled. Placement comes from the shared rule
-    // (alignRight); only the look is its own: a dashed notice, not a card.
-    if (evt.type === 'worker.abort') {
-      nodes.push(
-        <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-            <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
-          </div>
-          <div
-            style={{
-              maxWidth: alignRight ? '70%' : bubbleMax,
-              display: alignRight ? 'inline-block' : undefined,
-              textAlign: 'left',
-              background: colors.bgLight,
-              border: '1px solid ' + colors.border,
-              padding: '8px 12px',
-              fontSize: fontSizes.sm,
-              color: colors.textDim,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              {evt.target_worker_id && <span style={{ color: colors.textDimmed }}>to: {displayName(evt.target_worker_id)}</span>}
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
-            </div>
-            <div style={{ color: colors.text, fontSize: fontSizes.sm, marginTop: 4 }}>worker.abort</div>
-          </div>
-        </div>
-      )
-      continue
-    }
-
-    // timer.reminder — a dedicated look for the timer's tick (⏰ purpose text),
-    // placement from the shared rule like every other block.
-    if (evt.type === 'timer.reminder') {
-      let reminderText = (evt.payload?.text as string) || (evt.payload?.purpose as string) || ''
-      if (!reminderText && evt.payload?.result) {
-        const result = evt.payload.result
-        if (typeof result === 'string') {
-          try {
-            const parsed = JSON.parse(result)
-            reminderText = parsed.purpose || parsed.text || ''
-          } catch {
-            reminderText = result
-          }
-        } else if (typeof result === 'object') {
-          reminderText = (result as any).purpose || (result as any).text || ''
-        }
-      }
-      nodes.push(
-        <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
-            </div>
-          )}
-          <div
-            style={{
-              maxWidth: alignRight ? '70%' : bubbleMax,
-              display: alignRight ? 'inline-block' : undefined,
-              textAlign: 'left',
-              boxSizing: 'border-box',
-              background: colors.bgLight,
-              border: '1px solid ' + colors.border,
-              padding: '10px 14px',
-              fontSize: fontSizes.base,
-              lineHeight: 1.5,
-              color: colors.text,
-            }}
-          >
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              {evt.target_worker_id && <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>to: {displayName(evt.target_worker_id)}</span>}
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs }}>{formatTime(evt.timestamp)}</span>
-            </div>
-            {reminderText && <div style={{ color: colors.text }}>{reminderText}</div>}
-            {evt.trace_id && (
-              <div style={{ marginTop: 6, textAlign: 'right' }}>
-                <span
-                  onClick={() => onTraceClick(evt.trace_id!)}
-                  style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.textDimmed, textDecoration: 'underline', textDecorationStyle: 'dotted' }}
-                  title={t('talk.trace.tooltip')}
-                >
-                  {t('talk.trace')}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      )
-      continue
-    }
-
-    // timer.timeout — the timer reports a tool call timed out; same dedicated
-    // look, shared placement rule.
-    if (evt.type === 'timer.timeout') {
-      nodes.push(
-        <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
-            </div>
-          )}
-          <div
-            style={{
-              maxWidth: alignRight ? '70%' : bubbleMax,
-              display: alignRight ? 'inline-block' : undefined,
-              textAlign: 'left',
-              boxSizing: 'border-box',
-              background: colors.bgLight,
-              border: '1px solid ' + colors.border,
-              padding: '8px 12px',
-              fontSize: fontSizes.sm,
-              color: colors.textDim,
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ color: colors.text }}>{t('talk.timeout')}</span>
-              {evt.target_worker_id && <span style={{ color: colors.textDimmed }}>to: {displayName(evt.target_worker_id)}</span>}
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
-            </div>
-          </div>
-        </div>
-      )
-      continue
-    }
-
-    // request.cancel — a cancelled request notice, styled like the tool blocks
-    if (evt.type === 'request.cancel') {
-      nodes.push(
-        <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
-<div style={{ border: '1px solid ' + colors.border, padding: tPad, fontSize: tFontSize, lineHeight: 1.5, color: colors.textDim }}>
-              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4, columnGap: 8 }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 4, background: colors.textDim, flexShrink: 0, opacity: 0.5 }} />
-                  <span>{t('talk.tool.cancelled')}</span>
-                </span>
-                {directionOf(evt) && (
-                  <span style={{ ...itemSep, color: colors.textDimmed, whiteSpace: 'nowrap' }}>{directionOf(evt)}</span>
-                )}
-                <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto', whiteSpace: 'nowrap' }}>{formatTime(evt.timestamp)}</span>
-              </div>
-            </div>
-        </div>
-      )
-      continue
-    }
-
-    // reason.interrupted — a reasoning round was preempted (new input, abort)
-    if (evt.type === 'reason.interrupted') {
-      const reason = (evt.payload?.reason as string) || ''
-      const preserved = (evt.payload?.preserved_chars as number) || 0
-      nodes.push(
-        <div key={evt.id} style={{ maxWidth: bubbleMax, marginBottom: compactMode ? 8 : 12 }}>
-          <div style={{ border: '1px solid ' + colors.border, padding: tPad, fontSize: tFontSize, lineHeight: 1.5, color: colors.textDim }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 4, background: colors.textDim, flexShrink: 0, opacity: 0.5 }} />
-                <span>{t('talk.reasoning.interrupted')}</span>
-              </span>
-              {reason && (
-                <>
-                  <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
-                  <span style={{ color: colors.textDimmed }}>{reason}</span>
-                </>
-              )}
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
-            </div>
-            {preserved > 0 && (
-              <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginTop: 4 }}>{t('talk.charsPreserved', { n: preserved })}</div>
-            )}
-          </div>
-        </div>
-      )
-      continue
-    }
-
-    // Left-side events
-    if (evt.type === 'reason.thinking') {
-      nodes.push(
-        <div key={evt.id + '-thinking-' + thinkingExpanded} style={{ maxWidth: bubbleMax }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
-            </div>
-          )}
-          <ThinkingBlock evt={evt} defaultExpanded={thinkingExpanded} compact={compactMode} />
-        </div>
-      )
-      continue
-    }
-    if (evt.type === 'reason.response') {
-      const ref = findReferencedInput(events, evt)
-      nodes.push(
-        <div key={evt.id} data-evt-id={evt.id} style={{ maxWidth: bubbleMax }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12 }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
-            </div>
-          )}
-          <ResponseBlock evt={evt} quotedText={ref?.text} quotedWorker={ref?.workerId} quotedEvtId={ref?.evtId} onQuoteClick={scrollToEvent} />
-        </div>
-      )
-      continue
-    }
-
-    // Approval requests get a dedicated card: the boundary-expansion request
-    // body plus, inline below it, quick approve/reject until a decision lands.
-    // Expanded by default (the detail is the point of the card); the header
-    // toggles the reason + payload panel just like the tool cards toggle
-    // their arguments. The approve/reject actions stay visible either way.
-    if (evt.type === 'approval.request') {
-      const decision = decisionByRequestId[toolCallId(evt)]
-      const approved = decision?.payload?.approved === true
-      const note = typeof decision?.payload?.note === 'string' ? decision.payload.note : ''
-      const isExpanded = !expandedContent.has(evt.id)
-      const statusColor = decision
-        ? approved ? colors.toolCompleted : colors.toolFailed
-        : colors.toolRequested
-      nodes.push(
-        <div key={evt.id} data-evt-id={evt.id} style={{ marginTop: 16, marginBottom: compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
-            </div>
-          )}
-          <div className={!isExpanded ? 'block-card' : undefined} style={{ maxWidth: alignRight ? '70%' : bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', border: '1px solid ' + colors.accent, padding: compactMode ? '4px 8px' : '6px 12px', fontSize: compactMode ? fontSizes.xs : fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
-            <div onClick={() => toggleExpanded(evt.id)} style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0, opacity: 0.5 }} />
-              <span style={{ color: colors.text, fontWeight: 600 }}>{t('talk.approval.title')}</span>
-              {/* The source worker: who is asking for the boundary expansion. */}
-              <span style={{ fontFamily: 'monospace', color: colors.text, fontSize: fontSizes.sm }}>{evt.worker_id}</span>
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs }}>{isExpanded ? '▾' : '▸'}</span>
-            </div>
-            {/* Why this approval exists: keyed on the action, with a generic
-                fallback so unknown future approval kinds stay explainable. */}
-            {isExpanded && (
-              <div style={{ marginTop: 6, fontSize: fontSizes.sm, color: colors.text }}>
-                {t(evt.payload?.action === 'mount.add' ? 'approval.reason.mount.add' : 'approval.reason.generic')}
-              </div>
-            )}
-            {/* The approval's data, rendered as JSON in a muted panel with the
-                same soft-wrap toggle and fold affordances as the tool bodies.
-                Hidden entirely when the payload is empty (legacy events carry
-                no payload). */}
-            {isExpanded && Object.keys(evt.payload ?? {}).length > 0 && (
-              <div style={{ background: colors.bg, border: '1px solid ' + colors.borderLight, borderRadius: 2, padding: '6px 8px', marginTop: 8 }}>
-                <CollapsibleCode code={JSON.stringify(evt.payload, null, 2)} language="json" />
-              </div>
-            )}
-            {decision ? (
-              <div style={{ marginTop: 8, fontSize: fontSizes.sm, color: approved ? colors.toolCompleted : colors.toolFailed }}>
-                {approved ? t('talk.approval.approved') : t('talk.approval.rejected')}{note ? ` · ${note}` : ''}
-              </div>
-            ) : (
-              onDecide && (
-                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                  <span
-                    onClick={() => onDecide(evt.id, true)}
-                    className="btn-hover"
-                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, color: colors.accent, borderRadius: 2, padding: '4px 12px', fontSize: fontSizes.md, userSelect: 'none' }}
-                  >
-                    {t('talk.approval.approve')}
-                  </span>
-                  <span
-                    onClick={() => onDecide(evt.id, false)}
-                    className="btn-hover"
-                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, color: colors.textDim, borderRadius: 2, padding: '4px 12px', fontSize: fontSizes.md, userSelect: 'none' }}
-                  >
-                    {t('talk.approval.reject')}
-                  </span>
-                </div>
-              )
-            )}
-          </div>
-        </div>
-      )
-      continue
-    }
-
-    // Every other event renders as a card: the event type is the title and the
-    // payload is the body. request_id is only a pairing key — when a
-    // request.completed / failed / rejected answers this one, its body is
-    // merged in below the arguments.
-    {
-      const callId = toolCallId(evt)
-      const resultEvt = resultByRequestId[callId]
-
-      const isExpanded = expandedContent.has(evt.id)
-      const content = toolContent(evt, isExpanded)
-      const mergedResult = resultEvt ? toolContent(resultEvt, isExpanded) : ''
-      // The card shows the payload plus, when answered, the result body below.
-      const displayContent = mergedResult
-        ? (content ? content + '\n\n—— result ——\n\n' + mergedResult : mergedResult)
-        : content
-      const contentLen = toolContent(evt, false).length +
-        (resultEvt ? toolContent(resultEvt, false).length : 0)
-      const summary = toolSummary(evt)
-      // Status colour: an answered card takes the outcome colour of its
-      // result; one that carries a request_id is still awaiting its answer
-      // (toolRequested); anything else was never a request.
-      const statusColor = resultEvt
-        ? resultEvt.type === 'request.completed' ? colors.toolCompleted
-        : resultEvt.type === 'request.failed' ? colors.toolFailed
-        : colors.textDim
-        : evt.type === 'request.completed' ? colors.toolCompleted
-        : evt.type === 'request.failed' ? colors.toolFailed
-        : evt.type === 'request.rejected' ? colors.textDim
-        : evt.request_id ? colors.toolRequested
-        : colors.textDimmed
-
-      const toolLabel = isToolResult(evt.type)
-        ? evt.type === 'request.completed' ? t('talk.result')
-        : evt.type === 'request.failed' ? t('talk.failed')
-        : t('talk.rejected')
-        : t('talk.call')
-
-      // Streaming: accumulated request.progressed output shown live in the
-      // card while the call is in flight (only before it resolves).
-      const partialText = !resultEvt ? (toolPartials[callId] || '') : ''
-
-      nodes.push(
-        <div key={evt.id} style={{ marginBottom: compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
-          {showBadge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-              <WorkerBadge id={evt.worker_id} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
-            </div>
-          )}
-          <div
-            className={!isExpanded ? 'block-card' : undefined}
-            style={{
-              // Width lives on the card, not the wrapper: the wrapper stays
-              // full-width so a right-aligned card hugs the true right edge,
-              // while a left-aligned one keeps the plain block look. inline-
-              // block only on the right, so the card shrink-wraps its content.
-              maxWidth: alignRight ? '70%' : bubbleMax,
-              display: alignRight ? 'inline-block' : undefined,
-              textAlign: 'left',
-              boxSizing: 'border-box',
-              border: '1px solid ' + (isExpanded ? colors.accent : colors.border),
-              padding: tPad,
-              fontSize: tFontSize,
-              lineHeight: 1.5,
-              color: colors.textDim,
-              background: isExpanded
-                ? (dark ? 'rgba(60,120,180,0.06)' : 'rgba(60,120,180,0.04)')
-                : undefined,
-            }}
-          >
-            <div
-              onClick={() => toggleExpanded(evt.id)}
-              style={{ cursor: 'pointer', userSelect: 'none' }}
-            >
-              {isMobile ? (
-                /* Mobile: title is just the label + a chevron; the metadata
-                    moves to a dedicated second line once expanded. */
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0, opacity: 0.5 }} />
-                    <span style={{ color: colors.textDim, fontSize: tFontSize }}>{toolLabel} {summary}</span>
-                  </span>
-                  <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
-                    {isExpanded ? '▾' : '▸'}
-                  </span>
-                </div>
-              ) : (
-                /* Desktop: original single-row title with all metadata. */
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0, opacity: 0.5 }} />
-                    <span style={{ color: colors.textDim, fontSize: tFontSize }}>{toolLabel} {summary}</span>
-                  </span>
-                  {contentLen > 0 && (
-                    <>
-                      <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
-                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('thinking.chars', { n: contentLen })}</span>
-                    </>
-                  )}
-                  {directionOf(evt, alignRight) && (
-                    <>
-                      <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
-                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{directionOf(evt, alignRight)}</span>
-                    </>
-                  )}
-                  {isExpanded && contentLen > 0 && (
-                    <>
-                      <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
-                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('thinking.chars', { n: contentLen })}</span>
-                    </>
-                  )}
-                  <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
-                </div>
-              )}
-            </div>
-            {isMobile && isExpanded && (
-              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4, columnGap: 8, marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)'), fontSize: fontSizes.sm, color: colors.textDimmed }}>
-                {directionOf(evt, alignRight) && (
-                  <span style={{ whiteSpace: 'nowrap' }}>{directionOf(evt, alignRight)}</span>
-                )}
-                <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}>{formatTime(evt.timestamp)}</span>
-              </div>
-            )}
-            {isExpanded && displayContent && (
-              <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
-                {resultEvt ? (
-                  <>
-                    <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      {t('talk.arguments')}
-                    </div>
-                    <CollapsibleCode code={content} language="json" />
-                    <div style={{ margin: '10px 0 6px', height: 1, background: dark ? 'rgba(128,128,128,0.25)' : 'rgba(128,128,128,0.18)' }} />
-                    <div style={{ fontSize: fontSizes.xs, color: resultEvt.type === 'request.failed' ? colors.toolFailed : resultEvt.type === 'request.rejected' ? colors.textDimmed : colors.toolCompleted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      {t('talk.result')}
-                    </div>
-                    <CollapsibleCode code={mergedResult} language="json" />
-                  </>
-                ) : (
-                  <CollapsibleCode code={content} language="json" />
-                )}
-              </div>
-            )}
-            {partialText && (
-              <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
-                <CollapsibleCode code={partialText} language="json" />
-                <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, fontStyle: 'italic' }}>⏳ output streaming…</div>
-              </div>
-            )}
-          </div>
-        </div>
-      )
+    rowFacts.push({ evt, alignRight, showBadge })
+  }
+  for (const { evt, alignRight, showBadge } of rowFacts) {
+    switch (evt.type) {
+      case 'worker.input':
+        nodes.push(<InputRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
+        break
+      case 'worker.abort':
+        nodes.push(<AbortRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
+        break
+      case 'timer.reminder':
+        nodes.push(<TimerReminderRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
+        break
+      case 'timer.timeout':
+        nodes.push(<TimeoutRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
+        break
+      case 'request.cancel':
+        nodes.push(<CancelRow key={evt.id} evt={evt} ctx={ctx} />)
+        break
+      case 'reason.interrupted':
+        nodes.push(<InterruptedRow key={evt.id} evt={evt} ctx={ctx} />)
+        break
+      case 'reason.thinking':
+        nodes.push(<ThinkingRow key={evt.id} evt={evt} showBadge={showBadge} ctx={ctx} />)
+        break
+      case 'reason.response':
+        nodes.push(<ResponseRow key={evt.id} evt={evt} showBadge={showBadge} ctx={ctx} />)
+        break
+      case 'approval.request':
+        nodes.push(<ApprovalRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
+        break
+      default:
+        nodes.push(<ToolRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
+        break
     }
   }
-
   // Header: always visible, not in scroll area — shown even when empty. On
   // mobile the app-level top bar (hamburger + view label) already heads the
   // page, so this in-view header is skipped to avoid a double header.
@@ -1213,6 +419,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         <div
           ref={scrollRef}
           onScroll={handleScroll}
+          onWheel={markManual}
+          onPointerDown={markManual}
+          onTouchStart={markManual}
           onClick={(e) => {
             // Clicking blank space collapses any expanded tool call/result
             // blocks. Every message is a direct child of the scroller; a
