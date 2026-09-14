@@ -36,14 +36,14 @@ type ApprovalDecision struct {
 
 // ApprovalEntry is one approval request HIW tracks on behalf of the UI.
 type ApprovalEntry struct {
-	EventID   string            `json:"id"`             // approval.request event id
-	RequestID string            `json:"request_id"`     // correlation key (= its RequestId)
-	WorkerID  string            `json:"worker_id"`      // requester (e.g. workspace worker)
-	Action    string            `json:"action"`         // e.g. "mount.add"
-	Tool      string            `json:"tool,omitempty"` // tool that raised the request
-	Path      string            `json:"path,omitempty"` // boundary-expansion target
-	TraceID   string            `json:"trace_id,omitempty"`
-	Timestamp int64             `json:"timestamp"`
+	EventID   string `json:"id"`             // approval.request event id
+	RequestID string `json:"request_id"`     // correlation key (= its RequestId)
+	WorkerID  string `json:"worker_id"`      // requester (e.g. workspace worker)
+	Action    string `json:"action"`         // e.g. "mount.add"
+	Tool      string `json:"tool,omitempty"` // tool that raised the request
+	Path      string `json:"path,omitempty"` // boundary-expansion target
+	TraceID   string `json:"trace_id,omitempty"`
+	Timestamp int64  `json:"timestamp"`
 	// Payload is the approval request's full payload, carried through for the
 	// UI to render generically — approval kinds may carry different data
 	// (mounts context, tool arguments, ...) and the UI should not need a
@@ -260,7 +260,9 @@ func (w *Worker) Restore(state []byte) error {
 
 // SendInput publishes a user message to the bus as a worker.input event.
 // If target is non-empty, the message is directed to that worker.
-// mode controls input handling ("default", "schedule", "append").
+// mode controls input handling ("interrupt" | "schedule" | "append"). The
+// legacy "default" and the empty string are emitted without an input_mode
+// field, which the reason worker now treats as append (its default stance).
 func (w *Worker) SendInput(ctx context.Context, text string, target string, mode string) error {
 	payload := map[string]any{"text": text}
 	if mode != "" && mode != "default" {

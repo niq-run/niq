@@ -41,6 +41,10 @@ interface TalkViewProps {
   // "return to the live bottom" signal: even if the user had scrolled up to
   // read, we re-engage the follow and scroll to the newest content.
   scrollToBottomSignal?: number
+  // Reports the sticky follow-to-bottom switch state (true = pinned/following)
+  // whenever it changes, so App can e.g. only trim the event cache while the
+  // live tail is being followed.
+  onFollowChange?: (following: boolean) => void
 }
 
 // StreamTrace is one in-flight reason trace being accumulated from
@@ -220,7 +224,7 @@ function WorkerBadge({ id, show, humanId, isReason, onMention, onOpenDetail, dis
   )
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange }: TalkViewProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   // Left-side bubbles are wider on phones (90%) and keep the original 70% on
@@ -272,6 +276,13 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   }
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
+  // Last scrollTop seen, to detect a manual up-scroll (the one thing that
+  // turns the sticky follow switch off).
+  const prevScrollRef = useRef(0)
+  // Latest onFollowChange kept in a ref so the stable handleScroll callback
+  // doesn't have to change when the prop does.
+  const onFollowChangeRef = useRef(onFollowChange)
+  onFollowChangeRef.current = onFollowChange
   // Mirrors autoScrollRef for rendering: the scroll-to-bottom button shows
   // while the conversation isn't pinned to the bottom.
   const [atBottom, setAtBottom] = useState(true)
@@ -285,6 +296,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     lastScrollSignal.current = scrollToBottomSignal
     autoScrollRef.current = true
     setAtBottom(true)
+    onFollowChangeRef.current?.(true)
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [scrollToBottomSignal])
@@ -497,32 +509,36 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     const el = scrollRef.current
     if (!el) return
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    // Button visibility: hide when within a small window of the bottom.
-    const atBottom = dist < 50
-    // Follow latch stays in lockstep with the jump-to-bottom button's hide
-    // window: while within 50px of the bottom the view is considered pinned,
-    // so it never gets stuck in the deadzone between the true bottom and
-    // where the button disappears. This matters because live content can push
-    // the bottom down *while* the user scrolls back toward it — if the latch
-    // only re-engaged inside a strict epsilon, a reader who reaches where they
-    // *think* the bottom is (button hidden, dist in 4..50) would never re-pin,
-    // and the newest events would silently stream without scrolling the view.
-    // Once beyond 50px the pin releases so a slow upward drag while reading is
-    // never dragged back down.
-    autoScrollRef.current = atBottom
+    const prev = prevScrollRef.current
+    // Sticky follow switch: it turns OFF only when the user explicitly scrolls
+    // UP (scrollTop decreased). Content growth never flips it — while following
+    // the follow loop only ever raises scrollTop, and the trim gate (see
+    // App.onFollowChange) means nothing shrinks above the viewport. It turns
+    // back ON only when the user scrolls back DOWN into the bottom window (or
+    // via the button / a sent message) — requiring an actual down movement
+    // prevents the off→on→off flicker right at the bottom, where a fresh
+    // up-scroll can still leave dist < 50.
+    if (autoScrollRef.current && el.scrollTop < prev) {
+      autoScrollRef.current = false
+    } else if (!autoScrollRef.current && el.scrollTop > prev && dist < 50) {
+      autoScrollRef.current = true
+    }
+    prevScrollRef.current = el.scrollTop
     // Drives the scroll-to-bottom button; React bails out when unchanged.
-    setAtBottom(atBottom)
+    setAtBottom(autoScrollRef.current)
+    onFollowChangeRef.current?.(autoScrollRef.current)
     // Scroll-driven pagination: prefetch older events as the user approaches
     // the top. The 'short' auto-fill is driven separately by the content effect.
     maybeLoadMoreRef.current?.('nearTop')
   }, [])
 
-  	const scrollToBottom = useCallback(() => {
-  		autoScrollRef.current = true
-  		setAtBottom(true)
-  		const el = scrollRef.current
-  		if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-  	}, [])
+   	const scrollToBottom = useCallback(() => {
+   		autoScrollRef.current = true
+   		setAtBottom(true)
+   		onFollowChangeRef.current?.(true)
+   		const el = scrollRef.current
+   		if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+   	}, [])
 
 	// Scroll to an event node if it is present in the current list; no-op when
 	// it is not (e.g. filtered out or loaded-on-request).
@@ -535,6 +551,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
 		// viewport-based and stable regardless of offsetParent), then scroll so
 		// the node's top sits just under the container top.
 		autoScrollRef.current = false
+		onFollowChangeRef.current?.(false)
 		const top = target.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 12
 		el.scrollTo({ top, behavior: 'smooth' })
 	}, [])
@@ -621,15 +638,16 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       const parsed = parseAttachments(getInputText(evt))
       const { reminder, content } = splitSystemReminder(parsed.text)
       // The sending UI selects one of three input levels (interrupt / schedule /
-      // append). The event stores it as payload.input_mode; the web UI's own
-      // default "interrupt" is emitted without the field, so an absent value on
-      // a human message means interrupt. Surface the mode as a small grey italic
-      // label on the bubble so the reader can tell the three apart.
-      const rawMode = (evt.payload?.input_mode as string) || (evt.worker_id === humanId ? 'default' : '')
+      // append). The event stores it as payload.input_mode; an absent field now
+      // means append (the reason worker's default stance — a gentle wake-up),
+      // and only an explicit "interrupt" cancels in-flight reasoning. Surface
+      // the mode as a small grey italic label on the bubble so the reader can
+      // tell the three apart.
+      const rawMode = (evt.payload?.input_mode as string) || 'append'
       const modeKey =
-        rawMode === 'default' || rawMode === 'interrupt' ? 'interrupt'
+        rawMode === 'interrupt' ? 'interrupt'
         : rawMode === 'schedule' ? 'schedule'
-        : rawMode === 'append' ? 'append' : null
+        : 'append'
       nodes.push(
         		<div key={evt.id} data-evt-id={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
         		  {showBadge && (

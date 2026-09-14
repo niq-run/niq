@@ -26,6 +26,23 @@ import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, ProjectStar
 // (both the initial watermark backfill and the load-more pagination).
 const HISTORY_PAGE = 100
 
+// Cap on how many events the WebUI keeps in memory. Bounds the DOM (every
+// event is mounted by Talk/Events) and the per-event merge+sort+re-render
+// cost, so a very long conversation can't make the UI progressively slower.
+// It is only enforced while the user is following the live tail (see
+// activeFollowingRef): when scrolled up to read, trimming is held so it can't
+// shift the reader's viewport, and older history is anyway reachable by
+// scrolling to the top, which triggers onLoadMore to page it back in.
+const MAX_EVENTS = 1500
+
+// Per-reason-worker input mode, persisted to localStorage. The default is
+// append (level 2): the gentle mode that supplements the ongoing thought
+// without tearing down in-flight reasoning — friendlier for daily use than an
+// interrupt. Interrupting is an explicit per-message choice. Once the user
+// switches a worker's mode it sticks for that conversation partner.
+const INPUT_MODES_KEY = 'niq.input-modes'
+const DEFAULT_INPUT_MODE = 'append'
+
 // Talk view settings are persisted to localStorage so toggles survive reloads.
 const VIEW_SETTINGS_KEY = 'niq.view-settings'
 const DEFAULT_VIEW_SETTINGS: ViewSettings = {
@@ -64,7 +81,12 @@ function MobileDetailPanel({ children }: { children: ReactNode }) {
 // Merge incoming events into an existing list: dedupe by id and sort by
 // timestamp (with an id tiebreak). Used for both live appends and history
 // prepends so the timeline is independent of delivery order.
-function mergeEvents(existing: EventPayload[], incoming: EventPayload[]): EventPayload[] {
+// When maxLen > 0, drops the oldest events so the retained list (and the
+// DOM/render cost that follows it) stays bounded. maxLen is intentionally a
+// per-call decision rather than a global: trimming happens ONLY on the live
+// append path while the user is following the bottom, never on history
+// prepends (which run when the user has scrolled up to read).
+function mergeEvents(existing: EventPayload[], incoming: EventPayload[], maxLen = 0): EventPayload[] {
   const seen = new Set(existing.map((e) => e.id))
   const out = existing.slice()
   for (const e of incoming) {
@@ -74,6 +96,7 @@ function mergeEvents(existing: EventPayload[], incoming: EventPayload[]): EventP
     }
   }
   out.sort((a, b) => a.timestamp - b.timestamp || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  if (maxLen > 0 && out.length > maxLen) out.splice(0, out.length - maxLen)
   return out
 }
 
@@ -107,7 +130,11 @@ export default function App() {
   const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(null)
   const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
-  const [inputMode, setInputMode] = useState('default')
+  // Input mode is remembered per reason worker (the @ target the message is
+  // aimed at), defaulting to append; see INPUT_MODES_KEY / DEFAULT_INPUT_MODE.
+  const [inputModes, setInputModes] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem(INPUT_MODES_KEY) || '{}') } catch { return {} }
+  })
   const [attachments, setAttachments] = useState<StagedAttachment[]>([])
   const [sending, setSending] = useState(false)
   // Bumped on each send; TalkView watches it to re-pin and scroll to the bottom
@@ -155,6 +182,18 @@ export default function App() {
   const listRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
   const sentinelRef = useRef<HTMLDivElement>(null)
+  // Last scrollTop of the events list, to detect a manual up-scroll (the one
+  // thing that turns the sticky follow switch off).
+  const prevEventsScrollRef = useRef(0)
+  // The currently-visible list's sticky follow-to-bottom switch (true = pinned
+  // / following the live tail). Both the talk and events scrollers report
+  // through setActiveFollowing; the trim gate only runs while this is true so
+  // trimming never shifts a reader's scrolled-up viewport.
+  const activeFollowingRef = useRef(true)
+  const setActiveFollowing = useCallback((v: boolean) => { activeFollowingRef.current = v }, [])
+  // Switching the visible view mounts a fresh scroller, which starts pinned to
+  // the bottom until it reports its first scroll.
+  useEffect(() => { activeFollowingRef.current = true }, [view])
   // Mirrors autoScrollRef for rendering: the scroll-to-bottom button shows
   // while the list isn't pinned to the bottom.
   const [eventsAtBottom, setEventsAtBottom] = useState(true)
@@ -346,6 +385,8 @@ export default function App() {
     setEvents([])
     eventsRef.current = []
     seenRef.current.clear()
+    // A rebuilt timeline remounts its scroller pinned to the bottom.
+    activeFollowingRef.current = true
     setDeliveries({})
     deliveriesRef.current = {}
     setSelectedEventId(null)
@@ -400,12 +441,19 @@ export default function App() {
         return
       }
       if (seenRef.current.has(evt.id)) return
-      seenRef.current.add(evt.id)
       // Sort by timestamp (id tiebreak) rather than arrival order, so any
       // out-of-order delivery from the live stream can't scramble the tail.
-      const next = mergeEvents(eventsRef.current, [evt])
+      // Trim to MAX_EVENTS only while following the live tail; when the user
+      // has scrolled up to read, we hold the full list so trimming can't shift
+      // their viewport, and they return to the cap once they get back to bottom.
+      const trim = activeFollowingRef.current ? MAX_EVENTS : 0
+      const next = mergeEvents(eventsRef.current, [evt], trim)
       eventsRef.current = next
       setEvents(next)
+      // mergeEvents caps the list (MAX_EVENTS) while following; rebase the
+      // dedupe set to the retained ids so it too stays bounded instead of
+      // growing with every event seen over a session.
+      seenRef.current = new Set(next.map((e) => e.id))
     }
     return () => es.close()
     // `view` intentionally excluded: talk↔workers must keep the same connection.
@@ -457,6 +505,25 @@ export default function App() {
   }, [])
 
   // ── Callbacks ──
+  // Which reason worker the input is currently aimed at — drives the per-worker
+  // input mode. The @ target wins, else the first selected talk worker.
+  const activeWorker = useMemo(() => {
+    const reasons = workers.filter(w => w.type === 'reason')
+    if (mentionTarget && reasons.some(r => r.id === mentionTarget)) return mentionTarget
+    const sel = [...talkWorkers].filter(id => reasons.some(r => r.id === id))
+    return sel.length ? sel[0] : ''
+  }, [mentionTarget, talkWorkers, workers])
+  const currentInputMode = inputModes[activeWorker] || DEFAULT_INPUT_MODE
+
+  // Persist a per-worker mode change under the active worker.
+  const handleInputModeChange = useCallback((m: string) => {
+    setInputModes(prev => {
+      const next = { ...prev, [activeWorker]: m }
+      try { localStorage.setItem(INPUT_MODES_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }, [activeWorker])
+
   const sendMessage = useCallback(() => {
     if (!input.trim() || sending) return
     setSending(true)
@@ -486,14 +553,14 @@ export default function App() {
         msgTarget = selectedReasons.length > 0 ? selectedReasons[0] : ''
       }
     }
-    sendInput(composeInput(msgText, attachments), msgTarget, inputMode).then(() => {
+    sendInput(composeInput(msgText, attachments), msgTarget, currentInputMode).then(() => {
       setInput('')
       setAttachments([])
       setSending(false)
     }).catch(() => {
       setSending(false)
     })
-  }, [input, view, talkWorkers, inputMode, sending, workers, mentionTarget, attachments])
+  }, [input, view, talkWorkers, currentInputMode, sending, workers, mentionTarget, activeWorker, attachments])
 
   const handleAbort = useCallback(() => {
     const reasonWorkers = workers.filter(w => w.type === 'reason')
@@ -779,10 +846,21 @@ export default function App() {
   const handleScroll = useCallback(() => {
     const el = listRef.current
     if (!el) return
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
-    autoScrollRef.current = atBottom
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    const prev = prevEventsScrollRef.current
+    // Sticky follow switch (mirrors TalkView): off only on an explicit up-
+    // scroll, on again once the user gets back down to the bottom. Content
+    // growth never flips it, so a message pushing the bottom past the old
+    // threshold can't accidentally drop follow.
+    if (autoScrollRef.current && el.scrollTop < prev) {
+      autoScrollRef.current = false
+    } else if (!autoScrollRef.current && el.scrollTop > prev && dist < 50) {
+      autoScrollRef.current = true
+    }
+    prevEventsScrollRef.current = el.scrollTop
     // Drives the scroll-to-bottom button; React bails out when unchanged.
-    setEventsAtBottom(atBottom)
+    setEventsAtBottom(autoScrollRef.current)
+    setActiveFollowing(autoScrollRef.current)
     // Early prefetch: approach the top -> start loading older events while
     // there is still scroll room, so the prepend lands before reaching the
     // oldest row. scrollTop is the remaining distance upward; the prepend's
@@ -791,7 +869,7 @@ export default function App() {
     if (el.scrollTop < LOAD_EARLY_PX && el.scrollHeight > el.clientHeight + 1) {
       loadMoreRef.current?.()
     }
-  }, [])
+  }, [setActiveFollowing])
 
   const workerTypes = useMemo(() => {
     const map: Record<string, string> = {}
@@ -959,16 +1037,17 @@ export default function App() {
               isMobile={isMobile}
               onDecide={handleDecide}
               scrollToBottomSignal={sendPulse}
+              onFollowChange={setActiveFollowing}
             />
 
             <TalkInput
               talkPartner={''}
               input={input}
-              inputMode={inputMode}
+              inputMode={currentInputMode}
               onInputChange={setInput}
               onSend={sendMessage}
               onAbort={handleAbort}
-              onModeChange={setInputMode}
+              onModeChange={handleInputModeChange}
               workers={workers}
               archived={archived}
               mentionKey={mentionKey}
@@ -1098,6 +1177,7 @@ export default function App() {
                   onClick={() => {
                     autoScrollRef.current = true
                     setEventsAtBottom(true)
+                    setActiveFollowing(true)
                     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
                   }}
                   title={t('app.scrollToBottom')}

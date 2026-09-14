@@ -204,16 +204,18 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 // handleInput processes an input event. The input_mode field in the payload
 // picks one of the three levels (see package comment):
 //
-//	"schedule" — level 1: append the message and schedule a round, but only
-//	            when the system is idle (no in-flight reasoning, no pending
-//	            tool calls). Does not interrupt or park anything.
-//	"append" — level 2: append the message as a supplement to the ongoing
-//	            thought and schedule a fresh round, parking pending tools when
-//	            it starts, without interrupting an in-flight call (a gentle
-//	            wake-up, like a reminder).
-//	else (incl. hiw's usual "default") — level 3 interrupt: cancel the
-//	            in-flight reasoning call and schedule a fresh round; pending
-//	            tools are parked when reason() starts (using the stored cause).
+//	"schedule"  — level 1: append the message and schedule a round, but only
+//	             when the system is idle (no in-flight reasoning, no pending
+//	             tool calls). Does not interrupt or park anything.
+//	"append"   — level 2 (the DEFAULT stance, also used when input_mode is
+//	             absent or unknown): append the message as a supplement to the
+//	             ongoing thought and schedule a fresh round, parking pending
+//	             tools when it starts, without interrupting an in-flight call
+//	             (a gentle wake-up, like a reminder).
+//	"interrupt" — level 3: cancel the in-flight reasoning call and schedule a
+//	             fresh round; pending tools are parked when reason() starts
+//	             (using the stored cause). Interrupting a mid-thought worker is
+//	             opt-in — a machine message should carry this explicitly.
 func (w *BaseReasonWorker) handleInput(evt event.Event) {
 	w.captureTraceID(evt)
 
@@ -223,10 +225,12 @@ func (w *BaseReasonWorker) handleInput(evt event.Event) {
 	switch mode {
 	case "schedule":
 		w.scheduleInput(msgs)
-	case "append":
-		w.appendInput(msgs, requesttracker.PreemptCauseInput)
-	default:
+	case "interrupt":
 		w.interruptInput(msgs, requesttracker.PreemptCauseInput)
+	default:
+		// append is the default: absent or unrecognized input_mode — including
+		// hiw's legacy "default" — is a gentle append, not an interrupt.
+		w.appendInput(msgs, requesttracker.PreemptCauseInput)
 	}
 }
 

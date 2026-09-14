@@ -357,14 +357,14 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   //   append    = level 2 (no interrupt; respond promptly next round)
   //   interrupt = level 3 (cancel in-flight reasoning, handle now)
   const modeOptions: PickerOption[] = [
-    { id: 'default', label: t('mode.interrupt'), description: t('mode.interrupt.desc'), hint: t('mode.interrupt.hint') },
+    { id: 'interrupt', label: t('mode.interrupt'), description: t('mode.interrupt.desc'), hint: t('mode.interrupt.hint') },
     { id: 'append', label: t('mode.append'), description: t('mode.append.desc'), hint: t('mode.append.hint') },
     { id: 'schedule', label: t('mode.schedule'), description: t('mode.schedule.desc'), hint: t('mode.schedule.hint') },
   ]
   const currentModeLabel = modeOptions.find(m => m.id === inputMode)?.label ?? inputMode
   // Compact labels for the mobile action row: '模式: 打断模式' does not fit.
   const modeShortLabel: Record<string, string> = {
-    default: t('mode.interrupt.short'),
+    interrupt: t('mode.interrupt.short'),
     append: t('mode.append.short'),
     schedule: t('mode.schedule.short'),
   }

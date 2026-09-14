@@ -31,6 +31,34 @@ func TestCoreExtensionsRegistered(t *testing.T) {
 	}
 }
 
+// TestHandleSendMessageSendsAppendInput verifies send_message delivers the
+// message as a worker.input event in append mode (input_mode:"append") — a
+// gentle wake-up that does not interrupt the target's in-flight reasoning.
+func TestHandleSendMessageSendsAppendInput(t *testing.T) {
+	ch := newMockChannel()
+	w := NewWorker(Config{ID: "w1", Bus: ch})
+
+	handleSendMessage(w.BaseReasonWorker, "call-1", "send_message", "w1", "trace-1", map[string]any{
+		"target": "w2",
+		"text":   "hi",
+	})
+
+	inputs := ch.eventsOf(event.TypeWorkerInput)
+	if len(inputs) != 1 {
+		t.Fatalf("sent %d worker.input events, want 1", len(inputs))
+	}
+	in := inputs[0]
+	if in.WorkerId != "w1" {
+		t.Fatalf("input from = %q, want w1", in.WorkerId)
+	}
+	if text, _ := in.Payload["text"].(string); text != "hi" {
+		t.Fatalf("text = %q, want hi", text)
+	}
+	if mode, _ := in.Payload["input_mode"].(string); mode != "append" {
+		t.Fatalf("input_mode = %q, want append", mode)
+	}
+}
+
 // TestCoreExtensionsExposedToLLM verifies the LLM tool list is the union of
 // the worker's own exposed capabilities and nothing else — provider
 // switch/status are not exposed, and the context meta ops are. The worker

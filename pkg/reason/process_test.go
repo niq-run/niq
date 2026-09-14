@@ -230,15 +230,60 @@ func TestInputAppendIsGentle(t *testing.T) {
 		defer w.mu.Unlock()
 		return w.immediateReasoningCause == requesttracker.PreemptCauseInput
 	}, "append input to record cause")
-	w.mu.Lock()
-	cause := w.immediateReasoningCause
-	w.mu.Unlock()
-	if cause != requesttracker.PreemptCauseInput {
-		t.Fatalf("append input should set immediateReasoningCause, got %q", cause)
+}
+
+// TestDefaultInputIsGentle verifies that the default stance (an input with no
+// input_mode field, or a legacy "default") is append — a gentle wake-up that
+// does not interrupt an in-flight reasoning call. Interrupting is opt-in via an
+// explicit "interrupt" input_mode.
+func TestDefaultInputIsGentle(t *testing.T) {
+	prov := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	w, ch, _ := startWorker(t, prov)
+
+	// Hold a reasoning round in flight by providing an explicit interrupt.
+	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "hello", "input_mode": "interrupt"})
+	waitCond(t, testTimeout, func() bool {
+		select {
+		case <-prov.started:
+			return true
+		default:
+			return false
+		}
+	}, "reasoning to start")
+
+	// A default input (absent input_mode) must NOT interrupt the in-flight call.
+	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "note"})
+	time.Sleep(50 * time.Millisecond)
+	if ch.hasInterrupted() {
+		t.Fatal("default-mode input must not interrupt in-flight reasoning")
 	}
 
-	close(prov.release)
+	// The default input records the cause for the next round's parking.
 	waitCond(t, testTimeout, func() bool {
-		return len(ch.eventsOf("reason.end")) > 0
-	}, "reason.end")
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.immediateReasoningCause == requesttracker.PreemptCauseInput
+	}, "default input to record cause")
+}
+
+// TestInterruptInputStillInterrupts verifies an explicit "interrupt" input_mode
+// still cancels an in-flight reasoning call — interrupt is opt-in, not lost.
+func TestInterruptInputStillInterrupts(t *testing.T) {
+	prov := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	_, ch, _ := startWorker(t, prov)
+
+	// Hold a reasoning round in flight.
+	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "go", "input_mode": "interrupt"})
+	waitCond(t, testTimeout, func() bool {
+		select {
+		case <-prov.started:
+			return true
+		default:
+			return false
+		}
+	}, "reasoning to start")
+
+	// An explicit interrupt input must cancel the in-flight call.
+	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "stop", "input_mode": "interrupt"})
+	waitCond(t, testTimeout, ch.hasInterrupted, "reason.end(interrupted)")
 }

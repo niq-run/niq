@@ -85,7 +85,7 @@ export default function PickerDropdown({
     transform: 'translate(-50%, -50%)',
     width: panelWidth,
     maxWidth: panelWidth + 20,
-    background: colors.bgLight,
+    background: colors.bg,
     border: '1px solid ' + colors.border,
     borderRadius: 6,
     maxHeight: '70vh',
@@ -95,7 +95,7 @@ export default function PickerDropdown({
   } : {
     width,
     maxWidth: width + 20,
-    background: colors.bgLight,
+    background: colors.bg,
     border: '1px solid ' + colors.border,
     borderRadius: 6,
     maxHeight: 220,
@@ -188,8 +188,8 @@ export default function PickerDropdown({
               {opt.description && (
                 <span
                   style={{
-                    fontSize: fontSizes.xs,
-                    color: selected ? colors.accentDim : colors.textDimmed,
+                    fontSize: fontSizes.sm,
+                    color: selected ? colors.accentDim : colors.textDim,
                     lineHeight: 1.4,
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',

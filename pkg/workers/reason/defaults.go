@@ -39,7 +39,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		// SelfOnly: a worker's own addressed-messaging tool is not something
 		// peers should be able to call, so it is announced only to itself.
 		SelfOnly:    true,
-		Description: "Send a message to a specific worker on the bus.",
+		Description: "Send a message to a specific worker on the bus. The message is delivered in append mode: it does not interrupt the target's in-flight reasoning — it is appended as a supplement and the target schedules a fresh round.",
 		Parameters: obj(map[string]any{
 			"target": map[string]any{"type": "string", "description": "Target worker ID"},
 			"text":   map[string]any{"type": "string", "description": "Message text"},
@@ -170,7 +170,16 @@ func handleSendMessage(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 		return
 	}
 
-	msgEvt := event.New(event.TypeWorkerInput, w.ID(), map[string]any{"text": text})
+	msgEvt := event.New(event.TypeWorkerInput, w.ID(), map[string]any{
+		// Default to append mode: a cross-worker message supplements the target's
+		// ongoing thought and schedules a fresh round without interrupting its
+		// in-flight reasoning call. This is deliberate for machine-to-machine
+		// chatter — only a human (webui) or an explicit interrupt should yank a
+		// worker mid-thought. The target's handlerInput reads input_mode and falls
+		// back to interrupt ("default") if absent.
+		"text":       text,
+		"input_mode": "append",
+	})
 	msgEvt.TraceID = w.CurrentTraceID()
 	_ = w.Channel.Send(context.Background(), msgEvt, target)
 
