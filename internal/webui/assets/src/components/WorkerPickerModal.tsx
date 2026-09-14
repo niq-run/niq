@@ -29,6 +29,10 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   // '' = all, 'online' / 'offline' filter by bus connection.
   const [onlineFilter, setOnlineFilter] = useState<'' | 'online' | 'offline'>('')
+  // Hovered row key — the rows have no other hover feedback (they are a plain
+  // click-to-toggle list), so track it to paint a row background like the
+  // sidebar's view rows do.
+  const [hoverKey, setHoverKey] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // All distinct tags present across the selectable set (stable options for
@@ -92,10 +96,13 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
 
   const checkedCount = workers.filter(w => selected.has(w.id)).length
 
+  // Same box as the tag-filter trigger on the row below: the dialog's own
+  // background plus a border. Left unset, a native input would paint the UA's
+  // default field background, which ignores the theme.
   const input: React.CSSProperties = {
     width: '100%',
     boxSizing: 'border-box',
-    background: colors.bg,
+    background: colors.bgLight,
     border: '1px solid ' + colors.border,
     borderRadius: 4,
     padding: '6px 9px',
@@ -150,6 +157,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder={t('workerPicker.search')}
+            className="niq-input"
             style={input}
           />
           {/* Multi-select tag filter (shared dropdown component) on its own
@@ -159,8 +167,6 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
               it carries any of the selected tags. */}
           <div style={{ marginTop: 8 }}>
             <TagFilterDropdown
-              fill
-              variant="input"
               tags={availableTags}
               selected={selectedTags}
               onToggle={toggleTag}
@@ -218,6 +224,8 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
               <div
                 key={row.key}
                 onClick={() => onToggle(w.id)}
+                onMouseEnter={() => setHoverKey(row.key)}
+                onMouseLeave={() => setHoverKey(null)}
                 style={{
                   cursor: 'pointer',
                   userSelect: 'none',
@@ -225,7 +233,11 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
                   alignItems: 'center',
                   gap: 8,
                   padding: `7px ${14}px 7px ${padLeft}px`,
-                  background: isActive ? colors.bgChip : undefined,
+                  // The dialog sits on bgLight, so the hover band steps one
+                  // shade further out (bgLighter) to stay visible under it; a
+                  // selected row keeps its chip colour.
+                  background: isActive ? colors.bgChip : hoverKey === row.key ? colors.bgLighter : undefined,
+                  transition: 'background 0.12s',
                 }}
               >
                 <span

@@ -152,10 +152,10 @@
 [data-theme="dark"] .event-row.selected td { background: rgba(60,120,180,0.15); }
 [data-theme="light"] .event-row.selected td { background: rgba(60,120,180,0.1); }
 
-/* ── Talk input placeholder: dimmer than the palette's dimmest text, so it
-   reads as an affordance, not a message. ── */
-[data-theme="dark"] .talk-input::placeholder { color: #5c5c5c; }
-[data-theme="light"] .talk-input::placeholder { color: #b3b3b3; }
+/* ── Input placeholders (talk input, worker search boxes): dimmer than the
+   palette's dimmest text, so they read as an affordance, not a message. ── */
+[data-theme="dark"] .talk-input::placeholder, [data-theme="dark"] .niq-input::placeholder { color: #5c5c5c; }
+[data-theme="light"] .talk-input::placeholder, [data-theme="light"] .niq-input::placeholder { color: #b3b3b3; }
 
 /* ── Fade-in for view/list content transitions (e.g. switching event-view
    filters re-mounts the list with a new key and fades it in). ── */

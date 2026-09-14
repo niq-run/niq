@@ -1,9 +1,8 @@
-import { useState, useRef, useEffect, useMemo, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 import WorkerPickerModal from '../components/WorkerPickerModal'
-import TagFilterDropdown from '../components/TagFilterDropdown'
 
 interface SidebarProps {
   view: ViewMode
@@ -58,9 +57,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const [hoverId, setHoverId] = useState<string | null>(null)
   // Expanded picker modal for the worker selector (open on the expand button).
   const [showWorkerPicker, setShowWorkerPicker] = useState(false)
-  // Multi-select tag filter applied to the inline selector list (and inherited
-  // by the expanded picker).
-  const [filterTags, setFilterTags] = useState<string[]>([])
+  // Free-text filter for the inline selector list. A search box beats the tag
+  // filter here (picking a worker by name is the common case); the expanded
+  // picker still offers the tag filter for the crowded case.
+  const [workerQuery, setWorkerQuery] = useState('')
   const hoverStyle = (id: string): CSSProperties => ({
     background: hoverId === id ? colors.bgLight : 'transparent',
     // Full-width row highlight that bleeds to the sidebar edges. The options
@@ -244,16 +244,20 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const selectorWorkers = workers.filter(w => (view !== 'talk' || w.type === 'reason') && !archived.has(w.id))
   const selectorSelected = view === 'talk' ? talkWorkers : filterWorkers
 
-  // Tag multi-select filter for the selector list. A worker is kept when it
-  // carries any of the selected tags (OR).
-  const selectorTags = useMemo(() => {
-    const set = new Set<string>()
-    for (const w of selectorWorkers) for (const tag of w.tags || []) set.add(tag)
-    return [...set].sort()
-  }, [selectorWorkers])
-  const shownSelectorWorkers = filterTags.length === 0
-    ? selectorWorkers
-    : selectorWorkers.filter(w => (w.tags || []).some(tag => filterTags.includes(tag)))
+  // Inline list: online workers only — the sidebar is the at-a-glance list of
+  // who can actually be talked to / filtered right now, so offline workers are
+  // dropped outright (the expanded picker keeps the full set, offline included,
+  // and is where you go to filter by status). The search box narrows it on top,
+  // matching name, type, description and tags like the picker's search does.
+  const q = workerQuery.trim().toLowerCase()
+  const shownSelectorWorkers = selectorWorkers.filter(w =>
+    w.online !== false && (
+      q === '' ||
+      w.id.toLowerCase().includes(q) ||
+      (w.type || '').toLowerCase().includes(q) ||
+      (w.description || '').toLowerCase().includes(q) ||
+      (w.tags || []).some(tag => tag.toLowerCase().includes(q))
+    ))
 
   // Footer project menu: opened by clicking the project name in the bottom
   // row; closes on any click outside the menu and its trigger.
@@ -322,11 +326,15 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const optSize = isMobile ? fontSizes.xl : fontSizes.md + 1
   const optLineNum = isMobile ? 40 : 20
   const optLine = optLineNum + 'px'
-  const optPad = isMobile ? '4px 0' : undefined
+  // Worker-selector row metrics: the vertical padding that gives the hover band
+  // its height, and the gap between rows. Shared by workerRowStyle and the
+  // list's height cap below so the two can't drift apart.
+  const workerRowPadY = isMobile ? 4 : 6
+  const workerRowGapY = 4
   // Worker selector list: cap at ~10 rows and scroll the rest so a long worker
-  // list never sprawls down the sidebar. optLineNum is the single-row line
-  // height; the +8 accounts for the row's bottom margin/padding.
-  const workerListMax = (optLineNum + 8) * 10
+  // list never sprawls down the sidebar. Row height = its line height plus its
+  // own vertical padding, plus the gap to the next row.
+  const workerListMax = (optLineNum + workerRowPadY * 2 + workerRowGapY) * 10
   // Horizontal content inset; mobile gets more breathing room on both sides.
   // The section dividers use a matching negative horizontal margin so they
   // stay edge-to-edge.
@@ -344,6 +352,22 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const optGap = 0
   // Checkbox size: a bit bigger on mobile for easier tapping.
   const checkSize = isMobile ? 16 : 13
+  // Worker-selector rows: the same full-width hover band as the view/resource
+  // rows above (colors.bgLight, bled to the sidebar edges), but the row carries
+  // its own horizontal padding instead of a negative margin — the list wrapper
+  // below is already bled full-width, so the band, the text inset and the
+  // list's scrollbar all line up with the rest of the sidebar.
+  const workerRowStyle = (id: string): CSSProperties => ({
+    background: hoverId === id ? colors.bgLight : 'transparent',
+    padding: workerRowPadY + 'px ' + contentPadX + 'px',
+    marginBottom: workerRowGapY,
+    transition: 'background 0.12s',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
+  })
 
   return (
     <>
@@ -454,23 +478,35 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         <>
           <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
           <strong style={{ display: 'block', color: colors.text, fontSize: fontSizes.xl, marginBottom: 8 }}>{t('sidebar.workerSelector')}</strong>
-          {/* Control row: the compact multi-select tag filter takes 2/3 of the
-              width, the expand (opens the picker modal) button takes 1/3.
-              Expand shows text, not an icon. */}
+          {/* Control row: the search box takes 2/3 of the width, the expand
+              (opens the picker modal) button takes 1/3. Expand shows text, not
+              an icon. The box is sized to the sibling button and the worker
+              rows below so the whole selector reads at one size/height. */}
           <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', marginBottom: 11 }}>
-            <div style={{ flex: '2 1 0', minWidth: 0 }}>
-              <TagFilterDropdown
-                fill
-                tags={selectorTags}
-                selected={filterTags}
-                onToggle={(tag) => setFilterTags(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag])}
-                onClear={() => setFilterTags([])}
-                // Match the trigger to the sibling expand button (and the worker
-                // rows below) so the whole selector reads at one size/height.
-                triggerSize={optSize}
-                triggerLine={optLine}
-              />
-            </div>
+            <input
+              value={workerQuery}
+              onChange={e => setWorkerQuery(e.target.value)}
+              placeholder={t('sidebar.workerSelector.searchPlaceholder')}
+              className="niq-input"
+              style={{
+                flex: '2 1 0',
+                minWidth: 0,
+                boxSizing: 'border-box',
+                // Same total height as the expand button beside it: its line
+                // height plus its 3px vertical padding and 1px border.
+                height: optLineNum + 8,
+                border: '1px solid ' + colors.border,
+                borderRadius: 3,
+                padding: '0 8px',
+                // Sit on the sidebar's own background like the expand button
+                // next to it (a native input would otherwise paint the UA's
+                // default field background, which ignores the theme).
+                background: colors.bg,
+                color: colors.text,
+                fontSize: optSize,
+                outline: 'none',
+              }}
+            />
             {selectorWorkers.length > 1 && (
               <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex' }}>
                 <span
@@ -485,62 +521,66 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             )}
           </div>
           {/* Worker list, height-capped to ~10 rows; the rest scrolls so a long
-              list doesn't sprawl down the sidebar. */}
-          <div style={{ overflowY: 'auto', maxHeight: workerListMax }}>
+              list doesn't sprawl down the sidebar. The negative horizontal
+              margin bleeds the wrapper to the sidebar edges so the rows' hover
+              bands (painted on the rows themselves, see workerRowStyle) run
+              edge-to-edge like the view rows above instead of stopping at the
+              scroll container's padding. */}
+          <div style={{ overflowY: 'auto', overflowX: 'hidden', maxHeight: workerListMax, margin: '0 -' + contentPadX + 'px' }}>
           {shownSelectorWorkers.map((w) => {
             const isActive = view === 'talk'
               ? talkWorkers.has(w.id)
               : filterWorkers.has(w.id)
-            const connection = w.online === false ? t('worker.offline') : t('worker.online')
             if (view === 'talk') {
               // Single line: every entry here is a reason worker, so the type
-              // is redundant — just name + connection status.
-              const hovered = hoverId === w.id
+              // is redundant — just the name (offline workers are not listed).
               return (
                 <div
                   key={w.id}
                   onClick={() => handleWorkerClick(w.id)}
-                  onMouseEnter={() => setHoverId(w.id)}
+                  onMouseEnter={() => setHoverId('worker:' + w.id)}
                   onMouseLeave={() => setHoverId(null)}
-                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, minWidth: 0, padding: optPad }}
+                  style={workerRowStyle('worker:' + w.id)}
                 >
                   <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                   <span
                     title={w.id}
-                    style={{ color: isActive || hovered ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0, transition: 'color 0.12s' }}
+                    style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0, transition: 'color 0.12s' }}
                   >
                     {w.id}
-                  </span>
-                  <span style={{ color: w.online === false ? colors.textDimmed : colors.toolCompleted, fontSize: fontSizes.sm, flexShrink: 0 }}>
-                    {connection}
                   </span>
                 </div>
               )
             }
             // Events view: single line — id with its type in brackets.
-            const hovered = hoverId === w.id
             return (
-              <div key={w.id} style={{ marginBottom: 6 }}>
-                <div
-                  onClick={() => handleWorkerClick(w.id)}
-                  onMouseEnter={() => setHoverId(w.id)}
-                  onMouseLeave={() => setHoverId(null)}
-                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, padding: optPad }}
-                >
-                  <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
-                  <span style={{ display: 'flex', alignItems: 'baseline', gap: 12, flex: 1, minWidth: 0 }}>
-                    <span
-                      title={w.id}
-                      style={{ color: isActive || hovered ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
-                    >
-                      {w.id}
-                    </span>
-                    {w.type ? <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, flexShrink: 0 }}>[{w.type}]</span> : null}
+              <div
+                key={w.id}
+                onClick={() => handleWorkerClick(w.id)}
+                onMouseEnter={() => setHoverId('worker:' + w.id)}
+                onMouseLeave={() => setHoverId(null)}
+                style={workerRowStyle('worker:' + w.id)}
+              >
+                <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
+                <span style={{ display: 'flex', alignItems: 'baseline', gap: 12, flex: 1, minWidth: 0 }}>
+                  <span
+                    title={w.id}
+                    style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
+                  >
+                    {w.id}
                   </span>
-                </div>
+                  {w.type ? <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, flexShrink: 0 }}>[{w.type}]</span> : null}
+                </span>
               </div>
             )
           })}
+          {/* Nothing to show is the normal case when every worker is offline,
+              so say so instead of leaving a blank stretch under the header. */}
+          {shownSelectorWorkers.length === 0 && (
+            <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, padding: '2px ' + contentPadX + 'px' }}>
+              {q ? t('sidebar.workerSelector.noMatch') : t('sidebar.workerSelector.noOnline')}
+            </div>
+          )}
           </div>
 
           {/* View Settings — talk view only */}
@@ -690,8 +730,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         <WorkerPickerModal
           title={t('sidebar.workerSelector')}
           // The expanded view shows the full selectable set with its own search
-          // + tag filter — it is the pimarily where you find and pick workers,
-          // so it must not be pre-narrowed by the inline sidebar filter.
+          // + tag filter + online-status filter — it is primarily where you
+          // find and pick workers, so it must not be pre-narrowed by the inline
+          // sidebar list (neither its search nor its online-only rule).
           workers={selectorWorkers}
           selected={selectorSelected}
           onToggle={(id) => { if (view === 'talk') onToggleWorker(id); else onToggleFilterWorker(id) }}
