@@ -512,7 +512,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           onChange={(e) => { if (e.target.files?.length) addFiles(e.target.files); e.target.value = '' }}
         />
         {/* Attach: text button at the left edge of the right-aligned
-            action cluster (mode / send / stop). */}
+            action cluster (stop / mode / send). */}
         <span
           onClick={() => fileInputRef.current?.click()}
           title={t('talk.attach')}
@@ -525,6 +525,24 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         >
           {t('talk.attach.add')}
         </span>
+        {/* Stop sits left of the mode selector, so the mode label — and the
+            dropdown anchored to it — stays next to Send on the right. */}
+        <button
+          onClick={onAbort}
+          className="btn-stop"
+          style={{
+            background: 'none',
+            color: colors.textDim,
+            border: '1px solid ' + colors.border,
+            padding: '4px 10px',
+            borderRadius: 4,
+            cursor: 'pointer',
+            fontSize: isMobile ? 15 : 13,
+            lineHeight: '20px',
+          }}
+        >
+          {t('talk.input.stop')}
+        </button>
         <div style={{ position: 'relative', display: 'inline-block' }}>
           <span
             onClick={(e) => { e.stopPropagation(); setModeOpen(v => !v) }}
@@ -566,22 +584,6 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           }}
         >
           {t('talk.input.send')}
-        </button>
-        <button
-          onClick={onAbort}
-          className="btn-stop"
-          style={{
-            background: 'none',
-            color: colors.textDim,
-            border: '1px solid ' + colors.border,
-            padding: '4px 10px',
-            borderRadius: 4,
-            cursor: 'pointer',
-            fontSize: isMobile ? 15 : 13,
-            lineHeight: '20px',
-          }}
-        >
-          {t('talk.input.stop')}
         </button>
       </div>
     </div>
