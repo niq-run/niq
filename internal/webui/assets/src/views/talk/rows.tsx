@@ -2,7 +2,7 @@
 // WorkerBadge (speaker label) and the RowCtx carrying the colors/l10n/lookups/
 // callbacks they read. TalkView computes the cheap per-row facts (alignment +
 // whether to show the avatar) and hands each event to the matching row.
-import { useState, type ReactNode, type CSSProperties } from 'react'
+import { useState, memo, type ReactNode, type CSSProperties } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes, type Palette } from '../../theme'
@@ -80,16 +80,15 @@ interface RowCtx {
   directionOf: (evt: EventPayload, alignRight?: boolean) => string
   expandedContent: Set<string>
   toggleExpanded: (key: string) => void
+  // Tool/request cards are an accordion: at most one is open (openToolId), so
+  // only one code body is rendered/highlighted at a time.
+  openToolId: string | null
+  toggleTool: (key: string) => void
   onMention?: (id: string) => void
   onOpenDetail?: (id: string) => void
   onTraceClick: (traceId: string) => void
   onDecide?: (id: string, approved: boolean, note?: string) => void
   scrollToEvent: (evtId: string) => void
-  resultByRequestId: Record<string, EventPayload>
-  decisionByRequestId: Record<string, EventPayload>
-  toolPartials: Record<string, string>
-  // Full event list, used by ResponseRow to find the referenced input.
-  allEvents: EventPayload[]
 }
 
 // RowBadge is the shared "avatar row for a speaker switch" wrapper used by
@@ -271,9 +270,8 @@ function ThinkingRow({ evt, showBadge, ctx }: { evt: EventPayload; showBadge: bo
   )
 }
 
-function ResponseRow({ evt, showBadge, ctx }: { evt: EventPayload; showBadge: boolean; ctx: RowCtx }) {
-  // findReferencedInput needs the full events list, stored on the context.
-  const ref = findReferencedInput(ctx.allEvents, evt)
+function ResponseRowInner({ evt, showBadge, ctx, allEvents }: { evt: EventPayload; showBadge: boolean; ctx: RowCtx; allEvents: EventPayload[] }) {
+  const ref = findReferencedInput(allEvents, evt)
   return (
     <div key={evt.id} data-evt-id={evt.id} style={{ maxWidth: ctx.bubbleMax }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} extraPad />
@@ -281,6 +279,13 @@ function ResponseRow({ evt, showBadge, ctx }: { evt: EventPayload; showBadge: bo
     </div>
   )
 }
+// allEvents is excluded from the comparison on purpose: a live delta changes the
+// events array reference but not any already-committed response's quoted input,
+// so we'd otherwise re-render every response (and re-parse its markdown) on
+// every event. The quote is recomputed only when the row itself re-renders.
+const ResponseRow = memo(ResponseRowInner, (prev, next) =>
+  prev.evt === next.evt && prev.showBadge === next.showBadge && prev.ctx === next.ctx,
+)
 
 function TimeoutRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alignRight: boolean; showBadge: boolean; ctx: RowCtx }) {
   const { colors, t } = ctx
@@ -298,9 +303,8 @@ function TimeoutRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; al
   )
 }
 
-function ApprovalRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alignRight: boolean; showBadge: boolean; ctx: RowCtx }) {
+function ApprovalRowImpl({ evt, alignRight, showBadge, decision, ctx }: { evt: EventPayload; alignRight: boolean; showBadge: boolean; decision?: EventPayload; ctx: RowCtx }) {
   const { colors, t } = ctx
-  const decision = ctx.decisionByRequestId[toolCallId(evt)]
   const approved = decision?.payload?.approved === true
   const note = typeof decision?.payload?.note === 'string' ? decision.payload.note : ''
   const isExpanded = !ctx.expandedContent.has(evt.id)
@@ -339,11 +343,9 @@ function ApprovalRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; a
   )
 }
 
-function ToolRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alignRight: boolean; showBadge: boolean; ctx: RowCtx }) {
+function ToolRowImpl({ evt, alignRight, showBadge, resultEvt, partial, ctx }: { evt: EventPayload; alignRight: boolean; showBadge: boolean; resultEvt?: EventPayload; partial: string; ctx: RowCtx }) {
   const { colors, t, dark, isMobile } = ctx
-  const callId = toolCallId(evt)
-  const resultEvt = ctx.resultByRequestId[callId]
-  const isExpanded = ctx.expandedContent.has(evt.id)
+  const isExpanded = ctx.openToolId === evt.id
   const content = toolContent(evt, isExpanded)
   const mergedResult = resultEvt ? toolContent(resultEvt, isExpanded) : ''
   const displayContent = mergedResult ? (content ? content + '\n\n—— result ——\n\n' + mergedResult : mergedResult) : content
@@ -363,7 +365,7 @@ function ToolRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; align
     : evt.type === 'request.failed' ? t('talk.failed')
     : t('talk.rejected')
     : t('talk.call')
-  const partialText = !resultEvt ? (ctx.toolPartials[callId] || '') : ''
+  const partialText = !resultEvt ? partial : ''
   const dir = ctx.directionOf(evt, alignRight)
   const segSep = <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
   return (
@@ -384,7 +386,7 @@ function ToolRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; align
           background: isExpanded ? (dark ? 'rgba(60,120,180,0.06)' : 'rgba(60,120,180,0.04)') : undefined,
         }}
       >
-        <div onClick={() => ctx.toggleExpanded(evt.id)} style={{ cursor: 'pointer', userSelect: 'none' }}>
+        <div onClick={() => ctx.toggleTool(evt.id)} style={{ cursor: 'pointer', userSelect: 'none' }}>
           {isMobile ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
@@ -438,5 +440,36 @@ function ToolRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; align
   )
 }
 
+// Rows are memoized so a live SSE event only re-renders rows whose data
+// actually changed (the streaming tail), not all of them — the measured
+// bottleneck is per-event full-list script cost, so skipping unchanged rows
+// (no markdown re-parse / no element rebuild for that subtree) is the win.
+// Simple rows use default shallow compare on { evt, alignRight, showBadge,
+// ctx }; the volatile-data rows compare their resolved result/decision/partial
+// plus the (memoized, stable) ctx.
+const MemoInputRow = memo(InputRow)
+const MemoAbortRow = memo(AbortRow)
+const MemoTimerReminderRow = memo(TimerReminderRow)
+const MemoTimeoutRow = memo(TimeoutRow)
+const MemoCancelRow = memo(CancelRow)
+const MemoInterruptedRow = memo(InterruptedRow)
+const MemoThinkingRow = memo(ThinkingRow)
+const MemoApprovalRow = memo(ApprovalRowImpl, (p, n) =>
+  p.evt === n.evt && p.alignRight === n.alignRight && p.showBadge === n.showBadge && p.decision === n.decision && p.ctx === n.ctx,
+)
+const MemoToolRow = memo(ToolRowImpl,
+  (p, n) =>
+    p.evt === n.evt && p.alignRight === n.alignRight && p.showBadge === n.showBadge &&
+    p.resultEvt === n.resultEvt && p.partial === n.partial && p.ctx === n.ctx,
+)
+
+// Note: response rows are memoized above (ResponseRow) ignoring allEvents on
+// purpose, so they don't re-render on every event.
 export type { RowCtx }
-export { WorkerBadge, RowBadge, InputRow, AbortRow, TimerReminderRow, TimeoutRow, CancelRow, InterruptedRow, ThinkingRow, ResponseRow, ApprovalRow, ToolRow }
+export {
+  WorkerBadge, RowBadge,
+  MemoInputRow as InputRow, MemoAbortRow as AbortRow, MemoTimerReminderRow as TimerReminderRow,
+  MemoTimeoutRow as TimeoutRow, MemoCancelRow as CancelRow, MemoInterruptedRow as InterruptedRow,
+  MemoThinkingRow as ThinkingRow, ResponseRow,
+  MemoApprovalRow as ApprovalRow, MemoToolRow as ToolRow,
+}

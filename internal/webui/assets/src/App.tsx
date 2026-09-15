@@ -33,7 +33,7 @@ const HISTORY_PAGE = 100
 // activeFollowingRef): when scrolled up to read, trimming is held so it can't
 // shift the reader's viewport, and older history is anyway reachable by
 // scrolling to the top, which triggers onLoadMore to page it back in.
-const MAX_EVENTS = 400
+const MAX_EVENTS = 50
 
 // Per-reason-worker input mode, persisted to localStorage. The default is
 // append (level 2): the gentle mode that supplements the ongoing thought
@@ -201,7 +201,21 @@ export default function App() {
   // through setActiveFollowing; the trim gate only runs while this is true so
   // trimming never shifts a reader's scrolled-up viewport.
   const activeFollowingRef = useRef(true)
-  const setActiveFollowing = useCallback((v: boolean) => { activeFollowingRef.current = v }, [])
+  const setActiveFollowing = useCallback((v: boolean) => {
+    const was = activeFollowingRef.current
+    activeFollowingRef.current = v
+    // Re-engaging follow (the user scrolled back to the bottom) immediately
+    // drops any history above MAX_EVENTS that was loaded while reading up — so
+    // the list is trimmed the moment follow returns, without waiting for the
+    // next live event. Only runs on the transition into following, and only
+    // when there's actually excess to drop (keeps re-renders minimal).
+    if (v && !was && eventsRef.current.length > MAX_EVENTS) {
+      const trimmed = mergeEvents(eventsRef.current, [], MAX_EVENTS)
+      eventsRef.current = trimmed
+      seenRef.current = new Set(trimmed.map((e) => e.id))
+      setEvents(trimmed)
+    }
+  }, [])
   // Switching the visible view mounts a fresh scroller, which starts pinned to
   // the bottom until it reports its first scroll.
   useEffect(() => { activeFollowingRef.current = true }, [view])
@@ -635,6 +649,15 @@ export default function App() {
     setView('events')
   }, [])
 
+  // Mentioning a worker from a talk badge prefixes the input and pins the
+  // target. Kept stable (useCallback) so the memoized talk rows don't re-render
+  // on every event.
+  const handleMention = useCallback((id: string) => {
+    setInput(prev => prev + '@' + id + ' ')
+    setMentionTarget(id)
+    setMentionKey(k => k + 1)
+  }, [])
+
   const clearTraceFilter = useCallback(() => {
     setTraceFilter('')
   }, [])
@@ -1013,7 +1036,7 @@ export default function App() {
               talkWorkers={talkWorkers}
               onTraceClick={handleTraceClick}
               onLoadMore={loadMore}
-              onMention={(id) => { setInput(prev => prev + '@' + id + ' '); setMentionTarget(id); setMentionKey(k => k + 1) }}
+              onMention={handleMention}
               onOpenDetail={openWorkerDetail}
               deliveries={deliveries}
               workerTypes={workerTypes}

@@ -4,7 +4,7 @@ import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import ThinkingBlock from '../components/ThinkingBlock'
 import ResponseBlock from '../components/ResponseBlock'
-import { isReasonBoundary, isToolEvent, isToolInvocation, isToolResult } from '../components/talk-utils'
+import { isReasonBoundary, isToolEvent, isToolInvocation, isToolResult, toolCallId } from '../components/talk-utils'
 import type { EventPayload } from '../types'
 import { useChatScroll } from './talk/useChatScroll'
 import {
@@ -172,19 +172,22 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   const bubbleMax = isMobile ? '90%' : '70%'
   // Only reason workers (the conversation partners) get a standalone avatar
   // row; other workers' events carry their worker ID inline in the block title.
-  const isReason = (wid: string) => workerTypes[wid] === 'reason'
+  const isReason = useCallback((wid: string) => workerTypes[wid] === 'reason', [workerTypes])
   // Convert the human worker's id into a friendlier "you" for display. The
   // [webui] channel marker stays untranslated (it is a transport name): the
   // same human also speaks through other transports (lark bridge, ...), each
   // with its own worker id, so marking the channel tells the reader which
   // door the message came through.
-  const displayName = (wid?: string) => (wid && wid === humanId ? `${t('talk.you')}[webui]` : wid ?? '')
+  const displayName = useCallback(
+    (wid?: string) => (wid && wid === humanId ? `${t('talk.you')}[webui]` : wid ?? ''),
+    [humanId, t],
+  )
   // Direction of the worker identity in a block title. Left-aligned blocks
   // read from the reason worker's side ("to X" = it sends, "from: X" =
   // someone sent it in). Right-aligned blocks sit visually as outgoing
   // toward the reason worker, so they always read "to <reason worker>" —
   // regardless of who the sender was.
-  const directionOf = (evt: EventPayload, alignRight?: boolean): string => {
+  const directionOf = useCallback((evt: EventPayload, alignRight?: boolean): string => {
     if (alignRight && evt.target_worker_id) {
       return `to ${displayName(evt.target_worker_id)}`
     }
@@ -192,7 +195,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       return evt.target_worker_id ? `to ${displayName(evt.target_worker_id)}` : ''
     }
     return evt.worker_id ? `from: ${displayName(evt.worker_id)}` : ''
-  }
+  }, [displayName, isReason])
   // Unified rule for which message bubbles sit on the right. The right side is
   // reserved for messages addressed to a specific reason worker:
   //   (b) the human (hiw) -> that reason worker
@@ -215,15 +218,21 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return talkWorkers.size === 1 && talkWorkers.has(target) // (c)
   }
   const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set())
+  // Tool/request cards are an accordion: at most one open, so only one code
+  // body is rendered/highlighted at a time (a perf win on code-heavy chats).
+  const [openToolId, setOpenToolId] = useState<string | null>(null)
 
-  const toggleExpanded = (key: string) => {
+  const toggleExpanded = useCallback((key: string) => {
     setExpandedContent(prev => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
       return next
     })
-  }
+  }, [])
+  const toggleTool = useCallback((key: string) => {
+    setOpenToolId(prev => (prev === key ? null : key))
+  }, [])
 
   // Talk is the selected reason workers' conversation: what they sent, and
   // what was sent to them — from HIW or any worker alike. When nothing is
@@ -307,15 +316,24 @@ const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToE
   // of a standalone "|"), so a wrapped line never ends with a dangling bar.
   const itemSep: CSSProperties = { borderLeft: '1px solid ' + colors.textDimmed, paddingLeft: 8 }
 
-  // Shared context handed to every row component: theme, i18n, layout metrics,
-  // the per-event lookups and the callbacks they need. Slicing it off the
-  // render keeps the row components self-contained and the main body short.
-  const ctx: RowCtx = {
+  // Shared context handed to every row component. Memoized so its reference is
+  // stable across live events (the derived helper closures are useCallback'd),
+  // which is what lets the memoized rows skip re-rendering when only the
+  // volatile per-row data changed. The per-event volatile lookups (result/
+  // decision/partial/allEvents) are deliberately NOT in ctx — they're resolved
+  // per-row in the dispatch below so each row re-renders only when its own data
+  // changes.
+  const ctx = useMemo<RowCtx>(() => ({
     dark, colors, t, isMobile, compactMode, thinkingExpanded, bubbleMax,
     tPad, tFontSize, itemSep, humanId, displayName, isReason, directionOf,
-    expandedContent, toggleExpanded, onMention, onOpenDetail, onTraceClick, onDecide,
-    scrollToEvent, resultByRequestId, decisionByRequestId, toolPartials, allEvents: events,
-  }
+    expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onTraceClick, onDecide,
+    scrollToEvent,
+  }), [
+    dark, colors, t, isMobile, compactMode, thinkingExpanded, bubbleMax,
+    tPad, tFontSize, itemSep, humanId, displayName, isReason, directionOf,
+    expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onTraceClick, onDecide,
+    scrollToEvent,
+  ])
 
   const nodes: React.ReactNode[] = []
 
@@ -368,14 +386,20 @@ const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToE
         nodes.push(<ThinkingRow key={evt.id} evt={evt} showBadge={showBadge} ctx={ctx} />)
         break
       case 'reason.response':
-        nodes.push(<ResponseRow key={evt.id} evt={evt} showBadge={showBadge} ctx={ctx} />)
+        nodes.push(<ResponseRow key={evt.id} evt={evt} showBadge={showBadge} ctx={ctx} allEvents={events} />)
         break
-      case 'approval.request':
-        nodes.push(<ApprovalRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
+      case 'approval.request': {
+        const decision = decisionByRequestId[toolCallId(evt)]
+        nodes.push(<ApprovalRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} decision={decision} ctx={ctx} />)
         break
-      default:
-        nodes.push(<ToolRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
+      }
+      default: {
+        const callId = toolCallId(evt)
+        const resultEvt = resultByRequestId[callId]
+        const partial = toolPartials[callId] || ''
+        nodes.push(<ToolRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} resultEvt={resultEvt} partial={partial} ctx={ctx} />)
         break
+      }
     }
   }
   // Header: always visible, not in scroll area — shown even when empty. On
@@ -423,19 +447,15 @@ const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToE
           onPointerDown={markManual}
           onTouchStart={markManual}
           onClick={(e) => {
-            // Clicking blank space collapses any expanded tool call/result
-            // blocks. Every message is a direct child of the scroller; a
-            // message's actual content is always nested one level deeper.
-            // So a click whose target is the scroller itself or one of its
-            // direct children landed on empty background (the gutters beside
-            // a bubble, the gaps between messages, the trailing padding),
-            // while a click on any real content hits a deeper element.
-            if (expandedContent.size === 0) return
+            // Clicking blank space collapses any expanded tool/approval blocks.
+            // Tool cards are a single-open accordion; approvals are their own set.
+            if (expandedContent.size === 0 && openToolId === null) return
             const el = e.target as Element
             const scroller = scrollRef.current
             if (!scroller) return
             if (el === scroller || el.parentElement === scroller) {
               setExpandedContent(new Set())
+              setOpenToolId(null)
             }
           }}
           style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px', overflowAnchor: 'none' }}
