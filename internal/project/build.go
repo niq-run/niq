@@ -366,7 +366,16 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
-		return timer.New(timer.Config{ID: id, Bus: ch})
+		return timer.New(timer.Config{ID: id, Bus: ch,
+			// A scheduled/cancelled timer must survive a restart, so the worker
+			// signals it and the assembly layer checkpoints it — the same
+			// arrangement as the reason worker's provider switch.
+			OnDurableChange: func() {
+				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+					log.Printf("[project] checkpoint %s: %v", id, err)
+				}
+			},
+		})
 	}
 	cfg.ID = id
 	cfg.Type = "timer"
