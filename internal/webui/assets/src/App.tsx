@@ -432,6 +432,20 @@ export default function App() {
     es.addEventListener('watermark', onWatermark)
     es.onmessage = (msg) => {
       const evt = JSON.parse(msg.data) as EventPayload
+      // [streamdbg] Diagnostic logging for the streaming path: capture every
+      // delta / terminal arrival so we can tell — when streaming appears to
+      // "only render the final result" — whether deltas reached the client at
+      // all, and what they carried. Remove once diagnosed.
+      const isStreamEvt =
+        evt.type === 'reason.text_delta' || evt.type === 'reason.thinking_delta' ||
+        evt.type === 'reason.thinking' || evt.type === 'reason.response'
+      if (isStreamEvt) {
+        const delta = (evt.payload as any)?.delta
+        console.log(
+          '[streamdbg]', new Date().toISOString().slice(17, 26), evt.type, 'trace=' + (evt.trace_id || '?').slice(0, 8),
+          typeof delta === 'string' ? 'delta=' + delta.length + 'B' : 'payloadKeys=' + JSON.stringify(Object.keys(evt.payload || {})),
+        )
+      }
       if (evt.type === 'event.delivered') {
         const eventId = evt.payload?.event_id as string | undefined
         const recipients = evt.payload?.recipients as string[] | undefined
@@ -441,7 +455,10 @@ export default function App() {
         }
         return
       }
-      if (seenRef.current.has(evt.id)) return
+      if (seenRef.current.has(evt.id)) {
+        console.log('[streamdbg] DROP dup', evt.type, 'id=' + String(evt.id).slice(0, 8), 'trace=' + (evt.trace_id || '').slice(0, 8))
+        return
+      }
       // Sort by timestamp (id tiebreak) rather than arrival order, so any
       // out-of-order delivery from the live stream can't scramble the tail.
       // Trim to MAX_EVENTS only while following the live tail; when the user
