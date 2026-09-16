@@ -9,13 +9,11 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	corebus "github.com/niq-run/niq/core/bus"
 	"github.com/niq-run/niq/core/store"
 	"github.com/niq-run/niq/core/worker"
 	evtsqlite "github.com/niq-run/niq/internal/project/evtstore/sqlite"
@@ -483,135 +481,4 @@ func resolvePort(addr string) int {
 		return n
 	}
 	return 0
-}
-
-// workerMetaFromDecl builds the WebUI's worker display-metadata map (id ⇒
-// tags / description) from the declared worker set, for the workers view and
-// the talk target picker. Only declared hosts carry metadata.
-func workerMetaFromDecl(workers []WorkerConfig) map[string]webui.WorkerMeta {
-	if len(workers) == 0 {
-		return nil
-	}
-	m := make(map[string]webui.WorkerMeta, len(workers))
-	for _, wc := range workers {
-		if wc.Tags == nil && wc.Description == "" {
-			continue
-		}
-		m[wc.ID] = webui.WorkerMeta{Tags: wc.Tags, Description: wc.Description}
-	}
-	return m
-}
-
-// webuiMetaUpdater implements webui.WorkerMetaUpdater: it persists a worker's
-// display metadata (tags / description) to its project.json declaration. Tags
-// are pure WebUI management metadata — the running worker ignores them, so
-// this is a declaration edit only, with no live worker operation.
-type webuiMetaUpdater struct {
-	projectID string
-}
-
-func (u webuiMetaUpdater) UpdateWorkerMeta(id string, meta webui.WorkerMeta) error {
-	if u.projectID == "" {
-		return fmt.Errorf("worker metadata update requires a project")
-	}
-	return UpdateWorkerMeta(u.projectID, id, meta.Tags, meta.Description)
-}
-
-// webuiDeclRemover implements webui.WorkerDeclRemover for a specific project,
-// letting the WebUI remove a managed worker's project.json declaration on delete.
-type webuiDeclRemover struct {
-	projectID string
-}
-
-func (r webuiDeclRemover) RemoveDecl(id string) error {
-	if err := RemoveWorkerDecl(r.projectID, id); err != nil {
-		return err
-	}
-	return removeWorkerStateDir(r.projectID, id)
-}
-
-// webuiUnmanagedAdapter implements webui.UnmanagedController, routing the
-// project WebUI's external-worker controls to the project supervisor.
-type webuiUnmanagedAdapter struct {
-	supervisor *UnmanagedSupervisor
-	registry   corebus.IdentityRegistry
-	workerSvc  *workerhost.WorkerService // optional; identifies live managed workers
-	projectID  string
-}
-
-func (a *webuiUnmanagedAdapter) Start(id string) error {
-	if a.projectID == "" {
-		return fmt.Errorf("unmanaged control requires a project")
-	}
-	p, err := LoadProject(a.projectID)
-	if err != nil {
-		return err
-	}
-	spec, ok := FindWorker(p, id)
-	if !ok {
-		return fmt.Errorf("worker %s not found", id)
-	}
-	if isManagedWorker(spec) {
-		return fmt.Errorf("worker %s is managed, not an external process", id)
-	}
-	if err := provisionUnmanaged(a.registry, a.projectID, &spec); err != nil {
-		return err
-	}
-	return a.supervisor.Start(spec)
-}
-
-func (a *webuiUnmanagedAdapter) Stop(id string) error    { return a.supervisor.Stop(id) }
-func (a *webuiUnmanagedAdapter) Restart(id string) error { return a.supervisor.Restart(id) }
-
-// Remove stops the worker (if supervised) and deletes its project.json
-// declaration so it is not relaunched next start.
-func (a *webuiUnmanagedAdapter) Remove(id string) error {
-	_ = a.supervisor.Stop(id)
-	if a.projectID == "" {
-		return fmt.Errorf("unmanaged control requires a project")
-	}
-	if err := RemoveWorkerDecl(a.projectID, id); err != nil {
-		return err
-	}
-	return removeWorkerStateDir(a.projectID, id)
-}
-
-func (a *webuiUnmanagedAdapter) List() []webui.UnmanagedStatus {
-	out := make([]webui.UnmanagedStatus, 0, 4)
-	for _, st := range a.supervisor.List() {
-		out = append(out, webui.UnmanagedStatus{ID: st.ID, Type: st.Type, State: st.State, Alive: st.Alive})
-	}
-	return out
-}
-
-// Declared returns every worker project.json declares, merging the
-// supervisor's live state so declared-but-not-started externals show as
-// stopped. Managed declarations always report "stopped" — a live managed
-// worker's state belongs to the worker service, and the WebUI filters these
-// out via the registry / workerSvc before rendering. They drive the UI's
-// start buttons for declared-but-idle workers of both kinds.
-func (a *webuiUnmanagedAdapter) Declared() []webui.UnmanagedStatus {
-	if a.projectID == "" {
-		return nil
-	}
-	p, err := LoadProject(a.projectID)
-	if err != nil {
-		return nil
-	}
-	running := map[string]bool{}
-	for _, st := range a.supervisor.List() {
-		running[st.ID] = st.State == "running"
-	}
-	var out []webui.UnmanagedStatus
-	for _, spec := range p.Workers {
-		managed := isManagedWorker(spec)
-		st := webui.UnmanagedStatus{ID: spec.ID, Type: spec.Type, Managed: managed, State: "stopped"}
-		if !managed && running[spec.ID] {
-			st.State = "running"
-			st.Alive = true
-		}
-		out = append(out, st)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
 }

@@ -7,14 +7,9 @@
 package project
 
 import (
-	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
-	"sort"
-
-	"github.com/niq-run/niq/core/worker"
 )
 
 // ExportProjectTemplate builds a template from a project's worker
@@ -82,75 +77,4 @@ func ExportProjectPrograms(projectID, tmplDir string) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-// paramsShape mirrors the params keys workerConfigParams writes, with
-// subscription/publish entries decoded through their flexible (string-or-
-// object) unmarshalers. It is the inverse path of workerConfigParams; a
-// round-trip template → project → template preserves every field it covers.
-type paramsShape struct {
-	Instruction   string             `json:"instruction"`
-	Provider      string             `json:"provider"`
-	APIKey        string             `json:"api_key"`
-	BaseURL       string             `json:"base_url"`
-	Model         string             `json:"model"`
-	Subscriptions []SubscriptionSpec `json:"subscriptions"`
-	Publish       []PublishSpec      `json:"publish"`
-	Mounts        []string           `json:"mounts"`
-	Approver      string             `json:"approver"`
-	Programs      []ProgramSpec      `json:"programs"`
-}
-
-// exportableParams is what paramsShape can carry; anything else in a worker's
-// persisted params (goal/brief/programs/context tuning — spawn-tool extras)
-// has no template field and is dropped with a log line.
-var exportableParams = map[string]bool{
-	"instruction": true, "provider": true, "api_key": true, "base_url": true,
-	"model": true, "subscriptions": true, "publish": true, "mounts": true,
-	"approver": true,
-}
-
-// workerConfigFromParams converts a declared worker's effective params back
-// into the template WorkerConfig it was seeded from. The params map travels
-// through JSON (not hand-parsed) so the subscription/publish entries reuse
-// their own unmarshalers. The api_key is deliberately not carried over; with
-// withProgram the programs param is lifted into the Programs field.
-func workerConfigFromParams(cfg worker.WorkerConfig, withProgram bool) (WorkerConfig, error) {
-	raw, err := json.Marshal(cfg.Params)
-	if err != nil {
-		return WorkerConfig{}, fmt.Errorf("encode params: %w", err)
-	}
-	var shape paramsShape
-	if err := json.Unmarshal(raw, &shape); err != nil {
-		return WorkerConfig{}, fmt.Errorf("decode params: %w", err)
-	}
-
-	var dropped []string
-	for k := range cfg.Params {
-		if !exportableParams[k] && !(withProgram && k == "programs") {
-			dropped = append(dropped, k)
-		}
-	}
-	if len(dropped) > 0 {
-		sort.Strings(dropped)
-		log.Printf("[project] export worker %s: params without a template field are dropped: %v", cfg.ID, dropped)
-	}
-
-	programs := shape.Programs
-	if !withProgram {
-		programs = nil
-	}
-	return WorkerConfig{
-		Type:          cfg.Type,
-		ID:            cfg.ID,
-		Instruction:   shape.Instruction,
-		Provider:      shape.Provider,
-		BaseURL:       shape.BaseURL,
-		Model:         shape.Model,
-		Subscriptions: shape.Subscriptions,
-		Publish:       shape.Publish,
-		Mounts:        shape.Mounts,
-		Approver:      shape.Approver,
-		Programs:      programs,
-	}, nil
 }

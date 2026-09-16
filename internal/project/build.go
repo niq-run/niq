@@ -65,19 +65,13 @@ func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
 // creates a fresh, connected in-process worker-side channel.
 func specConnect(ctx BuildContext, id, typ string, pubAllow []event.PublishPattern, subAllow []event.EventPattern) func() (corebus.WorkerSideChannel, error) {
 	return func() (corebus.WorkerSideChannel, error) {
-		if err := ctx.Registry.Register(corebus.Identity{
+		if err := registerIdentity(ctx.Registry, corebus.Identity{
 			WorkerID:       id,
 			Type:           typ,
 			PublishAllow:   pubAllow,
 			SubscribeAllow: subAllow,
 		}); err != nil {
-			// Identity may exist from a previous run; refresh its allow lists so
-			// they reflect the current builder config.
-			if strings.Contains(err.Error(), "already registered") {
-				ctx.Registry.Update(id, pubAllow, subAllow)
-			} else {
-				return nil, err
-			}
+			return nil, err
 		}
 		ch := inprocess.NewWorkerSide(id, ctx.Listener)
 		if err := ch.Connect(context.Background(), "inproc://niq"); err != nil {

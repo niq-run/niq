@@ -18,7 +18,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -383,26 +382,7 @@ func provisionUnmanaged(registry corebus.IdentityRegistry, projectID string, spe
 		SubscribeAllow: subAllow,
 		Credential:     spec.Credential,
 	}
-	if err := registry.Register(identity); err != nil {
-		if !strings.Contains(err.Error(), "already registered") {
-			return err
-		}
-		// Re-registration after a restart: the identity persists in the
-		// registry file. Refresh the allow lists, and re-register the whole
-		// identity if the credential diverged.
-		existing, ok := registry.Lookup(spec.ID)
-		if !ok {
-			return err
-		}
-		if existing.Credential != spec.Credential {
-			if err := registry.Revoke(spec.ID); err != nil {
-				return err
-			}
-			return registry.Register(identity)
-		}
-		return registry.Update(spec.ID, pubAllow, subAllow)
-	}
-	return nil
+	return registerIdentity(registry, identity)
 }
 
 // persistWorkerCredential writes a generated credential back to the worker's
