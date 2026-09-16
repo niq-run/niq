@@ -1,9 +1,12 @@
 package control
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"strings"
@@ -311,6 +314,91 @@ func TestControlTemplateFromProject(t *testing.T) {
 	if code, _ = do("POST", "/api/templates", draft); code != 409 {
 		t.Fatalf("duplicate status=%d, want 409", code)
 	}
+}
+
+// TestControlImportTemplate verifies the zip-import endpoint: a valid package
+// creates a template (list + detail reflect it), an invalid one is rejected,
+// and a duplicate id is rejected.
+func TestControlImportTemplate(t *testing.T) {
+	setupProjectsRoot(t)
+	base := newControl(t)
+
+	zipBytes := func(files map[string]string) *bytes.Buffer {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		for name, content := range files {
+			f, err := zw.Create(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Write([]byte(content))
+		}
+		zw.Close()
+		return &buf
+	}
+
+	do := func(id string, buf *bytes.Buffer) *http.Response {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		if id != "" {
+			mw.WriteField("id", id)
+		}
+		part, err := mw.CreateFormFile("file", "t.zip")
+		if err != nil {
+			t.Fatal(err)
+		}
+		part.Write(buf.Bytes())
+		mw.Close()
+		req, _ := http.NewRequest("POST", base+"/api/templates/import", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	valid := `{"workers":[{"type":"reason","id":"niq"}]}`
+
+	// Import with an explicit id.
+	resp := do("imp1", zipBytes(map[string]string{"template.json": valid}))
+	if resp.StatusCode != 201 {
+		resp.Body.Close()
+		t.Fatalf("import status=%d, want 201", resp.StatusCode)
+	}
+	resp.Body.Close()
+	_, body := doGet(t, base+"/api/templates")
+	if !strings.Contains(body, "imp1") {
+		t.Fatalf("templates missing imp1: %s", body)
+	}
+
+	// Import with a wrapping folder derives the id from it.
+	resp = do("", zipBytes(map[string]string{"derived/template.json": valid}))
+	if resp.StatusCode != 201 {
+		resp.Body.Close()
+		t.Fatalf("derived import status=%d, want 201", resp.StatusCode)
+	}
+	resp.Body.Close()
+	_, body = doGet(t, base+"/api/templates")
+	if !strings.Contains(body, "derived") {
+		t.Fatalf("templates missing derived: %s", body)
+	}
+
+	// Invalid package (no template.json) is rejected.
+	resp = do("bad", zipBytes(map[string]string{"README.md": "x"}))
+	if resp.StatusCode != 400 {
+		resp.Body.Close()
+		t.Fatalf("bad import status=%d, want 400", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Duplicate id is rejected.
+	resp = do("imp1", zipBytes(map[string]string{"template.json": valid}))
+	if resp.StatusCode != 400 {
+		resp.Body.Close()
+		t.Fatalf("duplicate import status=%d, want 400", resp.StatusCode)
+	}
+	resp.Body.Close()
 }
 
 // TestControlProviders verifies the provider config endpoints: GET returns the

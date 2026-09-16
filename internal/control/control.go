@@ -118,6 +118,7 @@ func (c *Control) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/templates", c.handleListTemplates)
 	mux.HandleFunc("GET /api/templates/{name}", c.handleTemplateDetail)
 	mux.HandleFunc("POST /api/templates", c.handleCreateTemplate)
+	mux.HandleFunc("POST /api/templates/import", c.handleImportTemplate)
 	mux.HandleFunc("PUT /api/templates/{name}", c.handleUpdateTemplate)
 	mux.HandleFunc("DELETE /api/templates/{name}", c.handleDeleteTemplate)
 	mux.HandleFunc("GET /api/projects", c.handleListProjects)

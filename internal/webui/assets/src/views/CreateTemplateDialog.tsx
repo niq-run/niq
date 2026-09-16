@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { createTemplate, fetchTemplatePreview } from '../services/api'
+import { createTemplate, fetchTemplatePreview, importTemplate } from '../services/api'
 
 interface CreateTemplateDialogProps {
   open: boolean
@@ -24,11 +24,13 @@ interface CreateTemplateDialogProps {
 export default function CreateTemplateDialog({ open, templates, projects, onClose, onCreated, onDraft }: CreateTemplateDialogProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
-  const [source, setSource] = useState<'template' | 'project'>('template')
+  const [source, setSource] = useState<'template' | 'project' | 'zip'>('template')
   const [id, setId] = useState('')
   const [copyFrom, setCopyFrom] = useState('')
   const [fromProject, setFromProject] = useState('')
   const [includeProgram, setIncludeProgram] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
 
@@ -67,21 +69,29 @@ export default function CreateTemplateDialog({ open, templates, projects, onClos
     if (busy) return
     setNote('')
     const trimmed = id.trim()
-    if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) { setNote(t('templates.error.required')); return }
-    const src = source === 'template' ? copyFrom : fromProject
-    if (!src) { setNote(t('templates.error.required')); return }
+    // Zip import tolerates an empty id (derived from the folder name); the
+    // other sources require a valid id.
+    if (source !== 'zip') {
+      if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) { setNote(t('templates.error.required')); return }
+    }
+    if (source === 'template' && !copyFrom) { setNote(t('templates.error.required')); return }
+    if (source === 'project' && !fromProject) { setNote(t('templates.error.required')); return }
+    if (source === 'zip' && !file) { setNote(t('templates.create.fileRequired')); return }
 
     setBusy(true)
     try {
       if (source === 'template') {
-        await createTemplate(trimmed, src)
+        await createTemplate(trimmed, copyFrom)
         onCreated(trimmed)
+      } else if (source === 'project') {
+        const preview = await fetchTemplatePreview(fromProject, includeProgram)
+        onDraft(trimmed, preview, { fromProject, includeProgram })
       } else {
-        const preview = await fetchTemplatePreview(src, includeProgram)
-        onDraft(trimmed, preview, { fromProject: src, includeProgram })
+        await importTemplate(trimmed, file!)
+        onCreated(trimmed || file!.name.replace(/\.zip$/i, ''))
       }
     } catch (e) {
-      setNote(t('templates.error.create', { id: trimmed }))
+      setNote((e as Error)?.message || t('templates.error.create', { id: trimmed }))
     } finally {
       setBusy(false)
     }
@@ -123,7 +133,7 @@ export default function CreateTemplateDialog({ open, templates, projects, onClos
           </span>
         </div>
 
-        {/* Source: another template (immediate clone) or a project (draft). */}
+        {/* Source: another template (immediate clone), a project (draft), or a shared zip package. */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
           <span onClick={() => { setSource('template'); setNote('') }} style={pill(source === 'template')}>
             {t('templates.create.sourceTemplate')}
@@ -131,29 +141,64 @@ export default function CreateTemplateDialog({ open, templates, projects, onClos
           <span onClick={() => { setSource('project'); setNote('') }} style={pill(source === 'project')}>
             {t('templates.create.sourceProject')}
           </span>
+          <span onClick={() => { setSource('zip'); setNote('') }} style={pill(source === 'zip')}>
+            {t('templates.create.sourceZip')}
+          </span>
         </div>
         <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, lineHeight: 1.5, marginBottom: 12 }}>
-          {source === 'template' ? t('templates.create.sourceTemplateHint') : t('templates.create.sourceProjectHint')}
+          {source === 'template' ? t('templates.create.sourceTemplateHint') : source === 'project' ? t('templates.create.sourceProjectHint') : t('templates.create.sourceZipHint')}
         </div>
 
         <div style={field}>
-          <label style={label}>{t('templates.create.id')}</label>
+          <label style={label}>{source === 'zip' ? t('templates.create.idOptionalZip') : t('templates.create.id')}</label>
           <input style={input} value={id} onChange={e => setId(e.target.value)} placeholder={t('templates.newId.placeholder')} />
         </div>
-        <div style={field}>
-          <label style={label}>{source === 'template' ? t('templates.templatePlaceholder') : t('templates.projectPlaceholder')}</label>
-          {source === 'template' ? (
-            <select style={input} value={copyFrom} onChange={e => setCopyFrom(e.target.value)}>
-              <option value=""></option>
-              {templates.map(x => <option key={x} value={x}>{x}</option>)}
-            </select>
-          ) : (
-            <select style={input} value={fromProject} onChange={e => setFromProject(e.target.value)}>
-              <option value=""></option>
-              {projects.map(x => <option key={x} value={x}>{x}</option>)}
-            </select>
-          )}
-        </div>
+        {source === 'zip' ? (
+          <div style={field}>
+            <label style={label}>{t('templates.create.file')}</label>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span
+                onClick={() => fileRef.current?.click()}
+                className="btn-hover"
+                style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 12px', color: file ? colors.accent : colors.textDim, fontSize: fontSizes.sm, userSelect: 'none', whiteSpace: 'nowrap' }}
+              >
+                {file ? file.name : t('templates.create.filePlaceholder')}
+              </span>
+              {file && (
+                <span
+                  onClick={() => setFile(null)}
+                  className="btn-hover"
+                  title={t('templates.create.file')}
+                  style={{ cursor: 'pointer', color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none' }}
+                >
+                  {'✕'}
+                </span>
+              )}
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".zip"
+                style={{ display: 'none' }}
+                onChange={e => { setFile(e.target.files?.[0] ?? null); setNote('') }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div style={field}>
+            <label style={label}>{source === 'template' ? t('templates.templatePlaceholder') : t('templates.projectPlaceholder')}</label>
+            {source === 'template' ? (
+              <select style={input} value={copyFrom} onChange={e => setCopyFrom(e.target.value)}>
+                <option value=""></option>
+                {templates.map(x => <option key={x} value={x}>{x}</option>)}
+              </select>
+            ) : (
+              <select style={input} value={fromProject} onChange={e => setFromProject(e.target.value)}>
+                <option value=""></option>
+                {projects.map(x => <option key={x} value={x}>{x}</option>)}
+              </select>
+            )}
+          </div>
+        )}
 
         {/* From a project only: carry the project's programs into the template. */}
         {source === 'project' && (

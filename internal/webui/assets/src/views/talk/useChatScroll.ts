@@ -66,10 +66,28 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Synchronous bottom pin on content growth. The rAF loop below is a whole
+  // frame behind a render: by the time it sees the new (taller) scrollHeight
+  // and re-pins, the browser has already painted one frame with the stale
+  // scrollTop — the visible "kick then settle" that reads as a jump whenever
+  // the whole tail fits in the viewport (e.g. collapsed/header-only thinking
+  // blocks are short constant-height rows, so every stream batch shows the
+  // kick; a very tall block above the viewport hides it). Pinning in a layout
+  // effect runs before paint, so the frame already shows the pinned bottom.
+  // Only when the follow switch is on, and only when we aren't already there.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el || !autoScrollRef.current) return
+    const max = el.scrollHeight - el.clientHeight
+    if (el.scrollTop !== max) el.scrollTop = max
+  }, [relevantEvents, events])
+
   // Follow-to-bottom on content growth: a rAF loop that only writes scrollTop
   // when the height actually changed, so a quiet stretch never locks the
   // scroller and both a sent message and a stream batch are followed to the
-  // bottom while the switch is on.
+  // bottom while the switch is on. It keeps pace with the GrowingHeight CSS
+  // transition (which changes scrollHeight over several frames, not in the
+  // single commit the layout effect above sees).
   useEffect(() => {
     let raf = 0
     let lastHeight = scrollRef.current?.scrollHeight ?? 0

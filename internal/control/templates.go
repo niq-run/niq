@@ -162,6 +162,39 @@ func (c *Control) handleTemplatePreview(w stdhttp.ResponseWriter, r *stdhttp.Req
 	json.NewEncoder(w).Encode(tmpl)
 }
 
+// handleImportTemplate imports a shared template package (a zip carrying a
+// template.json and optional programs/) into the on-disk templates dir. The
+// client sends multipart/form-data with an optional id field and a file. Without
+// an id, the zip's wrapping folder name is used; an invalid/missing id is an
+// error. Nothing is written unless the whole package validates.
+func (c *Control) handleImportTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	if err := r.ParseMultipartForm(project.MaxTemplateImportBytes() + 1); err != nil {
+		stdhttp.Error(w, "import template: multipart form: "+err.Error(), 400)
+		return
+	}
+	id := r.FormValue("id")
+	fh, _, err := r.FormFile("file")
+	if err != nil {
+		stdhttp.Error(w, "a zip file is required (field 'file')", 400)
+		return
+	}
+	defer fh.Close()
+	data, err := io.ReadAll(io.LimitReader(fh, project.MaxTemplateImportBytes()+1))
+	if err != nil {
+		stdhttp.Error(w, "import template: read file: "+err.Error(), 400)
+		return
+	}
+	if int64(len(data)) > project.MaxTemplateImportBytes() {
+		stdhttp.Error(w, "import template: file too large", 400)
+		return
+	}
+	if _, err := project.ImportTemplateZip(id, data); err != nil {
+		stdhttp.Error(w, err.Error(), 400)
+		return
+	}
+	w.WriteHeader(stdhttp.StatusCreated)
+}
+
 // writeTemplate persists a template's template.json (dirs created lazily).
 func writeTemplate(dest string, src []byte) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {

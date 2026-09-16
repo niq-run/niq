@@ -108,6 +108,19 @@ export async function updateTemplate(name: string, template: any): Promise<void>
   if (!res.ok) throw new Error(await errText(res, 'update template failed'))
 }
 
+// importTemplate imports a shared template package (.zip) into the templates
+// dir. id may be empty — the backend derives it from the zip's folder name.
+export async function importTemplate(id: string, file: File): Promise<void> {
+  const form = new FormData()
+  if (id) form.append('id', id)
+  form.append('file', file)
+  const res = await fetch(CONTROL + '/api/templates/import', {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) throw new Error(await errText(res, 'import template failed'))
+}
+
 // errText extracts the server's error message (the handlers put the reason in
 // the body), falling back to the status line.
 async function errText(res: Response, fallback: string): Promise<string> {

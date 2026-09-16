@@ -110,6 +110,28 @@ function mergeEvents(existing: EventPayload[], incoming: EventPayload[], maxLen 
   return out
 }
 
+// ── Talk worker filter in the URL ──
+// The talk view's selected worker(s) live in `?talk=id1,id2`. Reading them on
+// load means a refresh re-establishes the conversation, and writing them on
+// every toggle keeps the selection durable without a full navigation.
+const TALK_PARAM = 'talk'
+function readTalkWorkersFromUrl(): Set<string> {
+  const ids = new Set<string>()
+  try {
+    const v = new URLSearchParams(window.location.search).get(TALK_PARAM)
+    if (v) for (const id of v.split(',')) if (id) ids.add(id)
+  } catch { /* ignore malformed URL */ }
+  return ids
+}
+function writeTalkWorkersToUrl(ids: Set<string>) {
+  try {
+    const q = new URLSearchParams(window.location.search)
+    if (ids.size) q.set(TALK_PARAM, [...ids].sort().join(','))
+    else q.delete(TALK_PARAM)
+    const qs = q.toString()
+    window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''))
+  } catch { /* replaceState can throw in odd contexts */ }
+}
 // composeInput appends the staged attachments to the message text as HIW
 // attachment envelope blocks (parsed worker-side and by the talk renderer).
 function composeInput(text: string, attachments: StagedAttachment[]): string {
@@ -160,7 +182,9 @@ export default function App() {
   const [detailWidth, setDetailWidth] = useState<number>(detailDefaultWidth)
   const detailDraggedRef = useRef(false)
   const [deliveries, setDeliveries] = useState<Record<string, string[]>>({})
-  const [talkWorkers, setTalkWorkers] = useState<Set<string>>(new Set())
+  // Selected talk worker(s), restored from the URL (?talk=id1,id2) so a refresh
+  // re-establishes the same conversation.
+  const [talkWorkers, setTalkWorkers] = useState<Set<string>>(() => readTalkWorkersFromUrl())
   const [mentionTarget, setMentionTarget] = useState('')
   // Talk view settings (moved from TalkView's header to the sidebar), persisted
   // to localStorage so they survive reloads / new sessions.
@@ -220,6 +244,9 @@ export default function App() {
   const trimTimerRef = useRef(0)
   const trimToMax = useCallback(() => {
     if (!activeFollowingRef.current || eventsRef.current.length <= MAX_EVENTS) return
+    // The talk stream is server-scoped to the selected worker(s), so this plain
+    // newest-N trim can't drop a worker's conversation the way the old global
+    // (unscoped) feed did.
     const trimmed = mergeEvents(eventsRef.current, [], MAX_EVENTS)
     eventsRef.current = trimmed
     seenRef.current = new Set(trimmed.map((e) => e.id))
@@ -358,16 +385,18 @@ export default function App() {
   }
 
   // ── SSE stream key ──
-  // The SSE is a *project-level* subscription to the event stream — it is not
-  // owned by any view. It only reconnects when the stream's filter actually
-  // changes, which happens solely for the events view (worker/trace filter).
-  // talk/workers (and any other non-events view) all use the same default
-  // stream, so switching between them never tears the connection down — the
-  // previous view's SSE simply stays alive. `view` is intentionally excluded
-  // from the effect deps for this reason.
+  // The SSE is a *project-level* subscription to the event stream. It
+  // reconnects (rebuilding the timeline) whenever the stream's filter actually
+  // changes: the events view's worker/trace filter, or the talk view's selected
+  // conversation worker(s). Selecting a talk worker therefore tears down and
+  // re-establishes the stream scoped to that worker server-side — the events
+  // array holds only that conversation, so the newest-N trim can never drop it
+  // and the earlier client-side re-scope fetch is unnecessary.
   const streamKey = view === 'events'
     ? 'events-' + [...filterWorkers].sort().join(',') + '-' + [...filterRoles].sort().join(',') + '-' + traceFilter
-    : 'all'
+    : view === 'talk'
+      ? 'talk-' + [...talkWorkers].sort().join(',')
+      : 'all'
   // Mirrors streamKey for async callbacks (the history fetch) to detect that
   // their stream was torn down while the request was in flight.
   const streamKeyRef = useRef(streamKey)
@@ -390,15 +419,19 @@ export default function App() {
   useEffect(() => {
     // No project → no event stream.
     if (mode !== 'project') return
-    // The SSE stays up across views AND management panels: tearing it down on
-    // a panel switch would race a rebuild against a message sent right after
-    // returning to talk, and its live events could be lost. The cost of one
-    // idle connection is negligible.
+    // The SSE is a project-level subscription; its filter follows the active
+    // view. The events view scopes by its worker/trace filter; the talk view
+    // scopes to the selected conversation worker(s) (worker_id OR target OR
+    // recipient — the same envelope semantics as TalkView's relevantEvents and
+    // the backend's workerMatchesAny), so the stream only ever ships that
+    // conversation. An empty talk selection means the unfiltered stream.
     const params = new URLSearchParams()
     if (view === 'events') {
       for (const id of filterWorkers) params.append('worker', id)
       for (const role of filterRoles) params.append('role', role)
       if (traceFilter) params.set('trace', traceFilter)
+    } else if (view === 'talk') {
+      for (const id of talkWorkers) params.append('worker', id)
     }
     const url = projectBase + `/api/stream?${params}`
 
@@ -505,8 +538,9 @@ export default function App() {
       es.close()
       window.clearTimeout(trimTimerRef.current)
     }
-    // `view` intentionally excluded: talk↔workers must keep the same connection.
-    // `streamKey` already encodes the events-view filter, so traceFilter is redundant here.
+    // Re-run whenever the filter changes (events view), or the selected talk
+    // conversation changes — both are captured in streamKey. `view` itself is
+    // intentionally not a dep; it is already encoded by streamKey.
   }, [streamKey, mode, projectBase])
 
   // ── Polling (only meaningful when a project is attached). The URL carries the
@@ -642,6 +676,7 @@ export default function App() {
     if (next.has(id)) next.delete(id)
     else next.add(id)
     setTalkWorkers(next)
+    writeTalkWorkersToUrl(next)
     if (next.size === 1) {
       setMentionTarget([...next][0])
     } else if (next.size === 0) {
@@ -847,37 +882,6 @@ export default function App() {
     noMoreRef.current = false
   }, [view, filterWorkers, filterRoles, traceFilter, talkScope])
 
-  // Re-scope the talk recent window when the selected worker(s) change. The
-  // talk SSE stream key is always 'all' (so switching workers never tears down
-  // the connection), which means relevantEvents previously only filtered
-  // whatever was already loaded client-side — a worker whose events aren't in
-  // the loaded window would show nothing at all. This re-fetches a fresh recent
-  // page scoped to the new selection (from the stream watermark, i.e. the
-  // newest) and merges it in, so switching focus pulls that worker's real
-  // conversation. The join(key) guard also covers the initial load: until the
-  // workers poll resolves, talkScope is empty (key '') and the SSE prime loads
-  // unscoped; once it resolves here the scope key changes and we re-scope.
-  const lastTalkScope = useRef('')
-  useEffect(() => {
-    if (view !== 'talk') return
-    const key = talkScope.join(',')
-    if (key === lastTalkScope.current) return
-    lastTalkScope.current = key
-    noMoreRef.current = false
-    const anchor = watermarkRef.current || (eventsRef.current.length ? eventsRef.current[eventsRef.current.length - 1].id : '')
-    if (!anchor) return
-    ;(async () => {
-      try {
-        const older = (await loadEventsBefore(anchor, HISTORY_PAGE, talkScope, '', [])) as EventPayload[]
-        if (view !== 'talk') return
-        const filtered = older.filter((e) => e.type !== 'event.delivered')
-        const merged = mergeEvents(eventsRef.current, filtered)
-        eventsRef.current = merged
-        setEvents(merged)
-      } catch {}
-    })()
-  }, [view, talkScope])
-
   // Auto-load more events when scrolling to top.
   useEffect(() => {
     if (view !== 'events' || events.length === 0) return
@@ -1077,8 +1081,12 @@ export default function App() {
           <div key="programs" className="fade-in" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <ProgramsView project={projectName} isMobile={isMobile} />
           </div>
+        // Re-key the talk wrapper on the stream scope so switching the selected
+        // conversation remounts with the existing fade-in instead of a hard cut
+        // to the new (possibly empty-while-loading) list. Mirrors the events
+        // view, which re-keys the same way on its filter stream.
         ) : view === 'talk' ? (
-          <div key="talk" className="fade-in" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div key={streamKey} className="fade-in" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <TalkView
               events={events}
               talkWorkers={talkWorkers}
