@@ -37,6 +37,9 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(true)
   const prevScrollRef = useRef(0)
+  // Previous distance-to-bottom, used to re-engage follow only when the reader
+  // is actually moving toward (or already at) the bottom — see handleScroll.
+  const prevDistRef = useRef(Number.POSITIVE_INFINITY)
   const manualRef = useRef(false)
   const manualTimerRef = useRef(0)
   const markManual = useCallback(() => {
@@ -158,16 +161,22 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
     if (!el) return
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
     const prev = prevScrollRef.current
-    // Sticky follow switch: off only on an explicit up-scroll; content growth
-    // never flips it (the follow loop only raises scrollTop and the trim gate
-    // means nothing shrinks above). Back on only when the user scrolls down
-    // into the bottom window, or via the button / a send.
-    if (autoScrollRef.current && manualRef.current && el.scrollTop < prev) {
+    // Sticky follow switch: off only on an explicit up-scroll (a few px of real
+    // upward movement — trackpad/natural-scroll micro-jitter is filtered out, so
+    // streaming pins don't spuriously drop it and flash the jump-to-bottom
+    // button). Back on when the reader reaches the bottom window, or via the
+    // button / a send. Re-engage compares against the PREVIOUS distance so it
+    // still fires when a fast scroll's final event has scrollTop clamped equal
+    // to the prior one (strict `scrollTop > prev` misses that), yet does NOT
+    // fire when the reader starts scrolling up away from the bottom (dist then
+    // increases, so `dist <= prevDist` is false).
+    if (autoScrollRef.current && manualRef.current && el.scrollTop < prev - 4) {
       autoScrollRef.current = false
-    } else if (!autoScrollRef.current && el.scrollTop > prev && dist < 50) {
+    } else if (!autoScrollRef.current && dist < 50 && dist <= prevDistRef.current) {
       autoScrollRef.current = true
     }
     prevScrollRef.current = el.scrollTop
+    prevDistRef.current = dist
     setAtBottom(autoScrollRef.current)
     onFollowChangeRef.current?.(autoScrollRef.current)
     maybeLoadMoreRef.current?.('nearTop')
