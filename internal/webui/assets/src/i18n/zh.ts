@@ -54,6 +54,7 @@ export const zh: Record<StringKey, string> = {
   'sidebar.resize.tooltip': '拖动调整宽度，双击重置',
   'sidebar.close': '关闭',
   'sidebar.logo.tooltip': '右键反转配色',
+  'sidebar.logo.pattern.tooltip': '别针图案 — 点击切换配色',
 
   // ── 主题与语言切换 ──
   'theme.light': '浅色',

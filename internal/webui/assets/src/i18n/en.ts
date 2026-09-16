@@ -53,6 +53,7 @@ export const en = {
   'sidebar.resize.tooltip': 'drag to resize, double-click to reset',
   'sidebar.close': 'close',
   'sidebar.logo.tooltip': 'right-click to invert colours',
+  'sidebar.logo.pattern.tooltip': 'pin pattern — click to swap colours',
 
   // ── Theme + language toggles ──
   'theme.light': 'light',

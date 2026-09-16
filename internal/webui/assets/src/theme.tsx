@@ -137,10 +137,12 @@ const light: Palette = {
 interface ThemeCtx {
   dark: boolean
   toggle: () => void
+  inverted: boolean
+  toggleInverted: () => void
   colors: Palette
 }
 
-const ThemeContext = createContext<ThemeCtx>({ dark: true, toggle: () => {}, colors: dark })
+const ThemeContext = createContext<ThemeCtx>({ dark: true, toggle: () => {}, inverted: false, toggleInverted: () => {}, colors: dark })
 
 function getInitialDark(): boolean {
   const stored = globalThis.localStorage?.getItem('niq-theme')
@@ -152,6 +154,7 @@ function getInitialDark(): boolean {
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [isDark, setIsDark] = useState(getInitialDark)
+  const [inverted, setInverted] = useState(false)
 
   // Follow live OS theme switches, but only while the user has not made an
   // explicit choice — a stored 'niq-theme' is authoritative.
@@ -174,8 +177,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     globalThis.localStorage?.setItem('niq-theme', next ? 'dark' : 'light')
     return next
   }), [])
+
+  // The inverted (colourful) mode: toggles the global inverted flag. Only the
+  // handful of structural border lines explicitly opt in (sidebar divider /
+  // partitions / band bottom / input divider); content, inputs and buttons are
+  // left untouched.
+  const toggleInverted = useCallback(() => setInverted(v => !v), [])
+  const colors = isDark ? dark : light
   return (
-    <ThemeContext.Provider value={{ dark: isDark, toggle, colors: isDark ? dark : light }}>
+    <ThemeContext.Provider value={{ dark: isDark, toggle, inverted, toggleInverted, colors }}>
       {children}
     </ThemeContext.Provider>
   )

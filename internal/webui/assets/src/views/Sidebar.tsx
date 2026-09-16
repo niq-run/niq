@@ -3,6 +3,8 @@ import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 import WorkerPickerModal from '../components/WorkerPickerModal'
+import pinSvg from '../assets/pin.svg'
+import pinwSvg from '../assets/pinw.svg'
 
 interface SidebarProps {
   view: ViewMode
@@ -49,7 +51,7 @@ function loadSidebarWidth(): number {
 }
 
 export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0 }: SidebarProps) {
-  const { dark, toggle, colors } = useTheme()
+  const { dark, toggle, colors, inverted, toggleInverted } = useTheme()
   const { lang, setLang, t } = useI18n()
   // Hovered sidebar option (non-toggle, non-checkbox rows) — shows a full-width
   // row highlight. Excludes the view-setting switches and the worker-selector
@@ -267,8 +269,8 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const [projBlockHover, setProjBlockHover] = useState(false)
 
   // Right-click on the logo band inverts the band's colours: the background
-  // takes the logo's accent colour and the logo takes the page background.
-  const [logoInverted, setLogoInverted] = useState(false)
+  // takes the accent colour, the logo takes the page background, and every
+  // neutral border in the UI turns accent too (via the theme's inverted mode).
   useEffect(() => {
     if (!projMenuOpen) return
     const close = () => setProjMenuOpen(false)
@@ -279,10 +281,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // Desktop: a fixed left column. Mobile: an off-canvas drawer (fixed,
   // translated off-screen when closed) that overlays the main area.
   // The right divider turns accent-colored and glows while the logo is dragged
-  // against it, then fades when the logo leaves.
+  // against it, then fades when the logo leaves. When inverted, the divider
+  // (sidebar's right line) explicitly turns accent so the band, its bottom
+  // border and the right line read as one unified accent stroke.
   const accent = colors.accent
   const accentDim = colors.accentDim
-  const dividerColor = hittingEdge ? accent : colors.border
+  const dividerColor = (inverted || hittingEdge) ? accent : colors.border
   const dividerGlow = hittingEdge ? 'inset -2px 0 8px ' + accentDim : 'none'
   const glowTransition = 'border-color 0.2s ease, box-shadow 0.2s ease'
 
@@ -403,18 +407,23 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           overflow clips the logo exactly at the right divider instead of
           letting it paint over the main content area. */}
       <div
-        onContextMenu={(e) => { e.preventDefault(); setLogoInverted(v => !v) }}
+        onContextMenu={(e) => { e.preventDefault(); toggleInverted() }}
         title={t('sidebar.logo.tooltip')}
         style={{
           flexShrink: 0, overflow: 'hidden', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`,
-          borderBottom: '1px solid ' + colors.border, height: VIEW_HEADER_HEIGHT, display: 'flex', alignItems: 'center',
-          background: logoInverted ? colors.accent : 'transparent', transition: 'background 0.2s ease',
+          // When inverted the band fills accent and its bottom border turns
+          // accent, so band, bottom line and sidebar right divider read as one
+          // unified accent stroke.
+          borderBottom: '1px solid ' + (inverted ? colors.accent : colors.border),
+          height: VIEW_HEADER_HEIGHT,
+          display: 'flex', alignItems: 'center',
+          background: inverted ? colors.accent : 'transparent', transition: 'background 0.2s ease',
         }}
       >
       {/* Logo + project name — clicking anywhere here plays the single-click
           cycle (a drag in the logo suppresses it). */}
       <div style={{ flex: 1, minWidth: 0 }} onClick={onLogoClick}>
-        <h2 ref={logoWrapRef} style={{ margin: '0 0 0 -3px', lineHeight: 1, color: logoInverted ? colors.bg : colors.accent, fontSize: 36, fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace", fontWeight: 'bold', transition: 'color 0.2s ease' }}>
+        <h2 ref={logoWrapRef} style={{ margin: '0 0 0 -3px', lineHeight: 1, color: inverted ? '#EEEEEE' : colors.accent, fontSize: 36, fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace", fontWeight: 'bold', transition: 'color 0.2s ease' }}>
           <span
             ref={logoRef}
             onPointerDown={onLogoPointerDown}
@@ -443,6 +452,20 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           </span>
         </h2>
       </div>
+      {/* Pin pattern logo — right-aligned in the logo band. By default it
+          picks the version whose background matches the current page theme
+          (light → pinw, dark → pin), so it blends into the backdrop. When the
+          band is inverted (right-click the band or click the pin) it switches
+          to the single light-background version, matching the unified blue
+          band + light logo look regardless of theme. */}
+      <img
+        src={inverted ? pinwSvg : (dark ? pinSvg : pinwSvg)}
+        alt=""
+        title={t('sidebar.logo.pattern.tooltip')}
+        draggable={false}
+        onClick={toggleInverted}
+        style={{ flexShrink: 0, marginLeft: 12, width: 28, height: 28, display: 'block', cursor: 'pointer', transition: 'opacity 0.2s ease', userSelect: 'none', WebkitUserSelect: 'none' }}
+      />
       </div>
 
       {/* Scrollable options between the fixed header and footer. The negative
