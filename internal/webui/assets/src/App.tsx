@@ -35,6 +35,16 @@ const HISTORY_PAGE = 100
 // scrolling to the top, which triggers onLoadMore to page it back in.
 const MAX_EVENTS = 50
 
+// Trims run against a short debounce ("settle") window rather than on every
+// live event: bursty streaming deltas no longer collapse the top of the list
+// mid-frame (that per-event interleave with the streaming tail's height
+// transition is what made each trim visibly shake the pinned bottom), and a
+// re-engaged follow gets a beat to reach the actual bottom before history
+// above is reclaimed (so it doesn't yank a whole block of history while the
+// user is still scrolling down through it). Must stay well under the backend's
+// ~3s delta flush so a trim always lands in the quiet gap between batches.
+const TRIM_SETTLE_MS = 350
+
 // Per-reason-worker input mode, persisted to localStorage. The default is
 // append (level 2): the gentle mode that supplements the ongoing thought
 // without tearing down in-flight reasoning — friendlier for daily use than an
@@ -201,21 +211,37 @@ export default function App() {
   // through setActiveFollowing; the trim gate only runs while this is true so
   // trimming never shifts a reader's scrolled-up viewport.
   const activeFollowingRef = useRef(true)
+  // Trims are debounced to a quiet settle window (see TRIM_SETTLE_MS) instead
+  // of applied inline on every live event, so a burst of streaming deltas does
+  // not collapse the top rows in the middle of an active frame/animation — the
+  // interleave that used to make each trim visibly shake the pinned bottom.
+  // Re-engaging follow likewise defers the cleanup a beat so it doesn't yank
+  // away a large block of history while the user is still scrolling down.
+  const trimTimerRef = useRef(0)
+  const trimToMax = useCallback(() => {
+    if (!activeFollowingRef.current || eventsRef.current.length <= MAX_EVENTS) return
+    const trimmed = mergeEvents(eventsRef.current, [], MAX_EVENTS)
+    eventsRef.current = trimmed
+    seenRef.current = new Set(trimmed.map((e) => e.id))
+    setEvents(trimmed)
+  }, [])
+  const scheduleTrim = useCallback((delay: number) => {
+    window.clearTimeout(trimTimerRef.current)
+    trimTimerRef.current = window.setTimeout(trimToMax, delay)
+  }, [trimToMax])
   const setActiveFollowing = useCallback((v: boolean) => {
     const was = activeFollowingRef.current
     activeFollowingRef.current = v
-    // Re-engaging follow (the user scrolled back to the bottom) immediately
-    // drops any history above MAX_EVENTS that was loaded while reading up — so
-    // the list is trimmed the moment follow returns, without waiting for the
-    // next live event. Only runs on the transition into following, and only
-    // when there's actually excess to drop (keeps re-renders minimal).
-    if (v && !was && eventsRef.current.length > MAX_EVENTS) {
-      const trimmed = mergeEvents(eventsRef.current, [], MAX_EVENTS)
-      eventsRef.current = trimmed
-      seenRef.current = new Set(trimmed.map((e) => e.id))
-      setEvents(trimmed)
+    if (!v) {
+      // Reading up: cancel any queued trim so we never collapse history while
+      // the reader is passing back through it.
+      window.clearTimeout(trimTimerRef.current)
+      return
     }
-  }, [])
+    // Re-engaging follow: schedule the cleanup so the list returns to the cap
+    // shortly after the user lands at the bottom, not in the scroll gesture.
+    if (!was) scheduleTrim(TRIM_SETTLE_MS)
+  }, [scheduleTrim])
   // Switching the visible view mounts a fresh scroller, which starts pinned to
   // the bottom until it reports its first scroll.
   useEffect(() => { activeFollowingRef.current = true }, [view])
@@ -461,19 +487,24 @@ export default function App() {
       }
       // Sort by timestamp (id tiebreak) rather than arrival order, so any
       // out-of-order delivery from the live stream can't scramble the tail.
-      // Trim to MAX_EVENTS only while following the live tail; when the user
-      // has scrolled up to read, we hold the full list so trimming can't shift
-      // their viewport, and they return to the cap once they get back to bottom.
-      const trim = activeFollowingRef.current ? MAX_EVENTS : 0
-      const next = mergeEvents(eventsRef.current, [evt], trim)
+      // Trim is NOT applied inline here — it's deferred through scheduleTrim so
+      // a burst of events settles into one quiet cleanup instead of a per-event
+      // top collapse while following. A hard ceiling (2×MAX_EVENTS) guarantees
+      // even a pathological high-rate feed stays bounded.
+      const next = mergeEvents(eventsRef.current, [evt])
       eventsRef.current = next
       setEvents(next)
-      // mergeEvents caps the list (MAX_EVENTS) while following; rebase the
-      // dedupe set to the retained ids so it too stays bounded instead of
-      // growing with every event seen over a session.
+      // Rebase the dedupe set to the retained ids so it stays bounded instead
+      // of growing with every event seen over a session.
       seenRef.current = new Set(next.map((e) => e.id))
+      if (activeFollowingRef.current) {
+        scheduleTrim(next.length > MAX_EVENTS * 2 ? 0 : TRIM_SETTLE_MS)
+      }
     }
-    return () => es.close()
+    return () => {
+      es.close()
+      window.clearTimeout(trimTimerRef.current)
+    }
     // `view` intentionally excluded: talk↔workers must keep the same connection.
     // `streamKey` already encodes the events-view filter, so traceFilter is redundant here.
   }, [streamKey, mode, projectBase])
