@@ -14,6 +14,7 @@ export const zh: Record<StringKey, string> = {
   'sidebar.workerSelector.searchPlaceholder': '搜索',
   'sidebar.workerSelector.noOnline': '无在线工作单元',
   'sidebar.workerSelector.noMatch': '无匹配',
+  'sidebar.workerSelector.allSlept': '全部已休眠 — 打开扩展选择器可唤醒',
   'sidebar.tagFilter.label': '标签',
   'sidebar.tagFilter.placeholder': '按标签筛选',
   'sidebar.tagFilter.clear': '清除',
@@ -111,6 +112,7 @@ export const zh: Record<StringKey, string> = {
   'talk.approval.rejected': '已拒绝',
   'talk.trace': '调用链',
   'talk.trace.tooltip': '查看该调用链的全部事件',
+  'talk.addFilter.tooltip': '点击将该 worker 加入筛选',
   'talk.wrap.tooltip': '切换代码块的自动换行显示',
   'talk.watching': '正在监听',
   'talk.charsPreserved': '{n} 字符已保留',
@@ -120,6 +122,9 @@ export const zh: Record<StringKey, string> = {
   'talk.code.collapse': '收起',
   'talk.code.collapse.tooltip': '折叠内容',
   'badge.mention.tip': '点击提及',
+  'badge.menu.detail': '查看详情',
+  'badge.menu.addFilter': '增加筛选',
+  'badge.menu.focus': '只看 {worker}',
 
   'sr.label': '系统提示',
   'sr.collapse.tooltip': '点击收起',
@@ -153,6 +158,12 @@ export const zh: Record<StringKey, string> = {
   'picker.broadcast': '广播（无目标）',
   'picker.header.mode': '模式',
   'picker.group.untagged': '其他',
+  'pinned.header': '置顶',
+  'pinned.pin': '置顶',
+  'pinned.unpin': '取消置顶',
+  'pinned.sleep': '休眠',
+  'pinned.wake': '唤醒',
+  'pinned.sleep.header': '已休眠',
 
   // ── 输入模式选项 ──
   'mode.interrupt': '打断模式',

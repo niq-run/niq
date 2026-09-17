@@ -13,6 +13,7 @@ export const en = {
   'sidebar.workerSelector.searchPlaceholder': 'search',
   'sidebar.workerSelector.noOnline': 'no online workers',
   'sidebar.workerSelector.noMatch': 'no match',
+  'sidebar.workerSelector.allSlept': 'all hibernated — open the expanded picker to wake',
   'sidebar.tagFilter.label': 'tags',
   'sidebar.tagFilter.placeholder': 'filter by tag',
   'sidebar.tagFilter.clear': 'clear',
@@ -113,6 +114,7 @@ export const en = {
   'talk.approval.rejected': 'Rejected',
   'talk.trace': 'trace',
   'talk.trace.tooltip': 'View all events in this trace',
+  'talk.addFilter.tooltip': 'click to add this worker to the filter',
   'talk.wrap.tooltip': 'toggle soft-wrapping of the code body',
   'talk.watching': 'watching',
   'talk.charsPreserved': '{n} chars preserved',
@@ -122,6 +124,9 @@ export const en = {
   'talk.code.collapse': 'collapse',
   'talk.code.collapse.tooltip': 'fold content',
   'badge.mention.tip': 'click to mention',
+  'badge.menu.detail': 'view details',
+  'badge.menu.addFilter': 'add to filter',
+  'badge.menu.focus': 'show only {worker}',
 
   // ── System reminder ──
   'sr.label': 'system reminder',
@@ -161,6 +166,12 @@ export const en = {
   'picker.broadcast': 'broadcast (no target)',
   'picker.header.mode': 'mode',
   'picker.group.untagged': 'other',
+  'pinned.header': 'pinned',
+  'pinned.pin': 'pin to top',
+  'pinned.unpin': 'unpin',
+  'pinned.sleep': 'hibernate',
+  'pinned.wake': 'wake up',
+  'pinned.sleep.header': 'hibernated',
 
   // ── Input mode options (TalkInput) ──
   'mode.interrupt': 'interrupt mode',

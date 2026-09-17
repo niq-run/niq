@@ -132,12 +132,23 @@ function writeTalkWorkersToUrl(ids: Set<string>) {
     window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''))
   } catch { /* replaceState can throw in odd contexts */ }
 }
+// Local date-time stamp for the per-send timestamp reminder, e.g.
+// "2026-09-17 15:30:05". Kept locale-independent so the reason worker can
+// reliably read it regardless of the UI language.
+function stampNow(): string {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
 // composeInput appends the staged attachments to the message text as HIW
-// attachment envelope blocks (parsed worker-side and by the talk renderer).
+// attachment envelope blocks (parsed worker-side and by the talk renderer), and
+// prepends a `<system-reminder>` carrying the current time so the receiver
+// knows when the message was sent.
 function composeInput(text: string, attachments: StagedAttachment[]): string {
+  const reminder = `<system-reminder>${stampNow()}</system-reminder>`
   const blocks = attachments.map(attachmentBlock)
-  if (blocks.length === 0) return text
-  return [text.trim(), ...blocks].filter(Boolean).join('\n\n')
+  return [reminder, text.trim(), ...blocks].filter(Boolean).join('\n\n')
 }
 
 export default function App() {
@@ -684,6 +695,27 @@ export default function App() {
     }
   }, [talkWorkers])
 
+  // Talk-avatar menu helpers that keep you in the talk view: "add filter"
+  // ensures the worker is in the watched conversation set, "show only this
+  // worker" narrows it to just that worker. Calling setTalkWorkers re-scopes the
+  // talk stream server-side (streamKey), so picking them visibly changes which
+  // conversation the talk timeline shows.
+  const addFilterWorker = useCallback((id: string) => {
+    if (talkWorkers.has(id)) return
+    const next = new Set(talkWorkers)
+    next.add(id)
+    setTalkWorkers(next)
+    writeTalkWorkersToUrl(next)
+    if (next.size === 1) setMentionTarget(id)
+  }, [talkWorkers])
+  const filterOnlyWorker = useCallback((id: string) => {
+    if (talkWorkers.size === 1 && talkWorkers.has(id)) return
+    const next = new Set([id])
+    setTalkWorkers(next)
+    writeTalkWorkersToUrl(next)
+    setMentionTarget(id)
+  }, [talkWorkers])
+
   const selectEvent = useCallback((id: string) => {
     setSelectedEventId(prev => {
       const next = prev === id ? null : id
@@ -1094,6 +1126,8 @@ export default function App() {
               onLoadMore={loadMore}
               onMention={handleMention}
               onOpenDetail={openWorkerDetail}
+              onAddFilter={addFilterWorker}
+              onFocusWorker={filterOnlyWorker}
               deliveries={deliveries}
               workerTypes={workerTypes}
               thinkingExpanded={viewSettings.thinkingExpanded}

@@ -3,6 +3,8 @@ import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 import WorkerPickerModal from '../components/WorkerPickerModal'
+import WorkerRowMenu from '../components/WorkerRowMenu'
+import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned } from '../pinnedWorkers'
 import pinSvg from '../assets/pin.svg'
 import pinwSvg from '../assets/pinw.svg'
 
@@ -57,6 +59,25 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // row highlight. Excludes the view-setting switches and the worker-selector
   // checkbox rows.
   const [hoverId, setHoverId] = useState<string | null>(null)
+  // Per-worker preferences (pinned / slept) persisted to localStorage via
+  // ../pinnedWorkers. The tick forces a re-render when the sets change.
+  const [prefTick, setPrefTick] = useState(0)
+  const pinnedIds = getPinnedWorkers()
+  const sleptIds = getSleptWorkers()
+  const togglePinned = (id: string) => {
+    setPinnedWorker(id, !pinnedIds.includes(id))
+    setPrefTick(x => x + 1)
+  }
+  const toggleSlept = (id: string) => {
+    setSleptWorker(id, !sleptIds.includes(id))
+    setPrefTick(x => x + 1)
+  }
+  // Right-click menu position for the worker under the cursor, or null.
+  const [rowMenu, setRowMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const openRowMenu = (e: React.MouseEvent, id: string) => {
+    e.preventDefault()
+    setRowMenu({ id, x: e.clientX, y: e.clientY })
+  }
   // Expanded picker modal for the worker selector (open on the expand button).
   const [showWorkerPicker, setShowWorkerPicker] = useState(false)
   // Free-text filter for the inline selector list. A search box beats the tag
@@ -260,6 +281,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       (w.description || '').toLowerCase().includes(q) ||
       (w.tags || []).some(tag => tag.toLowerCase().includes(q))
     ))
+  // Pinned workers sort to the top; slept workers are hidden from the inline
+  // quick list (the modal still surfaces them so they can be woken).
+  const selectorList = orderWithPinned(
+    shownSelectorWorkers.filter(w => !sleptIds.includes(w.id)),
+    w => w.id,
+  )
 
   // Footer project menu: opened by clicking the project name in the bottom
   // row; closes on any click outside the menu and its trigger.
@@ -550,7 +577,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               edge-to-edge like the view rows above instead of stopping at the
               scroll container's padding. */}
           <div style={{ overflowY: 'auto', overflowX: 'hidden', maxHeight: workerListMax, margin: '0 -' + contentPadX + 'px' }}>
-          {shownSelectorWorkers.map((w) => {
+          {selectorList.map((w) => {
             const isActive = view === 'talk'
               ? talkWorkers.has(w.id)
               : filterWorkers.has(w.id)
@@ -563,6 +590,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   onClick={() => handleWorkerClick(w.id)}
                   onMouseEnter={() => setHoverId('worker:' + w.id)}
                   onMouseLeave={() => setHoverId(null)}
+                  onContextMenu={(e) => openRowMenu(e, w.id)}
                   style={workerRowStyle('worker:' + w.id)}
                 >
                   <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
@@ -582,6 +610,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 onClick={() => handleWorkerClick(w.id)}
                 onMouseEnter={() => setHoverId('worker:' + w.id)}
                 onMouseLeave={() => setHoverId(null)}
+                onContextMenu={(e) => openRowMenu(e, w.id)}
                 style={workerRowStyle('worker:' + w.id)}
               >
                 <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
@@ -597,11 +626,17 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               </div>
             )
           })}
-          {/* Nothing to show is the normal case when every worker is offline,
-              so say so instead of leaving a blank stretch under the header. */}
-          {shownSelectorWorkers.length === 0 && (
+          {/* Nothing to show: every worker is offline, nothing matches the
+              search, or all the online/matching ones are hibernated (they are
+              still reachable via the expanded picker). Say which instead of
+              leaving a blank stretch under the header. */}
+          {selectorList.length === 0 && (
             <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, padding: '2px ' + contentPadX + 'px' }}>
-              {q ? t('sidebar.workerSelector.noMatch') : t('sidebar.workerSelector.noOnline')}
+              {q
+                ? t('sidebar.workerSelector.noMatch')
+                : shownSelectorWorkers.length > 0
+                  ? t('sidebar.workerSelector.allSlept')
+                  : t('sidebar.workerSelector.noOnline')}
             </div>
           )}
           </div>
@@ -761,6 +796,17 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           onToggle={(id) => { if (view === 'talk') onToggleWorker(id); else onToggleFilterWorker(id) }}
           onClose={() => setShowWorkerPicker(false)}
           isMobile={isMobile}
+        />
+      )}
+      {rowMenu && (
+        <WorkerRowMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          pinned={pinnedIds.includes(rowMenu.id)}
+          slept={sleptIds.includes(rowMenu.id)}
+          onTogglePin={() => togglePinned(rowMenu.id)}
+          onToggleSleep={() => toggleSlept(rowMenu.id)}
+          onClose={() => setRowMenu(null)}
         />
       )}
     </>

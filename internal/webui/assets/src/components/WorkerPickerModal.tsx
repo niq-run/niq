@@ -4,6 +4,8 @@ import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo } from '../types'
 import TagFilterDropdown from './TagFilterDropdown'
+import WorkerRowMenu from './WorkerRowMenu'
+import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker } from '../pinnedWorkers'
 
 interface WorkerPickerModalProps {
   title: string
@@ -34,6 +36,24 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
   // sidebar's view rows do.
   const [hoverKey, setHoverKey] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Bump-to-redraw for the persisted pin/sleep sets (read fresh from storage).
+  const [prefTick, setPrefTick] = useState(0)
+  const pinnedIds = getPinnedWorkers()
+  const sleptIds = getSleptWorkers()
+  // Right-click menu position for the worker under the cursor, or null.
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const togglePinned = (id: string) => {
+    setPinnedWorker(id, !pinnedIds.includes(id))
+    setPrefTick(x => x + 1)
+  }
+  const toggleSlept = (id: string) => {
+    setSleptWorker(id, !sleptIds.includes(id))
+    setPrefTick(x => x + 1)
+  }
+  const openContext = (e: React.MouseEvent, id: string) => {
+    e.preventDefault()
+    setMenu({ id, x: e.clientX, y: e.clientY })
+  }
 
   // All distinct tags present across the selectable set (stable options for
   // the multi-select tag filter, independent of the current search query).
@@ -65,11 +85,13 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
         (w.tags || []).some(tag => tag.toLowerCase().includes(q)))
     : onlineMatched
 
-  // Build the grouped list: group header per primary-tag top segment, worker
-  // rows indented by the tag's remaining depth; untagged workers fall into an
-  // "other" group.
+  // Build the grouped list: pinned workers first, then per-tag groups of the
+  // active (non-slept) workers, then the slept workers in a final group (so -
+  // hiding a worker is reversible by right-clicking it there to wake it).
   const rows = useMemo((): Row[] => {
     const out: Row[] = []
+    const isPinned = (w: WorkerInfo) => pinnedIds.includes(w.id)
+    const isSlept = (w: WorkerInfo) => sleptIds.includes(w.id)
     let lastGroup: string | null = null
     const emit = (g: string) => {
       if (g !== lastGroup) {
@@ -77,22 +99,44 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
         lastGroup = g
       }
     }
-    const tagged = filtered.filter(w => (w.tags?.length ?? 0) > 0)
-      .slice().sort((a, b) => a.tags![0].localeCompare(b.tags![0]))
-    const untagged = filtered.filter(w => !w.tags?.length)
-    for (const w of tagged) {
-      const segs = w.tags![0].split('/')
-      emit(segs[0])
-      out.push({ kind: 'worker', key: w.id, group: w.tags![0], indent: Math.min(segs.length - 1, 3), w })
+    const addTagged = (list: WorkerInfo[]) => {
+      const tagged = list.filter(w => (w.tags?.length ?? 0) > 0)
+        .slice().sort((a, b) => a.tags![0].localeCompare(b.tags![0]))
+      const untagged = list.filter(w => !w.tags?.length)
+      for (const w of tagged) {
+        const segs = w.tags![0].split('/')
+        emit(segs[0])
+        out.push({ kind: 'worker', key: w.id, group: w.tags![0], indent: Math.min(segs.length - 1, 3), w })
+      }
+      if (untagged.length) {
+        emit(t('picker.group.untagged'))
+        for (const w of untagged) {
+          out.push({ kind: 'worker', key: w.id, group: t('picker.group.untagged'), w })
+        }
+      }
     }
-    if (untagged.length) {
-      emit(t('picker.group.untagged'))
-      for (const w of untagged) {
-        out.push({ kind: 'worker', key: w.id, group: t('picker.group.untagged'), w })
+    if (pinnedIds.length) {
+      const pinned = filtered.filter(isPinned).slice()
+        .sort((a, b) => pinnedIds.indexOf(a.id) - pinnedIds.indexOf(b.id))
+      if (pinned.length) {
+        out.push({ kind: 'group', key: '__grp_pinned', group: t('pinned.header') })
+        lastGroup = t('pinned.header')
+        for (const w of pinned) {
+          out.push({ kind: 'worker', key: w.id, group: t('pinned.header'), indent: (w.tags?.[0]?.split('/').length ?? 1) - 1, w })
+        }
+      }
+    }
+    addTagged(filtered.filter(w => !isPinned(w) && !isSlept(w)))
+    const slept = filtered.filter(isSlept).slice()
+      .sort((a, b) => sleptIds.indexOf(a.id) - sleptIds.indexOf(b.id))
+    if (slept.length) {
+      emit(t('pinned.sleep.header'))
+      for (const w of slept) {
+        out.push({ kind: 'worker', key: w.id, group: t('pinned.sleep.header'), w })
       }
     }
     return out
-  }, [filtered, t])
+  }, [filtered, t, pinnedIds, sleptIds, prefTick])
 
   const checkedCount = workers.filter(w => selected.has(w.id)).length
 
@@ -219,6 +263,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
             }
             const w = row.w!
             const isActive = selected.has(w.id)
+            const isSlept = sleptIds.includes(w.id)
             const padLeft = 16 + (row.indent ?? 0) * 14
             return (
               <div
@@ -226,6 +271,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
                 onClick={() => onToggle(w.id)}
                 onMouseEnter={() => setHoverKey(row.key)}
                 onMouseLeave={() => setHoverKey(null)}
+                onContextMenu={(e) => openContext(e, w.id)}
                 style={{
                   cursor: 'pointer',
                   userSelect: 'none',
@@ -237,6 +283,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
                   // shade further out (bgLighter) to stay visible under it; a
                   // selected row keeps its chip colour.
                   background: isActive ? colors.bgChip : hoverKey === row.key ? colors.bgLighter : undefined,
+                  opacity: isSlept ? 0.5 : 1,
                   transition: 'background 0.12s',
                 }}
               >
@@ -292,6 +339,17 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
           </span>
         </div>
       </div>
+      {menu && (
+        <WorkerRowMenu
+          x={menu.x}
+          y={menu.y}
+          pinned={pinnedIds.includes(menu.id)}
+          slept={sleptIds.includes(menu.id)}
+          onTogglePin={() => togglePinned(menu.id)}
+          onToggleSleep={() => toggleSlept(menu.id)}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </>,
     document.body,
   )

@@ -1,3 +1,4 @@
+import { useRef, useEffect } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useIsMobile } from '../hooks/useIsMobile'
 
@@ -31,6 +32,14 @@ interface PickerDropdownProps {
   onActivate?: (index: number) => void
   footer?: PickerFooter
   width?: number
+  // Optional live search: when both are provided the dropdown renders a search
+  // box under the header. The caller owns the query state and passes the already
+  // filtered options (see TalkInput); the dropdown only shows the box and
+  // highlights the matching slice of each label. Omitted entirely for pickers
+  // that don't need it (e.g. the input-mode selector).
+  searchValue?: string
+  onSearchValueChange?: (v: string) => void
+  searchPlaceholder?: string
 }
 
 // Reusable option dropdown (used for the talk target picker, the @mention
@@ -47,9 +56,41 @@ export default function PickerDropdown({
   onActivate,
   footer,
   width = 240,
+  searchValue,
+  onSearchValueChange,
+  searchPlaceholder,
 }: PickerDropdownProps) {
   const { colors } = useTheme()
   const isMobile = useIsMobile()
+  const searchable = searchValue !== undefined && !!onSearchValueChange
+  const searchRef = useRef<HTMLInputElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  // Keeps the keyboard-highlighted row visible while navigating with
+  // arrow / Ctrl+n/p: when the active row moves outside the panel's scroll
+  // viewport, bring it into view (nearest edge), so a long option list doesn't
+  // "highlight off-screen" without scrolling.
+  useEffect(() => {
+    if (activeIndex == null || activeIndex < 0) return
+    const el = panelRef.current?.querySelector<HTMLElement>(`[data-picker-idx="${activeIndex}"]`)
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex])
+
+  // Split a label into [pre, match, post] around the first case-insensitive
+  // occurrence of the query (if any), so the matching slice can be highlighted.
+  const highlight = (text: string): React.ReactNode => {
+    if (!searchable || !searchValue) return text
+    const idx = text.toLowerCase().indexOf(searchValue.trim().toLowerCase())
+    if (idx < 0) return text
+    const end = idx + searchValue.trim().length
+    return (
+      <>
+        {text.slice(0, idx)}
+        <span style={{ background: colors.accentDim, color: colors.accent, borderRadius: 2, padding: '0 1px' }}>{text.slice(idx, end)}</span>
+        {text.slice(end)}
+      </>
+    )
+  }
 
   const rowBase: React.CSSProperties = {
     padding: '7px 12px',
@@ -89,6 +130,7 @@ export default function PickerDropdown({
     border: '1px solid ' + colors.border,
     borderRadius: 6,
     maxHeight: '70vh',
+    minHeight: 60,
     overflowY: 'auto',
     boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
     zIndex: 91,
@@ -98,7 +140,10 @@ export default function PickerDropdown({
     background: colors.bg,
     border: '1px solid ' + colors.border,
     borderRadius: 6,
-    maxHeight: 220,
+    // A taller visible window than before so a long option list shows more at
+    // once; a floor on the empty/very-short state keeps it from looking cramped.
+    maxHeight: 320,
+    minHeight: 108,
     overflowY: 'auto',
     boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
   }
@@ -110,6 +155,7 @@ export default function PickerDropdown({
       {isMobile && <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 90 }} />}
       <div
         className="picker-dropdown"
+        ref={panelRef}
         style={panelStyle}
       >
       <div
@@ -118,6 +164,23 @@ export default function PickerDropdown({
       >
         {header}
       </div>
+      {searchable && (
+        <div style={{ padding: '4px 10px 6px 10px' }}>
+          <input
+            ref={searchRef}
+            value={searchValue}
+            onChange={(e) => onSearchValueChange!(e.target.value)}
+            placeholder={searchPlaceholder ?? ''}
+            spellCheck={false}
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              background: colors.bgLight, border: '1px solid ' + colors.border,
+              borderRadius: 4, padding: '5px 8px', outline: 'none',
+              color: colors.text, fontSize: fontSizes.sm,
+            }}
+          />
+        </div>
+      )}
       {options.map((opt, i) => {
         const selected = selectedId !== undefined && selectedId === opt.id
         const active = activeIndex === i
@@ -150,6 +213,7 @@ export default function PickerDropdown({
           <div
             key={opt.id}
             className="picker-row"
+            data-picker-idx={i}
             title={opt.hint}
             onClick={() => onSelect(opt.id)}
             onMouseEnter={() => onActivate?.(i)}
@@ -177,7 +241,7 @@ export default function PickerDropdown({
             >
               <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, textAlign: 'left' }}>
                 <span style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {opt.label}
+                  {highlight(opt.label)}
                 </span>
                 {opt.sublabel && (
                   <span style={{ flexShrink: 0, color: colors.textDimmed, fontStyle: 'italic', fontSize: fontSizes.sm }}>

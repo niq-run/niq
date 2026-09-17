@@ -12,37 +12,49 @@ import CollapsibleCode from '../../components/CollapsibleCode'
 import ThinkingBlock from '../../components/ThinkingBlock'
 import ResponseBlock from '../../components/ResponseBlock'
 import SystemReminderBlock from '../../components/SystemReminderBlock'
+import WorkerBadgeMenu from '../../components/WorkerBadgeMenu'
 import {
   getInputText, isToolResult, toolContent, toolSummary, toolCallId,
   formatTime, findReferencedInput, splitSystemReminder, parseAttachments,
 } from '../../components/talk-utils'
 import type { EventPayload } from '../../types'
 
-function WorkerBadge({ id, show, humanId, isReason, onMention, onOpenDetail, displayName }: {
+function WorkerBadge({ id, show, humanId, isReason, onMention, onOpenDetail, onAddFilter, onFocusWorker, displayName, small }: {
   id: string
   show: boolean
   humanId: string
   isReason: (id: string) => boolean
   onMention?: (id: string) => void
   onOpenDetail?: (id: string) => void
+  onAddFilter?: (id: string) => void
+  onFocusWorker?: (id: string) => void
   displayName: (id?: string) => string
+  // small renders a compact trailing marker (font ~sm) instead of the big
+  // speaker badge — used for the bottom-right run footer.
+  small?: boolean
 }) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const [hover, setHover] = useState(false)
+  // Right-click context menu position, or null.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   if (!show) return null
   const isHuman = id === humanId
   const mentionable = !isHuman && isReason(id) && !!onMention
+  const hasMenu = !!(onOpenDetail || onAddFilter || onFocusWorker)
   return (
     <span
       onClick={(e) => { e.stopPropagation(); if (mentionable) onMention?.(id) }}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onOpenDetail?.(id) }}
+      onContextMenu={(e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (hasMenu) setMenu({ x: e.clientX, y: e.clientY })
+      }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       className={mentionable ? 'badge-mention' : undefined}
       style={{
-        cursor: mentionable ? 'pointer' : (onOpenDetail ? 'context-menu' : 'default'),
-        fontSize: fontSizes.xxl,
+        cursor: mentionable ? 'pointer' : (hasMenu ? 'context-menu' : 'default'),
+        fontSize: small ? fontSizes.sm : fontSizes.xxl,
         color: colors.accent,
         fontWeight: 'bold',
         fontFamily: 'monospace',
@@ -53,6 +65,16 @@ function WorkerBadge({ id, show, humanId, isReason, onMention, onOpenDetail, dis
       )}
       {displayName(id)}
       {mentionable && <span className="badge-tip">{t('badge.mention.tip')}</span>}
+      {menu && (
+        <WorkerBadgeMenu
+          x={menu.x}
+          y={menu.y}
+          workerId={id}
+          onDetail={onOpenDetail ? () => onOpenDetail(id) : () => {}}
+          onFocus={onFocusWorker ? () => onFocusWorker(id) : () => {}}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </span>
   )
 }
@@ -86,6 +108,8 @@ interface RowCtx {
   toggleTool: (key: string) => void
   onMention?: (id: string) => void
   onOpenDetail?: (id: string) => void
+  onAddFilter?: (id: string) => void
+  onFocusWorker?: (id: string) => void
   onTraceClick: (traceId: string) => void
   onDecide?: (id: string, approved: boolean, note?: string) => void
   scrollToEvent: (evtId: string) => void
@@ -103,7 +127,7 @@ function RowBadge({ ctx, workerId, showBadge, alignRight, extraPad = false }: {
   if (!showBadge) return null
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: extraPad ? 16 : undefined, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-      <WorkerBadge id={workerId} show={true} humanId={ctx.humanId} isReason={ctx.isReason} onMention={ctx.onMention} onOpenDetail={ctx.onOpenDetail} displayName={ctx.displayName} />
+      <WorkerBadge id={workerId} show={true} humanId={ctx.humanId} isReason={ctx.isReason} onMention={ctx.onMention} onOpenDetail={ctx.onOpenDetail} onAddFilter={ctx.onAddFilter} onFocusWorker={ctx.onFocusWorker} displayName={ctx.displayName} />
     </div>
   )
 }
@@ -137,7 +161,13 @@ function InputRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
             <>
               <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold' }}>{ctx.displayName(evt.worker_id)}</span>
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>@</span>
-              <span style={{ fontSize: fontSizes.sm, color: colors.accent }}>{ctx.displayName(evt.target_worker_id)}</span>
+              <span
+                onClick={(e) => { e.stopPropagation(); ctx.onAddFilter?.(evt.target_worker_id!) }}
+                title={ctx.onAddFilter ? t('talk.addFilter.tooltip') : undefined}
+                style={{ fontSize: fontSizes.sm, color: colors.accent, cursor: ctx.onAddFilter ? 'pointer' : undefined, textDecoration: ctx.onAddFilter ? 'underline dotted' : undefined, textUnderlineOffset: 3 }}
+              >
+                {ctx.displayName(evt.target_worker_id)}
+              </span>
             </>
           ) : (
             <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold' }}>{t('talk.broadcast')}</span>

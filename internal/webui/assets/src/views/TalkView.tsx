@@ -21,6 +21,10 @@ interface TalkViewProps {
   onMention?: (workerId: string) => void
   // Right-clicking a worker badge opens its detail page.
   onOpenDetail?: (workerId: string) => void
+  // Talk-avatar context-menu actions: add a worker to the watched set, or focus
+  // it as the only watched worker.
+  onAddFilter?: (workerId: string) => void
+  onFocusWorker?: (workerId: string) => void
   deliveries: Record<string, string[]>
   humanId?: string
   workerTypes?: Record<string, string>
@@ -164,7 +168,7 @@ function GrowingHeight({ children, durationMs = 180 }: { children: ReactNode; du
   )
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, onAddFilter, onFocusWorker, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange }: TalkViewProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   // Left-side bubbles are wider on phones (90%) and keep the original 70% on
@@ -332,12 +336,12 @@ const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToE
   const ctx = useMemo<RowCtx>(() => ({
     dark, colors, t, isMobile, compactMode, thinkingExpanded, bubbleMax,
     tPad, tFontSize, itemSep, humanId, displayName, isReason, directionOf,
-    expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onTraceClick, onDecide,
+    expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onAddFilter, onFocusWorker, onTraceClick, onDecide,
     scrollToEvent,
   }), [
     dark, colors, t, isMobile, compactMode, thinkingExpanded, bubbleMax,
     tPad, tFontSize, itemSep, humanId, displayName, isReason, directionOf,
-    expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onTraceClick, onDecide,
+    expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onAddFilter, onFocusWorker, onTraceClick, onDecide,
     scrollToEvent,
   ])
 
@@ -368,7 +372,23 @@ const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToE
     if (showBadge) lastAvatarId = evt.worker_id
     rowFacts.push({ evt, alignRight, showBadge })
   }
-  for (const { evt, alignRight, showBadge } of rowFacts) {
+
+  // Trailing avatar: at the end of every speaker run (the last row sharing one
+  // display avatar) stamp a small avatar — on the block's right edge — so the
+  // reader always knows whose output this is without scrolling back to the top
+  // badge. Always shown (no height heuristic), matching the compact footer look.
+  const trails: Record<number, string> = {}
+  {
+    let runAvatar = ''
+    for (let i = 0; i < rowFacts.length; i++) {
+      const f = rowFacts[i]
+      if (f.showBadge) runAvatar = f.evt.worker_id
+      const runEnds = (i === rowFacts.length - 1) || rowFacts[i + 1].showBadge
+      if (runEnds && runAvatar) trails[i] = runAvatar
+    }
+  }
+  for (let i = 0; i < rowFacts.length; i++) {
+    const { evt, alignRight, showBadge } = rowFacts[i]
     switch (evt.type) {
       case 'worker.input':
         nodes.push(<InputRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
@@ -406,6 +426,29 @@ const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToE
         nodes.push(<ToolRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} resultEvt={resultEvt} partial={partial} ctx={ctx} />)
         break
       }
+    }
+    // Stamp a small trailing avatar on the LEFT block's right edge at the end of
+    // every speaker run. Right-aligned messages already carry their avatar on
+    // the right, so they don't need the extra marker. It reuses WorkerBadge, so
+    // the trailing avatar has the same left-click (mention) and right-click
+    // (detail / focus) affordances as the top badge.
+    const trail = trails[i]
+    if (trail && !alignRight) {
+      nodes.push(
+        <div key={evt.id + '-trail'} style={{ display: 'flex', justifyContent: 'flex-end', maxWidth: bubbleMax, margin: '2px 0 16px' }}>
+          <WorkerBadge
+            id={trail}
+            show={true}
+            small
+            humanId={humanId}
+            isReason={isReason}
+            onMention={onMention}
+            onOpenDetail={onOpenDetail}
+            onFocusWorker={onFocusWorker}
+            displayName={displayName}
+          />
+        </div>,
+      )
     }
   }
   // Header: always visible, not in scroll area — shown even when empty. On

@@ -239,8 +239,6 @@ export default function ProjectsView({ onGoToProviders }: ProjectsViewProps) {
                 {p.ports?.webui && (
                   <a
                     href={`/p/${encodeURIComponent(p.id)}/`}
-                    target={'_blank'}
-                    rel="noopener noreferrer"
                     style={{ color: colors.accent, fontSize: fontSizes.sm, textDecoration: 'none' }}
                   >
                     {t('projects.jump')}

@@ -43,7 +43,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerMode, setPickerMode] = useState<'mention' | 'target'>('target')
-  const [mentionQuery, setMentionQuery] = useState('')
+  // Live query for the worker picker's search box (seeded from the @token in
+  // mention mode); used to filter the dropdown in both mention and target mode.
+  const [pickerQuery, setPickerQuery] = useState('')
   const [mentionIndex, setMentionIndex] = useState(0)
   const [modeOpen, setModeOpen] = useState(false)
   const [uploading, setUploading] = useState(0)
@@ -178,7 +180,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     if (atMatch) {
       setPickerOpen(true)
       setPickerMode('mention')
-      setMentionQuery(atMatch[1].toLowerCase())
+      setPickerQuery(atMatch[1].toLowerCase())
       setMentionIndex(0)
     } else {
       setPickerOpen(false)
@@ -211,6 +213,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     if (pickerMode === 'mention') selectMention(id)
     else onSelectTarget(id)
     setPickerOpen(false)
+    setPickerQuery('')
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -289,10 +292,10 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
 
   // Archived or suspended reason workers are not mentionable / targetable.
   const pickableWorkers = reasonWorkers.filter(w => !archived.has(w.id) && w.state !== 'suspended')
-  // Mention mode narrows by the typed query; target mode shows everything.
-  const pickableShown = (pickerMode === 'mention')
-    ? pickableWorkers.filter(w => w.id.toLowerCase().includes(mentionQuery))
-    : pickableWorkers
+  // The dropdown's search box filters by worker id across both modes; an empty
+  // query keeps everything.
+  const pickableShown = pickableWorkers.filter(w =>
+    pickerQuery.trim() === '' || w.id.toLowerCase().includes(pickerQuery.trim().toLowerCase()))
 
   // Build the picker's grouped option list. Reason workers are grouped by
   // their primary (first) tag's top-level path segment — a slash tag nests
@@ -376,7 +379,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const targetChip = (
     <div style={{ position: 'relative', display: 'flex', ...(isMobile ? { width: '100%' } : { marginRight: 'auto' }) }}>
         <span
-          onClick={(e) => { e.stopPropagation(); setPickerMode('target'); setMentionIndex(0); setPickerOpen(v => !v) }}
+          onClick={(e) => { e.stopPropagation(); setPickerMode('target'); setPickerQuery(''); setMentionIndex(0); setPickerOpen(v => !v) }}
           title={shownTarget ? t('talk.input.target.tooltip', { target: shownTarget }) : t('talk.input.broadcast.tooltip')}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, lineHeight: '20px',
@@ -401,6 +404,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
                 // headers are skipped (they are inert structure).
                 setMentionIndex(pickerGroup.opts.slice(0, i + 1).filter(o => !o.isGroup).length - 1)
               }}
+              searchValue={pickerQuery}
+              onSearchValueChange={setPickerQuery}
+              searchPlaceholder={t('workerPicker.search')}
               footer={{
                 label: t('picker.broadcast'),
                 checked: !shownTarget,
