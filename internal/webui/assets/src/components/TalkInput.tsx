@@ -34,9 +34,12 @@ interface TalkInputProps {
   // base64) and uploaded files (referenced by path).
   attachments: StagedAttachment[]
   onAttachmentsChange: (a: StagedAttachment[]) => void
+  // Called when the input box gains focus — App trims the list so typing is
+  // crisp even if it had grown large while following.
+  onFocus?: () => void
 }
 
-export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget, isMobile, attachments, onAttachmentsChange }: TalkInputProps) {
+export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget, isMobile, attachments, onAttachmentsChange, onFocus }: TalkInputProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -481,6 +484,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         ref={textareaRef}
         value={input}
         onChange={handleChange}
+        onFocus={onFocus}
         onKeyDown={handleKeyDown}
         onPaste={(e) => {
           // Pasted images stage as attachments instead of leaking into the

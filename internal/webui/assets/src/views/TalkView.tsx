@@ -134,38 +134,15 @@ function computeToolPartials(events: EventPayload[], talkWorkers: Set<string>, d
   return map
 }
 
-// GrowingHeight animates the height of its child so that when the child's
-// content grows (e.g. a streaming delta batch adds several lines at once), the
-// block expands smoothly over a short transition instead of instantly. It
-// measures the child's natural (unclipped) height and drives the wrapper height
-// through a CSS transition, so growth appears as a continuous push rather than
-// an abrupt reflow. It clocks out of the animation on the FIRST render (and
-// whenever previously unmounted, since we start with a fixed px height) — the
-// first measurement sets the height without animating so nothing flashes open.
-//
-// While this is in play, the caller's pin-to-bottom loop (see the rAF loop in
-// TalkView) follows the expanding wrapper each frame, so the content above
-// slides up in lockstep with the growth. This is the mechanism that turns a
-// multi-line batch into a smooth upward push instead of a "roll".
-function GrowingHeight({ children, durationMs = 180 }: { children: ReactNode; durationMs?: number }) {
-  const innerRef = useRef<HTMLDivElement>(null)
-  const [h, setH] = useState<number | null>(null)
-  useLayoutEffect(() => {
-    const el = innerRef.current
-    if (!el) return
-    setH(el.scrollHeight || 0)
-  })
-  return (
-    <div
-      style={{
-        height: h ?? 'auto',
-        overflow: 'hidden',
-        transition: h != null ? `height ${durationMs}ms ease` : 'none',
-      }}
-    >
-      <div ref={innerRef} style={{ display: 'flow-root' }}>{children}</div>
-    </div>
-  )
+// GrowingHeight previously animated the streaming tail's height over a CSS
+// transition. That multi-frame transition interleaved with the pinned-bottom
+// trim (a single commit collapsing the top), which is what made the sealed
+// bottom visibly "jump up then get pulled down". With no animation, growth and
+// trim are both single-commit — the sync pin in useChatScroll then holds the
+// bottom fixed through both in the same frame. It now just renders its child
+// at natural height (streaming batches appear instantly / "pop").
+function GrowingHeight({ children }: { children: ReactNode }) {
+  return <div>{children}</div>
 }
 
 export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, onAddFilter, onFocusWorker, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange }: TalkViewProps) {
@@ -533,11 +510,9 @@ const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToE
                 <WorkerBadge id={workerId} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
                 <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, fontStyle: 'italic' }}>● streaming</span>
               </div>
-              {/* Height transition: when a delta batch adds several lines at
-                  once, GrowingHeight expands the block smoothly, and the rAF
-                  pin loop above follows each frame — so earlier content is
-                  pushed up as a continuous motion instead of an abrupt
-                  reflow/roll. */}
+              {/* No height animation on the streaming tail: growth is a single
+                  commit, so the sync pin in useChatScroll holds the bottom fixed
+                  through both growth and a pinned trim (no frame interleave). */}
               {showThinking && (
                 <GrowingHeight>
                   <ThinkingBlock evt={synthetic('reason.thinking', thinking)} defaultExpanded={thinkingExpanded} compact={compactMode} />
