@@ -4,7 +4,7 @@ import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import ThinkingBlock from '../components/ThinkingBlock'
 import ResponseBlock from '../components/ResponseBlock'
-import { isReasonBoundary, isToolEvent, isToolInvocation, isToolResult, toolCallId } from '../components/talk-utils'
+import { isReasonBoundary, isToolEvent, isToolInvocation, isToolResult, toolCallId, getUsageParts, type UsageParts } from '../components/talk-utils'
 import type { EventPayload } from '../types'
 import { useChatScroll } from './talk/useChatScroll'
 import {
@@ -354,14 +354,25 @@ const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToE
   // display avatar) stamp a small avatar — on the block's right edge — so the
   // reader always knows whose output this is without scrolling back to the top
   // badge. Always shown (no height heuristic), matching the compact footer look.
+  // When the run ends on a reason.response that carries context usage, that
+  // usage label rides along next to the trailing avatar.
   const trails: Record<number, string> = {}
+  const trailUsage: Record<number, UsageParts> = {}
   {
     let runAvatar = ''
+    let runUsage: UsageParts | null = null
     for (let i = 0; i < rowFacts.length; i++) {
       const f = rowFacts[i]
-      if (f.showBadge) runAvatar = f.evt.worker_id
+      if (f.showBadge) {
+        runAvatar = f.evt.worker_id
+        runUsage = null // new speaker: reset the run's usage label
+      }
+      if (f.evt.type === 'reason.response') runUsage = getUsageParts(f.evt, t)
       const runEnds = (i === rowFacts.length - 1) || rowFacts[i + 1].showBadge
-      if (runEnds && runAvatar) trails[i] = runAvatar
+      if (runEnds && runAvatar) {
+        trails[i] = runAvatar
+        if (runUsage && (runUsage.left || runUsage.right)) trailUsage[i] = runUsage
+      }
     }
   }
   for (let i = 0; i < rowFacts.length; i++) {
@@ -411,8 +422,23 @@ const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToE
     // (detail / focus) affordances as the top badge.
     const trail = trails[i]
     if (trail && !alignRight) {
+      const usage = trailUsage[i]
+      const hasLeft = !!usage?.left
+      const hasRight = !!usage?.right
       nodes.push(
-        <div key={evt.id + '-trail'} style={{ display: 'flex', justifyContent: 'flex-end', maxWidth: bubbleMax, margin: '2px 0 16px' }}>
+        <div key={evt.id + '-trail'} style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, maxWidth: bubbleMax, margin: '2px 0 16px' }}>
+          {usage && (hasLeft || hasRight) && (
+            <span
+              title={t('talk.usage.tooltip')}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: fontSizes.xs, color: colors.textDimmed, userSelect: 'none', whiteSpace: 'nowrap' }}
+            >
+              {hasLeft && <span>{usage.left}</span>}
+              {hasLeft && hasRight && (
+                <span aria-hidden style={{ width: 1, height: '0.6em', background: colors.textDimmed, opacity: 0.45, alignSelf: 'center' }} />
+              )}
+              {hasRight && <span>{usage.right}</span>}
+            </span>
+          )}
           <WorkerBadge
             id={trail}
             show={true}

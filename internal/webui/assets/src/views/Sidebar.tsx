@@ -114,6 +114,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const [dragging, setDragging] = useState(false)
   const [flipped, setFlipped] = useState(false)
   const [hittingEdge, setHittingEdge] = useState(false)
+  // 0 = at rest, 1 = dragged fully right. Drives the pin-icon's fade/shrink so
+  // the text logo can reach the far right without overlapping it.
+  const [iconProgress, setIconProgress] = useState(0)
 
   // Desktop sidebar width is user-draggable (like the detail panels) and
   // persists across reloads; double-clicking the handle resets it. Mobile
@@ -181,6 +184,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     setDragging(true)
     setHittingEdge(false)
     setDragX(0)
+    setIconProgress(0)
     e.currentTarget.setPointerCapture?.(e.pointerId)
   }
   const onLogoPointerMove = (e: ReactPointerEvent) => {
@@ -200,6 +204,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     if (Math.abs(clamped) > 5) dragMoved.current = true
     lastDragX.current = clamped
     setDragX(clamped)
+    // Pin icon fades/shrinks with drag progress (reaches invisible at the far
+    // right) so the text logo doesn't collide with it.
+    const prog = maxRight > 0 ? Math.max(0, Math.min(1, clamped / maxRight)) : 0
+    setIconProgress(prog)
   }
   const onLogoPointerUp = (e: ReactPointerEvent) => {
     if (!draggingRef.current) return
@@ -212,6 +220,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     }
     setMoveDur(returnDurFor(Math.abs(lastDragX.current))) // quick, decelerating return
     setDragX(0) // spring back to the resting position
+    setIconProgress(0)
     e.currentTarget.releasePointerCapture?.(e.pointerId)
   }
 
@@ -316,6 +325,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const dividerColor = (inverted || hittingEdge) ? accent : colors.border
   const dividerGlow = hittingEdge ? 'inset -2px 0 8px ' + accentDim : 'none'
   const glowTransition = 'border-color 0.2s ease, box-shadow 0.2s ease'
+  // Pin-icon fade/shrink vs drag progress. Reaches half-scale AND fully
+  // transparent by the MIDDLE of the drag range (p=0.5) and holds there — so
+  // it hides well before the text logo gets to the far right, shrinking at most
+  // to half.
+  const iconScale = Math.max(0.5, 1 - iconProgress)
+  const iconOpacity = Math.max(0, 1 - 2 * iconProgress)
 
   const rootStyle: React.CSSProperties = isMobile ? {
     position: 'fixed',
@@ -437,7 +452,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         onContextMenu={(e) => { e.preventDefault(); toggleInverted() }}
         title={t('sidebar.logo.tooltip')}
         style={{
-          flexShrink: 0, overflow: 'hidden', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`,
+          flexShrink: 0, overflow: 'hidden', position: 'relative', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`,
           // When inverted the band fills accent and its bottom border turns
           // accent, so band, bottom line and sidebar right divider read as one
           // unified accent stroke.
@@ -484,14 +499,27 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           (light → pinw, dark → pin), so it blends into the backdrop. When the
           band is inverted (right-click the band or click the pin) it switches
           to the single light-background version, matching the unified blue
-          band + light logo look regardless of theme. */}
+          band + light logo look regardless of theme. It is absolutely
+          positioned so it doesn't take layout space from the draggable text
+          logo, and fades+shrinks as the logo is dragged toward it (invisible
+          at the far right) so the two never overlap. */}
       <img
         src={inverted ? pinwSvg : (dark ? pinSvg : pinwSvg)}
         alt=""
         title={t('sidebar.logo.pattern.tooltip')}
         draggable={false}
         onClick={toggleInverted}
-        style={{ flexShrink: 0, marginLeft: 12, width: 28, height: 28, display: 'block', cursor: 'pointer', transition: 'opacity 0.2s ease', userSelect: 'none', WebkitUserSelect: 'none' }}
+        style={{
+          position: 'absolute', right: contentPadX, top: '50%',
+          transform: `translateY(-50%) scale(${iconScale})`,
+          opacity: iconOpacity,
+          // Fade is instant while dragging (progress-driven); on release it
+          // fades back in over the SAME duration as the logo's spring-back
+          // (moveDur), so the icon reappears in sync with the logo returning.
+          transition: dragging ? 'none' : `opacity ${moveDur} ease, transform ${moveDur} ease`,
+          width: 28, height: 28, display: 'block', cursor: 'pointer',
+          userSelect: 'none', WebkitUserSelect: 'none',
+        }}
       />
       </div>
 

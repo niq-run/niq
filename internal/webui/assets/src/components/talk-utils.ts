@@ -264,6 +264,72 @@ export function oneLine(s: string, n: number): string {
 // Use with CSS text-overflow:ellipsis for a trailing ellipsis at the edge.
 export { ellipsis }
 
+// ── Context usage meta (reason.response) ──
+
+// UsageMeta is the context usage a reason worker reports on its response, taken
+// from the meta.usage payload it attaches to reason.response. Absent when the
+// provider reported no usage (or the field is malformed).
+export interface UsageMeta {
+  input: number
+  output: number
+  total: number
+  cacheRead: number
+  contextWindow: number
+  // contextPercent is 0..100 of total/contextWindow, or 0 when unknown.
+  contextPercent: number
+}
+
+// getUsageMeta extracts the context usage carried in a reason.response event's
+// meta payload. Returns undefined when the response carries none.
+export function getUsageMeta(evt: EventPayload): UsageMeta | undefined {
+  const meta = evt.payload?.meta
+  if (!meta || typeof meta !== 'object') return undefined
+  const u = (meta as Record<string, any>).usage
+  if (!u || typeof u !== 'object') return undefined
+  const input = Number(u.input_tokens) || 0
+  const output = Number(u.output_tokens) || 0
+  const total = Number(u.total_tokens) || (input + output)
+  const cacheRead = Number(u.cache_read_tokens) || 0
+  const contextWindow = Number(u.context_window) || 0
+  const contextPercent = contextWindow > 0
+    ? Math.round((total / contextWindow) * 100)
+    : 0
+  return { input, output, total, cacheRead, contextWindow, contextPercent }
+}
+
+// formatCompact abbreviates a token count for display as thousands: 1000+
+// becomes "NK" rounded to the nearest thousand (128000 → "128K", 1200000 →
+// "1200K", 1290 → "1K"). Values below 1000 stay raw.
+export function formatCompact(n: number): string {
+  if (n < 1000) return String(n)
+  return Math.round(n / 1000) + 'K'
+}
+
+// UsageParts is the usage label split ready for rendering with a drawn
+// vertical bar: left = context-window size + occupancy percent, right = this
+// round's input/output token breakdown. Either side may be empty.
+export interface UsageParts {
+  left: string
+  right: string
+}
+
+// getUsageParts renders the context usage of a response as i18n-localized text
+// split into the two sides of a vertical separator (window/percent | in/out).
+// Returns empty parts when the response carries no usage.
+export function getUsageParts(evt: EventPayload, t: (key: any, vars?: Record<string, string | number>) => string): UsageParts {
+  const m = getUsageMeta(evt)
+  if (!m) return { left: '', right: '' }
+  const left = (m.contextPercent > 0 && m.contextWindow > 0)
+    ? t('talk.usage.window', { window: formatCompact(m.contextWindow), pct: m.contextPercent })
+    : ''
+  const right = [
+    t('talk.usage.in', { n: formatCompact(m.input) }),
+    t('talk.usage.out', { n: formatCompact(m.output) }),
+  ]
+  if (m.cacheRead) right.push(t('talk.usage.cache', { n: formatCompact(m.cacheRead) }))
+  return { left, right: right.join(' · ') }
+}
+
 // ── Find referenced input event by trace_id ──
 
 /**

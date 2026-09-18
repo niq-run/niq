@@ -637,13 +637,49 @@ func (w *BaseReasonWorker) broadcastResponse(msg llm.Message, traceID string) {
 			texts = append(texts, block.Text)
 		}
 	}
-	evt := event.New("reason.response", w.ID(), map[string]any{
+	payload := map[string]any{
 		"content":     texts,
 		"stop_reason": msg.StopReason,
-	})
+	}
+	// Carry the round's context usage alongside the response so the webui can
+	// surface it (e.g. next to the message's trailing avatar). Mirror of the
+	// transcript message's Usage (plus the resolved model context window, so the
+	// UI can render an occupancy percentage); omitted when the provider reported
+	// none.
+	if u := usageMeta(msg, w.contextWindow); u != nil {
+		payload["meta"] = map[string]any{"usage": u}
+	}
+	evt := event.New("reason.response", w.ID(), payload)
 	evt.TraceID = traceID
 	_ = w.Channel.Broadcast(context.Background(), evt)
 	log.Printf("[reason %s] published reason.response, text_count=%d", w.ID(), len(texts))
+}
+
+// usageMeta renders a completed message's context usage into the reason.response
+// event payload meta shape. contextWindow is the resolved model context window
+// (0 = unknown/disabled) and is carried so the UI can compute an occupancy
+// percentage. Returns nil when the message carries no usage (so the meta field
+// is omitted rather than emitted empty).
+func usageMeta(msg llm.Message, contextWindow int) map[string]any {
+	if msg.Usage == nil {
+		return nil
+	}
+	u := msg.Usage
+	meta := map[string]any{
+		"input_tokens":  u.InputTokens,
+		"output_tokens": u.OutputTokens,
+		"total_tokens":  u.TotalTokens,
+	}
+	if contextWindow > 0 {
+		meta["context_window"] = contextWindow
+	}
+	if u.CacheReadTokens != nil {
+		meta["cache_read_tokens"] = *u.CacheReadTokens
+	}
+	if u.CacheCreationTokens != nil {
+		meta["cache_creation_tokens"] = *u.CacheCreationTokens
+	}
+	return meta
 }
 
 func (w *BaseReasonWorker) broadcastReasonStart(traceID string) {

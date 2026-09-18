@@ -230,6 +230,44 @@ func (p *mixedRoundProvider) CompleteStream(_ context.Context, _ *llm.Completion
 
 func (p *mixedRoundProvider) ListModels(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
 
+// TestUsageMeta verifies the reason.response meta payload renders the round's
+// context usage (and stays nil when the provider reported none).
+func TestUsageMeta(t *testing.T) {
+	cacheRead := 42
+	cacheCreate := 7
+
+	// Full usage including cache fields and the context window.
+	m := usageMeta(llm.Message{Usage: &llm.Usage{
+		InputTokens:         100,
+		OutputTokens:        25,
+		TotalTokens:         125,
+		CacheReadTokens:     &cacheRead,
+		CacheCreationTokens: &cacheCreate,
+	}}, 1000)
+	if m == nil {
+		t.Fatal("usageMeta returned nil for a message with usage")
+	}
+	if m["input_tokens"] != 100 || m["output_tokens"] != 25 || m["total_tokens"] != 125 {
+		t.Fatalf("unexpected token counts: %+v", m)
+	}
+	if m["context_window"] != 1000 {
+		t.Fatalf("unexpected context_window: %+v", m)
+	}
+	if m["cache_read_tokens"] != 42 || m["cache_creation_tokens"] != 7 {
+		t.Fatalf("unexpected cache tokens: %+v", m)
+	}
+
+	// Zero/unknown context window → field omitted.
+	if m := usageMeta(llm.Message{Usage: &llm.Usage{InputTokens: 1}}, 0); m["context_window"] != nil {
+		t.Fatalf("context_window should be omitted when unknown, got %+v", m["context_window"])
+	}
+
+	// No usage → nil meta (field omitted).
+	if m := usageMeta(llm.Message{}, 1000); m != nil {
+		t.Fatalf("usageMeta should be nil without usage, got %+v", m)
+	}
+}
+
 // TestMixedRoundPublishesLeadingText verifies that when a single reasoning round
 // contains both text and a tool call, the leading text is published as a durable
 // reason.response (so it survives replay) rather than only existing as transient
