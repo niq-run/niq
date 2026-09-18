@@ -18,26 +18,6 @@ const MAX_TALK_BACKFILL = 30
 // instead of stalling exactly at the earliest message.
 const LOAD_EARLY_PX = 480
 
-// Once the reader is more than this far from the bottom, follow switches off
-// for good (position-based, independent of wheel/pointer gesture detection).
-const FOLLOW_OFF_PX = 80
-
-// Cap on consecutive nearTop auto-prefetches. Near the top each prepend grows
-// the list above and re-anchors scrollTop to a value still under LOAD_EARLY_PX,
-// which would otherwise keep firing loadMore forever (a runaway that jitters
-// the scroll position while the user idles). The count resets when the reader
-// scrolls away from the top zone, so more history is still loadable on demand.
-const MAX_NEARTOP_AUTOLOAD = 3
-
-// ── Scrolling / follow / pagination ──
-// Owns the scroll container and everything that drives it: the sticky
-// follow-to-bottom switch (on by default, off on an explicit up-scroll, back on
-// at the bottom / via the button / a send), the manual-gesture detector that
-// distinguishes user scrolls from the follow loop's programmatic writes, the
-// mount pin, the follow loop, the pagination (short auto-fill + nearTop
-// prefetch) with its prepend anchor, and the jump-to-bottom / jump-to-event
-// helpers. Extracted from TalkView so the main body is about rendering, not
-// scroll bookkeeping.
 export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBottomSignal, onFollowChange }: {
   relevantEvents: EventPayload[]
   events: EventPayload[]
@@ -128,23 +108,12 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   const loadMoreRef = useRef(onLoadMore)
   loadMoreRef.current = onLoadMore
 
-  const prependAnchorRef = useRef<{ id: string; offset: number; atScroll: number } | null>(null)
+  const prependAnchorRef = useRef<{ top: number; height: number } | null>(null)
   const captureTopAnchor = () => {
     if (autoScrollRef.current) return
     const el = scrollRef.current
     if (!el) return
-    const nodes = el.querySelectorAll<HTMLElement>('[data-evt-id]')
-    let pick: HTMLElement | null = null
-    let pickTop = Infinity
-    for (let i = 0; i < nodes.length; i++) {
-      const n = nodes[i] as HTMLElement
-      const nt = n.getBoundingClientRect().top
-      if (nt < pickTop) { pickTop = nt; pick = n }
-    }
-    const id = pick?.dataset?.evtId
-    if (!pick || !id) return
-    const ct = el.getBoundingClientRect().top
-    prependAnchorRef.current = { id, offset: pickTop - ct, atScroll: el.scrollTop }
+    prependAnchorRef.current = { top: el.scrollTop, height: el.scrollHeight }
   }
 
   // Unified load-more controller: 'short' (timeline doesn't fill the container)
@@ -152,23 +121,25 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   // in-flight latch + backfill cap, and pre-capture the prepend anchor.
   const loadingRef = useRef(false)
   const backfillCountRef = useRef(0)
-  const nearTopCountRef = useRef(0)
   const maybeLoadMore = (reason: 'short' | 'nearTop') => {
     const sc = scrollRef.current
     if (!sc || !loadMoreRef.current) return
     const need = reason === 'short'
       ? sc.scrollHeight <= sc.clientHeight + 1
-      : sc.scrollTop < LOAD_EARLY_PX
+      : sc.scrollTop <= LOAD_EARLY_PX
     if (!need) {
       if (reason === 'short') backfillCountRef.current = 0
       return
     }
     if (reason === 'short' && backfillCountRef.current >= MAX_TALK_BACKFILL) return
-    if (reason === 'nearTop' && nearTopCountRef.current >= MAX_NEARTOP_AUTOLOAD) return
+    // One in-flight load at a time. An idle reader resting at the very top is
+    // still served: the prepend re-pin raises scrollTop back above LOAD_EARLY_PX
+    // for a normal-sized page, and while a load is pending this latch blocks the
+    // re-pin's own scroll event, so there is no runaway loop — no per-gesture
+    // direction gate or hard page cap is needed (mirroring the events view).
     if (loadingRef.current) return
     loadingRef.current = true
     if (reason === 'short') backfillCountRef.current++
-    else nearTopCountRef.current++
     captureTopAnchor()
     loadMoreRef.current()
     setTimeout(() => { loadingRef.current = false }, 400)
@@ -180,29 +151,32 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
     const el = scrollRef.current
     if (!el) return
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    // Sticky follow switch, POSITION-BASED (doesn't depend on a gesture having
-    // set manualRef — dragging the scrollbar thumb or a keyboard page-up that
-    // bypass the wheel/pointer handlers would otherwise leave follow stuck on
-    // and re-pin the reader back toward the bottom):
-    //   off  -> the reader is more than FOLLOW_OFF_PX above the bottom
-    //   back on -> the reader scrolls down into the 50px bottom window
-    // After a switch change the previous distance feeds the re-engage test.
+    // Sticky follow switch, GESTURE-BASED (mirrors the events view): off on an
+    // explicit up-scroll (a real gesture, not the follow-loop's programmatic
+    // writes — marked by manualRef, with a small 4px deadband so trackpad/natural
+    // micro-jitter while pinned doesn't drop it and flash the jump-to-bottom
+    // button), back on once the reader scrolls down into the 50px bottom window.
+    // Content growth never flips it, so a message pushing the bottom past the old
+    // threshold can't accidentally disengage. After a switch change the previous
+    // distance feeds the re-engage test.
     const prev = prevScrollRef.current
-    if (autoScrollRef.current) {
-      if (dist > FOLLOW_OFF_PX) autoScrollRef.current = false
-    } else if (dist < 50 && dist <= prevDistRef.current) {
+    if (autoScrollRef.current && manualRef.current && el.scrollTop < prev - 4) {
+      autoScrollRef.current = false
+    } else if (!autoScrollRef.current && dist < 50 && dist <= prevDistRef.current) {
       autoScrollRef.current = true
     }
     prevScrollRef.current = el.scrollTop
     prevDistRef.current = dist
     setAtBottom(autoScrollRef.current)
     onFollowChangeRef.current?.(autoScrollRef.current)
-    // Near-top history prefetch: fire only while the user is actually scrolling
-    // UP toward the top (scrollTop decreasing) and into the top zone. The
-    // prepend re-pin raises scrollTop back into the zone, which would otherwise
-    // re-trigger a load loop that jitters the view. Scrolling away re-arms it.
-    if (el.scrollTop >= LOAD_EARLY_PX) nearTopCountRef.current = 0
-    if (el.scrollTop < LOAD_EARLY_PX && el.scrollTop < prev) maybeLoadMoreRef.current?.('nearTop')
+    // Near-top history prefetch: fire whenever the reader is resting in the top
+    // zone (no scroll-direction requirement, so sitting at the true top still
+    // loads each page) and the list actually overflows. A single in-flight latch
+    // blocks re-entry, and the prepend re-pin raises scrollTop back above the
+    // zone on a normal page, so it can't loop.
+    if (el.scrollTop <= LOAD_EARLY_PX && el.scrollHeight > el.clientHeight + 1) {
+      maybeLoadMoreRef.current?.('nearTop')
+    }
   }, [])
 
   const scrollToBottom = useCallback(() => {
@@ -233,23 +207,18 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relevantEvents])
 
-  // If a history prepend is in flight, re-pin the anchored node to its offset.
+  // If a history prepend is in flight, keep the same viewport region anchored:
+  // content grew by `grew` px above what the reader was looking at, so raise
+  // scrollTop by exactly that much. Unconditional (even when the reader is
+  // mid-gesture or at the true top) so a prepend never reads as a jump.
   useLayoutEffect(() => {
     const a = prependAnchorRef.current
     if (!a) return
     prependAnchorRef.current = null
     const el = scrollRef.current
     if (!el) return
-    // Captured offset >= 0 (reader was at the very top) or the reader has since
-    // scrolled UP past where they captured (e.g. to the true top while the load
-    // was in flight): do NOT re-pin. Re-pinning would undo their scroll and snap
-    // them back to the old position — the "fixed distance from top" jump.
-    if (a.offset >= -1 || el.scrollTop < a.atScroll - 2) return
-    const target = el.querySelector<HTMLElement>(`[data-evt-id="${CSS.escape(a.id)}"]`)
-    if (!target) return
-    const offNow = target.getBoundingClientRect().top - el.getBoundingClientRect().top
-    const delta = offNow - a.offset
-    if (delta !== 0) el.scrollTop += delta
+    const grew = el.scrollHeight - a.height
+    if (grew > 0) el.scrollTop = a.top + grew
   }, [relevantEvents])
 
   return { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToEvent }

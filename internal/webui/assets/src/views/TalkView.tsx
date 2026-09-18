@@ -283,12 +283,6 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   const toolPartials = useMemo<Record<string, string>>(() => (
     streamingMode ? computeToolPartials(events, talkWorkers, deliveries) : {}
   ), [events, talkWorkers, deliveries, streamingMode])
-  // [streamdbg] Log the streaming-UI state whenever the signature changes, so we
-  // can see whether the live tail is actually building as deltas arrive. Remove
-  // once diagnosed.
-  const streamSig = streamingMode + '|' + responseOnly + '|' + streamingTraces.length + '|' +
-    streamingTraces.map(x => (x.traceId || '').slice(0, 6) + ':t' + x.thinking.length + ':x' + x.text.length + ':' + (x.thinkingDone ? 'T' : 's') + (x.textDone ? 'T' : 's')).join(',')
-  useEffect(() => { console.log('[streamdbg] UI', streamSig) }, [streamSig])
 const { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToEvent } = useChatScroll({
     relevantEvents, events, onLoadMore, scrollToBottomSignal, onFollowChange,
   })

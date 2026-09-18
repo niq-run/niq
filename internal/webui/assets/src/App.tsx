@@ -33,8 +33,8 @@ const HISTORY_PAGE = 100
 // instead of constant and small. Trims only ever run while following (so a
 // scrolled-up reader is never shifted); a trim is also triggered when the input
 // box gains focus, so typing never contends with a huge DOM.
-const TRIM_HIGH = 500
-const TRIM_LOW = 100
+const TRIM_HIGH = 50
+const TRIM_LOW = 50
 
 // Per-reason-worker input mode, persisted to localStorage. The default is
 // append (level 2): the gentle mode that supplements the ongoing thought
@@ -496,20 +496,6 @@ export default function App() {
     es.addEventListener('watermark', onWatermark)
     es.onmessage = (msg) => {
       const evt = JSON.parse(msg.data) as EventPayload
-      // [streamdbg] Diagnostic logging for the streaming path: capture every
-      // delta / terminal arrival so we can tell — when streaming appears to
-      // "only render the final result" — whether deltas reached the client at
-      // all, and what they carried. Remove once diagnosed.
-      const isStreamEvt =
-        evt.type === 'reason.text_delta' || evt.type === 'reason.thinking_delta' ||
-        evt.type === 'reason.thinking' || evt.type === 'reason.response'
-      if (isStreamEvt) {
-        const delta = (evt.payload as any)?.delta
-        console.log(
-          '[streamdbg]', new Date().toISOString().slice(17, 26), evt.type, 'trace=' + (evt.trace_id || '?').slice(0, 8),
-          typeof delta === 'string' ? 'delta=' + delta.length + 'B' : 'payloadKeys=' + JSON.stringify(Object.keys(evt.payload || {})),
-        )
-      }
       if (evt.type === 'event.delivered') {
         const eventId = evt.payload?.event_id as string | undefined
         const recipients = evt.payload?.recipients as string[] | undefined
@@ -519,21 +505,34 @@ export default function App() {
         }
         return
       }
-      if (seenRef.current.has(evt.id)) {
-        console.log('[streamdbg] DROP dup', evt.type, 'id=' + String(evt.id).slice(0, 8), 'trace=' + (evt.trace_id || '').slice(0, 8))
-        return
+      if (seenRef.current.has(evt.id)) return
+      // Steady live-stream events arrive in order, so the common case is a cheap
+      // sorted append: build one new array (for React to see a new reference)
+      // but skip the full-array sort and the dedupe-set rebuild. Only a rare
+      // genuinely out-of-order delivery falls back to mergeEvents, which sorts
+      // to keep the timeline ordered. This is the difference between a per-event
+      // O(n·log n) sort and a linear copy — with thousands of rows that was the
+      // dominant dom/script cost, which is why trims had to kick in so early.
+      const prev = eventsRef.current
+      const lastEvt = prev[prev.length - 1]
+      const inOrder = !!lastEvt && (
+        evt.timestamp > lastEvt.timestamp ||
+        (evt.timestamp === lastEvt.timestamp && evt.id > lastEvt.id)
+      )
+      let next: EventPayload[]
+      if (inOrder) {
+        next = prev.concat([evt])
+        eventsRef.current = next
+        seenRef.current.add(evt.id)
+        setEvents(next)
+      } else {
+        next = mergeEvents(prev, [evt])
+        eventsRef.current = next
+        setEvents(next)
+        // Rebase the dedupe set to the retained ids (only needs doing on the
+        // rare out-of-order path; the in-order path is kept identical by add).
+        seenRef.current = new Set(next.map((e) => e.id))
       }
-      // Sort by timestamp (id tiebreak) rather than arrival order, so any
-      // out-of-order delivery from the live stream can't scramble the tail.
-      // Trim is only scheduled when the list crosses the high watermark — rare,
-      // big trims instead of constant small ones, so the pinned bottom doesn't
-      // bounce on every batch.
-      const next = mergeEvents(eventsRef.current, [evt])
-      eventsRef.current = next
-      setEvents(next)
-      // Rebase the dedupe set to the retained ids so it stays bounded instead
-      // of growing with every event seen over a session.
-      seenRef.current = new Set(next.map((e) => e.id))
       if (activeFollowingRef.current && next.length >= TRIM_HIGH) {
         scheduleTrim(0)
       }
