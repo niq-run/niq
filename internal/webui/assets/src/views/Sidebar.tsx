@@ -170,6 +170,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const armedRef = useRef(false)
   const logoWrapRef = useRef<HTMLHeadingElement>(null)
   const logoRef = useRef<HTMLSpanElement>(null)
+  // Pending reveal timer for the pattern icon on the logo's spring-back.
+  const iconRevealRef = useRef(0)
+  useEffect(() => () => window.clearTimeout(iconRevealRef.current), [])
 
   const onLogoPointerDown = (e: ReactPointerEvent) => {
     // Only the primary button drags the logo; the right button is reserved for
@@ -184,6 +187,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     setDragging(true)
     setHittingEdge(false)
     setDragX(0)
+    window.clearTimeout(iconRevealRef.current)
     setIconProgress(0)
     e.currentTarget.setPointerCapture?.(e.pointerId)
   }
@@ -220,7 +224,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     }
     setMoveDur(returnDurFor(Math.abs(lastDragX.current))) // quick, decelerating return
     setDragX(0) // spring back to the resting position
-    setIconProgress(0)
+    // Pattern icon stays hidden through the whole spring-back — an icon fading
+    // back in while the logo is still visibly on its way home splits the
+    // viewer's focus. It reveals only as the logo nears its resting position
+    // (late in the return), then fades in quickly.
+    window.clearTimeout(iconRevealRef.current)
+    const retMs = Math.max(110, Math.round((Math.abs(lastDragX.current) / 300) * 1000))
+    iconRevealRef.current = window.setTimeout(() => setIconProgress(0), Math.round(retMs * 0.7))
     e.currentTarget.releasePointerCapture?.(e.pointerId)
   }
 
@@ -513,10 +523,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           position: 'absolute', right: contentPadX, top: '50%',
           transform: `translateY(-50%) scale(${iconScale})`,
           opacity: iconOpacity,
-          // Fade is instant while dragging (progress-driven); on release it
-          // fades back in over the SAME duration as the logo's spring-back
-          // (moveDur), so the icon reappears in sync with the logo returning.
-          transition: dragging ? 'none' : `opacity ${moveDur} ease, transform ${moveDur} ease`,
+          // Reveal is quick (not tied to the logo's return duration): the logo
+          // is already hidden--then-revealed at the tail of the spring-back, so
+          // the icon just needs a short fade/grow, not a full-duration match.
+          transition: dragging ? 'none' : 'opacity 0.12s ease, transform 0.12s ease',
           width: 28, height: 28, display: 'block', cursor: 'pointer',
           userSelect: 'none', WebkitUserSelect: 'none',
         }}

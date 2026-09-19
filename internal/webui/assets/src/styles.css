@@ -19,13 +19,20 @@
   padding: 10px; border-radius: 4px; overflow-x: auto; margin: 8px 0;
 }
 [data-theme="dark"] .md-content pre {
-  background: #222; color: #d9d9d9;
+  background: #262626; color: #d9d9d9;
 }
 [data-theme="light"] .md-content pre {
-  background: #f7f7f7; color: #333;
+  background: #ededed; color: #333;
+}
+/* Thinking code blocks read the other way: slightly deeper than the page in
+   light mode (response stays slightly lighter), so the two are visually
+   distinct. */
+[data-theme="light"] .md-content.thinking-md pre {
+  background: #e0e0e0; color: #333;
 }
 .md-content pre code {
   background: none; color: inherit; padding: 0;
+  white-space: pre-wrap; word-break: break-word;
 }
 .md-content pre > div {
   background: transparent !important;

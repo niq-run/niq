@@ -51,7 +51,7 @@ export default function ThinkingBlock({ evt, defaultExpanded = true, compact = f
         <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
       </div>
       {!collapsed && text && (
-        <div className="md-content" style={{ marginTop: 8, padding: '8px 0', borderTop: '1px solid ' + colors.borderLight }}>
+        <div className="md-content thinking-md" style={{ marginTop: 8, padding: '8px 0', borderTop: '1px solid ' + colors.borderLight }}>
           <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>{text}</Markdown>
         </div>
       )}

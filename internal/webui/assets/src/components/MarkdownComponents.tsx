@@ -11,7 +11,13 @@ export function makeMdComponents(dark: boolean, colors: any) {
         return <code className={className} {...props}>{children}</code>
       }
       return (
-        <SyntaxHighlighter style={hlStyle} language={match[1]} PreTag="div">
+        <SyntaxHighlighter
+          style={hlStyle}
+          language={match[1]}
+          PreTag="div"
+          codeTagProps={{ style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }}
+          customStyle={{ background: 'transparent', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+        >
           {String(children).replace(/\n$/, '')}
         </SyntaxHighlighter>
       )
