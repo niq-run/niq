@@ -65,7 +65,11 @@ func RunProject(opts ProjectRunOptions) error {
 	busAddr := opts.BusAddr
 	if busAddr == "" {
 		if p.Ports.Bus != 0 {
-			busAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.Bus)
+			// Bind the event bus on all interfaces so remote workers can connect
+			// directly (authenticated by their bus credential), not through the
+			// control plane. The WebUI — below — stays loopback-only: it is the
+			// thing meant to be reached through the control plane.
+			busAddr = fmt.Sprintf(":%d", p.Ports.Bus)
 		} else {
 			busAddr = ":0"
 		}
