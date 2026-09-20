@@ -177,6 +177,39 @@ func TestLateToolResultWakesReason(t *testing.T) {
 	}
 }
 
+// TestLateToolResultWithPendingStaysQuiet verifies a late result does NOT wake
+// a follow-up round while another tool call is still in flight. Waking then
+// would park that in-flight call (prepareReasoning parks all pending tools),
+// interrupting it too — and its own late result would then wake another round,
+// so a cascade of interrupting rounds would follow. Instead the late result is
+// appended to the transcript and the wake is deferred until the in-flight call
+// settles (its own resolution path sets needReason once Resolved).
+func TestLateToolResultWithPendingStaysQuiet(t *testing.T) {
+	w, _, _ := startWorker(t, &staticProvider{})
+	w.mu.Lock()
+	w.needReason = false
+	// c1 is parked (input-preempted), c2 is still in flight (Pending).
+	w.requestTracker.Add("workspace", []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"},
+		{Type: llm.ContentToolCall, ToolCallID: "c2", ToolName: "bash"},
+	})
+	w.requestTracker.ParkAll(requesttracker.PreemptCauseInput)
+	// Bring c2 back to Pending: it is the still-awaiting in-flight call now.
+	w.requestTracker.Add("workspace", []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c2", ToolName: "bash"},
+	})
+	w.mu.Unlock()
+
+	// c1's result arrives late while c2 is still pending.
+	late := event.New(event.TypeRequestCompleted, "workspace", map[string]any{"result": "out"})
+	late.RequestId = "c1"
+	w.handleToolResult(late)
+
+	if w.needReason {
+		t.Fatal("late result must NOT wake a round while another tool is still in flight")
+	}
+}
+
 // TestLateToolResultAbortStaysQuiet verifies a late result for a call parked by
 // an explicit abort does NOT wake a round: the user asked to stop, so the
 // worker stays quiet until the next input.

@@ -191,12 +191,19 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 		// this: an append/interrupt session parked a tool, the prompt round
 		// answered *without* its result (it was told the call was interrupted),
 		// and then the real result landed. Without waking, that stale
-		// "interrupted" answer is never corrected. Causes that mean a deliberate
-		// stop (abort, restart) stay quiet.
+		// "interrupted" answer is never corrected. We route the wake through the
+		// same idle gate as schedule-mode input (wakeIfIdle): never park an
+		// in-flight tool to surface this. If another call is still being awaited,
+		// waking would park it (prepareReasoning parks all pending tools),
+		// interrupting that tool too — and its own late result would then wake
+		// another round, cascading. The late result is already appended to the
+		// transcript, and the in-flight call's own resolution sets needReason once
+		// every request settles, so that later round still sees it. Causes that
+		// mean a deliberate stop (abort, restart) stay quiet entirely.
 		switch parked.ParkCause {
 		case requesttracker.PreemptCauseAbort, requesttracker.PreemptCauseRestart:
 		default:
-			w.needReason = true
+			w.wakeIfIdle()
 		}
 	}
 }
@@ -254,6 +261,19 @@ func (w *BaseReasonWorker) recallToolCalls(tcs []*requesttracker.TrackedRequest)
 	}
 }
 
+// wakeIfIdle schedules a fresh reasoning round only when the system is idle
+// - no in-flight reasoning and no tool call still being awaited. When busy,
+// the caller keeps its message in the transcript and lets the wake happen when
+// the current work finishes (an in-flight call's own resolution sets needReason
+// once Resolved). Both schedule-mode input (level 1) and a resolving late
+// result route through this gate, so a late result never parks an in-flight
+// tool - which would interrupt that tool too and cascade.
+func (w *BaseReasonWorker) wakeIfIdle() {
+	if !w.isReasoning && w.requestTracker.Resolved() {
+		w.needReason = true
+	}
+}
+
 // scheduleInput appends messages and schedules a new round only when the
 // system is idle - no in-flight reasoning and no pending tool calls. Does not
 // interrupt or park anything; when busy, the message waits in the transcript
@@ -261,10 +281,7 @@ func (w *BaseReasonWorker) recallToolCalls(tcs []*requesttracker.TrackedRequest)
 // (level 1).
 func (w *BaseReasonWorker) scheduleInput(msgs []llm.Message) {
 	w.transcript.Apply(transcript.InputPatch{Messages: msgs})
-
-	if !w.isReasoning && w.requestTracker.Resolved() {
-		w.needReason = true
-	}
+	w.wakeIfIdle()
 }
 
 // appendInput appends messages, records the cause, and schedules a fresh
