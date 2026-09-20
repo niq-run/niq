@@ -155,7 +155,7 @@ export const zh: Record<StringKey, string> = {
   'talk.input.stop': '停止',
   'talk.input.send': '发送',
   'talk.input.mode': '模式',
-  'talk.input.broadcast': '→ 广播',
+  'talk.input.broadcast': '广播',
   'talk.input.target.tooltip': '目标：{target} — 点击更改',
   'talk.input.broadcast.tooltip': '广播中；点击指定一个 worker 作为目标',
   'picker.mention': '提及',

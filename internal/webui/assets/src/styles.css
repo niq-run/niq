@@ -1,4 +1,13 @@
 /* ── Markdown content styles ── */
+/* Long unbroken strings (URLs, code, far-east text) in response/thinking
+   blocks must wrap instead of overflowing the bubble on narrow (mobile)
+   viewports. overflow-wrap anywhere + word-break lets any long token break;
+   min-width:0 lets the content shrink inside flex/grid ancestors. */
+.md-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 [data-theme="dark"] .md-content code:not(pre code):not(div code) {
   background: #404040; color: #e6c7a0;

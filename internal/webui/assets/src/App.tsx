@@ -70,10 +70,14 @@ const detailDefaultWidth = () =>
 // top matches the top bar's box-border height so the panel starts exactly at
 // the bar's bottom border line.
 const MOBILE_TOP_BAR_HEIGHT = 44
+// On notched (full-bleed) iPhones the top bar must also clear the status-bar /
+// notch inset (viewport-fit=cover), so both the bar height and the detail
+// panel's top offset add env(safe-area-inset-top) — 0 everywhere else.
+const mobileTopBarHeight = 'calc(' + MOBILE_TOP_BAR_HEIGHT + 'px + env(safe-area-inset-top, 0px))'
 function MobileDetailPanel({ children }: { children: ReactNode }) {
   const { colors } = useTheme()
   return (
-    <div style={{ position: 'fixed', top: MOBILE_TOP_BAR_HEIGHT, right: 0, bottom: 0, width: '100%', zIndex: 20, display: 'flex', background: colors.bg }}>
+    <div style={{ position: 'fixed', top: mobileTopBarHeight, right: 0, bottom: 0, width: '100%', zIndex: 20, display: 'flex', background: colors.bg }}>
       {children}
     </div>
   )
@@ -1047,7 +1051,7 @@ export default function App() {
             Fixed border-box height keeps the detail overlay's top aligned to
             its bottom border. */}
         {isMobile && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, height: MOBILE_TOP_BAR_HEIGHT, boxSizing: 'border-box', padding: '0 16px', borderBottom: '1px solid ' + colors.border, flexShrink: 0, background: colors.bg, zIndex: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, height: mobileTopBarHeight, boxSizing: 'border-box', padding: '0 16px', paddingTop: 'env(safe-area-inset-top, 0px)', borderBottom: '1px solid ' + colors.border, flexShrink: 0, background: colors.bg, zIndex: 10 }}>
             <button
               onClick={() => setSidebarOpen(true)}
               title={t('app.menu')}
@@ -1246,7 +1250,7 @@ export default function App() {
                 {events.length > 0 && <div ref={sentinelRef} style={{ height: 1 }} />}
                 {/* min-width lets the wide fixed columns scroll horizontally on
                     narrow (phone) viewports instead of collapsing. */}
-                <table style={{ width: '100%', minWidth: 680, borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
+                <table style={{ width: '100%', minWidth: 680, borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', fontSize: fontSizes.md }}>
                   <thead>
                     <tr style={{ textAlign: 'left', color: colors.textDimmed, fontSize: fontSizes.xs }}>
                       <th style={{ padding: '6px 6px', width: 80, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('events.col.time.tooltip')}>{t('events.col.time')}</th>

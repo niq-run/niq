@@ -87,7 +87,7 @@ export const en = {
 
   // ── Talk view ──
   'talk.empty': 'No messages yet. Watching {label}.',
-  'talk.attach.add': 'Attach',
+  'talk.attach.add': 'Add',
   'talk.attach': 'Attach files (images inline as base64, files upload and reference the path)',
   'talk.attach.uploading': 'Uploading…',
   'talk.attach.tooMany': 'At most 4 attachments',
@@ -163,7 +163,7 @@ export const en = {
   'talk.input.stop': 'Stop',
   'talk.input.send': 'Send',
   'talk.input.mode': 'mode',
-  'talk.input.broadcast': '→ broadcast',
+  'talk.input.broadcast': 'all',
   'talk.input.target.tooltip': 'targeting {target} — click to change',
   'talk.input.broadcast.tooltip': 'broadcasting; click to target a worker',
   'picker.mention': 'mention',
@@ -180,9 +180,9 @@ export const en = {
 
   // ── Input mode options (TalkInput) ──
   'mode.interrupt': 'interrupt mode',
-  'mode.interrupt.short': 'Interrupt',
+  'mode.interrupt.short': 'Intrpt',
   'mode.append.short': 'Append',
-  'mode.schedule.short': 'Schedule',
+  'mode.schedule.short': 'Sched',
   'mode.interrupt.desc': 'cancel in-flight reasoning and handle now',
   'mode.interrupt.hint': 'interrupt in-flight reasoning and handle now (level 3)',
   'mode.schedule': 'schedule mode',

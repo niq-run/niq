@@ -368,30 +368,31 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     { id: 'schedule', label: t('mode.schedule'), description: t('mode.schedule.desc'), hint: t('mode.schedule.hint') },
   ]
   const currentModeLabel = modeOptions.find(m => m.id === inputMode)?.label ?? inputMode
-  // Compact labels for the mobile action row: '模式: 打断模式' does not fit.
-  const modeShortLabel: Record<string, string> = {
-    interrupt: t('mode.interrupt.short'),
-    append: t('mode.append.short'),
-    schedule: t('mode.schedule.short'),
-  }
+  // One size for the whole action cluster (attach/stop/mode/send) so they read
+  // as one row; slightly larger on phones for a comfortable tap target.
+  const actionFont = isMobile ? 15 : 13
 
   // The mode dropdown is 420px wide on desktop; on phones it must fit the
   // viewport (minus padding) or it overflows the screen.
   const modePickerWidth = Math.min(420, Math.max(280, (typeof window !== 'undefined' ? window.innerWidth : 420) - 24))
 
   const targetChip = (
-    <div style={{ position: 'relative', display: 'flex', ...(isMobile ? { width: '100%' } : { marginRight: 'auto' }) }}>
+    <div style={{ position: 'relative', display: 'flex', minWidth: 0, ...(isMobile ? { flexShrink: 1 } : { marginRight: 'auto' }) }}>
         <span
           onClick={(e) => { e.stopPropagation(); setPickerMode('target'); setPickerQuery(''); setMentionIndex(0); setPickerOpen(v => !v) }}
           title={shownTarget ? t('talk.input.target.tooltip', { target: shownTarget }) : t('talk.input.broadcast.tooltip')}
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, lineHeight: '20px',
+            display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: actionFont, lineHeight: '20px',
             color: shownTarget ? colors.accent : colors.textDimmed,
             border: '1px solid ' + (shownTarget ? colors.accentBorder : colors.border),
             borderRadius: 2, padding: '4px 10px', cursor: 'pointer', userSelect: 'none',
           }}
         >
-          {shownTarget ? `→ ${shownTarget}` : t('talk.input.broadcast')}
+          {/* Wrap the label so a long worker id truncates instead of widening
+              the chip past the mobile button row. */}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: isMobile ? '10ch' : undefined }}>
+            {shownTarget ? shownTarget : t('talk.input.broadcast')}
+          </span>
         </span>
 
         {pickerOpen && (
@@ -402,6 +403,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
               selectedId={pickerMode === 'target' ? (shownTarget || undefined) : undefined}
               activeIndex={pickerGroup.activeOptionIndex}
               onSelect={commitPicker}
+              width={isMobile ? 480 : 240}
               onActivate={(i) => {
                 // Map the option index back to the worker it selects: group
                 // headers are skipped (they are inert structure).
@@ -432,7 +434,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   )
 
   return (
-    <div style={{ padding: '12px 24px', borderTop: '1px solid ' + colors.border, position: 'relative' }}>
+    <div style={{ padding: '12px 24px', borderTop: '1px solid ' + colors.border, position: 'relative', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))' }}>
 
       {/* Attachment chips: staged images (thumbnail) and uploaded files
           (name), each removable, plus upload/note status. */}
@@ -473,13 +475,6 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         </div>
       )}
 
-      {/* Mobile: the target/mention chip is its own full-width row above the
-          input; on desktop it lives in the action row below. */}
-      {isMobile && (
-        <div style={{ marginBottom: 6 }}>
-          {targetChip}
-        </div>
-      )}
       <textarea
         ref={textareaRef}
         value={input}
@@ -510,8 +505,8 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           boxSizing: 'border-box',
         }}
       />
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: isMobile ? 6 : 12, rowGap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-      {!isMobile && targetChip}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: isMobile ? 4 : 12, rowGap: isMobile ? 4 : 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+        {targetChip}
         {/* File picker: non-image files upload to the project's upload dir
             and enter the input as path references. */}
         <input
@@ -528,7 +523,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           title={t('talk.attach')}
           style={{
             cursor: 'pointer', userSelect: 'none',
-            color: colors.textDim, fontSize: 13, lineHeight: '20px',
+            color: colors.textDim, fontSize: actionFont, lineHeight: '20px',
             padding: '4px 10px',
             border: '1px solid ' + colors.border, borderRadius: 4,
           }}
@@ -547,7 +542,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             padding: '4px 10px',
             borderRadius: 4,
             cursor: 'pointer',
-            fontSize: isMobile ? 15 : 13,
+            fontSize: actionFont,
             lineHeight: '20px',
           }}
         >
@@ -558,14 +553,13 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             onClick={(e) => { e.stopPropagation(); setModeOpen(v => !v) }}
             title={modeOptions.find(m => m.id === inputMode)?.hint}
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, lineHeight: '20px',
+              display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: actionFont, lineHeight: '20px',
               color: colors.textDim,
               border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 10px',
               cursor: 'pointer', userSelect: 'none',
             }}
           >
-            {isMobile ? (modeShortLabel[inputMode] ?? currentModeLabel) : `${t('talk.input.mode')}: ${currentModeLabel}`}
-            <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed }}>▾</span>
+            {isMobile ? t('talk.input.mode') : `${t('talk.input.mode')}: ${currentModeLabel}`}
           </span>
           {modeOpen && (
             <div style={{ position: 'absolute', right: 0, bottom: '100%', marginBottom: 4, zIndex: 100 }}>
@@ -589,7 +583,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             padding: '4px 10px',
             borderRadius: 4,
             cursor: 'pointer',
-            fontSize: 13,
+            fontSize: actionFont,
             lineHeight: '20px',
           }}
         >

@@ -81,24 +81,25 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
           </>}
         />
       )}
-      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: isMobile ? 24 : '0 24px 16px' }}>
-        {/* On mobile the app-level top bar heads the page; the action pill then
-            lives in a slim bar above the table. */}
-        {isMobile && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+      {/* Mobile: the app-level top bar heads the page; the create action pill
+          lives in a fixed bar above the scrollable table so it stays on-screen
+          (it used to live inside the scroller and scrolled away). */}
+      {isMobile && (
+        <div style={{ display: 'flex', padding: '12px 24px 8px', flexShrink: 0 }}>
           <span
             onClick={() => setShowCreate(true)}
             className="btn-hover"
-            style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 2, padding: '6px 14px', userSelect: 'none' }}
+            style={{ flex: 1, textAlign: 'center', cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, border: '1px solid ' + colors.accent, borderRadius: 2, padding: '10px 14px', userSelect: 'none' }}
           >
             {t('workers.create')}
           </span>
         </div>
-        )}
+      )}
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '0 24px 16px' }}>
 
       {/* min-width lets the fixed columns scroll horizontally on narrow
           (phone) viewports instead of collapsing. */}
-      <table style={{ width: '100%', minWidth: 640, borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: fontSizes.md }}>
+      <table style={{ width: '100%', minWidth: 640, borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', fontSize: fontSizes.md }}>
         <thead>
           <tr style={{ textAlign: 'left', color: colors.textDimmed, fontSize: fontSizes.xs }}>
             <th style={{ padding: '6px 6px', width: 170, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>{t('workers.col.workerId')}</th>

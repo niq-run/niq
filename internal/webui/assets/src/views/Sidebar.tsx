@@ -595,7 +595,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 outline: 'none',
               }}
             />
-            {selectorWorkers.length > 1 && (
+            {selectorWorkers.length > 0 && (
               <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex' }}>
                 <span
                   onClick={() => setShowWorkerPicker(true)}
@@ -609,12 +609,15 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             )}
           </div>
           {/* Worker list, height-capped to ~10 rows; the rest scrolls so a long
-              list doesn't sprawl down the sidebar. The negative horizontal
-              margin bleeds the wrapper to the sidebar edges so the rows' hover
-              bands (painted on the rows themselves, see workerRowStyle) run
-              edge-to-edge like the view rows above instead of stopping at the
-              scroll container's padding. */}
-          <div style={{ overflowY: 'auto', overflowX: 'hidden', maxHeight: workerListMax, margin: '0 -' + contentPadX + 'px' }}>
+              list doesn't sprawl down the sidebar. overflowY:auto makes the
+              flex automatic min-height 0, so it must not shrink (flexShrink:0)
+              or it collapses to a sliver in a tight column (mobile drawer) and
+              no worker is visible. The negative horizontal margin bleeds the
+              wrapper to the sidebar edges so the rows' hover bands (painted on
+              the rows themselves, see workerRowStyle) run edge-to-edge like
+              the view rows above instead of stopping at the scroll container's
+              padding. */}
+          <div style={{ flexShrink: 0, overflowY: 'auto', overflowX: 'hidden', maxHeight: workerListMax, margin: '0 -' + contentPadX + 'px' }}>
           {selectorList.map((w) => {
             const isActive = view === 'talk'
               ? talkWorkers.has(w.id)

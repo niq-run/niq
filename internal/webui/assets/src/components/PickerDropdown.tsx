@@ -157,15 +157,20 @@ export default function PickerDropdown({
         className="picker-dropdown"
         ref={panelRef}
         style={panelStyle}
+        // A callers' global window-click handler closes the picker; stop the
+        // click from escaping the panel so interacting with the search box or
+        // rows (which don't close it) doesn't dismiss the whole dropdown. The
+        // mobile backdrop is a separate sibling, so tapping it still closes.
+        onClick={(e) => e.stopPropagation()}
       >
       <div
         className="picker-header"
-        style={{ padding: '8px 10px 3px 10px', fontSize: fontSizes.xs, color: colors.textDimmed }}
+        style={{ padding: isMobile ? '12px 12px 4px 12px' : '8px 10px 3px 10px', fontSize: isMobile ? fontSizes.sm : fontSizes.xs, color: colors.textDimmed }}
       >
         {header}
       </div>
       {searchable && (
-        <div style={{ padding: '4px 10px 6px 10px' }}>
+        <div style={{ padding: isMobile ? '6px 12px 8px 12px' : '4px 10px 6px 10px' }}>
           <input
             ref={searchRef}
             value={searchValue}
@@ -175,8 +180,8 @@ export default function PickerDropdown({
             style={{
               width: '100%', boxSizing: 'border-box',
               background: colors.bgLight, border: '1px solid ' + colors.border,
-              borderRadius: 4, padding: '5px 8px', outline: 'none',
-              color: colors.text, fontSize: fontSizes.sm,
+              borderRadius: 4, padding: isMobile ? '9px 10px' : '5px 8px', outline: 'none',
+              color: colors.text, fontSize: isMobile ? fontSizes.base : fontSizes.sm,
             }}
           />
         </div>
@@ -218,11 +223,11 @@ export default function PickerDropdown({
             onClick={() => onSelect(opt.id)}
             onMouseEnter={() => onActivate?.(i)}
             style={{
-              padding: `7px 12px 7px ${padLeft}px`,
+              padding: isMobile ? `12px 12px 12px ${padLeft}px` : `7px 12px 7px ${padLeft}px`,
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: 8,
+              gap: isMobile ? 10 : 8,
               fontSize: fontSizes.base,
               color: selected ? colors.accent : colors.textDim,
               background: active ? highlightBg : undefined,
