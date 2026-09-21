@@ -126,6 +126,7 @@ func RunProject(opts ProjectRunOptions) error {
 		ContextInfo: webui.ContextInfo{
 			Mode:    "project",
 			Project: opts.ProjectID,
+			BusPort: PortOf(busAddr),
 		},
 	})
 }

@@ -19,9 +19,11 @@ interface WorkerDetailProps {
   // Called after a display-metadata edit so the caller refreshes the worker
   // list and this detail reflects the change immediately.
   onRefresh?: () => void
+  // Event-bus port, used to render a remote worker's connect configuration.
+  busPort?: number
 }
 
-export default function WorkerDetail({ worker, allWorkers, watch, onClose, archived, onToggleArchived, onDeleted, onRefresh }: WorkerDetailProps) {
+export default function WorkerDetail({ worker, allWorkers, watch, onClose, archived, onToggleArchived, onDeleted, onRefresh, busPort }: WorkerDetailProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const suspended = worker.managed && worker.state === 'suspended'
@@ -45,6 +47,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
   const [umNote, setUmNote] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
   const [delBusy, setDelBusy] = useState(false)
+  const [configNote, setConfigNote] = useState('')
 
   const doDelete = async () => {
     setDelBusy(true)
@@ -93,6 +96,27 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
   const handleAction = async () => {
     if (suspended) await resumeWorker(worker.id)
     else await suspendWorker(worker.id)
+  }
+
+  // remoteConfig renders the env-var block a remote worker consumes to reach
+  // the bus on its own (same convention as supervisor-launched workers).
+  const remoteConfig = (): string => {
+    const busBase = `${window.location.hostname || 'localhost'}:${busPort ?? 'PORT'}`
+    return [
+      `NIQ_BUS_URL=http://${busBase}`,
+      `NIQ_WORKER_ID=${worker.id}`,
+      `NIQ_WORKER_CREDENTIAL=${worker.credential || ''}`,
+      `# type=${worker.type || ''}`,
+    ].join('\n')
+  }
+
+  const copyRemoteConfig = async () => {
+    try {
+      await navigator.clipboard.writeText(remoteConfig())
+      setConfigNote(t('workers.create.copied'))
+    } catch {
+      setConfigNote(t('workers.create.copyFailed'))
+    }
   }
 
   const tag: React.CSSProperties = {
@@ -297,6 +321,23 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                   </span>
                 </div>
               </>
+            ) : worker.remote ? (
+              <div>
+                <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
+                  {t('wd.remote.desc')}
+                </div>
+                <pre style={{ margin: 0, padding: 8, background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, fontSize: fontSizes.xs, color: colors.text, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.6 }}>{remoteConfig()}</pre>
+                <span
+                  onClick={copyRemoteConfig}
+                  className="btn-hover"
+                  style={{ cursor: 'pointer', display: 'inline-block', marginTop: 8, border: '1px solid ' + colors.accent, borderRadius: 3, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+                >
+                  {t('workers.create.copyConfig')}
+                </span>
+                {configNote && (
+                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{configNote}</div>
+                )}
+              </div>
             ) : worker.unmanaged ? (
               <div>
                 <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
