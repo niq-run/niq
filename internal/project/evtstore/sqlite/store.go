@@ -279,6 +279,12 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 		query += " AND timestamp >= ?"
 		args = append(args, opts.Since)
 	}
+	if len(opts.Types) > 0 {
+		query += " AND type IN (" + strings.TrimRight(strings.Repeat("?,", len(opts.Types)), ",") + ")"
+		for _, t := range opts.Types {
+			args = append(args, t)
+		}
+	}
 	// Order and paginate by (timestamp, id) — a total order on the event id,
 	// matching the client's sort. Do NOT page by rowid: events are persisted
 	// asynchronously, so rowid (insertion order) does not reliably match
@@ -307,6 +313,22 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 	}
 
 	return s.query(ctx, query, args...)
+}
+
+// Get implements [store.EventStore]: a point lookup by event ID, returning the
+// full event (undisturbed by the worker-scoped filtering or pagination of
+// List). Returns (event, false) when the id is unknown.
+func (s *Store) Get(ctx context.Context, id string) (event.Event, bool, error) {
+	rows, err := s.query(ctx, `SELECT id, type, worker_id, payload, timestamp, target_worker_id,
+			recipients, trace_id, request_id, specversion, dataschema
+			FROM events WHERE id = ?`, id)
+	if err != nil {
+		return event.Event{}, false, err
+	}
+	if len(rows) == 0 {
+		return event.Event{}, false, nil
+	}
+	return rows[0], true, nil
 }
 
 func (s *Store) query(ctx context.Context, query string, args ...any) ([]event.Event, error) {

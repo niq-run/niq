@@ -41,6 +41,18 @@ func TestRequestIDRoundtrip(t *testing.T) {
 	if got := list[0].RequestId; got != "call-123" {
 		t.Fatalf("request_id = %q, want call-123", got)
 	}
+
+	// Get: point lookup by id returns the full stored event.
+	got, found, err := s.Get(context.Background(), evt.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !found || got.RequestId != "call-123" || got.TargetWorkerID != "hello" {
+		t.Fatalf("Get = %+v, found=%v", got, found)
+	}
+	if _, found, _ := s.Get(context.Background(), "unknown-id"); found {
+		t.Fatalf("Get of unknown id must report found=false")
+	}
 }
 
 // TestListRequestIDFilter verifies the request_id query option pairs an

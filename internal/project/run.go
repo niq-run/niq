@@ -250,6 +250,7 @@ func runAssembly(opts assemblyOptions) error {
 		Engine:       engine,
 		WorkerSvc:    workerSvc,
 		EventLog:     eventLog,
+		EventStore:   evtStore,
 		ProgramsRoot: opts.ProgramsRoot,
 	}
 	RegisterBuilders(buildCtx, workerSvc)
