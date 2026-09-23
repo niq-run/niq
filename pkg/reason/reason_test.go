@@ -85,6 +85,9 @@ func TestHandleToolCallsUnknownFails(t *testing.T) {
 		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace__bash"},
 	}
 	w.mu.Lock()
+	// finishReasoning inserts the placeholders before dispatching; mirror it so
+	// the error ToolResultPatch has a placeholder to replace in place.
+	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: calls})
 	w.handleToolCalls(context.Background(), calls, "trace1")
 
 	// Nothing dispatched.
@@ -126,6 +129,9 @@ func TestHandleToolCallsUnavailable(t *testing.T) {
 		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "ghost.tool"},
 	}
 	w.mu.Lock()
+	// finishReasoning inserts the placeholders before dispatching; mirror it so
+	// the error ToolResultPatch has a placeholder to replace in place.
+	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: calls})
 	w.handleToolCalls(context.Background(), calls, "trace1")
 
 	if len(ch.eventsOf("bash")) != 0 {
@@ -366,6 +372,58 @@ func TestSoftBudgetInjectsReminder(t *testing.T) {
 	w.handleContextBudget(context.Background(), llm.Message{Usage: &llm.Usage{InputTokens: 950, OutputTokens: 5}})
 	if got := len(w.transcript.Render()); got != 1 {
 		t.Fatalf("reminder should fire once per crossing, got %d messages", got)
+	}
+}
+
+// TestSoftBudgetReminderStaysAfterToolResult verifies that for a round ending
+// in a tool call, the inline soft-budget reminder lands AFTER the assistant
+// tool_call and its (pending→resolved) tool result — it is the round's last
+// transcript write because finishReasoning inserts the tool placeholders before
+// handleContextBudget. The assistant→tool pairing is never broken.
+func TestSoftBudgetReminderStaysAfterToolResult(t *testing.T) {
+	prov := &summarizeProvider{summarized: "unused"}
+	w := NewBaseReasonWorker(Config{ID: "r1", Provider: prov, Bus: newTestChannel(),
+		ContextWindow: 1000, BudgetSoft: 0.85, BudgetHard: 0.97})
+
+	// Mirror finishReasoning's order: assistant tool_call, then the placeholders
+	// (inserted before the budget check), then handleContextBudget appends the
+	// reminder as the round's LAST transcript write.
+	w.transcript.Apply(transcript.AssistantOutputPatch{Message: llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"}},
+	}})
+	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: []llm.ContentBlock{{
+		Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"}}})
+	w.handleContextBudget(context.Background(), llm.Message{
+		Usage:   &llm.Usage{InputTokens: 900, OutputTokens: 10},
+		Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"}},
+	})
+
+	// Before the tool result resolves, the transcript must be assistant→tool→user
+	// (the reminder is the trailing user message, after the placeholder).
+	msgs := w.transcript.Render()
+	if len(msgs) != 3 {
+		t.Fatalf("expected assistant→tool→user, got %d messages", len(msgs))
+	}
+	if msgs[0].Role != llm.RoleAssistant || msgs[1].Role != llm.RoleToolResult {
+		t.Fatalf("unexpected leading roles: %s, %s", msgs[0].Role, msgs[1].Role)
+	}
+	if last := msgs[2]; last.Role != llm.RoleUser || !strings.Contains(last.Content[0].Text, "91%") {
+		t.Fatalf("reminder must be the trailing user message, got %+v", last)
+	}
+
+	// Once the real tool result replaces the placeholder (in place), the order
+	// assistant→tool(result)→user still holds — the pairing is intact.
+	w.transcript.Apply(transcript.ToolResultPatch{CallID: "c1", Name: "bash", Text: "ok"})
+	msgs = w.transcript.Render()
+	if len(msgs) != 3 {
+		t.Fatalf("after result, expected assistant→tool→user, got %d messages", len(msgs))
+	}
+	if msgs[1].Role != llm.RoleToolResult || !strings.Contains(msgs[1].Content[0].Text, "ok") {
+		t.Fatalf("tool result should have replaced the placeholder, got %+v", msgs[1])
+	}
+	if msgs[2].Role != llm.RoleUser {
+		t.Fatalf("reminder should still trail the tool result, got %s", msgs[2].Role)
 	}
 }
 

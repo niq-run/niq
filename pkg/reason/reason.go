@@ -338,7 +338,8 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// The applied assistant message carries only thinking/text; handleToolCalls
 	// still sees the calls and emits worker.update.
 	appliedMsg := finalMsg
-	if _, isMeta := w.TranscriptEditCall(finalMsg); isMeta {
+	_, isMeta := w.TranscriptEditCall(finalMsg)
+	if isMeta {
 		appliedMsg = stripToolCalls(finalMsg)
 	}
 	// Guarantee every tool call carries a stable id before it enters the
@@ -361,12 +362,13 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 		w.transcript.Apply(transcript.AssistantOutputPatch{Message: appliedMsg})
 	}
 
-	// Budget check: record the round's usage and act on thresholds
-	// (soft: remind, hard: emit the context.compress convention event).
-	// Expects w.mu held.
-	w.handleContextBudget(ctx, finalMsg)
-
-	// Collect tool calls and thinking blocks from the response.
+	// Collect tool calls and thinking blocks from the response first, so the
+	// tool placeholders can be inserted BEFORE the budget check below. This is
+	// what keeps the inline soft-budget reminder (handleContextBudget's last
+	// transcript write of the round) from ever landing between an assistant
+	// tool_call and its tool_result: placeholders are in place first, and the
+	// reminder appends after them. Meta rounds edit the transcript themselves
+	// and take no placeholders.
 	var toolCalls []llm.ContentBlock
 	var thinkingBlocks []llm.ContentBlock
 	for _, block := range finalMsg.Content {
@@ -377,6 +379,15 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 			thinkingBlocks = append(thinkingBlocks, block)
 		}
 	}
+	if !isMeta && len(toolCalls) > 0 {
+		w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: toolCalls})
+	}
+
+	// Budget check: record the round's usage and act on thresholds
+	// (soft: remind, hard: emit the context.compress convention event).
+	// Expects w.mu held. Runs after the placeholders above, so its inline
+	// soft reminder is always the round's final transcript write.
+	w.handleContextBudget(ctx, finalMsg)
 	if len(thinkingBlocks) > 0 {
 		log.Printf("[reason %s] publishing %d thinking block(s)", w.ID(), len(thinkingBlocks))
 		w.broadcastThinking(thinkingBlocks, traceID)
@@ -457,7 +468,11 @@ func (w *BaseReasonWorker) handleContextBudget(ctx context.Context, msg llm.Mess
 		w.budgetReminded = false
 		w.emitContextCompress(ctx)
 	case ratio >= w.budgetSoft && !w.budgetReminded:
-		// Guided exit: one reminder per crossing; the LLM decides.
+		// Guided exit: one reminder per crossing; the LLM decides. It is applied
+		// as the LAST transcript write of the round: finishReasoning inserts the
+		// tool placeholders BEFORE calling this, so for a tool-call round the
+		// reminder lands after the assistant tool_call + its placeholder — never
+		// between them — keeping the assistant↔tool pairing intact.
 		w.budgetReminded = true
 		log.Printf("[reason %s] context soft budget %.0f%% (%d/%d tokens) - reminding",
 			w.ID(), ratio*100, w.lastUsageTokens, w.contextWindow)
@@ -585,7 +600,10 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 		}
 	}
 
-	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: busCalls})
+	// NOTE: tool placeholders are inserted in finishReasoning BEFORE the budget
+	// check (so the inline soft-budget reminder never interleaves the assistant
+	// tool_call with its result). handleToolCalls only dispatches; it does not
+	// (re)apply placeholders here.
 
 	// Group tool calls by owning worker, then publish each call as its own
 	// event type to that worker. The owning worker is the discovered cap's
