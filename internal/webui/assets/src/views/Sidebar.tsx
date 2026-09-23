@@ -4,6 +4,8 @@ import { useI18n } from '../i18n'
 import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 import WorkerPickerModal from '../components/WorkerPickerModal'
 import WorkerRowMenu from '../components/WorkerRowMenu'
+import ContextMenuSurface from '../components/ContextMenuSurface'
+import { useContextMenu, contextMenuElementStyle } from '../hooks/useContextMenu'
 import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned } from '../pinnedWorkers'
 import pinSvg from '../assets/pin.svg'
 import pinwSvg from '../assets/pinw.svg'
@@ -74,10 +76,11 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   }
   // Right-click menu position for the worker under the cursor, or null.
   const [rowMenu, setRowMenu] = useState<{ id: string; x: number; y: number } | null>(null)
-  const openRowMenu = (e: React.MouseEvent, id: string) => {
-    e.preventDefault()
-    setRowMenu({ id, x: e.clientX, y: e.clientY })
+  const openRowMenu = (pos: { x: number; y: number }, id: string) => {
+    setRowMenu({ id, x: pos.x, y: pos.y })
   }
+  // Long-press / right-click on the logo band toggles the inverted palette.
+  const logoMenu = useContextMenu(() => toggleInverted())
   // Expanded picker modal for the worker selector (open on the expand button).
   const [showWorkerPicker, setShowWorkerPicker] = useState(false)
   // Free-text filter for the inline selector list. A search box beats the tag
@@ -459,7 +462,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           overflow clips the logo exactly at the right divider instead of
           letting it paint over the main content area. */}
       <div
-        onContextMenu={(e) => { e.preventDefault(); toggleInverted() }}
+        {...logoMenu}
         title={t('sidebar.logo.tooltip')}
         style={{
           flexShrink: 0, overflow: 'hidden', position: 'relative', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`,
@@ -470,6 +473,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           height: VIEW_HEADER_HEIGHT,
           display: 'flex', alignItems: 'center',
           background: inverted ? colors.accent : 'transparent', transition: 'background 0.2s ease',
+          ...contextMenuElementStyle,
         }}
       >
       {/* Logo + project name — clicking anywhere here plays the single-click
@@ -626,12 +630,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               // Single line: every entry here is a reason worker, so the type
               // is redundant — just the name (offline workers are not listed).
               return (
-                <div
+                <ContextMenuSurface
                   key={w.id}
                   onClick={() => handleWorkerClick(w.id)}
                   onMouseEnter={() => setHoverId('worker:' + w.id)}
                   onMouseLeave={() => setHoverId(null)}
-                  onContextMenu={(e) => openRowMenu(e, w.id)}
+                  onOpenMenu={(pos) => openRowMenu(pos, w.id)}
                   style={workerRowStyle('worker:' + w.id)}
                 >
                   <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
@@ -641,17 +645,17 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   >
                     {w.id}
                   </span>
-                </div>
+                </ContextMenuSurface>
               )
             }
             // Events view: single line — id with its type in brackets.
             return (
-              <div
+              <ContextMenuSurface
                 key={w.id}
                 onClick={() => handleWorkerClick(w.id)}
                 onMouseEnter={() => setHoverId('worker:' + w.id)}
                 onMouseLeave={() => setHoverId(null)}
-                onContextMenu={(e) => openRowMenu(e, w.id)}
+                onOpenMenu={(pos) => openRowMenu(pos, w.id)}
                 style={workerRowStyle('worker:' + w.id)}
               >
                 <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
@@ -664,7 +668,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   </span>
                   {w.type ? <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, flexShrink: 0 }}>[{w.type}]</span> : null}
                 </span>
-              </div>
+              </ContextMenuSurface>
             )
           })}
           {/* Nothing to show: every worker is offline, nothing matches the

@@ -2,118 +2,29 @@
 // WorkerBadge (speaker label) and the RowCtx carrying the colors/l10n/lookups/
 // callbacks they read. TalkView computes the cheap per-row facts (alignment +
 // whether to show the avatar) and hands each event to the matching row.
-import { useState, memo, type ReactNode, type CSSProperties } from 'react'
+import { memo } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useTheme, fontSizes, type Palette } from '../../theme'
-import { useI18n, type StringKey } from '../../i18n'
+import { fontSizes } from '../../theme'
 import { makeMdComponents } from '../../components/MarkdownComponents'
 import CollapsibleCode from '../../components/CollapsibleCode'
 import ThinkingBlock from '../../components/ThinkingBlock'
 import ResponseBlock from '../../components/ResponseBlock'
 import SystemReminderBlock from '../../components/SystemReminderBlock'
-import WorkerBadgeMenu from '../../components/WorkerBadgeMenu'
 import {
-  getInputText, isToolResult, toolContent, toolSummary, toolCallId,
+  getInputText, isToolResult, toolContent, toolSummary,
   formatTime, findReferencedInput, splitSystemReminder, parseAttachments,
 } from '../../components/talk-utils'
 import type { EventPayload } from '../../types'
-
-function WorkerBadge({ id, show, humanId, isReason, onMention, onOpenDetail, onAddFilter, onFocusWorker, displayName, small }: {
-  id: string
-  show: boolean
-  humanId: string
-  isReason: (id: string) => boolean
-  onMention?: (id: string) => void
-  onOpenDetail?: (id: string) => void
-  onAddFilter?: (id: string) => void
-  onFocusWorker?: (id: string) => void
-  displayName: (id?: string) => string
-  // small renders a compact trailing marker (font ~sm) instead of the big
-  // speaker badge — used for the bottom-right run footer.
-  small?: boolean
-}) {
-  const { colors } = useTheme()
-  const { t } = useI18n()
-  const [hover, setHover] = useState(false)
-  // Right-click context menu position, or null.
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
-  if (!show) return null
-  const isHuman = id === humanId
-  const mentionable = !isHuman && isReason(id) && !!onMention
-  const hasMenu = !!(onOpenDetail || onAddFilter || onFocusWorker)
-  return (
-    <span
-      onClick={(e) => { e.stopPropagation(); if (mentionable) onMention?.(id) }}
-      onContextMenu={(e) => {
-        e.preventDefault(); e.stopPropagation();
-        if (hasMenu) setMenu({ x: e.clientX, y: e.clientY })
-      }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      className={mentionable ? 'badge-mention' : undefined}
-      style={{
-        cursor: mentionable ? 'pointer' : (hasMenu ? 'context-menu' : 'default'),
-        fontSize: small ? fontSizes.sm : fontSizes.xxl,
-        color: colors.accent,
-        fontWeight: 'bold',
-        fontFamily: 'monospace',
-      }}
-    >
-      {mentionable && (
-        <span style={{ display: 'inline-block', overflow: 'hidden', whiteSpace: 'nowrap', verticalAlign: 'bottom', maxWidth: hover ? '1ch' : 0, transition: 'max-width 0.18s' }}>@</span>
-      )}
-      {displayName(id)}
-      {mentionable && <span className="badge-tip">{t('badge.mention.tip')}</span>}
-      {menu && (
-        <WorkerBadgeMenu
-          x={menu.x}
-          y={menu.y}
-          workerId={id}
-          onDetail={onOpenDetail ? () => onOpenDetail(id) : () => {}}
-          onFocus={onFocusWorker ? () => onFocusWorker(id) : () => {}}
-          onClose={() => setMenu(null)}
-        />
-      )}
-    </span>
-  )
-}
+import WorkerBadge from './WorkerBadge'
+import type { RowCtx } from './RowCtx'
 
 // ── Row rendering ──
 // Each talk event renders as one self-contained row component (below). They
-// share a RowCtx carrying the colors/l10n/lookups/callbacks and the two
-// per-row facts (alignment + whether to show the avatar), so the main render
-// loop in TalkView reduces to "pick a row component and hand it the context"
-// instead of an inline wall of JSX per event type.
-interface RowCtx {
-  dark: boolean
-  colors: Palette
-  t: (key: StringKey, vars?: Record<string, string | number>) => string
-  isMobile: boolean
-  compactMode: boolean
-  thinkingExpanded: boolean
-  bubbleMax: string
-  tPad: string
-  tFontSize: number
-  itemSep: CSSProperties
-  humanId: string
-  displayName: (id?: string) => string
-  isReason: (id: string) => boolean
-  directionOf: (evt: EventPayload, alignRight?: boolean) => string
-  expandedContent: Set<string>
-  toggleExpanded: (key: string) => void
-  // Tool/request cards are an accordion: at most one is open (openToolId), so
-  // only one code body is rendered/highlighted at a time.
-  openToolId: string | null
-  toggleTool: (key: string) => void
-  onMention?: (id: string) => void
-  onOpenDetail?: (id: string) => void
-  onAddFilter?: (id: string) => void
-  onFocusWorker?: (id: string) => void
-  onTraceClick: (traceId: string) => void
-  onDecide?: (id: string, approved: boolean, note?: string) => void
-  scrollToEvent: (evtId: string) => void
-}
+// share the RowCtx (see RowCtx.ts) carrying the colors/l10n/lookups/callbacks
+// and the two per-row facts (alignment + whether to show the avatar), so the
+// main render loop in TalkView reduces to "pick a row component and hand it
+// the context" instead of an inline wall of JSX per event type.
 
 // RowBadge is the shared "avatar row for a speaker switch" wrapper used by
 // most row components. Returns null when no badge is warranted.
@@ -433,7 +344,6 @@ function ToolRowImpl({ evt, alignRight, showBadge, resultEvt, partial, ctx }: { 
               </span>
               {contentLen > 0 && (<>{segSep}<span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('thinking.chars', { n: contentLen })}</span></>)}
               {dir && (<>{segSep}<span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{dir}</span></>)}
-              {isExpanded && contentLen > 0 && (<>{segSep}<span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('thinking.chars', { n: contentLen })}</span></>)}
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
             </div>
           )}
@@ -495,9 +405,7 @@ const MemoToolRow = memo(ToolRowImpl,
 
 // Note: response rows are memoized above (ResponseRow) ignoring allEvents on
 // purpose, so they don't re-render on every event.
-export type { RowCtx }
 export {
-  WorkerBadge, RowBadge,
   MemoInputRow as InputRow, MemoAbortRow as AbortRow, MemoTimerReminderRow as TimerReminderRow,
   MemoTimeoutRow as TimeoutRow, MemoCancelRow as CancelRow, MemoInterruptedRow as InterruptedRow,
   MemoThinkingRow as ThinkingRow, ResponseRow,

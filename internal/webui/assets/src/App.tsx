@@ -1016,7 +1016,7 @@ export default function App() {
 
   // ── Render ──
   return (
-    <div data-theme={dark ? 'dark' : 'light'} style={{ display: 'flex', height: '100vh', color: colors.text, background: colors.bg }}>
+    <div data-theme={dark ? 'dark' : 'light'} className="app-shell" style={{ display: 'flex', color: colors.text, background: colors.bg }}>
       <Sidebar
         view={view}
         setView={selectView}
