@@ -21,7 +21,7 @@ interface CreateWorkerDialogProps {
 
 // Managed worker types offered by the form. host/hiw are infrastructure the
 // assembly owns — creating them from the UI is not a thing.
-const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program', 'history'] as const
+const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program', 'history', 'directory'] as const
 
 // CreateWorkerDialog is the workers-view "create worker" form: it persists a
 // declaration into project.json (plus workers/<id>/config.json for a managed
