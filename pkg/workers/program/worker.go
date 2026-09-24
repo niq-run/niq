@@ -195,7 +195,7 @@ func (w *Worker) process(ctx context.Context, evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
 		if evt.WorkerId != w.ID() {
-			w.AnnounceReady("program", nil)
+			w.AnnounceReadyTo(evt.WorkerId, "program", nil, false)
 		}
 	default:
 		if !w.DispatchExtension(evt) {

@@ -2,7 +2,6 @@ package reason
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,8 +25,14 @@ func TestCoreExtensionsRegistered(t *testing.T) {
 	if cap, ok := w.ExtensionByToolName("context_compress"); !ok || cap.Event != reasonBase.TypeContextCompress {
 		t.Fatalf("context_compress not registered as context.compress extension: %+v ok=%v", cap, ok)
 	}
-	if cap, ok := w.ExtensionByToolName("get_worker_info"); !ok || cap.Event != TypeWorkerInfo {
-		t.Fatalf("get_worker_info not registered under its own event type: %+v ok=%v", cap, ok)
+	// list_workers / get_worker_info are NOT the reason worker's tools anymore
+	// — the fleet directory lives on the HOST worker, so a reason worker does
+	// not surface peer-reason capabilities as callable tools.
+	if _, ok := w.ExtensionByToolName("list_workers"); ok {
+		t.Fatal("list_workers must not be registered on the reason worker (host owns the directory)")
+	}
+	if _, ok := w.ExtensionByToolName("get_worker_info"); ok {
+		t.Fatal("get_worker_info must not be registered on the reason worker (host owns the directory)")
 	}
 }
 
@@ -78,10 +83,15 @@ func TestCoreExtensionsExposedToLLM(t *testing.T) {
 	for _, d := range defs {
 		got[d.Name] = true
 	}
-	for _, want := range []string{"send_message", "list_workers", "context_compress", "context_rotate"} {
+	// The fleet roster is NOT an LLM tool here — that is the host's
+	// list_workers directory. This worker's own tools are its self tools.
+	for _, want := range []string{"send_message", "context_compress", "context_rotate"} {
 		if !got[want] {
 			t.Fatalf("expected %q in LLM tool list, got %v", want, keysOf(got))
 		}
+	}
+	if got["list_workers"] || got["get_worker_info"] {
+		t.Fatalf("list_workers/get_worker_info must not be LLM tools on the reason worker, got %v", keysOf(got))
 	}
 	// The provider.* domain is LLM-callable since the exclusion was dropped:
 	// the model may inspect (and switch) its own model supplier. Tool names
@@ -99,50 +109,6 @@ func keysOf(m map[string]bool) []string {
 		ks = append(ks, k)
 	}
 	return ks
-}
-
-// TestGetWorkerInfoReturnsFullSchemas verifies the detail view behind the
-// slimmed list_workers: a known worker comes back with its COMPLETE tool
-// parameter schemas (the part list_workers omits), and an unknown worker
-// fails with the self-correcting hint to call list_workers.
-func TestGetWorkerInfoReturnsFullSchemas(t *testing.T) {
-	ch := newMockChannel()
-	w := NewWorker(Config{ID: "w1", Bus: ch})
-
-	// A peer announces a tool carrying a parameter schema.
-	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "timer", map[string]any{
-		"worker_id": "timer",
-		"watch": []map[string]any{{
-			"event":      "timer.timeout",
-			"desc":       "set a timeout",
-			"parameters": map[string]any{"duration_ms": map[string]any{"type": "integer"}},
-		}},
-	}))
-
-	handleWorkerInfo(w.BaseReasonWorker, "call-1", "get_worker_info", "webui", "trace-1", map[string]any{"worker": "timer"})
-	done := ch.eventsOf(event.TypeRequestCompleted)
-	if len(done) != 1 {
-		t.Fatalf("expected 1 completed reply, got %d", len(done))
-	}
-	if res, _ := done[0].Payload["result"].(string); !strings.Contains(res, `"duration_ms"`) {
-		t.Fatalf("result must carry the full parameter schema, got %s", res)
-	}
-
-	// Missing parameter → failed reply.
-	handleWorkerInfo(w.BaseReasonWorker, "call-2", "get_worker_info", "webui", "trace-1", map[string]any{})
-	if failed := ch.eventsOf(event.TypeRequestFailed); len(failed) != 1 {
-		t.Fatalf("expected 1 failed reply for the missing parameter, got %d", len(failed))
-	}
-
-	// Unknown worker → failed reply pointing back at list_workers.
-	handleWorkerInfo(w.BaseReasonWorker, "call-3", "get_worker_info", "webui", "trace-1", map[string]any{"worker": "ghost"})
-	failed := ch.eventsOf(event.TypeRequestFailed)
-	if len(failed) != 2 {
-		t.Fatalf("expected 2 failed replies total, got %d", len(failed))
-	}
-	if msg, _ := failed[1].Payload["error"].(string); !strings.Contains(msg, "list_workers") {
-		t.Fatalf("unknown-worker error should point at list_workers, got %q", msg)
-	}
 }
 
 // TestBroadcastReadyExcludesSelfOnly verifies the two-part announcement: the
@@ -186,13 +152,13 @@ func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
 	if presence == nil || directed == nil {
 		t.Fatal("expected one presence broadcast (self excluded) and one directed announcement")
 	}
-	if watchHasEvent(*presence, "send_message") || watchHasEvent(*presence, "list_workers") {
+	if watchHasEvent(*presence, "send_message") {
 		t.Fatal("presence broadcast must not carry the SelfOnly core tools")
 	}
 	if !watchHasEvent(*presence, "provider.switch") {
 		t.Fatal("presence broadcast must keep non-SelfOnly extensions")
 	}
-	if !watchHasEvent(*directed, "send_message") || !watchHasEvent(*directed, "list_workers") {
+	if !watchHasEvent(*directed, "send_message") {
 		t.Fatal("directed announcement must carry the full contract, SelfOnly included")
 	}
 }

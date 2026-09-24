@@ -78,8 +78,11 @@ func TestHandleToolCallsDispatches(t *testing.T) {
 // tool_unavailable notice is broadcast.
 func TestHandleToolCallsUnknownFails(t *testing.T) {
 	ch := newTestChannel()
-	w := newTestWorker(nil, ch)
-	// No worker announces "bash", so it is unknown.
+	// No worker announces "bash", so it is unknown. The all-unavailable round
+	// now schedules a follow-up round; give it a provider so that round
+	// terminates cleanly (text-only) instead of panicking on a nil provider.
+	prov := &staticProvider{msg: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
+	w := newTestWorker(prov, ch)
 
 	calls := []llm.ContentBlock{
 		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace__bash"},
@@ -122,7 +125,10 @@ func TestHandleToolCallsUnknownFails(t *testing.T) {
 // (placeholder replaced) and NOT dispatched.
 func TestHandleToolCallsUnavailable(t *testing.T) {
 	ch := newTestChannel()
-	w := newTestWorker(nil, ch)
+	// The all-unavailable round now schedules a follow-up round; give it a
+	// provider so that round terminates cleanly (text-only).
+	prov := &staticProvider{msg: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
+	w := newTestWorker(prov, ch)
 	// No workerTools registered — every call is unavailable.
 
 	calls := []llm.ContentBlock{
@@ -147,6 +153,48 @@ func TestHandleToolCallsUnavailable(t *testing.T) {
 	if !noDispatch {
 		t.Fatal("transcript should carry an error tool_result for the unavailable tool")
 	}
+}
+
+// TestUnavailableToolSchedulesFollowUp verifies that a round whose tool calls
+// are ALL unavailable does not stall: because nothing was dispatched, no tool
+// result event will ever arrive to set needReason, so handleToolCalls must
+// self-schedule a follow-up round — otherwise the LLM never gets to react to
+// the "tool unavailable" error. The round is observed via blockingProvider's
+// started signal (fired when the follow-up's CompleteStream is called).
+//
+//  1. round ends with only unavailable call(s) -> follow-up round launches.
+func TestUnavailableToolSchedulesFollowUp(t *testing.T) {
+	prov := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	ch := newTestChannel()
+	w := newTestWorker(prov, ch)
+
+	calls := []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "ghost.tool"},
+	}
+	w.mu.Lock()
+	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: calls})
+	w.handleToolCalls(context.Background(), calls, "trace1")
+	// handleToolCalls unlocks internally; the fix sets needReason and tryReason
+	// spawns the follow-up round on a goroutine, which calls the provider.
+
+	// The follow-up round must start despite nothing having been dispatched.
+	waitCond(t, testTimeout, func() bool {
+		select {
+		case <-prov.started:
+			return true
+		default:
+			return false
+		}
+	}, "follow-up reasoning round starts after an all-unavailable round")
+
+	// Release the blocked round so it finishes cleanly (text-only); the worker
+	// then goes idle with no further rounds scheduled.
+	close(prov.release)
+	waitCond(t, testTimeout, func() bool {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return !w.isReasoning
+	}, "follow-up round completes")
 }
 
 // TestConsumeStreamSummarizesText verifies consumeStream accumulates text

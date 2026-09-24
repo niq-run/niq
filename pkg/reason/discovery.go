@@ -143,6 +143,20 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 		return
 	}
 
+	// A reason worker's ready lists events it RESPONDS to, not callable tools
+	// for peers. Another reason worker must not surface a peer's extensions as
+	// tools (e.g. oncall__context_compress / oncall__program_query): they are
+	// not capabilities purpose-built for callers the way workspace/bash or
+	// timer/timeout are. So we ignore peer-reason announcements entirely —
+	// infra workers (workspace/timer/program/host/history...) expose real
+	// tools and are kept, and this worker's own ready (its capabilities) is
+	// kept. Who exists as a reason peer is discovered via the host's
+	// list_workers directory, not by turning their events into tools.
+	if workerID != w.ID() && evt.Payload["type"] == "reason" {
+		log.Printf("[reason %s] ignoring peer reason %s ready (not a callable tool)", w.ID(), workerID)
+		return
+	}
+
 	// Re-announcement is idempotent: drop this worker's previous view.
 	w.discovered = removeDiscoveredCapabilitys(w.discovered, workerID)
 

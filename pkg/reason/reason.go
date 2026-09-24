@@ -643,6 +643,17 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 		evt.TraceID = traceID
 		_ = w.Channel.Broadcast(context.Background(), evt)
 	}
+	// If no tool call was actually dispatched (every call in the round was
+	// unavailable), none was added to the requestTracker, so no result event
+	// will ever arrive to schedule the next round — the worker would stall
+	// right after surfacing the "tool unavailable" error. Request a follow-up
+	// round here so the LLM can react (reach for a real tool or tell the user
+	// it cannot). When anything WAS dispatched, the peer's result resolves the
+	// tracker and sets needReason on its own; forcing one here would interrupt
+	// those in-flight tools.
+	if len(callsByTarget) == 0 {
+		w.needReason = true
+	}
 	w.isReasoning = false
 	w.mu.Unlock()
 	w.tryReason(ctx)

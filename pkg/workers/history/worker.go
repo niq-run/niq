@@ -139,8 +139,12 @@ func (w *Worker) watch(ctx context.Context, busCh <-chan event.Event) {
 func (w *Worker) process(ctx context.Context, evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
-		// A joiner asked the fleet to re-announce its tools.
-		w.AnnounceReady("history", nil)
+		// A discoverer asked who the fleet is — answer it directly, not by a
+		// broadcast re-announce (a discover storm would otherwise fan O(N²)
+		// ready broadcasts across every online worker).
+		if evt.WorkerId != w.ID() {
+			w.AnnounceReadyTo(evt.WorkerId, "history", nil, false)
+		}
 	default:
 		if !w.DispatchExtension(evt) {
 			log.Printf("[history %s] no extension for event %s", w.ID(), evt.Type)

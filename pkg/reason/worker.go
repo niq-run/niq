@@ -252,6 +252,13 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 	// callback off the event loop; no goroutine when nothing is installed.
 	w.StartDurableLoop(runCtx)
 
+	// Announce ourselves (BroadcastReady) and ask the current fleet who is
+	// online (discover). Choosing to keep the original startup broadcast: a
+	// worker that starts must disclose both ways — its own ready reaches
+	// whoever is already up, and its discover makes those workers reply
+	// DIRECTLY (see process.go), so it learns those that predate it. Dropping
+	// the startup discover would make early-started workers permanently
+	// invisible to the newcomer (and asymmetric).
 	w.BroadcastReady()
 	disc := event.New(event.TypeWorkerDiscover, w.ID(), map[string]any{
 		"worker_id": w.ID(),

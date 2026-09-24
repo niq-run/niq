@@ -1,6 +1,7 @@
 package reason
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -155,4 +156,29 @@ func TestRestoreSnapshotWithoutTrackerFields(t *testing.T) {
 	if got := msg.Content[0].ToolCallID; got != "call_1" {
 		t.Fatalf("first synthesized id = %q, want call_1", got)
 	}
+}
+
+// TestDiscoverReplyIsDirected verifies that receiving a foreign worker.discover
+// produces EXACTLY ONE ready event — a directed reply to the source — and not
+// a broadcast re-announcement plus a self-ready. With the old broadcast logic
+// that was two events (peer broadcast + self-directed), which under a discover
+// storm fanned O(N²) across many reason workers.
+func TestDiscoverReplyIsDirected(t *testing.T) {
+	w, ch := newTestWorker2()
+	discover := event.New(event.TypeWorkerDiscover, "peer", map[string]any{"worker_id": "peer"})
+	w.process(context.Background(), discover)
+
+	readys := ch.eventsOf(event.TypeWorkerReady)
+	if len(readys) != 1 {
+		t.Fatalf("expected exactly one directed ready reply, got %d", len(readys))
+	}
+	if readys[0].WorkerId != w.ID() {
+		t.Fatalf("ready reply source = %q, want %q", readys[0].WorkerId, w.ID())
+	}
+}
+
+// newTestWorker2 is a small local helper returning the worker and a channel.
+func newTestWorker2() (*BaseReasonWorker, *testChannel) {
+	ch := newTestChannel()
+	return newTestWorker(nil, ch), ch
 }

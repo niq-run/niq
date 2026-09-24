@@ -50,32 +50,6 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	})
 
 	w.Register(baseworker.Extension{
-		Event: TypeListWorkers,
-		// SelfOnly: list_workers reports this worker's own contract and is not
-		// exposed to peers.
-		SelfOnly:    true,
-		Description: "List all available workers and their capabilities.",
-		Parameters:  obj(map[string]any{}),
-	}, func(evt event.Event) {
-		tc := baseworker.ParseToolCall(evt)
-		handleListWorkers(w, tc.CallID, string(evt.Type), tc.CallerID, tc.TraceID, tc.Args)
-	})
-
-	w.Register(baseworker.Extension{
-		Event: TypeWorkerInfo,
-		// SelfOnly: the detail view behind list_workers — this worker's own
-		// browsing tool, not a peer-callable contract.
-		SelfOnly:    true,
-		Description: "Full details for one worker: its tools with complete parameter schemas and its published events.",
-		Parameters: obj(map[string]any{
-			"worker": map[string]any{"type": "string", "description": "Worker ID, as reported by list_workers"},
-		}),
-	}, func(evt event.Event) {
-		tc := baseworker.ParseToolCall(evt)
-		handleWorkerInfo(w, tc.CallID, string(evt.Type), tc.CallerID, tc.TraceID, tc.Args)
-	})
-
-	w.Register(baseworker.Extension{
 		// The event type comes from the mechanism, so the emitter
 		// (emitContextCompress) and this handler cannot drift apart.
 		Event:       reasonBase.TypeContextCompress,
@@ -144,11 +118,12 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 const TypeContextRotate event.EventType = "context.rotate"
 
 // The default worker's own LLM-facing tools, each its own event type (see the
-// request-response convention in pkg/reason).
+// request-response convention in pkg/reason). list_workers / get_worker_info
+// deliberately live on the HOST worker, not here: a reason worker must not
+// treat peer reasons' ready events as callable tools, and the fleet roster is
+// the host's directory service.
 const (
 	TypeSendMessage event.EventType = "send_message"
-	TypeListWorkers event.EventType = "list_workers"
-	TypeWorkerInfo  event.EventType = "get_worker_info"
 )
 
 // TypeProgramQuery / TypeProgramUpdate are the program-management extensions:
@@ -184,60 +159,6 @@ func handleSendMessage(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 	_ = w.Channel.Send(context.Background(), msgEvt, target)
 
 	w.ReplyCompleted(callerID, callID, fmt.Sprintf("message sent to %s", target), traceID)
-}
-
-// handleListWorkers serves the list_workers tool: it returns all known workers
-// with their tools and published events (grouped by provider via
-// DiscoveredWorkers) and triggers a worker.discover to refresh the cache for the
-// next call.
-func handleListWorkers(w *reasonBase.BaseReasonWorker, callID, toolName, callerID, traceID string, args map[string]any) {
-	// Trigger re-discovery so the next call gets fresh data.
-	disc := event.New(event.TypeWorkerDiscover, w.ID(), nil)
-	disc.Transient = true // presence: live-only, not durable history
-	_ = w.Channel.Broadcast(context.Background(), disc)
-
-	snapshot := w.DiscoveredWorkers()
-	b, err := json.Marshal(snapshot)
-	if err != nil {
-		w.ReplyFailed(callerID, callID, fmt.Sprintf(
-			"list_workers could not serialize the worker list: a worker's announced tool/event carried "+
-				"a field that cannot be serialized (%v). This usually means a worker.ready declared an invalid "+
-				"schema. Ask that worker to fix its declaration, then retry.", err), traceID)
-		return
-	}
-
-	w.ReplyCompleted(callerID, callID, string(b), traceID)
-	log.Printf("[reason %s] list_workers → %d workers", w.ID(), len(snapshot))
-}
-
-// handleWorkerInfo serves the get_worker_info tool: the detail view for one
-// worker, with complete tool parameter schemas — the part list_workers
-// deliberately omits to stay small. Unknown workers fail with the list of
-// known ids so the model can self-correct.
-func handleWorkerInfo(w *reasonBase.BaseReasonWorker, callID, toolName, callerID, traceID string, args map[string]any) {
-	target, _ := args["worker"].(string)
-	if target == "" {
-		w.ReplyFailed(callerID, callID, "get_worker_info requires the 'worker' parameter (target worker ID)", traceID)
-		return
-	}
-	// Fresh data, same as list_workers: ask everyone to re-announce first.
-	disc := event.New(event.TypeWorkerDiscover, w.ID(), nil)
-	disc.Transient = true // presence: live-only, not durable history
-	_ = w.Channel.Broadcast(context.Background(), disc)
-
-	info, ok := w.WorkerInfo(target)
-	if !ok {
-		w.ReplyFailed(callerID, callID, fmt.Sprintf(
-			"unknown worker %q — call list_workers to see the known ids", target), traceID)
-		return
-	}
-	b, err := json.Marshal(info)
-	if err != nil {
-		w.ReplyFailed(callerID, callID, fmt.Sprintf("get_worker_info could not serialize %q: %v", target, err), traceID)
-		return
-	}
-	w.ReplyCompleted(callerID, callID, string(b), traceID)
-	log.Printf("[reason %s] get_worker_info → %s (%d tools)", w.ID(), target, len(info.Tools))
 }
 
 // handleContextOp responds to a context.compress / context.rotate request: it
