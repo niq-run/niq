@@ -181,7 +181,7 @@ func (w *DirectoryWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeListWorkers,
-		Description: "List every worker on the bus with its type and the tools it exposes (from its ready announcement) plus the events it publishes. This is the fleet directory — the one place to see who exists, including peer reason workers and third-party workers that connected directly. Peer reason workers are NOT callable tools (their ready lists events they respond to, not capabilities to invoke) but are reachable as message targets. Call get_worker_info for one worker's full detail.",
+		Description: "List every worker on the bus as a slim roster: worker_id, type, and the short event-type list it publishes. It deliberately omits tool schemas (those are large) — call get_worker_info for one worker's full tool detail. This is the fleet directory: the one place to see who exists, including peer reason workers and third-party workers that connected directly. Peer reason workers are NOT callable tools (their ready lists events they respond to, not capabilities to invoke) but are reachable as message targets.",
 		Parameters:  obj(map[string]any{}),
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
@@ -201,7 +201,10 @@ func (w *DirectoryWorker) registerExtensions() {
 	})
 }
 
-// handleListWorkers serves the roster: every worker learned from its ready.
+// handleListWorkers serves the roster: every worker learned from its ready, as
+// a slim identity list — worker_id, type and the short event-type list it
+// publishes. NO tool details: those schemas are large and belong to
+// get_worker_info's drill-in view, so a roster stays cheap to read.
 func (w *DirectoryWorker) handleListWorkers(evt event.Event, tc baseworker.ToolCall) {
 	w.dirMu.Lock()
 	roster := make([]map[string]any, 0, len(w.workers))
@@ -209,7 +212,6 @@ func (w *DirectoryWorker) handleListWorkers(evt event.Event, tc baseworker.ToolC
 		roster = append(roster, map[string]any{
 			"worker_id": id,
 			"type":      rec.Type,
-			"tools":     rec.Watch,
 			"publishes": rec.Publishes,
 		})
 	}

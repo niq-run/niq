@@ -95,8 +95,12 @@ func TestDirectoryCollectsFromBus(t *testing.T) {
 	if byID["lark"]["type"] != "lark" || byID["peer-reason"]["type"] != "reason" {
 		t.Fatalf("lark/peer-reason missing: %v", byID)
 	}
+	// list must be SLIM: no tool schemas (those belong to get_worker_info).
+	if _, hasTools := byID["workspace"]["tools"]; hasTools {
+		t.Fatalf("list_workers must NOT carry tool details, got %v", roster)
+	}
 
-	// get_worker_info known → full record; unknown → fail.
+	// get_worker_info known → full record (tools included); unknown → fail.
 	invoke(w, TypeGetWorkerInfo, map[string]any{"worker": "workspace"})
 	var rec map[string]any
 	if err := json.Unmarshal([]byte(ch.result()), &rec); err != nil {
@@ -104,6 +108,9 @@ func TestDirectoryCollectsFromBus(t *testing.T) {
 	}
 	if rec["type"] != "workspace" {
 		t.Fatalf("get_worker_info type=%v", rec["type"])
+	}
+	if _, hasTools := rec["tools"]; !hasTools {
+		t.Fatalf("get_worker_info must carry full tool detail, got %s", ch.result())
 	}
 	invoke(w, TypeGetWorkerInfo, map[string]any{"worker": "ghost"})
 	if ch.lastType() != event.TypeRequestFailed {
