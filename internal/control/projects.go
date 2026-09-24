@@ -3,6 +3,7 @@ package control
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	stdhttp "net/http"
 	"os"
@@ -190,7 +191,14 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 	c.procs[id] = cmd.Process
 	c.mu.Unlock()
 	go func() {
-		_ = cmd.Wait()
+		// Record the child's exit so a crash is observable: a project killed by
+		// an eventbus panic exits with code 2 (Go's panic) and no shutdown seq —
+		// discarding cmd.Wait() hid exactly that in the field.
+		if werr := cmd.Wait(); werr != nil {
+			log.Printf("[control] project %s exited abnormally: %v", id, werr)
+		} else {
+			log.Printf("[control] project %s exited cleanly", id)
+		}
 		c.mu.Lock()
 		if cur, ok := c.procs[id]; ok && cur == cmd.Process {
 			delete(c.procs, id)
