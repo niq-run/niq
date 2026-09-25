@@ -34,7 +34,19 @@ func watch(ctx context.Context, engine *Engine, workerID string, ch corebus.BusS
 		return
 	}
 	for req := range reqCh {
-		engine.HandleRequest(ctx, req, workerID)
+		// Defensive: a panic while routing one request must not take down the
+		// whole project process (a goroutine panic is fatal in Go). Recover it,
+		// log it, and keep serving this worker. Routing is the biggest surface
+		// (Send/broadcast/persist), so guard here rather than across every
+		// goroutine.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[eventbus] watch %s: recovered panic in HandleRequest: %v", workerID, r)
+				}
+			}()
+			engine.HandleRequest(ctx, req, workerID)
+		}()
 	}
 	engine.DisconnectChannel(workerID, ch)
 	log.Printf("[eventbus] watch %s: channel closed, disconnected", workerID)

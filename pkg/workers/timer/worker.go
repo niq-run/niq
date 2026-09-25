@@ -283,7 +283,9 @@ func (w *Worker) watch(ctx context.Context, busCh <-chan event.Event) {
 func (w *Worker) process(evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
-		w.AnnounceReady("timer", timerPublishes)
+		if evt.WorkerId != w.ID() {
+			w.AnnounceReadyTo(evt.WorkerId, "timer", timerPublishes, false)
+		}
 	case event.TypeRequestCancel:
 		w.handleCancelEvent(evt)
 	default:

@@ -79,6 +79,18 @@ func TestMemoryStoreRequestIDFilter(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
+	// Get: point lookup by id returns the full event.
+	ev, found, err := s.Get(ctx, "r2")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !found || ev.WorkerId != "ws" || ev.RequestId != "req-1" {
+		t.Fatalf("get r2 = %+v, found=%v", ev, found)
+	}
+	if _, found, _ := s.Get(ctx, "missing"); found {
+		t.Fatalf("get of unknown id must report found=false")
+	}
+
 	got, err := s.List(ctx, "*", store.QueryOpts{RequestID: "req-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -138,8 +150,17 @@ func TestShouldPersist(t *testing.T) {
 }
 
 type recStore struct{ evts []event.Event }
-func (r *recStore) Append(_ context.Context, evts ...event.Event) error { r.evts = append(r.evts, evts...); return nil }
-func (r *recStore) List(_ context.Context, _ string, _ store.QueryOpts) ([]event.Event, error) { return nil, nil }
+
+func (r *recStore) Append(_ context.Context, evts ...event.Event) error {
+	r.evts = append(r.evts, evts...)
+	return nil
+}
+func (r *recStore) List(_ context.Context, _ string, _ store.QueryOpts) ([]event.Event, error) {
+	return nil, nil
+}
+func (r *recStore) Get(_ context.Context, _ string) (event.Event, bool, error) {
+	return event.Event{}, false, nil
+}
 
 func TestTransientRequestReplyPropagation(t *testing.T) {
 	st := &recStore{}

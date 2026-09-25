@@ -118,6 +118,62 @@ func TestDeclCreatorExternal(t *testing.T) {
 	t.Fatalf("supervisor never reported e1 running: %v", sv.List())
 }
 
+// TestDeclCreatorRemote verifies a remote (third-party) worker is declared with
+// no command, gets a generated credential returned in the create result, and is
+// registered with the bus registry — without any local process being launched.
+func TestDeclCreatorRemote(t *testing.T) {
+	c, sv := newDeclCreator(t)
+	created, err := c.Create(json.RawMessage(
+		`{"type":"mcp","id":"r3","managed":false,"remote":true}`))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.Managed || !created.Remote || created.Credential == "" {
+		t.Fatalf("created = %+v, want a remote result with a credential", created)
+	}
+
+	// No process is launched for a remote worker — the supervisor knows nothing.
+	time.Sleep(50 * time.Millisecond)
+	if sts := sv.List(); len(sts) != 0 {
+		t.Fatalf("remote worker must not be supervised, got %v", sts)
+	}
+
+	// Declaration persisted with remote=true, managed=false, no command.
+	p, err := LoadProject("proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := FindWorker(p, "r3")
+	if !ok {
+		t.Fatal("declaration not persisted")
+	}
+	if isManagedWorker(spec) || !spec.Remote || len(spec.Command) != 0 {
+		t.Fatalf("declaration = %+v, want an unmanaged remote entry with no command", spec)
+	}
+	if spec.Credential != created.Credential {
+		t.Fatalf("persisted credential %q != returned %q", spec.Credential, created.Credential)
+	}
+
+	// Identity registered with the credential.
+	id, ok := c.registry.Lookup("r3")
+	if !ok {
+		t.Fatal("identity not registered")
+	}
+	if id.Credential != created.Credential {
+		t.Fatalf("registry credential %q != returned %q", id.Credential, created.Credential)
+	}
+
+	// Declared() reports it as a remote (unmanaged, not running) worker, and the
+	// start endpoint refuses to launch it.
+	a := &webuiUnmanagedAdapter{supervisor: sv, registry: c.registry, projectID: "proj"}
+	if st := findStatus2(a.Declared(), "r3"); st == nil || !st.Remote || st.State != "stopped" {
+		t.Fatalf("declared = %+v, want a remote/stopped entry", st)
+	}
+	if err := a.Start("r3"); err == nil {
+		t.Fatal("start must refuse a remote worker")
+	}
+}
+
 // TestDeclCreatorValidation covers the create-time rejections: duplicate ids
 // across declarations / worker service / registry, missing fields, invalid id
 // characters, and a commandless external worker.

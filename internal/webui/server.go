@@ -37,8 +37,8 @@ import (
 	eventbusapi "github.com/niq-run/niq/pkg/eventbus/api"
 	reasonBase "github.com/niq-run/niq/pkg/reason"
 	"github.com/niq-run/niq/pkg/services/workerhost"
-	programBase "github.com/niq-run/niq/pkg/workers/program"
 	"github.com/niq-run/niq/pkg/workers/hiw"
+	programBase "github.com/niq-run/niq/pkg/workers/program"
 	workspaceBase "github.com/niq-run/niq/pkg/workers/workspace"
 )
 
@@ -47,10 +47,14 @@ var embeddedAssets embed.FS
 
 // ContextInfo tells the single SPA which mode it is in: control (no project
 // attached — only project management is available) or project (a specific
-// project is attached — talk/events run against it).
+// project is attached — talk/events run against it). BusPort carries the
+// project's event-bus port so the UI can render a connect configuration for a
+// third-party worker (not set in control mode). The host is derived from the
+// current page's origin so the URL points at the machine the user reached.
 type ContextInfo struct {
-	Mode    string `json:"mode"`              // "control" | "project"
-	Project string `json:"project,omitempty"` // project id in project mode
+	Mode    string `json:"mode"`               // "control" | "project"
+	Project string `json:"project,omitempty"`  // project id in project mode
+	BusPort int    `json:"bus_port,omitempty"` // project event-bus port
 }
 
 // ArchivedStore reads/writes a project's archived-worker set (persisted in the
@@ -100,19 +104,26 @@ type UnmanagedStatus struct {
 	ID      string `json:"id"`
 	Type    string `json:"type"`
 	Managed bool   `json:"managed"`
-	State   string `json:"state"` // "running" | "stopped"
-	Alive   bool   `json:"alive"`
+	// Remote marks a third-party worker the project does not launch — it
+	// connects on its own. Such workers have no supervisor lifecycle.
+	Remote bool   `json:"remote,omitempty"`
+	State  string `json:"state"` // "running" | "stopped"
+	Alive  bool   `json:"alive"`
 }
 
 // WorkerCreated is the effective result of creating a worker declaration: the
 // persisted identity plus, for a managed worker, the bus "spawn" event payload
 // the server sends to the host worker (external workers are started by the
-// creator itself before it returns).
+// creator itself before it returns). Credential is populated for a remote
+// (third-party) worker, so the UI can hand the connect configuration to the
+// third party.
 type WorkerCreated struct {
-	ID      string         `json:"id"`
-	Type    string         `json:"type"`
-	Managed bool           `json:"managed"`
-	Spawn   map[string]any `json:"-"`
+	ID         string         `json:"id"`
+	Type       string         `json:"type"`
+	Managed    bool           `json:"managed"`
+	Remote     bool           `json:"remote,omitempty"`
+	Credential string         `json:"credential,omitempty"`
+	Spawn      map[string]any `json:"-"`
 }
 
 // WorkerDeclCreator creates a worker declaration on the spot from a
@@ -1049,6 +1060,9 @@ type WorkerView struct {
 	State          string                 `json:"state,omitempty"` // managed: "running" | "suspended" | "stopped" (stopped = declared but not instantiated)
 	Unmanaged      bool                   `json:"unmanaged,omitempty"`
 	UnmanagedState string                 `json:"unmanaged_state,omitempty"` // "running" | "stopped"
+	// Remote marks a third-party worker that connects on its own; it has no
+	// local process lifecycle (no start/stop).
+	Remote bool `json:"remote,omitempty"`
 }
 
 // handleWorkers returns every registered worker identity merged with its
@@ -1088,6 +1102,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		if st, ok := unmngd[id.WorkerID]; ok && !st.Managed {
 			v.Unmanaged = true
 			v.UnmanagedState = st.State
+			v.Remote = st.Remote
 		}
 		views = append(views, v)
 	}
@@ -1123,7 +1138,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		views = append(views, WorkerView{
-			ID: st.ID, Type: st.Type, Unmanaged: true, UnmanagedState: st.State,
+			ID: st.ID, Type: st.Type, Unmanaged: true, UnmanagedState: st.State, Remote: st.Remote,
 			Tags: meta.Tags, Description: meta.Description,
 		})
 	}
@@ -1217,7 +1232,7 @@ func (s *Server) ask(ctx context.Context, target string, evt event.Event, want .
 	traceID, _ := uuid.NewV7() // only fails if crypto/rand fails
 	tid := traceID.String()
 	reqID, _ := uuid.NewV7()
-	evt.TraceID = tid   // event.New leaves TraceID empty; we own correlation here
+	evt.TraceID = tid              // event.New leaves TraceID empty; we own correlation here
 	evt.RequestId = reqID.String() // make every webui ask a proper request (the worker echoes it; the engine can correlate a transient request to its reply)
 
 	subCtx, cancel := context.WithCancel(ctx)

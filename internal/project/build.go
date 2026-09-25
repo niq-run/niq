@@ -12,6 +12,7 @@ import (
 	"github.com/niq-run/niq/core/event"
 	"github.com/niq-run/niq/core/llm"
 	programpkg "github.com/niq-run/niq/core/program"
+	"github.com/niq-run/niq/core/store"
 	"github.com/niq-run/niq/core/worker"
 	"github.com/niq-run/niq/internal/niqhome"
 	providerpkg "github.com/niq-run/niq/internal/project/provider"
@@ -21,7 +22,9 @@ import (
 	"github.com/niq-run/niq/pkg/services/pgbackend"
 	"github.com/niq-run/niq/pkg/services/workerhost"
 	"github.com/niq-run/niq/pkg/services/wsbackend"
+	"github.com/niq-run/niq/pkg/workers/history"
 	"github.com/niq-run/niq/pkg/workers/hiw"
+	"github.com/niq-run/niq/pkg/workers/directory"
 	"github.com/niq-run/niq/pkg/workers/host"
 	programworker "github.com/niq-run/niq/pkg/workers/program"
 	"github.com/niq-run/niq/pkg/workers/reason"
@@ -36,6 +39,7 @@ type BuildContext struct {
 	Engine       *eventbus.Engine
 	WorkerSvc    *workerhost.WorkerService
 	EventLog     *eventbusapi.EventLog
+	EventStore   store.EventStore
 	ProgramsRoot string
 }
 
@@ -58,6 +62,12 @@ func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
 	})
 	svc.RegisterBuilder("program", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		return buildProgramSpec(ctx, cfg)
+	})
+	svc.RegisterBuilder("history", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+		return buildHistorySpec(ctx, cfg)
+	})
+	svc.RegisterBuilder("directory", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+		return buildDirectorySpec(ctx, cfg)
 	})
 }
 
@@ -320,7 +330,9 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 	// events (spawn/suspend/resume) are directed calls — no subscription
 	// needed; request.cancel is directed too (sent to the target worker).
 	// SubscribeAllow: worker.discover, so the host re-announces its tools to
-	// any worker that asks (late joiners, list_workers refresh).
+	// any worker that asks (late joiners, list_workers refresh). The fleet
+	// roster lives on the directory worker, not here — host manages lifecycles
+	// and must not be misread as listing or suspending arbitrary workers.
 	connect := specConnect(ctx, id, "host",
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
@@ -637,6 +649,87 @@ func subAllowFromParams(p map[string]any, defaults []string) []event.EventPatter
 		return sub
 	}
 	return eventPatternsFromStrings(defaults)
+}
+
+// ── history ──
+
+func buildHistorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	p := cfg.Params
+	id := cfg.ID
+	if id == "" {
+		id = "history"
+	}
+	// PublishAllow: replies (request.*) and presence (worker.ready). Its tool
+	// events (history.list / history.get) are directed calls — no broadcast
+	// subscription is needed to serve them. SubscribeAllow: worker.discover,
+	// so the history worker re-announces its tools to joiners (late reason
+	// workers, list_workers refresh).
+	connect := specConnect(ctx, id, "history",
+		[]event.PublishPattern{
+			event.NewPublishPattern("request.*"),
+			event.NewPublishPattern("worker.ready"),
+		},
+		subAllowFromParams(p, []string{"worker.discover"}))
+	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		return history.New(history.Config{
+			ID:               id,
+			Bus:              ch,
+			Store:            ctx.EventStore,
+			MaxListEvents:    pInt(p, "max_list_events"),
+			MaxListItemBytes: pInt(p, "max_list_item_bytes"),
+		})
+	}
+	cfg.ID = id
+	cfg.Type = "history"
+	return worker.SpawnSpec{
+		Config:  cfg,
+		Connect: connect,
+		Build:   build,
+	}, nil
+}
+
+// pInt reads an optional int worker param (JSON numbers arrive as float64).
+func pInt(p map[string]any, key string) int {
+	switch n := p[key].(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
+// ── directory ──
+
+func buildDirectorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	p := cfg.Params
+	id := cfg.ID
+	if id == "" {
+		id = "directory"
+	}
+	// The directory LEARNS the fleet from worker.ready/gone broadcasts and
+	// serves list_workers/get_worker_info as callable tools to peers. It
+	// never touches lifecycle (no WorkerService): a neutral observer.
+	// PublishAllow: replies + presence. SubscribeAllow: worker.discover (so it
+	// re-announces and answers joiners) plus worker.ready/worker.gone to build
+	// the roster.
+	connect := specConnect(ctx, id, "directory",
+		[]event.PublishPattern{
+			event.NewPublishPattern("request.*"),
+			event.NewPublishPattern("worker.ready"),
+			event.NewPublishPattern("worker.discover"),
+		},
+		subAllowFromParams(p, []string{"worker.discover", "worker.ready", "worker.gone"}))
+	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		return directory.New(directory.Config{ID: id, Bus: ch})
+	}
+	cfg.ID = id
+	cfg.Type = "directory"
+	return worker.SpawnSpec{
+		Config:  cfg,
+		Connect: connect,
+		Build:   build,
+	}, nil
 }
 
 func sanitizeWorkerID(path string) string {

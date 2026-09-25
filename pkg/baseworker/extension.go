@@ -171,3 +171,26 @@ func (w *BaseWorker) AnnounceReady(workerType string, publishes []map[string]any
 	presence.Transient = true // presence: delivered live, not durable history
 	_ = w.Channel.Broadcast(context.Background(), presence)
 }
+
+// AnnounceReadyTo sends this worker's presence (worker.ready) directly to a
+// single target, instead of broadcasting it. It is the reply to a
+// worker.discover: the discoverer asked who the fleet is, so each responder
+// answers just the asker — the complete answer the discoverer needs, at O(N)
+// total directed sends instead of an O(N²) broadcast re-announcement storm
+// (N workers each re-broadcasting to N subscribers).
+//
+// includeSelfOnly mirrors WatchEntries: false sends the peer-facing contract
+// (SelfOnly left out, for replying to a peer discover); true sends the full
+// contract including SelfOnly (for a worker learning its own capabilities).
+func (w *BaseWorker) AnnounceReadyTo(target, workerType string, publishes []map[string]any, includeSelfOnly bool) {
+	payload := map[string]any{
+		"type":  workerType,
+		"watch": w.WatchEntries(includeSelfOnly),
+	}
+	if len(publishes) > 0 {
+		payload["publishes"] = publishes
+	}
+	ready := event.New(event.TypeWorkerReady, w.ID(), payload)
+	ready.Transient = true // presence: delivered live, not durable history
+	_ = w.Channel.Send(context.Background(), ready, target)
+}

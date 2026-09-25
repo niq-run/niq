@@ -47,6 +47,10 @@ export interface WorkerInfo {
   state?: string
   unmanaged?: boolean
   unmanaged_state?: string // "running" | "stopped" (unmanaged only)
+  // remote = a third-party worker that connected on its own: the project
+  // issued its credential but does not launch any process, so there is no
+  // unmanaged start/stop. Shown for the connect configuration to copy.
+  remote?: boolean
   // Display metadata from the worker declaration: tags form a slash-path
   // hierarchy used to group workers in the target picker, and description
   // is a short purpose note shown as a dimmed second line.
@@ -59,6 +63,8 @@ export interface CreateWorkerResult {
   id: string
   type: string
   managed: boolean
+  remote?: boolean
+  credential?: string
 }
 
 // ProviderOption is one selectable LLM provider of a reason worker, as
@@ -142,6 +148,7 @@ export type ViewSettingKey = keyof ViewSettings
 export interface ContextInfo {
   mode: 'control' | 'project'
   project?: string
+  bus_port?: number
 }
 
 // ProjectInfo is a project's definition as exposed by the control-plane API.

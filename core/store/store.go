@@ -15,6 +15,12 @@ type EventStore interface {
 	// Use Desc=true for display (newest first), Desc=false for replay (oldest first).
 	// When AfterID is set, only events after that event are returned (for rebuild).
 	List(ctx context.Context, workerID string, opts QueryOpts) ([]event.Event, error)
+
+	// Get returns the single event with the given ID, or (zero, false) when
+	// no such event has been persisted. It is the store's point lookup, used
+	// by detail/introspection views that need one full event without the
+	// worker-scoped filtering and pagination of List.
+	Get(ctx context.Context, id string) (event.Event, bool, error)
 }
 
 // Append writes events to the store. Workers should not call this directly;
@@ -48,5 +54,10 @@ type QueryOpts struct {
 	WorkerRoles []string
 	TraceID     string // filter by trace ID
 	RequestID   string // filter by request ID (request → response pairing)
-	Desc        bool   // true = newest first (display), false = oldest first (replay)
+	// Types restricts results to the given exact event types (e.g. "bash",
+	// "request.completed"). Empty means any type. These are exact matches —
+	// for wildcard subscription-style matching a caller would filter in worker
+	// code.
+	Types []string
+	Desc  bool // true = newest first (display), false = oldest first (replay)
 }

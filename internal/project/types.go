@@ -123,7 +123,11 @@ type WorkerConfig struct {
 	// Managed marks the worker as host-managed (in-process, worker dir is the
 	// config authority). nil or true = managed; false = an external process
 	// launched by the project via Command/Env/Cwd.
-	Managed    *bool             `json:"managed,omitempty"`
+	Managed *bool `json:"managed,omitempty"`
+	// Remote marks a third-party worker that connects to the bus on its own —
+	// the project only registers its identity and issues a credential, and does
+	// not launch any process for it. Requires Managed=false and no Command.
+	Remote     bool              `json:"remote,omitempty"`
 	Credential string            `json:"credential,omitempty"`
 	Command    []string          `json:"command,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`

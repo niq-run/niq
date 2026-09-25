@@ -83,6 +83,22 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 		return webui.WorkerCreated{ID: wc.ID, Type: wc.Type, Managed: true, Spawn: payload}, nil
 	}
 
+	// A remote (third-party) worker is an external declaration with no local
+	// command to launch: the project registers its identity and issues a
+	// credential, and the worker connects to the bus on its own. No supervisor
+	// entry, no process — just the persisted declaration and the provisioned
+	// identity/credential the WebUI surfaces for the third party to copy.
+	if wc.Remote {
+		p.Workers = append(p.Workers, wc)
+		if err := SaveProject(p); err != nil {
+			return webui.WorkerCreated{}, err
+		}
+		if err := provisionUnmanaged(c.registry, c.projectID, &wc); err != nil {
+			return webui.WorkerCreated{}, err
+		}
+		return webui.WorkerCreated{ID: wc.ID, Type: wc.Type, Remote: true, Credential: wc.Credential}, nil
+	}
+
 	if len(wc.Command) == 0 {
 		return webui.WorkerCreated{}, fmt.Errorf("command is required for an external worker")
 	}
@@ -219,6 +235,9 @@ func (a *webuiUnmanagedAdapter) Start(id string) error {
 	if isManagedWorker(spec) {
 		return fmt.Errorf("worker %s is managed, not an external process", id)
 	}
+	if spec.Remote {
+		return fmt.Errorf("worker %s is a remotely-connected worker; it connects on its own", id)
+	}
 	if err := provisionUnmanaged(a.registry, a.projectID, &spec); err != nil {
 		return err
 	}
@@ -270,8 +289,8 @@ func (a *webuiUnmanagedAdapter) Declared() []webui.UnmanagedStatus {
 	var out []webui.UnmanagedStatus
 	for _, spec := range p.Workers {
 		managed := isManagedWorker(spec)
-		st := webui.UnmanagedStatus{ID: spec.ID, Type: spec.Type, Managed: managed, State: "stopped"}
-		if !managed && running[spec.ID] {
+		st := webui.UnmanagedStatus{ID: spec.ID, Type: spec.Type, Managed: managed, Remote: spec.Remote, State: "stopped"}
+		if !managed && !spec.Remote && running[spec.ID] {
 			st.State = "running"
 			st.Alive = true
 		}

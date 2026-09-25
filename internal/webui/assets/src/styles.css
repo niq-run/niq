@@ -1,3 +1,27 @@
+/* ── Disable the mobile whole-page overscroll "rubber band" ──
+   The app is a fixed full-height layout where only internal panes scroll. A
+   swipe in a non-scrollable area (header, dead space) would otherwise fall
+   through to the document and bounce at its top/bottom edge. On iOS (WeChat
+   included, which rides WKWebView / the system engine on 16+):
+   - overscroll-behavior:none stops that bounce and the scroll chaining; and
+   - using the dynamic viewport height (100dvh) instead of 100vh keeps the
+     shell exactly the visible size, so on a tall-address-bar iPhone the body
+     can't drift under the toolbar and turn into a stray scrollable page.
+   100vh is kept as the fallback for browsers without dvh. */
+html, body {
+  overscroll-behavior: none;
+}
+
+/* Fixed full-height app shell: 100vh fallback, 100dvh on iOS 16+. */
+.app-shell {
+  height: 100vh;
+}
+@supports (height: 100dvh) {
+  .app-shell {
+    height: 100dvh;
+  }
+}
+
 /* ── Markdown content styles ── */
 /* Long unbroken strings (URLs, code, far-east text) in response/thinking
    blocks must wrap instead of overflowing the bubble on narrow (mobile)

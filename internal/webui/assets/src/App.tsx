@@ -1016,7 +1016,7 @@ export default function App() {
 
   // ── Render ──
   return (
-    <div data-theme={dark ? 'dark' : 'light'} style={{ display: 'flex', height: '100vh', color: colors.text, background: colors.bg }}>
+    <div data-theme={dark ? 'dark' : 'light'} className="app-shell" style={{ display: 'flex', color: colors.text, background: colors.bg }}>
       <Sidebar
         view={view}
         setView={selectView}
@@ -1170,6 +1170,7 @@ export default function App() {
               onOpenEvents={handleSelectWorker}
               isMobile={isMobile}
               onRefresh={refreshWorkers}
+                busPort={context.bus_port}
             />
             {selectedWorker && (
               isMobile ? (
@@ -1183,6 +1184,7 @@ export default function App() {
                   						onToggleArchived={toggleArchived}
                   						onDeleted={(id) => { setSelectedWorkerId(null); refreshWorkers() }}
                   						onRefresh={refreshWorkers}
+                busPort={context.bus_port}
                   					/>
                   				</MobileDetailPanel>
                   			  ) : (
@@ -1196,6 +1198,7 @@ export default function App() {
                   						onToggleArchived={toggleArchived}
                   						onDeleted={(id) => { setSelectedWorkerId(null); refreshWorkers() }}
                   						onRefresh={refreshWorkers}
+                busPort={context.bus_port}
                   					/>
                 </ResizablePanel>
               )
@@ -1333,6 +1336,7 @@ export default function App() {
                 onToggleArchived={toggleArchived}
                 onDeleted={(id) => { setDetailOverlayId(null); refreshWorkers() }}
                 onRefresh={refreshWorkers}
+                busPort={context.bus_port}
               />
             </div>
           </div>

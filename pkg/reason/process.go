@@ -38,8 +38,15 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 
 	switch {
 	case evt.Type == event.TypeWorkerDiscover:
+		// Answer the discoverer DIRECTLY (not by broadcasting a ready to the
+		// whole fleet). The storm was: every reason worker re-broadcast its
+		// ready in reply to every discover, so N discovers × N workers × N
+		// subscribers = O(N³) deliveries. A directed reply to the asker is the
+		// complete answer at O(N) per discover — and the startup broadcast still
+		// discloses this worker to whoever is up, so nothing is lost. Replying
+		// to our own discover is pointless (we know ourselves).
 		if evt.WorkerId != w.ID() {
-			w.BroadcastReady()
+			w.AnnounceReadyTo(evt.WorkerId, "reason", nil, false)
 		}
 	case evt.Type == event.TypeWorkerAbort:
 		w.handleAbort(evt)

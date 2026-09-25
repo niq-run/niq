@@ -192,7 +192,9 @@ func (w *WorkspaceWorker) watch(ctx context.Context, busCh <-chan event.Event) {
 func (w *WorkspaceWorker) process(ctx context.Context, evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
-		w.AnnounceReady("workspace", nil)
+		if evt.WorkerId != w.ID() {
+			w.AnnounceReadyTo(evt.WorkerId, "workspace", nil, false)
+		}
 	case event.TypeRequestCancel:
 		callID := evt.RequestId
 		log.Printf("[workspace %s] cancel requested for %s (best-effort)", w.ID(), callID)

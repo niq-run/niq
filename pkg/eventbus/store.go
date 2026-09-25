@@ -77,6 +77,9 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 		if opts.Since > 0 && e.Timestamp < opts.Since {
 			continue
 		}
+		if len(opts.Types) > 0 && !slices.Contains(opts.Types, string(e.Type)) {
+			continue
+		}
 		// Insertion-order pagination: strictly after/before the anchor index.
 		if afterIdx >= 0 && idx <= afterIdx {
 			continue
@@ -97,6 +100,20 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 		result = result[:opts.Limit]
 	}
 	return result, nil
+}
+
+// Get implements store.EventStore: a linear scan by event ID over the
+// in-memory list (the slice is insertion-ordered and append-mostly; a point
+// lookup is rare compared to List). Returns (event, false) when absent.
+func (s *MemoryEventStore) Get(ctx context.Context, id string) (event.Event, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range s.events {
+		if e.ID == id {
+			return e, true, nil
+		}
+	}
+	return event.Event{}, false, nil
 }
 
 // workerInRecipients reports whether the given worker ID appears in the

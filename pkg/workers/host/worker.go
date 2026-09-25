@@ -3,9 +3,14 @@
 //
 // HostWorker is deliberately thin: it handles the bus protocol (tool
 // invocation events, replies) and forwards lifecycle operations to
-// workerhost.WorkerService.
-// It holds no knowledge of how specific worker types are built — that lives in
-// the Builder registry the assembly layer registers on the WorkerService.
+// workerhost.WorkerService. It holds no knowledge of how specific worker
+// types are built — that lives in the Builder registry the assembly layer
+// registers on the WorkerService.
+//
+// Lifecycle operations are host's ONLY job. The fleet roster (who exists,
+// with what tools) deliberately lives on the separate directory worker — a
+// reason worker must not be led to think host can suspend arbitrary workers,
+// nor that host's knowledge is limited to workers it spawned.
 package host
 
 import (
@@ -47,7 +52,7 @@ func New(cfg Config) *HostWorker {
 	}
 	w := &HostWorker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
-		engine: cfg.Engine,
+		engine:     cfg.Engine,
 	}
 	w.registerExtensions()
 	return w
@@ -112,7 +117,10 @@ func (w *HostWorker) process(evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
 		if evt.WorkerId != w.ID() {
-			w.AnnounceReady("host", nil)
+			// Answer the discoverer directly (no broadcast re-announce — a
+			// discover storm must not fan O(N²) ready broadcasts). The
+			// directory worker owns the roster; host only says what it serves.
+			w.AnnounceReadyTo(evt.WorkerId, "host", nil, false)
 		}
 	case event.TypeRequestCancel:
 		callID := evt.RequestId

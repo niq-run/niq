@@ -14,9 +14,10 @@ interface WorkersViewProps {
   archived: Set<string>
   isMobile: boolean
   onRefresh?: () => void
+  busPort?: number
 }
 
-export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived, isMobile, onRefresh }: WorkersViewProps) {
+export default function WorkersView({ workers, selectedId, onSelect, onOpenEvents, archived, isMobile, onRefresh, busPort }: WorkersViewProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const [showCreate, setShowCreate] = useState(false)
@@ -186,11 +187,12 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                   )}
                 </td>
                 {/* How the worker is hosted. The two flags are set
-                    independently, so managed wins when both are present. */}
+                    independently, so managed wins when both are present. A
+                    remote worker (connects on its own) is shown as external. */}
                 <td style={cell}>
                   {w.managed ? (
                     <span style={tag} title={t('worker.managed.tooltip')}>{t('worker.managed')}</span>
-                  ) : w.unmanaged ? (
+                  ) : w.unmanaged && !w.remote ? (
                     <span style={tag} title={t('worker.subprocess.tooltip')}>{t('worker.subprocess')}</span>
                   ) : (
                     <span style={tag} title={t('worker.external.tooltip')}>{t('worker.external')}</span>
@@ -205,7 +207,13 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
       <CreateWorkerDialog
         open={showCreate}
         onClose={() => setShowCreate(false)}
-        onCreated={() => { setShowCreate(false); onRefresh?.() }}
+        onCreated={(r) => {
+          // A remote worker stays in the dialog so its connect configuration
+          // can be copied in place; only close for managed/external workers.
+          if (!r.remote) setShowCreate(false)
+          onRefresh?.()
+        }}
+        busPort={busPort}
       />
       </div>
     </div>

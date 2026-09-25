@@ -8,6 +8,10 @@ interface CreateWorkerDialogProps {
   open: boolean
   onClose: () => void
   onCreated: (r: CreateWorkerResult) => void
+  // busHost/busPort describe the event bus an external/remote worker connects
+  // to, used to render the connect configuration for remote workers.
+  busHost?: string
+  busPort?: number
   // When set, the dialog is a BUILDER: submit hands the form's body object to
   // onBuild instead of creating a live worker (the template drawer uses this
   // to append a worker entry into the template's JSON). The form and its
@@ -17,7 +21,7 @@ interface CreateWorkerDialogProps {
 
 // Managed worker types offered by the form. host/hiw are infrastructure the
 // assembly owns — creating them from the UI is not a thing.
-const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program'] as const
+const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program', 'history', 'directory'] as const
 
 // CreateWorkerDialog is the workers-view "create worker" form: it persists a
 // declaration into project.json (plus workers/<id>/config.json for a managed
@@ -25,10 +29,10 @@ const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program'] as const
 // the host worker's spawn event. A centered overlay on both desktop and
 // mobile: the trigger is a header pill (no anchor for a dropdown) and the form
 // is far larger than a picker list.
-export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }: CreateWorkerDialogProps) {
+export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, busPort, onBuild }: CreateWorkerDialogProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
-  const [mode, setMode] = useState<'managed' | 'external'>('managed')
+  const [mode, setMode] = useState<'managed' | 'external' | 'remote'>('managed')
   const [type, setType] = useState('reason')
   const [extType, setExtType] = useState('')
   const [id, setId] = useState('')
@@ -45,11 +49,15 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
   const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
+  const [result, setResult] = useState<CreateWorkerResult | null>(null)
+  const [copied, setCopied] = useState(false)
 
   if (!open) return null
 
   const isExternal = mode === 'external'
-  const effType = isExternal ? extType.trim() : type
+  const isRemote = mode === 'remote'
+  const isManaged = mode === 'managed'
+  const effType = isExternal || isRemote ? extType.trim() : type
 
   const input: React.CSSProperties = {
     width: '100%',
@@ -100,14 +108,17 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
     const body: Record<string, unknown> = {
       type: effType,
       id: id.trim(),
-      managed: !isExternal,
+      managed: isManaged,
     }
+    // A remote (third-party) worker: host-managed=false, remote=true, and no
+    // local command — the worker connects to the bus on its own.
+    if (isRemote) body.remote = true
     // Display metadata: slash-path tags (grouping) + purpose note. Applies to
     // every worker kind, managed or external; carried in the declaration.
     const tagList = tags.split(',').map(x => x.trim()).filter(Boolean)
     if (tagList.length > 0) body.tags = tagList
     if (description.trim()) body.description = description.trim()
-    if (!isExternal) {
+    if (isManaged) {
       if (effType === 'reason') {
         if (instruction.trim()) body.instruction = instruction.trim()
         if (provider.trim()) body.provider = provider.trim()
@@ -118,7 +129,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
         // More mounts can be added at runtime via the workspace's mount.add.
         body.mounts = [rootDir.trim()]
       }
-    } else {
+    } else if (isExternal) {
       body.command = command.trim().split(/\s+/)
       if (cwd.trim()) body.cwd = cwd.trim()
       if (Object.keys(env).length > 0) body.env = env
@@ -146,10 +157,51 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
     try {
       const r = await createWorker(body)
       onCreated(r)
+      // Remote workers have no live lifecycle to direct the user to; instead
+      // surface the connect configuration (bus URL + id + credential) so the
+      // third party can copy it and connect on its own.
+      if (r.remote && r.credential) {
+        setResult(r)
+      } else {
+        onClose()
+      }
     } catch (e) {
       setNote((e as Error)?.message || 'create failed')
     } finally {
       setBusy(false)
+    }
+  }
+
+  // connectConfig renders the env-var block a remote worker consumes to reach
+  // the bus on its own (the same convention NIQ_BUS_URL / NIQ_WORKER_ID /
+  // NIQ_WORKER_CREDENTIAL carry for supervisor-launched workers).
+  const remoteConfig = (): string => {
+    const busBase = `${window.location.hostname || 'localhost'}:${busPort ?? 'PORT'}`
+    return [
+      `NIQ_BUS_URL=http://${busBase}`,
+      `NIQ_WORKER_ID=${result?.id ?? ''}`,
+      `NIQ_WORKER_CREDENTIAL=${result?.credential ?? ''}`,
+      `# type=${result?.type ?? ''}`,
+    ].join('\n')
+  }
+
+  const copyRemoteConfig = async () => {
+    try {
+      await navigator.clipboard.writeText(remoteConfig())
+      setCopied(true)
+      setNote('')
+    } catch {
+      setNote(t('workers.create.copyFailed'))
+    }
+  }
+
+  const copyCredential = async () => {
+    try {
+      await navigator.clipboard.writeText(result?.credential ?? '')
+      setCopied(true)
+      setNote('')
+    } catch {
+      setNote(t('workers.create.copyFailed'))
     }
   }
 
@@ -189,22 +241,29 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
           </span>
         </div>
 
-        {/* Mode: host-managed in-process worker vs external OS process. */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <span onClick={() => { setMode('managed'); setNote('') }} style={pill(mode === 'managed')}>
+        {/* Mode + form: once a remote worker is created, only its copyable
+            connect configuration remains — the used-up form is hidden. */}
+        {!result && (<>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+          <span onClick={() => { setMode('managed'); setNote(''); setResult(null) }} style={pill(mode === 'managed')}>
             {t('workers.create.managed')}
           </span>
-          <span onClick={() => { setMode('external'); setNote('') }} style={pill(mode === 'external')}>
+          <span onClick={() => { setMode('external'); setNote(''); setResult(null) }} style={pill(mode === 'external')}>
             {t('workers.create.external')}
           </span>
+          {!onBuild && (
+            <span onClick={() => { setMode('remote'); setNote(''); setResult(null) }} style={pill(mode === 'remote')}>
+              {t('workers.create.remote')}
+            </span>
+          )}
         </div>
         <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, lineHeight: 1.5, marginBottom: 12 }}>
-          {isExternal ? t('workers.create.externalHint') : t('workers.create.managedHint')}
+          {isRemote ? t('workers.create.remoteHint') : isExternal ? t('workers.create.externalHint') : t('workers.create.managedHint')}
         </div>
 
         <div style={field}>
           <label style={label}>{t('workers.create.type')}</label>
-          {isExternal ? (
+          {isExternal || isRemote ? (
             <input style={input} value={extType} onChange={e => setExtType(e.target.value)} placeholder={t('workers.create.typePlaceholder')} />
           ) : (
             <select style={input} value={type} onChange={e => setType(e.target.value)}>
@@ -231,7 +290,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
           <input style={input} value={description} onChange={e => setDescription(e.target.value)} placeholder={t('workers.create.description.placeholder')} />
         </div>
 
-        {!isExternal && effType === 'reason' && (
+        {isManaged && effType === 'reason' && (
           <>
             <div style={field}>
               <label style={label}>{t('workers.create.instruction')}</label>
@@ -249,7 +308,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
             </div>
           </>
         )}
-        {!isExternal && (effType === 'workspace' || effType === 'program') && (
+        {isManaged && (effType === 'workspace' || effType === 'program') && (
           <div style={field}>
             <label style={label}>{t('workers.create.rootDir')}</label>
             <input style={input} value={rootDir} onChange={e => setRootDir(e.target.value)} />
@@ -287,27 +346,80 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, onBuild }
             {t('workers.create.publish.default')}
           </div>
         </div>
+        </>)}
 
         {note && (
           <div style={{ fontSize: fontSizes.sm, color: colors.toolFailed, marginBottom: 10, lineHeight: 1.5, wordBreak: 'break-all' }}>{note}</div>
         )}
 
-        <div style={{ display: 'flex', gap: 8 }}>
-          <span
-            onClick={submit}
-            className="btn-hover"
-            style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, border: '1px solid ' + colors.accent, borderRadius: 4, padding: '4px 14px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
-          >
-            {busy ? t('workers.create.saving') : onBuild ? t('templates.addWorker.submit') : t('workers.create.submit')}
-          </span>
-          <span
-            onClick={onClose}
-            className="btn-hover"
-            style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 14px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
-          >
-            {t('wd.cancel')}
-          </span>
-        </div>
+        {/* Connect configuration for a freshly-created remote worker: a detail
+            card with the credential and the SDK-ready env block, both copyable.
+            The form fields are replaced by this block once created. */}
+        {result && (
+          <div style={{ marginBottom: 12, padding: '10px 12px', background: colors.detailBg, borderRadius: 6 }}>
+            <div style={{ fontSize: fontSizes.sm, color: colors.textDim, marginBottom: 8, lineHeight: 1.5 }}>
+              {t('workers.create.remoteConfig.desc')}
+            </div>
+            {/* Copyable worker id + credential. */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed }}>{t('wd.id')}:</span>
+              <code style={{ fontSize: fontSizes.xs, color: colors.text, background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 3, padding: '2px 6px' }}>{result.id}</code>
+              <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed }}>{t('wd.credential')}:</span>
+              <code style={{ fontSize: fontSizes.xs, color: colors.text, background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 3, padding: '2px 6px', wordBreak: 'break-all' }}>{result.credential}</code>
+              <span
+                onClick={copyCredential}
+                className="btn-hover"
+                style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 3, padding: '2px 8px', color: colors.textDim, fontSize: fontSizes.xs, userSelect: 'none' }}
+              >
+                {t('workers.create.copyCredential')}
+              </span>
+            </div>
+            <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, lineHeight: 1.5 }}>
+              {t('workers.create.remoteConfig.sdk')}
+            </div>
+            <pre style={{ margin: 0, padding: 8, background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, fontSize: fontSizes.xs, color: colors.text, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.6 }}>{remoteConfig()}</pre>
+            <span
+              onClick={copyRemoteConfig}
+              className="btn-hover"
+              style={{ cursor: 'pointer', display: 'inline-block', marginTop: 8, border: '1px solid ' + colors.accent, borderRadius: 3, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+            >
+              {t('workers.create.copyConfig')}
+            </span>
+            {copied && (
+              <span style={{ fontSize: fontSizes.xs, color: colors.toolCompleted, marginLeft: 10 }}>{t('workers.create.copied')}</span>
+            )}
+          </div>
+        )}
+
+	{result ? (
+	  /* Remote worker created: just a close to dismiss the config card. */
+	  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+	    <span
+	      onClick={onClose}
+	      className="btn-hover"
+	      style={{ cursor: 'pointer', border: '1px solid ' + colors.accent, borderRadius: 4, padding: '4px 14px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+	    >
+	      {t('wd.done')}
+	    </span>
+	  </div>
+	) : (
+	  <div style={{ display: 'flex', gap: 8 }}>
+	    <span
+	      onClick={submit}
+	      className="btn-hover"
+	      style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, border: '1px solid ' + colors.accent, borderRadius: 4, padding: '4px 14px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+	    >
+	      {busy ? t('workers.create.saving') : onBuild ? t('templates.addWorker.submit') : isRemote ? t('workers.create.submitRemote') : t('workers.create.submit')}
+	    </span>
+	    <span
+	      onClick={onClose}
+	      className="btn-hover"
+	      style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 14px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+	    >
+	      {t('wd.cancel')}
+	    </span>
+	  </div>
+	)}
       </div>
     </>
   )

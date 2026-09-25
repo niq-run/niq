@@ -5,6 +5,7 @@ import { useI18n } from '../i18n'
 import { type WorkerInfo } from '../types'
 import TagFilterDropdown from './TagFilterDropdown'
 import WorkerRowMenu from './WorkerRowMenu'
+import ContextMenuSurface from './ContextMenuSurface'
 import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker } from '../pinnedWorkers'
 
 interface WorkerPickerModalProps {
@@ -29,8 +30,10 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
   const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
-  // '' = all, 'online' / 'offline' filter by bus connection.
-  const [onlineFilter, setOnlineFilter] = useState<'' | 'online' | 'offline'>('')
+  // '' = all, 'online' / 'offline' filter by bus connection. Opens on 'online'
+  // by default — most pickers are for choosing a live worker, and it keeps a
+  // long list of offline/hibernated workers from burying the reachable ones.
+  const [onlineFilter, setOnlineFilter] = useState<'' | 'online' | 'offline'>('online')
   // Hovered row key — the rows have no other hover feedback (they are a plain
   // click-to-toggle list), so track it to paint a row background like the
   // sidebar's view rows do.
@@ -50,9 +53,8 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
     setSleptWorker(id, !sleptIds.includes(id))
     setPrefTick(x => x + 1)
   }
-  const openContext = (e: React.MouseEvent, id: string) => {
-    e.preventDefault()
-    setMenu({ id, x: e.clientX, y: e.clientY })
+  const openContext = (pos: { x: number; y: number }, id: string) => {
+    setMenu({ id, x: pos.x, y: pos.y })
   }
 
   // All distinct tags present across the selectable set (stable options for
@@ -266,15 +268,14 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
             const isSlept = sleptIds.includes(w.id)
             const padLeft = 16 + (row.indent ?? 0) * 14
             return (
-              <div
+              <ContextMenuSurface
                 key={row.key}
                 onClick={() => onToggle(w.id)}
                 onMouseEnter={() => setHoverKey(row.key)}
                 onMouseLeave={() => setHoverKey(null)}
-                onContextMenu={(e) => openContext(e, w.id)}
+                onOpenMenu={(pos) => openContext(pos, w.id)}
                 style={{
                   cursor: 'pointer',
-                  userSelect: 'none',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
@@ -323,7 +324,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
                 <span style={{ flexShrink: 0, color: w.online === false ? colors.textDimmed : colors.toolCompleted, fontSize: fontSizes.sm }}>
                   {w.online === false ? t('worker.offline') : t('worker.online')}
                 </span>
-              </div>
+              </ContextMenuSurface>
             )
           })}
         </div>
