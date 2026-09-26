@@ -57,9 +57,9 @@ func (e *Engine) PersistStats() (total, dropped uint64) {
 // store may be nil; if nil, events are not persisted.
 func NewEngine(registry corebus.IdentityRegistry, store store.AppendStore) *Engine {
 	return &Engine{
-		channels:     make(map[string]corebus.BusSideChannel),
-		registry:     registry,
-		store:        store,
+		channels:      make(map[string]corebus.BusSideChannel),
+		registry:      registry,
+		store:         store,
 		transientReqs: make(map[string]time.Time),
 	}
 }
@@ -170,13 +170,18 @@ func (e *Engine) handleSend(ctx context.Context, req corebus.Request, from strin
 	defer e.mu.RUnlock()
 
 	for _, evt := range req.Events {
-		// The event's Payload map is handed in by reference and may be kept and
-		// reused by the sender. Deep-copy at ingress so (a) the delivered and
-		// persisted copies are a stable snapshot, not aliased to the sender's
-		// live map, and (b) json.Marshal in the store never races a concurrent
-		// writer (a torn map read was a process-killing panic). The engine from
-		// here on owns its own copy.
-		evt = cloneEvent(evt)
+		// Canonicalize at ingress (a JSON round-trip): the bus-wide shape for
+		// Payload becomes uniform JSON-generic (map[string]any / []any / float64) no
+		// matter the source — an in-process event's concrete nested types (e.g.
+		// []map[string]any) are normalized to the same shape an HTTP-crossing event
+		// decodes to, so consumers handle one form. The round-trip is also a deep
+		// copy, so the delivered/persisted payload is a stable snapshot owned by
+		// the engine, never aliasing the sender's live map (the json.Marshal race
+		// that panicked the process).
+		evt, ok := ingressEvent(evt)
+		if !ok {
+			continue
+		}
 		evt.WorkerId = from // ensure identity is set by bus, not by sender
 		// Only override the trace when the request actually carries one; the
 		// in-process transport leaves req.TraceID empty, so dropping it would
@@ -226,10 +231,13 @@ func (e *Engine) handleBroadcast(ctx context.Context, req corebus.Request, from 
 	defer e.mu.RUnlock()
 
 	for _, evt := range req.Events {
-		// Deep-copy at ingress (see handleSend): the engine owns the payload map
-		// from here on, so delivery, the onEvent hook and persistence all read a
-		// stable snapshot, never racing the sender's (possibly reused) map.
-		evt = cloneEvent(evt)
+		// Canonicalize at ingress (see handleSend): uniform JSON-generic payload
+		// shape + owned deep copy, before delivery, the onEvent hook and
+		// persistence.
+		evt, ok := ingressEvent(evt)
+		if !ok {
+			continue
+		}
 		evt.WorkerId = from
 		if !e.publishBroadcastAllowed(from, evt.Type) {
 			log.Printf("[eventbus] broadcast: %s denied publish %s", from, evt.Type)
@@ -273,44 +281,19 @@ func (e *Engine) broadcastLocked(ctx context.Context, evt event.Event, from stri
 	e.persistEvent(ctx, evt)
 }
 
-// cloneEvent returns a deep copy of evt whose Payload map (and Recipients
-// slice) belong exclusively to the engine. The bus ingests every event this
-// way so delivery, streaming hooks and persistence all read a stable snapshot;
-// a sender reusing its map can no longer corrupt other recipients or the store
-// (and json.Marshal in persistence never races a concurrent map write, which
-// used to panic the whole process).
-func cloneEvent(evt event.Event) event.Event {
-	c := evt
-	c.Payload = cloneValue(evt.Payload).(map[string]any)
+// ingressEvent prepares an event for routing: it canonicalizes the payload to
+// the bus-wide JSON-generic shape (which is also a deep copy) and copies the
+// Recipients slice so the engine owns a stable snapshot. ok=false when the
+// payload is not JSON-serializable — a sender bug, dropped with a log.
+func ingressEvent(evt event.Event) (event.Event, bool) {
+	if err := event.CanonicalizePayload(&evt); err != nil {
+		log.Printf("[eventbus] drop event %s: %v", evt.Type, err)
+		return event.Event{}, false
+	}
 	if evt.Recipients != nil {
-		c.Recipients = append([]string(nil), evt.Recipients...)
+		evt.Recipients = append([]string(nil), evt.Recipients...)
 	}
-	return c
-}
-
-// cloneValue deep-copies common payload values (maps, slices, strings). Values
-// of any other type are immutable value types (numbers, bools) and are shared.
-func cloneValue(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, val := range t {
-			out[k] = cloneValue(val)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, val := range t {
-			out[i] = cloneValue(val)
-		}
-		return out
-	case []string:
-		return append([]string(nil), t...)
-	case nil:
-		return map[string]any{} // keep Payload non-nil for callers
-	default:
-		return v
-	}
+	return evt, true
 }
 
 // OnEvent registers a callback invoked for every event routed via

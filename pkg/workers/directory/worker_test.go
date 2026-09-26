@@ -118,6 +118,29 @@ func TestDirectoryCollectsFromBus(t *testing.T) {
 	}
 }
 
+// TestDirectoryParsesRemoteReadyWatch verifies a remote worker's worker.ready —
+// whose watch/publishes decode across HTTP to []any of maps, not []map[string]any —
+// still populates the roster's tool list, so a third-party/remote worker is not
+// listed with 0 tools.
+func TestDirectoryParsesRemoteReadyWatch(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "directory", Bus: ch})
+	w.process(event.New(event.TypeWorkerReady, "niw-a", map[string]any{
+		"worker_id": "niw-a", "type": "niw",
+		"watch": []any{map[string]any{"event": "niw.recipient.set"}, map[string]any{"event": "niw.recipient.unset"}},
+	}))
+
+	invoke(w, TypeGetWorkerInfo, map[string]any{"worker": "niw-a"})
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(ch.result()), &rec); err != nil {
+		t.Fatalf("get_worker_info not JSON: %v", err)
+	}
+	tools, ok := rec["tools"].([]any)
+	if !ok || len(tools) != 2 {
+		t.Fatalf("remote worker tools not parsed: %s", ch.result())
+	}
+}
+
 // TestDirectoryForgetsOnGone verifies worker.gone removes a departed worker —
 // including a third-party one.
 func TestDirectoryForgetsOnGone(t *testing.T) {

@@ -12,3 +12,7 @@ bin/
 
 # frontend dependencies / build caches
 internal/webui/assets/node_modules/
+
+# local ad-hoc probe (a throwaway main package for testing a two-project niw
+# link by hand); kept out of the repo.
+scratch-probe/

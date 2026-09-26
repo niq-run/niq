@@ -22,10 +22,11 @@ import (
 	"github.com/niq-run/niq/pkg/services/pgbackend"
 	"github.com/niq-run/niq/pkg/services/workerhost"
 	"github.com/niq-run/niq/pkg/services/wsbackend"
+	"github.com/niq-run/niq/pkg/workers/directory"
 	"github.com/niq-run/niq/pkg/workers/history"
 	"github.com/niq-run/niq/pkg/workers/hiw"
-	"github.com/niq-run/niq/pkg/workers/directory"
 	"github.com/niq-run/niq/pkg/workers/host"
+	"github.com/niq-run/niq/pkg/workers/niw"
 	programworker "github.com/niq-run/niq/pkg/workers/program"
 	"github.com/niq-run/niq/pkg/workers/reason"
 	"github.com/niq-run/niq/pkg/workers/timer"
@@ -59,6 +60,9 @@ func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
 	})
 	svc.RegisterBuilder("hiw", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		return buildHIWSpec(ctx, cfg)
+	})
+	svc.RegisterBuilder("niw", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+		return buildNIWSpec(ctx, cfg)
 	})
 	svc.RegisterBuilder("program", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		return buildProgramSpec(ctx, cfg)
@@ -425,6 +429,94 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 		Connect: connect,
 		Build:   build,
 	}, nil
+}
+
+// ── niw ──
+
+// buildNIWSpec builds a NIW (niq interface worker) — a managed worker that, at
+// Start, dials another niq instance's bus as an HTTP-transport remote worker.
+// Its local identity is registered like any managed worker; the remote
+// connection (remote URL / remote worker id / remote credential) comes from
+// Params.
+func buildNIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	p := cfg.Params
+	id := cfg.ID
+	if id == "" {
+		id = "niw"
+	}
+	remoteURL, _ := p["remote_url"].(string)
+	remoteWorkerID, _ := p["remote_worker_id"].(string)
+	remoteCredRaw, _ := p["remote_credential"].(string)
+	remoteCred := resolveSecret(remoteCredRaw)
+	// recipient seeds the LOCAL binding, remote_recipient the REMOTE one. Both
+	// are runtime properties (set via niw.recipient.*); the seeds just avoid a
+	// bootstrap control event. Empty seed is fine.
+	recipient, _ := p["recipient"].(string)
+	remoteRecipient, _ := p["remote_recipient"].(string)
+	if remoteURL == "" || remoteWorkerID == "" {
+		return worker.SpawnSpec{}, fmt.Errorf("niw %s: params remote_url and remote_worker_id are required", id)
+	}
+
+	// Local identity, modelled on the lark worker. NIW listens for its peers'
+	// worker.input and delivers far-side events onward as a worker.input DIRECTED
+	// at whichever local worker is currently bound as the recipient. That binding
+	// is runtime-mutable (niw.recipient.*), and the worker cannot update the
+	// identity's PublishAllow per change — so the local grant defaults to the
+	// same "*" the reason worker uses for its dynamically routed sends. The far
+	// side's own PublishAllow is the security boundary for the remote identity
+	// (what it may direct-send on B); see the design doc. A params.publish entry
+	// narrows the LOCAL grant.
+	pubAllow := []event.PublishPattern{
+		event.NewPublishPattern("*"),
+	}
+	if pAllow := publishPatterns(p["publish"]); len(pAllow) > 0 {
+		pubAllow = pAllow
+	}
+	connect := specConnect(ctx, id, "niw", pubAllow,
+		subAllowFromParams(p, []string{"worker.input", "worker.discover"}))
+	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		return niw.New(niw.Config{
+			ID:               id,
+			Bus:              ch,
+			Recipient:        recipient,
+			RemoteRecipient:  remoteRecipient,
+			RemoteURL:        remoteURL,
+			RemoteWorkerID:   remoteWorkerID,
+			RemoteCredential: remoteCred,
+			// A re-bound recipient must survive a restart; the assembly layer
+			// checkpoints the worker the same way it does hiw/timer.
+			OnDurableChange: func() {
+				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+					log.Printf("[project] checkpoint %s: %v", id, err)
+				}
+			},
+		})
+	}
+	cfg.ID = id
+	cfg.Type = "niw"
+	return worker.SpawnSpec{
+		Config:  cfg,
+		Connect: connect,
+		Build:   build,
+	}, nil
+}
+
+// resolveSecret resolves a credential that may be a literal value or an
+// "env:VAR" / "file:PATH" reference. References keep remote credentials out of
+// project.json; a bare value passes through unchanged.
+func resolveSecret(s string) string {
+	if s == "" {
+		return s
+	}
+	if v, ok := strings.CutPrefix(s, "env:"); ok {
+		return os.Getenv(v)
+	}
+	if v, ok := strings.CutPrefix(s, "file:"); ok {
+		if b, err := os.ReadFile(v); err == nil {
+			return strings.TrimSpace(string(b))
+		}
+	}
+	return s
 }
 
 // ── program ──
