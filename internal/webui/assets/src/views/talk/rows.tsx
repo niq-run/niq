@@ -38,7 +38,7 @@ function RowBadge({ ctx, workerId, showBadge, alignRight, extraPad = false }: {
   if (!showBadge) return null
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: extraPad ? 16 : undefined, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-      <WorkerBadge id={workerId} show={true} humanId={ctx.humanId} isReason={ctx.isReason} onMention={ctx.onMention} onOpenDetail={ctx.onOpenDetail} onAddFilter={ctx.onAddFilter} onFocusWorker={ctx.onFocusWorker} displayName={ctx.displayName} />
+      <WorkerBadge id={workerId} show={true} humanId={ctx.humanId} isReason={ctx.isReason} isPartner={ctx.isPartner} onMention={ctx.onMention} onOpenDetail={ctx.onOpenDetail} onAddFilter={ctx.onAddFilter} onFocusWorker={ctx.onFocusWorker} displayName={ctx.displayName} />
     </div>
   )
 }
@@ -114,7 +114,7 @@ function AbortRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
   return (
     <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-        <WorkerBadge id={evt.worker_id} show={true} humanId={ctx.humanId} isReason={ctx.isReason} onMention={ctx.onMention} onOpenDetail={ctx.onOpenDetail} displayName={ctx.displayName} />
+        <WorkerBadge id={evt.worker_id} show={true} humanId={ctx.humanId} isReason={ctx.isReason} isPartner={ctx.isPartner} onMention={ctx.onMention} onOpenDetail={ctx.onOpenDetail} displayName={ctx.displayName} />
       </div>
       <div style={{ maxWidth: alignRight ? '70%' : ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', background: colors.bgLight, border: '1px solid ' + colors.border, padding: '8px 12px', fontSize: fontSizes.sm, color: colors.textDim }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

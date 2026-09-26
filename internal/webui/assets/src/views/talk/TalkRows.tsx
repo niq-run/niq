@@ -56,7 +56,7 @@ function isRightAligned(evt: EventPayload, ctx: RowCtx, talkWorkers: Set<string>
 // has the same left-click (mention) and right-click (detail / focus)
 // affordances as the top badge.
 function TrailMarker({ workerId, usage, ctx }: { workerId: string; usage?: UsageParts; ctx: RowCtx }) {
-  const { colors, t, humanId, isReason, onMention, onOpenDetail, onFocusWorker, displayName, bubbleMax } = ctx
+  const { colors, t, humanId, isReason, isPartner, onMention, onOpenDetail, onFocusWorker, displayName, bubbleMax, isMobile } = ctx
   const hasLeft = !!usage?.left
   const hasRight = !!usage?.right
   return (
@@ -64,11 +64,21 @@ function TrailMarker({ workerId, usage, ctx }: { workerId: string; usage?: Usage
       {usage && (hasLeft || hasRight) && (
         <span
           title={t('talk.usage.tooltip')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: fontSizes.xs, color: colors.textDimmed, userSelect: 'none', whiteSpace: 'nowrap' }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            fontSize: fontSizes.xs, color: colors.textDimmed, userSelect: 'none',
+            // On phone the trailing usage/context label is trimmed to a single
+            // capped line with an ellipsis instead of forcing full width next to
+            // the trailing avatar (the context line is informational, not
+            // worth squeezing a narrow screen for).
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            maxWidth: isMobile ? 'calc(100vw - 96px)' : '60%',
+            flexShrink: 1, minWidth: 0,
+          }}
         >
           {hasLeft && <span>{usage.left}</span>}
           {hasLeft && hasRight && (
-            <span aria-hidden style={{ width: 1, height: '0.6em', background: colors.textDimmed, opacity: 0.45, alignSelf: 'center' }} />
+            <span aria-hidden style={{ width: 1, height: '0.6em', background: colors.textDimmed, opacity: 0.45, alignSelf: 'center', flexShrink: 0 }} />
           )}
           {hasRight && <span>{usage.right}</span>}
         </span>
@@ -79,6 +89,7 @@ function TrailMarker({ workerId, usage, ctx }: { workerId: string; usage?: Usage
         small
         humanId={humanId}
         isReason={isReason}
+        isPartner={isPartner}
         onMention={onMention}
         onOpenDetail={onOpenDetail}
         onFocusWorker={onFocusWorker}

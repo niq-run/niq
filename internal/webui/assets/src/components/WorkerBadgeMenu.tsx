@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 interface WorkerBadgeMenuProps {
   x: number
@@ -12,13 +13,17 @@ interface WorkerBadgeMenuProps {
   onClose: () => void
 }
 
-// Right-click menu on a talk sender's avatar/badge: 查看详情 / 只看该 worker.
+// Context menu on a talk sender's avatar/badge: 查看详情 / 只看该 worker.
 // (Adding a worker to the filter is offered as a click affordance on the
 // `@ recipient` label in the message instead, where it is actually meaningful.)
-// Closes on outside click / Escape.
+//
+// Responsive: on phone (long-press) it renders a full-width bottom sheet with
+// large tap targets and a dimmed backdrop; on desktop it is the small menu
+// anchored at the cursor. Closes on outside click / backdrop / Escape.
 export default function WorkerBadgeMenu({ x, y, workerId, onDetail, onFocus, onClose }: WorkerBadgeMenuProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
+  const isMobile = useIsMobile()
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -35,10 +40,39 @@ export default function WorkerBadgeMenu({ x, y, workerId, onDetail, onFocus, onC
   }, [onClose])
 
   const item: React.CSSProperties = {
-    padding: '5px 12px', cursor: 'pointer', fontSize: fontSizes.sm,
-    color: colors.text, whiteSpace: 'nowrap', userSelect: 'none',
+    padding: '14px 20px', cursor: 'pointer', fontSize: isMobile ? fontSizes.base : fontSizes.sm,
+    color: colors.text, whiteSpace: 'nowrap', userSelect: 'none', display: 'flex', alignItems: 'center',
   }
 
+  if (isMobile) {
+    // Phone: a bottom sheet — full-width panel at the bottom, dimmed backdrop.
+    return createPortal(
+      <>
+        <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 400 }} />
+        <div
+          ref={ref}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 401,
+            background: colors.bgLight, borderTop: '1px solid ' + colors.border,
+            borderRadius: '12px 12px 0 0', boxShadow: '0 -4px 20px rgba(0,0,0,0.28)',
+            paddingBottom: 'env(safe-area-inset-bottom)',
+          }}
+        >
+          <div style={{ height: 4, width: 44, background: colors.border, borderRadius: 2, margin: '10px auto 6px' }} />
+          <div style={{ padding: '4px 8px 8px 20px', color: colors.textDim, fontSize: fontSizes.sm }}>{workerId}</div>
+          <div className="btn-hover" style={item} onClick={() => { onDetail(); onClose() }}>{t('badge.menu.detail')}</div>
+          <div className="btn-hover" style={{ ...item, borderTop: '1px solid ' + colors.border }} onClick={() => { onFocus(); onClose() }}>
+            {t('badge.menu.focus', { worker: workerId })}
+          </div>
+        </div>
+      </>,
+      document.body,
+    )
+  }
+
+  // Desktop: small menu anchored at the cursor.
+  const itemDesktop: React.CSSProperties = { ...item, padding: '5px 12px', fontSize: fontSizes.sm }
   return createPortal(
     <div
       ref={ref}
@@ -50,8 +84,8 @@ export default function WorkerBadgeMenu({ x, y, workerId, onDetail, onFocus, onC
         borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.18)', padding: '3px 0',
       }}
     >
-      <div className="btn-hover" style={item} onClick={() => { onDetail(); onClose() }}>{t('badge.menu.detail')}</div>
-      <div className="btn-hover" style={item} onClick={() => { onFocus(); onClose() }}>{t('badge.menu.focus', { worker: workerId })}</div>
+      <div className="btn-hover" style={itemDesktop} onClick={() => { onDetail(); onClose() }}>{t('badge.menu.detail')}</div>
+      <div className="btn-hover" style={itemDesktop} onClick={() => { onFocus(); onClose() }}>{t('badge.menu.focus', { worker: workerId })}</div>
     </div>,
     document.body,
   )

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
-import { type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
+import { isTalkPartnerType, type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 import WorkerPickerModal from '../components/WorkerPickerModal'
 import WorkerRowMenu from '../components/WorkerRowMenu'
 import ContextMenuSurface from '../components/ContextMenuSurface'
@@ -283,10 +283,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     onNavigate()
   }
 
-  // The worker-selector rows shown inline and in the expanded picker: reason
-  // workers when choosing whom to talk to, all workers when filtering events,
-  // archived ones always hidden.
-  const selectorWorkers = workers.filter(w => (view !== 'talk' || w.type === 'reason') && !archived.has(w.id))
+  // The worker-selector rows shown inline and in the expanded picker: talk
+  // partners (reason / niw / remote-niw) when choosing whom to talk to, all
+  // workers when filtering events, archived ones always hidden.
+  const selectorWorkers = workers.filter(w => (view !== 'talk' || isTalkPartnerType(w.type)) && !archived.has(w.id))
   const selectorSelected = view === 'talk' ? talkWorkers : filterWorkers
 
   // Inline list: online workers only — the sidebar is the at-a-glance list of

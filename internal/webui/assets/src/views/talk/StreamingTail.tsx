@@ -26,7 +26,7 @@ export default function StreamingTail({ traces, responseOnly, ctx }: {
   ctx: RowCtx
 }) {
   if (responseOnly || traces.length === 0) return null
-  const { colors, bubbleMax, humanId, isReason, onMention, onOpenDetail, displayName, thinkingExpanded, compactMode } = ctx
+  const { colors, bubbleMax, humanId, isReason, isPartner, onMention, onOpenDetail, displayName, thinkingExpanded, compactMode } = ctx
   return (
     <>
       {traces.map(({ traceId, thinking, text, workerId, lastTs, thinkingDone, textDone }) => {
@@ -49,7 +49,7 @@ export default function StreamingTail({ traces, responseOnly, ctx }: {
         return (
           <div key={`stream-${traceId}`} style={{ maxWidth: bubbleMax, marginBottom: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <WorkerBadge id={workerId} show={true} humanId={humanId} isReason={isReason} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
+              <WorkerBadge id={workerId} show={true} humanId={humanId} isReason={isReason} isPartner={isPartner} onMention={onMention} onOpenDetail={onOpenDetail} displayName={displayName} />
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, fontStyle: 'italic' }}>● streaming</span>
             </div>
             {/* No height animation on the streaming tail: growth is a single

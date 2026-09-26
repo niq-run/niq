@@ -6,11 +6,14 @@ import { useI18n } from '../../i18n'
 import WorkerBadgeMenu from '../../components/WorkerBadgeMenu'
 import { useContextMenu, contextMenuElementStyle } from '../../hooks/useContextMenu'
 
-export default function WorkerBadge({ id, show, humanId, isReason, onMention, onOpenDetail, onAddFilter, onFocusWorker, displayName, small }: {
+export default function WorkerBadge({ id, show, humanId, isReason, isPartner, onMention, onOpenDetail, onAddFilter, onFocusWorker, displayName, small }: {
   id: string
   show: boolean
   humanId: string
   isReason: (id: string) => boolean
+  // isPartner (talk partner: reason / niw / remote-niw) gates single-click
+  // mention. Falls back to isReason when absent (older callers).
+  isPartner?: (id: string) => boolean
   onMention?: (id: string) => void
   onOpenDetail?: (id: string) => void
   onAddFilter?: (id: string) => void
@@ -29,7 +32,8 @@ export default function WorkerBadge({ id, show, humanId, isReason, onMention, on
   const contextMenu = useContextMenu((pos) => { if (hasMenu) setMenu(pos) })
   if (!show) return null
   const isHuman = id === humanId
-  const mentionable = !isHuman && isReason(id) && !!onMention
+  const partner = isPartner ? isPartner(id) : isReason(id)
+  const mentionable = !isHuman && partner && !!onMention
   return (
     <span
       onClick={(e) => { e.stopPropagation(); if (mentionable) onMention?.(id) }}
