@@ -17,10 +17,10 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/store"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // Default tunables for the list tool. MaxListEvents caps how many events a
@@ -128,7 +128,10 @@ func (w *Worker) Restore(_ []byte) error { return nil }
 func (w *Worker) watch(ctx context.Context, busCh <-chan event.Event) {
 	for {
 		select {
-		case evt := <-busCh:
+		case evt, ok := <-busCh:
+			if !ok {
+				return
+			}
 			w.process(ctx, evt)
 		case <-ctx.Done():
 			return

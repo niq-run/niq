@@ -13,9 +13,18 @@ import (
 //
 // The worker creates its own WorkerSideChannel (对讲机), then calls
 // Connect to push the paired BusSideChannel to the listener (射箭).
+//
+// The channel pair (toBus/toWorker) has exactly one owner: busSide.
+// workerSide only operates on the channels through Send/Broadcast/Receive
+// and never closes them itself — Close delegates to busSide.Close, whose
+// mu+closed guard is the single idempotent close path. Two independent
+// closers on the same pair (a plain close here plus the guarded busSide
+// close) raced and caused "send on closed channel"/"close of closed
+// channel" panics during host suspend.
 type workerSide struct {
 	workerID  string
 	listener  *InProcListener
+	bs        *busSide // owns the channel pair; single close path
 	toBus     chan corebus.Request
 	toWorker  chan event.Event
 	connected bool
@@ -53,11 +62,14 @@ func (w *workerSide) Connect(ctx context.Context, endpoint string) error {
 	}
 
 	if err := w.listener.pushBusSide(ctx, bs); err != nil {
+		// Not published: the only reference is this function, so closing the
+		// channels directly is safe — busSide was never handed off.
 		close(toBus)
 		close(toWorker)
 		return err
 	}
 
+	w.bs = bs
 	w.toBus = toBus
 	w.toWorker = toWorker
 	w.connected = true
@@ -110,11 +122,11 @@ func (w *workerSide) Receive(ctx context.Context) (<-chan event.Event, error) {
 func (w *workerSide) Close() error {
 	w.closeOnce.Do(func() {
 		w.connected = false
-		if w.toBus != nil {
-			close(w.toBus)
-		}
-		if w.toWorker != nil {
-			close(w.toWorker)
+		// Delegate to the single owner of the channel pair so close is
+		// idempotent and no stray Send (peer broadcast, presence gone event)
+		// can hit a closed channel between the two closers.
+		if w.bs != nil {
+			_ = w.bs.Close()
 		}
 	})
 	return nil

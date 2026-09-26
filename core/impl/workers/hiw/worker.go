@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // maxDecidedApprovals caps the decided-approval history kept for the UI.
@@ -113,7 +113,10 @@ func (w *Worker) Start(ctx context.Context) error {
 	go func() {
 		for {
 			select {
-			case evt := <-busCh:
+			case evt, ok := <-busCh:
+				if !ok {
+					return
+				}
 				// HIW reacts to nothing except the approval requests
 				// addressed to it; everything else is drained (the swarm's
 				// EventLog handles streaming).

@@ -18,9 +18,9 @@ import (
 	"log"
 	"sync"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // Config holds the construction inputs for a directory worker.
@@ -120,7 +120,10 @@ func (w *DirectoryWorker) Restore([]byte) error      { return nil }
 func (w *DirectoryWorker) watch(ctx context.Context, busCh <-chan event.Event) {
 	for {
 		select {
-		case evt := <-busCh:
+		case evt, ok := <-busCh:
+			if !ok {
+				return
+			}
 			w.process(evt)
 		case <-ctx.Done():
 			return

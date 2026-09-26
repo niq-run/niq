@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // Config holds configuration for an HTTP worker.
@@ -100,7 +100,10 @@ func (w *Worker) Restore(state []byte) error { return nil }
 func (w *Worker) watch(ctx context.Context, busCh <-chan event.Event) {
 	for {
 		select {
-		case evt := <-busCh:
+		case evt, ok := <-busCh:
+			if !ok {
+				return
+			}
 			w.process(evt)
 		case <-ctx.Done():
 			return

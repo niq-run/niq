@@ -48,6 +48,16 @@ func watch(ctx context.Context, engine *Engine, workerID string, ch corebus.BusS
 			engine.HandleRequest(ctx, req, workerID)
 		}()
 	}
-	engine.DisconnectChannel(workerID, ch)
+	// Guard the teardown too: DisconnectChannel fans out a worker.gone broadcast
+	// (broadcastGone -> Send on peer channels), which can race another worker's
+	// teardown. A panic here must not escape the goroutine.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[eventbus] watch %s: recovered panic in DisconnectChannel: %v", workerID, r)
+			}
+		}()
+		engine.DisconnectChannel(workerID, ch)
+	}()
 	log.Printf("[eventbus] watch %s: channel closed, disconnected", workerID)
 }

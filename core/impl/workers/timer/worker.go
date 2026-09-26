@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // Worker is the TimerWorker — a bus-connected timer service.
@@ -272,7 +272,10 @@ func (w *Worker) Restore(state []byte) error {
 func (w *Worker) watch(ctx context.Context, busCh <-chan event.Event) {
 	for {
 		select {
-		case evt := <-busCh:
+		case evt, ok := <-busCh:
+			if !ok {
+				return
+			}
 			w.process(evt)
 		case <-ctx.Done():
 			return

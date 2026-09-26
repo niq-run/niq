@@ -32,14 +32,14 @@ import (
 	"log"
 	"sync"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/impl/reason/requesttracker"
+	"github.com/niq-run/niq/core/impl/reason/transcript"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/itfs/program"
 	"github.com/niq-run/niq/core/itfs/worker"
-	"github.com/niq-run/niq/core/impl/baseworker"
-	"github.com/niq-run/niq/core/impl/reason/requesttracker"
-	"github.com/niq-run/niq/core/impl/reason/transcript"
 )
 
 // EventConverter pairs an event pattern with a conversion function that
@@ -276,7 +276,10 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 func (w *BaseReasonWorker) watch(ctx context.Context, busCh <-chan event.Event) {
 	for {
 		select {
-		case evt := <-busCh:
+		case evt, ok := <-busCh:
+			if !ok {
+				return
+			}
 			w.process(ctx, evt)
 		case <-ctx.Done():
 			return
