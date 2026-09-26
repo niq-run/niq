@@ -206,3 +206,18 @@ html, body {
 .fade-in {
   animation: niq-fade-in 0.18s ease-out;
 }
+
+/* ── Logo brand font ──
+   The sidebar's text logo ("nip") is set in Sometype Mono. Bundle a
+   woff2 subset containing only those three lowercase glyphs (built with
+   fontTools.subset --text=nip), so the brand renders in its intended typeface
+   even on machines that don't have Sometype Mono installed. Defines the
+   family the logo asks for; a page @font-face takes precedence over a
+   system-installed font of the same name. */
+@font-face {
+  font-family: 'Sometype Mono';
+  src: url('./assets/SometypeMono-Logo.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}

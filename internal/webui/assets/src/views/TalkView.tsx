@@ -3,7 +3,7 @@ import ViewHeader from '../components/ViewHeader'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { isToolResult } from '../components/talk-utils'
-import type { EventPayload } from '../types'
+import { isTalkPartnerType, type EventPayload } from '../types'
 import { useChatScroll } from './talk/useChatScroll'
 import TalkRows from './talk/TalkRows'
 import StreamingTail from './talk/StreamingTail'
@@ -55,6 +55,9 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // Only reason workers (the conversation partners) get a standalone avatar
   // row; other workers' events carry their worker ID inline in the block title.
   const isReason = useCallback((wid: string) => workerTypes[wid] === 'reason', [workerTypes])
+  // A talk-partner check (reason / niw / remote-niw) gates single-click avatar
+  // mention: any partner's badge can be clicked to @mention it into the input.
+  const isPartner = useCallback((wid: string) => isTalkPartnerType(workerTypes[wid]), [workerTypes])
   // Convert the human worker's id into a friendlier "you" for display. The
   // [webui] channel marker stays untranslated (it is a transport name): the
   // same human also speaks through other transports (lark bridge, ...), each
@@ -96,16 +99,16 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     setOpenToolId(prev => (prev === key ? null : key))
   }, [])
 
-  // Talk is the selected reason workers' conversation: what they sent, and
-  // what was sent to them — from HIW or any worker alike. When nothing is
-  // selected the scope is every reason worker. Events whose envelope involves
-  // no reason worker at all (the human UI driving a workspace directly, and
-  // that worker's replies to the UI) are simply outside this conversation —
+  // Talk is the selected partners' conversation: what a reason/niw worker sent,
+  // and what was sent to it — from HIW or any worker alike. When nothing is
+  // selected the scope is every talk-partner worker. Events whose envelope
+  // involves no talk partner at all (the human UI driving a workspace directly,
+  // and that worker's replies to the UI) are simply outside this conversation —
   // scope does the filtering, no blacklist needed.
   const inReasonScope = (id?: string): boolean => {
     if (!id) return false
     if (talkWorkers.size > 0) return talkWorkers.has(id)
-    return workerTypes[id] === 'reason'
+    return isTalkPartnerType(workerTypes[id])
   }
   // Defers scope filtering until the worker types are known, so the timeline
   // doesn't start empty on first paint (the workers poll fills it instantly).
@@ -184,12 +187,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // per-row in TalkRows so each row re-renders only when its own data changes.
   const ctx = useMemo<RowCtx>(() => ({
     dark, colors, t, isMobile, compactMode, thinkingExpanded, bubbleMax,
-    tPad, tFontSize, itemSep, humanId, displayName, isReason, directionOf,
+    tPad, tFontSize, itemSep, humanId, displayName, isReason, isPartner, directionOf,
     expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onAddFilter, onFocusWorker, onTraceClick, onDecide,
     scrollToEvent,
   }), [
     dark, colors, t, isMobile, compactMode, thinkingExpanded, bubbleMax,
-    tPad, tFontSize, itemSep, humanId, displayName, isReason, directionOf,
+    tPad, tFontSize, itemSep, humanId, displayName, isReason, isPartner, directionOf,
     expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onAddFilter, onFocusWorker, onTraceClick, onDecide,
     scrollToEvent,
   ])

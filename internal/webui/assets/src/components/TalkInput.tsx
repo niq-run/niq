@@ -3,7 +3,7 @@ import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import PickerDropdown, { type PickerOption } from './PickerDropdown'
 import { uploadFile } from '../services/api'
-import type { StagedAttachment, WorkerInfo } from '../types'
+import { isTalkPartnerType, type StagedAttachment, type WorkerInfo } from '../types'
 
 // Attachment limits: images ride inline as base64, files go through
 // /api/upload and only their path enters the input.
@@ -54,7 +54,10 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const [uploading, setUploading] = useState(0)
   const [attachNote, setAttachNote] = useState('')
 
-  const reasonWorkers = useMemo(() => workers.filter(w => w.type === 'reason'), [workers])
+  // Talk partners: workers that consume worker.input — reason, and niw /
+  // remote-niw bridges. These are the mentionable / targetable workers in the
+  // input.
+  const partners = useMemo(() => workers.filter(w => isTalkPartnerType(w.type)), [workers])
 
   // ── Attachments ──
   const stage = (a: StagedAttachment) => {
@@ -275,9 +278,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     const matches = [...input.matchAll(/@([\w.-]+)/g)]
     if (matches.length === 0) return null
     const last = matches[matches.length - 1]
-    const w = reasonWorkers.find(r => r.id === last[1])
+    const w = partners.find(r => r.id === last[1])
     return w ? w.id : null
-  }, [input, reasonWorkers])
+  }, [input, partners])
 
   // Close the picker on a click outside.
   useEffect(() => {
@@ -294,7 +297,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   }, [mentionKey])
 
   // Archived or suspended reason workers are not mentionable / targetable.
-  const pickableWorkers = reasonWorkers.filter(w => !archived.has(w.id) && w.state !== 'suspended')
+  const pickableWorkers = partners.filter(w => !archived.has(w.id) && w.state !== 'suspended')
   // The dropdown's search box filters by worker id across both modes; an empty
   // query keeps everything.
   const pickableShown = pickableWorkers.filter(w =>
@@ -353,7 +356,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const pickList = pickerGroup.opts
 
   // Persistent target: a specific reason worker, or '' (broadcast).
-  const persistentTarget = mentionTarget && reasonWorkers.some(r => r.id === mentionTarget) ? mentionTarget : ''
+  const persistentTarget = mentionTarget && partners.some(r => r.id === mentionTarget) ? mentionTarget : ''
   // The single visible target: an immediate @ in the input takes priority, then
   // the persistent target, otherwise broadcast.
   const shownTarget = currentTarget || persistentTarget

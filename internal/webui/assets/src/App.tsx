@@ -20,7 +20,7 @@ import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
 import { attachmentBlock } from './components/talk-utils'
-import type { ApprovalEntry, ContextInfo, EventPayload, ProjectInfo, StagedAttachment, ViewMode, ViewSettings, ViewSettingKey, WatchEntry, WorkerInfo } from './types'
+import { isTalkPartnerType, type ApprovalEntry, type ContextInfo, type EventPayload, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerInfo } from './types'
 
 // How many history events the WebUI pages back per /api/events/before call
 // (both the initial watermark backfill and the load-more pagination).
@@ -421,7 +421,7 @@ export default function App() {
   const talkScope = useMemo(() => {
     if (talkWorkers.size > 0) return [...talkWorkers]
     const reason: string[] = []
-    for (const w of workers) if (w.type === 'reason') reason.push(w.id)
+    for (const w of workers) if (isTalkPartnerType(w.type)) reason.push(w.id)
     return reason
   }, [talkWorkers, workers])
 
@@ -598,7 +598,7 @@ export default function App() {
   // Which reason worker the input is currently aimed at — drives the per-worker
   // input mode. The @ target wins, else the first selected talk worker.
   const activeWorker = useMemo(() => {
-    const reasons = workers.filter(w => w.type === 'reason')
+    const reasons = workers.filter(w => isTalkPartnerType(w.type))
     if (mentionTarget && reasons.some(r => r.id === mentionTarget)) return mentionTarget
     const sel = [...talkWorkers].filter(id => reasons.some(r => r.id === id))
     return sel.length ? sel[0] : ''
@@ -625,7 +625,7 @@ export default function App() {
     const mentionMatch = input.match(/^@(\S+)\s+(.*)$/s)
     if (mentionMatch) {
       const mentioned = mentionMatch[1]
-      const reasonWorkers = workers.filter(w => w.type === 'reason')
+      const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
       if (reasonWorkers.some(r => r.id === mentioned)) {
         msgTarget = mentioned
         msgText = mentionMatch[2]
@@ -635,7 +635,7 @@ export default function App() {
     if (!msgTarget) {
       // No @mention: reuse the persisted target if still valid; otherwise the
       // first selected reason worker, or broadcast.
-      const reasonWorkers = workers.filter(w => w.type === 'reason')
+      const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
       if (mentionTarget && reasonWorkers.some(r => r.id === mentionTarget)) {
         msgTarget = mentionTarget
       } else {
@@ -653,7 +653,7 @@ export default function App() {
   }, [input, view, talkWorkers, currentInputMode, sending, workers, mentionTarget, activeWorker, attachments])
 
   const handleAbort = useCallback(() => {
-    const reasonWorkers = workers.filter(w => w.type === 'reason')
+    const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
     const isReason = (id: string) => reasonWorkers.some(r => r.id === id)
     // Abort the worker the input is currently @-targeted at, falling back to a
     // selected reason worker, then the first reason worker.

@@ -58,6 +58,19 @@ export interface WorkerInfo {
   description?: string
 }
 
+// The set of worker types that can be a talk conversation partner: ones that
+// consume worker.input. Beyond the reason worker (which reasons), a NIW
+// (niq interface worker) accepts worker.input and bridges it to another niq
+// instance; on the far side such a link is registered as a remote-niw worker
+// (the A-side niw seen from B), which is likewise a valid talk partner. This is
+// the single gate the mention component and the talk worker selector use.
+export const TALK_PARTNER_TYPES = ['reason', 'niw', 'remote-niw'] as const
+
+// isTalkPartnerType reports whether a worker type can be a talk partner.
+export function isTalkPartnerType(type: string): boolean {
+  return (TALK_PARTNER_TYPES as readonly string[]).includes(type)
+}
+
 // CreateWorkerResult is what POST /api/workers/create returns.
 export interface CreateWorkerResult {
   id: string
