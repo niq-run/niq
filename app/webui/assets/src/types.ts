@@ -71,6 +71,21 @@ export function isTalkPartnerType(type: string): boolean {
   return (TALK_PARTNER_TYPES as readonly string[]).includes(type)
 }
 
+// RESPONSE_ONLY_TYPES is the whitelist the talk view's response-only mode keeps:
+// the events that are visible when intermediate process (thinking, reasoning
+// interruptions, tool invocations, request.* lifecycle) is hidden. It is sent to
+// the backend as the ?type= whitelist so the stream AND history are filtered
+// server-side — `events` is then exactly what renders, and the scroll/load-more
+// math needs no extra client pass over the full set.
+export const RESPONSE_ONLY_TYPES = [
+  'worker.input',
+  'worker.abort',
+  'timer.reminder',
+  'timer.timeout',
+  'reason.response',
+  'approval.request',
+] as const
+
 // CreateWorkerResult is what POST /api/workers/create returns.
 export interface CreateWorkerResult {
   id: string

@@ -298,6 +298,9 @@ export const en = {
   'projects.start': 'Start',
 
   'project.stoppedBanner': 'this project is not running',
+  // Live event stream connection
+  'stream.dropped': 'live event stream disconnected — new messages may be missing. Grab the logs, then reload.',
+  'stream.reload': 'reload',
   // ── Programs view ──
   'programs.title': 'Programs',
   'programs.noProject': 'Open or start a project to browse its programs.',

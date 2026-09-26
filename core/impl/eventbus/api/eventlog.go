@@ -12,9 +12,9 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/store"
-	"github.com/niq-run/niq/core/impl/eventbus"
 )
 
 // Filter controls which events a subscriber receives.
@@ -27,6 +27,12 @@ type Filter struct {
 	TraceID     string          // filter by trace ID
 	RequestID   string          // filter by request ID (request → response pairing)
 	Type        event.EventType // filter by event type (exact match)
+	// Types is a whitelist of exact event types to include. Empty means any
+	// type. It is the include-only spelling (used by the talk view's
+	// response-only mode to keep just the terminal/visible events) — unlike a
+	// blacklist it enumerates what SHOULD show, so it never has to know the
+	// full set of (dynamically named) tool types.
+	Types []string
 }
 
 // matchesFilter checks whether an event satisfies the filter.
@@ -42,6 +48,9 @@ func matchesFilter(evt event.Event, f Filter) bool {
 		return false
 	}
 	if f.Type != "" && evt.Type != f.Type {
+		return false
+	}
+	if len(f.Types) > 0 && !slices.Contains(f.Types, string(evt.Type)) {
 		return false
 	}
 	return true
@@ -215,6 +224,7 @@ func (l *EventLog) LoadBefore(ctx context.Context, filter Filter, anchor string,
 		WorkerRoles: filter.WorkerRoles,
 		TraceID:     filter.TraceID,
 		RequestID:   filter.RequestID,
+		Types:       filter.Types,
 	})
 }
 

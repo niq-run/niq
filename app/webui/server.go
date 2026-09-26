@@ -30,9 +30,6 @@ import (
 
 	"github.com/google/uuid"
 
-	corebus "github.com/niq-run/niq/core/itfs/bus"
-	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	reasonBase "github.com/niq-run/niq/core/impl/reason"
@@ -40,6 +37,9 @@ import (
 	"github.com/niq-run/niq/core/impl/workers/hiw"
 	programBase "github.com/niq-run/niq/core/impl/workers/program"
 	workspaceBase "github.com/niq-run/niq/core/impl/workers/workspace"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
+	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/itfs/store"
 )
 
 //go:embed assets/dist/*
@@ -786,6 +786,7 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 		TraceID:     r.URL.Query().Get("trace"),
 		RequestID:   r.URL.Query().Get("request"),
 		Type:        event.EventType(r.URL.Query().Get("type")),
+		Types:       cleanTypeList(r.URL.Query()["type"]),
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1818,6 +1819,20 @@ func parseWorkerRoles(q url.Values) []string {
 	return roles
 }
 
+// cleanTypeList returns the non-empty values of the ?type multi-value query
+// parameters — the event-type whitelist (e.g. the talk view's response-only
+// mode). Returns nil (no type filter) when empty.
+func cleanTypeList(raw []string) []string {
+	var types []string
+	for _, t := range raw {
+		t = strings.TrimSpace(t)
+		if t != "" && !slices.Contains(types, t) {
+			types = append(types, t)
+		}
+	}
+	return types
+}
+
 func (s *Server) handleLoadBefore(w http.ResponseWriter, r *http.Request) {
 	anchor := r.PathValue("id")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -1828,6 +1843,7 @@ func (s *Server) handleLoadBefore(w http.ResponseWriter, r *http.Request) {
 		TraceID:     r.URL.Query().Get("trace"),
 		RequestID:   r.URL.Query().Get("request"),
 		Type:        event.EventType(r.URL.Query().Get("type")),
+		Types:       cleanTypeList(r.URL.Query()["type"]),
 	}
 
 	events, err := s.eventLog.LoadBefore(r.Context(), filter, anchor, limit)

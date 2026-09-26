@@ -20,7 +20,7 @@ import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
 import { attachmentBlock } from './components/talk-utils'
-import { isTalkPartnerType, type ApprovalEntry, type ContextInfo, type EventPayload, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerInfo } from './types'
+import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerInfo } from './types'
 
 // How many history events the WebUI pages back per /api/events/before call
 // (both the initial watermark backfill and the load-more pagination).
@@ -175,6 +175,10 @@ export default function App() {
   })
   const [attachments, setAttachments] = useState<StagedAttachment[]>([])
   const [sending, setSending] = useState(false)
+  // Set while the live event stream is down / auto-reconnecting, so we can
+  // surface a visible "grab the logs" banner instead of silently missing new
+  // messages.
+  const [streamDropped, setStreamDropped] = useState(false)
   // Bumped on each send; TalkView watches it to re-pin and scroll to the bottom
   // even if the user had scrolled up before sending.
   const [sendPulse, setSendPulse] = useState(0)
@@ -401,10 +405,11 @@ export default function App() {
   // re-establishes the stream scoped to that worker server-side — the events
   // array holds only that conversation, so the newest-N trim can never drop it
   // and the earlier client-side re-scope fetch is unnecessary.
+  const responseOnly = viewSettings.responseOnly
   const streamKey = view === 'events'
     ? 'events-' + [...filterWorkers].sort().join(',') + '-' + [...filterRoles].sort().join(',') + '-' + traceFilter
     : view === 'talk'
-      ? 'talk-' + [...talkWorkers].sort().join(',')
+      ? 'talk-' + [...talkWorkers].sort().join(',') + (responseOnly ? '-ro' : '')
       : 'all'
   // Mirrors streamKey for async callbacks (the history fetch) to detect that
   // their stream was torn down while the request was in flight.
@@ -441,6 +446,7 @@ export default function App() {
       if (traceFilter) params.set('trace', traceFilter)
     } else if (view === 'talk') {
       for (const id of talkWorkers) params.append('worker', id)
+      if (responseOnly) for (const t of RESPONSE_ONLY_TYPES) params.append('type', t)
     }
     const url = projectBase + `/api/stream?${params}`
 
@@ -476,6 +482,7 @@ export default function App() {
       const workers = view === 'events' ? [...filterWorkers] : view === 'talk' ? talkScope : []
       const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
+      const types = view === 'talk' && responseOnly ? [...RESPONSE_ONLY_TYPES] as string[] : []
       try {
         // Merge history into whatever the live stream has already delivered
         // (the watermark event itself arrives this way) instead of wiping:
@@ -484,7 +491,7 @@ export default function App() {
         // by id and sorts, so the result is the clean timeline a rebuild
         // would produce. The streamKey guard drops responses from a torn-
         // down stream, so a slow fetch can't pollute the successor timeline.
-        const older = (await loadEventsBefore(watermark, limit, workers, trace, roles)) as EventPayload[]
+        const older = (await loadEventsBefore(watermark, limit, workers, trace, roles, '', types)) as EventPayload[]
         if (streamKeyRef.current !== myKey) return
         const filtered = older.filter((e) => e.type !== 'event.delivered')
         const merged = mergeEvents(eventsRef.current, filtered)
@@ -494,6 +501,14 @@ export default function App() {
     }
 
     const es = new EventSource(url)
+    es.onopen = () => setStreamDropped(false)
+    // A dropped / erroring stream (server closed the connection, a reconnect
+    // failed, or a network blip) surfaces a banner telling the user to grab the
+    // project logs — otherwise a silently missing live stream looks like "the
+    // app ignored me". EventSource auto-reconnects, so onopen clears it again;
+    // the guard drops a stale stream's error so a torn-down subscription can't
+    // raise a phantom banner after its view switched.
+    es.onerror = () => { if (streamKeyRef.current === myKey) setStreamDropped(true) }
     // The server advertises the subscription watermark as a control event before
     // any data; we use it to kick off backwards pagination for history.
     const onWatermark = (e: MessageEvent) => { watermarkRef.current = e.data as string; loadInitialHistory(e.data as string) }
@@ -864,7 +879,8 @@ export default function App() {
       const workers = view === 'events' ? [...filterWorkers] : view === 'talk' ? talkScope : []
       const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
-      const older = (await loadEventsBefore(events[0].id, HISTORY_PAGE, workers, trace, roles)) as EventPayload[]
+      const types = view === 'talk' && responseOnly ? [...RESPONSE_ONLY_TYPES] as string[] : []
+      const older = (await loadEventsBefore(events[0].id, HISTORY_PAGE, workers, trace, roles, '', types)) as EventPayload[]
       // Fewer than a full page means the store has nothing older that matches.
       if (older.length < HISTORY_PAGE) noMoreRef.current = true
       const filtered = older.filter((e) => e.type !== 'event.delivered')
@@ -1094,6 +1110,21 @@ export default function App() {
             >
               {startingProj && <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />}
               {startingProj ? t('projects.starting') : t('projects.start')}
+            </span>
+          </div>
+        )}
+        {streamDropped && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight, flexShrink: 0 }}>
+            <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>●</span>
+            <span style={{ flex: 1, color: colors.text, fontSize: fontSizes.sm }}>
+              {t('stream.dropped')}
+            </span>
+            <span
+              onClick={() => window.location.reload()}
+              className="btn-hover"
+              style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', border: '1px solid ' + colors.accent, borderRadius: 2, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+            >
+              {t('stream.reload')}
             </span>
           </div>
         )}

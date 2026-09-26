@@ -282,6 +282,9 @@ export const zh: Record<StringKey, string> = {
   'projects.starting': '启动中…',
   'projects.stopping': '停止中…',
   'project.stoppedBanner': '项目未运行',
+  // 实时事件流连接
+  'stream.dropped': '实时事件流已断开——新消息可能缺失。请先抓日志，再刷新页面。',
+  'stream.reload': '刷新',
   'projects.restarting': '重启中…',
   'projects.jump': '跳转 ↗',
   'projects.restart': '重启',

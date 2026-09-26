@@ -447,13 +447,14 @@ export async function deleteProgram(name: string): Promise<void> {
   if (!res.ok) throw new Error((await res.text()).trim() || 'delete failed: ' + res.status)
 }
 
-export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = '', roles: string[] = [], request = ''): Promise<any[]> {
+export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = '', roles: string[] = [], request = '', types: string[] = []): Promise<any[]> {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
   for (const w of workers) params.append('worker', w)
   for (const role of roles) params.append('role', role)
   if (trace) params.set('trace', trace)
   if (request) params.set('request', request)
+  for (const t of types) params.append('type', t)
   const res = await fetch(p(`/api/events/before/${anchorId}?${params}`))
   return res.json()
 }
