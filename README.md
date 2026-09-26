@@ -94,9 +94,9 @@ The `reason` worker talks to an LLM provider. Provider settings (endpoint, model
 ## Project layout
 
 ```
-core/      interfaces & types (contracts, not implementations)
-pkg/       implementations (workers, services, bus, transports)
-internal/  control plane, project runtime, WebUI
+core/itfs/ interfaces & types (contracts, not implementations)
+core/impl/ implementations (workers, bus, transports, providers, hosts)
+app/       control plane, project runtime, WebUI
 cmd/       CLI entry point
 npm/       npm distribution (launcher shim + package template)
 ext/       external worker implementations (HTTP)
@@ -106,20 +106,20 @@ ext/       external worker implementations (HTTP)
 
 ```sh
 go build ./... && go vet ./...
-go test ./pkg/eventbus/ -count=1
+go test ./core/impl/eventbus/ -count=1
 ```
 
 The WebUI bundle is committed (it is `go:embed`-ed), so rebuild and commit it
-after changing anything under `internal/webui/assets/src`:
+after changing anything under `app/webui/assets/src`:
 
 ```sh
-cd internal/webui/assets && npm run build
+cd app/webui/assets && npm run build
 ```
 
 ### Frontend development
 
 With the control plane running, the Vite dev server (`npm run dev` in
-`internal/webui/assets`, port 5173) proxies API traffic to :9527, so both pages
+`app/webui/assets`, port 5173) proxies API traffic to :9527, so both pages
 work with HMR:
 
 - control plane UI: http://localhost:5173/

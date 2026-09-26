@@ -17,9 +17,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/niq-run/niq/internal/control"
-	"github.com/niq-run/niq/internal/niqhome"
-	"github.com/niq-run/niq/internal/project"
+	"github.com/niq-run/niq/app/control"
+	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/project"
 )
 
 // version is injected at build time via -ldflags:

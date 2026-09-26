@@ -14,7 +14,7 @@ export OPENAI_API_KEY=sk-xxxx
 
 ```
 cd niq && go build ./... && go vet ./...
-cd niq && go test ./pkg/services/bus/ -count=1
+cd niq && go test ./core/impl/eventbus/ -count=1
 ```
 
 ### Run
@@ -33,9 +33,9 @@ cd niq && go run ./cmd/niq/
 
 ### Package discipline
 
-- `core/` — interfaces and types a **worker** needs (contracts, not implementations)
-- `pkg/` — all implementations (workers, services, bus, transports)
-- Each `core/` sub-package should have a `README.md` explaining its contract
+- `core/itfs/` — interfaces and types a **worker** needs (contracts, not implementations)
+- `core/impl/` — all implementations (workers, bus, transports, providers, hosts)
+- Each `core/itfs/` or `core/impl/` sub-package should have a `README.md` explaining its contract
 
 ## Design Discipline
 

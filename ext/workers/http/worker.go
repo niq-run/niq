@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	corebus "github.com/niq-run/niq/core/bus"
-	"github.com/niq-run/niq/core/event"
-	"github.com/niq-run/niq/pkg/baseworker"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
+	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // Config holds configuration for an HTTP worker.
