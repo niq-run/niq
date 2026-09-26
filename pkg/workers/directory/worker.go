@@ -114,8 +114,8 @@ func (w *DirectoryWorker) Stop() error {
 
 // Snapshot/Restore: the directory is rebuilt from the bus on start, so nothing
 // durable needs persisting.
-func (w *DirectoryWorker) Snapshot() ([]byte, error)  { return nil, nil }
-func (w *DirectoryWorker) Restore([]byte) error       { return nil }
+func (w *DirectoryWorker) Snapshot() ([]byte, error) { return nil, nil }
+func (w *DirectoryWorker) Restore([]byte) error      { return nil }
 
 func (w *DirectoryWorker) watch(ctx context.Context, busCh <-chan event.Event) {
 	for {
@@ -161,16 +161,35 @@ func (w *DirectoryWorker) rememberReady(evt event.Event) {
 	if typ, _ := evt.Payload["type"].(string); typ != "" {
 		rec.Type = typ
 	}
-	if watch, ok := evt.Payload["watch"].([]map[string]any); ok {
-		rec.Watch = watch
-	}
-	if pubs, ok := evt.Payload["publishes"].([]map[string]any); ok {
-		rec.Publishes = pubs
-	}
+	rec.Watch = normalizeObjectList(evt.Payload["watch"])
+	rec.Publishes = normalizeObjectList(evt.Payload["publishes"])
 	w.dirMu.Lock()
 	w.workers[id] = rec
 	w.dirMu.Unlock()
 	log.Printf("[directory %s] learned %s (%s, %d tools)", w.ID(), id, rec.Type, len(rec.Watch))
+}
+
+// normalizeObjectList unpacks the wire form of a watch/publishes list. In-process
+// announcements carry []map[string]any; events that crossed a transport (e.g. a
+// remote worker over HTTP) decode to []any of map[string]any. Both are normalized
+// here so the directory roster does not silently drop a remote worker's tools.
+func normalizeObjectList(v any) []map[string]any {
+	switch l := v.(type) {
+	case nil:
+		return nil
+	case []map[string]any:
+		return l
+	case []any:
+		out := make([]map[string]any, 0, len(l))
+		for _, item := range l {
+			if m, ok := item.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // registerExtensions binds the directory tools.

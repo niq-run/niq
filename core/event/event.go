@@ -2,6 +2,7 @@ package event
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -266,6 +267,33 @@ func New(typ EventType, workerId string, payload map[string]any) Event {
 		SpecVersion: "niq/1.0",
 		Status:      StatusCreated,
 	}
+}
+
+// CanonicalizePayload rewrites an event's Payload to a uniform JSON-generic
+// tree (map[string]any, []any, float64, string, bool). It is the bus-wide
+// contract that makes every event look the same at the consumer regardless of
+// where it originated: in-process events keep concrete Go types (e.g.
+// []map[string]any), while events that crossed a transport decode to generic
+// values ([]any). Canonicalizing at bus ingress removes that in-process vs
+// remote divergence, so consumers only ever handle one decoded shape.
+//
+// It also acts as a deep copy, so the payload no longer aliases the sender's
+// map. Payloads must be JSON-serializable; non-serializable values surface as
+// an error.
+func CanonicalizePayload(evt *Event) error {
+	if evt.Payload == nil {
+		return nil
+	}
+	b, err := json.Marshal(evt.Payload)
+	if err != nil {
+		return fmt.Errorf("event: canonicalize payload: %w", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return fmt.Errorf("event: decode payload: %w", err)
+	}
+	evt.Payload = m
+	return nil
 }
 
 // newID returns a time-ordered UUIDv7 string. It is globally unique and
