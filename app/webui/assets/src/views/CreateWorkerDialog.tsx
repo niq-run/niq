@@ -20,8 +20,22 @@ interface CreateWorkerDialogProps {
 }
 
 // Managed worker types offered by the form. host/hiw are infrastructure the
-// assembly owns — creating them from the UI is not a thing.
-const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program', 'history', 'directory'] as const
+// assembly owns — creating them from the UI is not a thing. niw is a bridge
+// worker that dials another niq's bus.
+const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program', 'history', 'directory', 'niw'] as const
+
+// parseNiwConfig turns the far-side bus's copyable worker config (KEY=value
+// lines, as rendered by that bus for a created remote worker) into a map.
+const parseNiwConfig = (s: string): Record<string, string> => {
+  const out: Record<string, string> = {}
+  for (const line of s.split('\n')) {
+    const i = line.indexOf('=')
+    const k = line.slice(0, i).trim()
+    const v = line.slice(i + 1).trim()
+    if (i > 0 && k) out[k] = v
+  }
+  return out
+}
 
 // CreateWorkerDialog is the workers-view "create worker" form: it persists a
 // declaration into project.json (plus workers/<id>/config.json for a managed
@@ -45,6 +59,9 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [envText, setEnvText] = useState('')
   const [subscriptions, setSubscriptions] = useState('')
   const [publish, setPublish] = useState('')
+  const [tokenTtl, setTokenTtl] = useState('')
+  const [niwConfig, setNiwConfig] = useState('')
+  const [niwRecipient, setNiwRecipient] = useState('')
   const [tags, setTags] = useState('')
   const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
@@ -133,6 +150,31 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
       body.command = command.trim().split(/\s+/)
       if (cwd.trim()) body.cwd = cwd.trim()
       if (Object.keys(env).length > 0) body.env = env
+    }
+    if (isManaged && effType === 'niw') {
+      // NIW is a MANAGED bridge worker: map the pasted far-side config onto
+      // the NIW construction params (remote_url / remote_worker_id /
+      // remote_credential) plus the optional local recipient seed. This is
+      // intentionally scoped to managed mode — a THIRD-PARTY worker typing
+      // "niw" (or "remote-niw") is a remote peer, not a local bridge, and
+      // must not hit the local-niw parameter requirements.
+      const c = parseNiwConfig(niwConfig)
+      const params: Record<string, unknown> = {}
+      if (c.NIQ_BUS_URL) params.remote_url = c.NIQ_BUS_URL
+      if (c.NIQ_WORKER_ID) params.remote_worker_id = c.NIQ_WORKER_ID
+      if (c.NIQ_WORKER_CREDENTIAL) params.remote_credential = c.NIQ_WORKER_CREDENTIAL
+      if (niwRecipient.trim()) params.recipient = niwRecipient.trim()
+      if (!params.remote_url || !params.remote_worker_id) {
+        setNote(t('workers.create.niwErr'))
+        return null
+      }
+      body.params = params
+    }
+    // Optional token lifetime override for workers whose credential WE issue
+    // (external second-party and remote third-party workers).
+    if ((isExternal || isRemote) && tokenTtl.trim()) {
+      const d = Number(tokenTtl.trim())
+      if (Number.isFinite(d) && d > 0) body.token_ttl_seconds = Math.round(d * 86400)
     }
     const subs = typesFromList(subscriptions)
     const pubs = typesFromList(publish)
@@ -264,11 +306,34 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         <div style={field}>
           <label style={label}>{t('workers.create.type')}</label>
           {isExternal || isRemote ? (
-            <input style={input} value={extType} onChange={e => setExtType(e.target.value)} placeholder={t('workers.create.typePlaceholder')} />
+            <input style={input} value={extType} onChange={e => { setExtType(e.target.value); setNote('') }} placeholder={t('workers.create.typePlaceholder')} />
           ) : (
             <select style={input} value={type} onChange={e => setType(e.target.value)}>
               {MANAGED_TYPES.map(x => <option key={x} value={x}>{x}</option>)}
             </select>
+          )}
+          {isRemote && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+              <span
+                onClick={() => { setExtType('remote-niw'); setNote('') }}
+                className="btn-hover"
+                style={{ cursor: 'pointer', border: '1px solid ' + (extType === 'remote-niw' ? colors.accent : colors.border), borderRadius: 3, padding: '2px 10px', fontSize: fontSizes.xs, color: (extType === 'remote-niw' ? colors.accent : colors.textDim), userSelect: 'none' }}
+              >
+                remote-niw
+              </span>
+              <span
+                onClick={() => { setExtType('mcp'); setNote('') }}
+                className="btn-hover"
+                style={{ cursor: 'pointer', border: '1px solid ' + (extType === 'mcp' ? colors.accent : colors.border), borderRadius: 3, padding: '2px 10px', fontSize: fontSizes.xs, color: (extType === 'mcp' ? colors.accent : colors.textDim), userSelect: 'none' }}
+              >
+                mcp
+              </span>
+            </div>
+          )}
+          {isRemote && (
+            <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>
+              {t('workers.create.remoteNiwHint')}
+            </div>
           )}
         </div>
         <div style={field}>
@@ -315,6 +380,27 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           </div>
         )}
 
+        {isManaged && effType === 'niw' && (
+          <>
+            <div style={field}>
+              <label style={label}>{t('workers.create.niwConfig')}</label>
+              <textarea
+                style={{ ...input, resize: 'vertical', minHeight: 72 }}
+                value={niwConfig}
+                onChange={e => setNiwConfig(e.target.value)}
+                placeholder={t('workers.create.niwConfigPlaceholder')}
+              />
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                {t('workers.create.niwHint')}
+              </div>
+            </div>
+            <div style={field}>
+              <label style={label}>{t('workers.create.niwRecipient')}</label>
+              <input style={input} value={niwRecipient} onChange={e => setNiwRecipient(e.target.value)} placeholder="reason.local" />
+            </div>
+          </>
+        )}
+
         {isExternal && (
           <>
             <div style={field}>
@@ -330,6 +416,16 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
               <textarea style={{ ...input, resize: 'vertical', minHeight: 48 }} value={envText} onChange={e => setEnvText(e.target.value)} />
             </div>
           </>
+        )}
+
+        {(isExternal || isRemote) && (
+          <div style={field}>
+            <label style={label}>{t('workers.create.tokenTtl')}</label>
+            <input style={input} value={tokenTtl} onChange={e => setTokenTtl(e.target.value)} placeholder="30 / 180" />
+            <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+              {t('workers.create.tokenTtlHint')}
+            </div>
+          </div>
         )}
 
         <div style={field}>

@@ -127,12 +127,17 @@ type WorkerConfig struct {
 	// Remote marks a third-party worker that connects to the bus on its own —
 	// the project only registers its identity and issues a credential, and does
 	// not launch any process for it. Requires Managed=false and no Command.
-	Remote     bool              `json:"remote,omitempty"`
-	Credential string            `json:"credential,omitempty"`
-	Command    []string          `json:"command,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	Cwd        string            `json:"cwd,omitempty"`
+	Remote     bool   `json:"remote,omitempty"`
+	Credential string `json:"credential,omitempty"`
+	// TokenTTLSeconds overrides the default lifetime of a remote/launched
+	// worker's bus token. nil (unset) = class default. Purely about the issued
+	// credential's expiry; never a process knob.
+	TokenTTLSeconds *int64            `json:"token_ttl_seconds,omitempty"`
+	Command         []string          `json:"command,omitempty"`
+	Env             map[string]string `json:"env,omitempty"`
+	Cwd             string            `json:"cwd,omitempty"`
 	// Params holds the raw type-specific construction params — the wire
+	// format every builder reads and the general escape hatch: spawn-time
 	// format every builder reads and the general escape hatch: spawn-time
 	// extras (goal/brief/programs/context tuning) and third-party worker
 	// types' private keys have no typed field. It overlays the typed fields

@@ -3,6 +3,7 @@ package httptrans
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -10,38 +11,44 @@ import (
 	"sync"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/eventbus"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/impl/eventbus"
 )
 
 // Server is the HTTP transport server — the "守塔人" for remote workers.
 //
 // It exposes two endpoints:
-//   - GET /events?worker_id=xxx&credential=yyy — SSE stream, creates BusSideChannel
+//   - GET /events?credential=<token> — SSE stream, creates BusSideChannel
 //   - POST /publish — receive events from the worker
 //
-// Every request carries its own credentials. There is no session state
-// beyond the BusSideChannel stored for each connected worker.
+// Every request carries the same self-contained signed token as its credential.
+// There is no session token beyond the BusSideChannel stored per connected
+// worker, and the worker's identity is derived from the verified token on every
+// request — never from a client self-declared worker_id.
 //
 // Usage:
 //
-//	srv := httptrans.NewServer(engine, registry, ":8080")
+//	srv := httptrans.NewServer(engine, registry, signer, ":8080")
 //	srv.Start(ctx)
 type Server struct {
 	engine   *eventbus.Engine
 	registry corebus.IdentityRegistry
+	signer   *eventbus.TokenSigner // token mint/verify; nil refuses all remote auth
 	addr     string
 	listener net.Listener
 	bound    string   // resolved host:port, empty until Bind
 	sessions sync.Map // map[workerID]*busSide
 }
 
-// NewServer creates an HTTP transport server.
-func NewServer(engine *eventbus.Engine, registry corebus.IdentityRegistry, addr string) *Server {
+// NewServer creates an HTTP transport server. signer authenticates remote
+// connections (see eventbus.TokenSigner); a nil signer means no remote worker
+// can connect (the bus is not exposing a token-issuing authority here).
+func NewServer(engine *eventbus.Engine, registry corebus.IdentityRegistry, signer *eventbus.TokenSigner, addr string) *Server {
 	return &Server{
 		engine:   engine,
 		registry: registry,
+		signer:   signer,
 		addr:     addr,
 	}
 }
@@ -94,41 +101,91 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-// validateCredential checks that the worker exists and the credential matches.
-func (s *Server) validateCredential(workerID, credential string) error {
-	id, ok := s.registry.Lookup(workerID)
+// authenticate is the single auth boundary for the HTTP/SSE transport. It
+// verifies the presented credential as a signed bus token and returns the
+// derived worker identity, or an error that rejects the request with 401.
+//
+// The worker_id is taken from the token's verified claims — never from any
+// client self-declared worker_id. authenticate also enforces remote
+// connectability: an id whose registered Identity.Remote is false (an
+// in-process managed worker) is rejected, closing the hole where a remote
+// caller claims a managed worker's id. A credential-less request is rejected
+// outright — there is no short-circuit for "no credential configured".
+func (s *Server) authenticate(credential string) (corebus.Identity, error) {
+	cl, err := s.signer.Verify(credential)
+	if err != nil {
+		return corebus.Identity{}, err
+	}
+	id, ok := s.registry.Lookup(cl.WorkerID)
 	if !ok {
-		return fmt.Errorf("unknown worker: %s", workerID)
+		return corebus.Identity{}, &authError{code: "unknown", msg: fmt.Sprintf("unknown worker: %s", cl.WorkerID)}
 	}
-	if id.Credential != "" && id.Credential != credential {
-		return fmt.Errorf("invalid credential")
+	if !id.Remote {
+		return corebus.Identity{}, &authError{code: "not_remote", msg: fmt.Sprintf("worker %s is not remote-connectable", cl.WorkerID)}
 	}
-	return nil
+	return id, nil
+}
+
+// authError carries a machine-readable code alongside the human message, so the
+// transport can respond with a distinct indicator a remote peer can act on
+// (most importantly "expired": the peer should re-provision a fresh token).
+type authError struct {
+	code string
+	msg  string
+}
+
+func (e *authError) Error() string { return e.msg }
+
+// authCode maps any authentication failure to a stable code string.
+func (s *Server) authCode(err error) string {
+	var ae *authError
+	if errors.As(err, &ae) {
+		return ae.code
+	}
+	switch {
+	case errors.Is(err, eventbus.ErrTokenExpired):
+		return "expired"
+	case errors.Is(err, eventbus.ErrTokenRevoked):
+		return "revoked"
+	case errors.Is(err, eventbus.ErrNoSigner):
+		return "unconfigured"
+	default:
+		return "invalid"
+	}
+}
+
+// writeAuthError answers a failed authentication with HTTP 401 and a
+// machine-readable JSON body plus a stable header, so a generic HTTP peer (not
+// just our own Go client) can tell "expired → re-provision" from other
+// failures. Status 401 is used for every auth failure (never 200), and there is
+// intentionally no credential-less path.
+func (s *Server) writeAuthError(w stdhttp.ResponseWriter, err error) {
+	code := s.authCode(err)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Niq-Auth-Error", code)
+	w.WriteHeader(stdhttp.StatusUnauthorized)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "message": err.Error()})
 }
 
 // ── Endpoints ──
 
 // handleEvents opens an SSE stream for a worker and creates the BusSideChannel.
 //
-// This is where the "线头插到球上" happens — the worker opens an SSE
-// connection, the server validates its credentials, creates a BusSideChannel,
-// attaches it to the engine, and starts pushing events.
+// The worker's identity is derived from the verified token presented in the
+// credential query parameter, then the channel is attached to the engine and
+// bound to that id for the rest of the connection.
 //
 // Query parameters:
-//   - worker_id:  the worker's identity
-//   - credential: the worker's credential for authentication
+//   - credential: the signed bus token (source of the authoritative worker id)
 func (s *Server) handleEvents(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-	workerID := r.URL.Query().Get("worker_id")
 	credential := r.URL.Query().Get("credential")
 
-	if workerID == "" {
-		stdhttp.Error(w, "worker_id required", 400)
+	id, err := s.authenticate(credential)
+	if err != nil {
+		s.writeAuthError(w, err)
 		return
 	}
-	if err := s.validateCredential(workerID, credential); err != nil {
-		stdhttp.Error(w, err.Error(), 401)
-		return
-	}
+	workerID := id.WorkerID
 
 	// Create BusSideChannel.
 	toBus := make(chan corebus.Request, 64)
@@ -226,13 +283,19 @@ func (s *Server) handlePublish(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		stdhttp.Error(w, "invalid request", 400)
 		return
 	}
-	if err := s.validateCredential(req.WorkerID, req.Credential); err != nil {
-		stdhttp.Error(w, err.Error(), 401)
+
+	// Authenticate by token and derive the worker id from its claims; the
+	// body's self-declared req.WorkerID is never trusted for routing. A
+	// connection is pinned to whatever id its token proved at /events, so
+	// /publish cannot impersonate another worker under a different id.
+	id, err := s.authenticate(req.Credential)
+	if err != nil {
+		s.writeAuthError(w, err)
 		return
 	}
 
-	// Find the session.
-	val, ok := s.sessions.Load(req.WorkerID)
+	// Find the session established at /events for that id.
+	val, ok := s.sessions.Load(id.WorkerID)
 	if !ok {
 		stdhttp.Error(w, "worker not connected", 400)
 		return
