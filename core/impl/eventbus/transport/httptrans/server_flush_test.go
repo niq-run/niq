@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/eventbus"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/impl/eventbus"
 )
 
 // TestEventsHeadersFlushWithoutTraffic verifies that a connect to /events
@@ -27,10 +27,16 @@ func TestEventsHeadersFlushWithoutTraffic(t *testing.T) {
 		t.Fatalf("registry: %v", err)
 	}
 	defer reg.Close()
+	signer := eventbus.NewTokenSigner([]byte("test-secret"))
+	tok, err := signer.Mint("w1", time.Hour)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
 	if err := reg.Register(corebus.Identity{
 		WorkerID:       "w1",
 		Type:           "lark",
-		Credential:     "cred",
+		Credential:     tok,
+		Remote:         true,
 		PublishAllow:   []event.PublishPattern{event.NewPublishPattern("*")},
 		SubscribeAllow: []event.EventPattern{{Type: "*"}},
 	}); err != nil {
@@ -38,7 +44,7 @@ func TestEventsHeadersFlushWithoutTraffic(t *testing.T) {
 	}
 
 	eng := eventbus.NewEngine(reg, nil)
-	srv := NewServer(eng, reg, ":0")
+	srv := NewServer(eng, reg, signer, ":0")
 	addr, err := srv.Bind()
 	if err != nil {
 		t.Fatalf("bind: %v", err)
@@ -48,7 +54,7 @@ func TestEventsHeadersFlushWithoutTraffic(t *testing.T) {
 	go func() { done <- srv.Start(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
 
-	url := "http://" + addr + "/events?worker_id=w1&credential=cred"
+	url := "http://" + addr + "/events?credential=" + tok
 
 	// The request must complete (headers received) without any event traffic.
 	// Before the flush fix this hung until the client-side timeout.

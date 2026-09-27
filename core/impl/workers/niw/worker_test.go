@@ -100,23 +100,34 @@ func TestForwardToRemoteDirected(t *testing.T) {
 	}
 }
 
-// TestDeliverToLocalRecipient verifies a far-side event is directed at the local
-// recipient and bookkeeping is dropped.
+// TestDeliverToLocalRecipient verifies ONLY collaborative worker.input crosses
+// the bridge: bookkeeping (ready/gone) AND arbitrary far-side broadcast/lifecycle
+// events (e.g. reason.start, remote.result) are dropped — they must never be
+// retransmitted as a worker.input flood to the local peer.
 func TestDeliverToLocalRecipient(t *testing.T) {
 	w, local, _ := testWorker("reason.local", "")
 
 	// Bookkeeping from the far side is not collaboration.
 	w.deliverToLocalRecipient(context.Background(), event.New(event.TypeWorkerReady, "r", nil))
 	w.deliverToLocalRecipient(context.Background(), event.New(event.TypeWorkerGone, "r", nil))
+	w.deliverToLocalRecipient(context.Background(), event.New(event.TypeWorkerDiscover, "r", nil))
+	// A far-side broadcast/lifecycle event (any non-worker.input) must not be
+	// relayed as conversation either.
+	w.deliverToLocalRecipient(context.Background(),
+		event.New(event.EventType("remote.result"), "r", map[string]any{"ok": true}))
+	w.deliverToLocalRecipient(context.Background(),
+		event.New(event.EventType("reason.start"), "r", nil))
 	local.mu.Lock()
 	if n := len(local.sends); n != 0 {
 		local.mu.Unlock()
-		t.Fatalf("delivered %d bookkeeping events, want 0", n)
+		t.Fatalf("delivered %d non-collaboration events, want 0", n)
 	}
 	local.mu.Unlock()
 
+	// The one collaborative worker.input IS forwarded, directed at the local
+	// recipient.
 	w.deliverToLocalRecipient(context.Background(),
-		event.New(event.EventType("remote.result"), "r", map[string]any{"ok": true}))
+		event.New(event.TypeWorkerInput, "r", map[string]any{"text": "hi"}))
 
 	local.mu.Lock()
 	defer local.mu.Unlock()

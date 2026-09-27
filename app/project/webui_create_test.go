@@ -24,10 +24,12 @@ func newDeclCreator(t *testing.T) (*webuiDeclCreator, *UnmanagedSupervisor) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	signer := eventbus.NewTokenSigner([]byte("test-secret"))
 	sv := testSupervisor()
 	return &webuiDeclCreator{
 		supervisor: sv,
 		registry:   registry,
+		signer:     signer,
 		workerSvc:  workerhost.New(),
 		projectID:  "proj",
 	}, sv
@@ -99,11 +101,17 @@ func TestDeclCreatorExternal(t *testing.T) {
 	if !ok || isManagedWorker(spec) || len(spec.Command) == 0 {
 		t.Fatalf("declaration = %+v, want an external entry with command", spec)
 	}
-	if spec.Credential == "" {
-		t.Fatal("credential not persisted")
+	// A launched (second-party) worker is TEMP-provisioned: its token is handed
+	// to the child in memory and must NOT be persisted to project.json.
+	if spec.Credential != "" {
+		t.Fatalf("temp credential must not be persisted, got %q", spec.Credential)
 	}
-	if _, ok := c.registry.Lookup("e1"); !ok {
+	id, ok := c.registry.Lookup("e1")
+	if !ok {
 		t.Fatal("identity not registered")
+	}
+	if !id.Remote {
+		t.Fatal("temp identity must be remote-connectable")
 	}
 
 	deadline := time.Now().Add(3 * time.Second)

@@ -9,7 +9,7 @@ import (
 // TestBindDynamicPort verifies ":0" yields an ephemeral, already-listening port
 // that is non-zero, readable via ResolvedAddr, and dialable.
 func TestBindDynamicPort(t *testing.T) {
-	srv := NewServer(nil, nil, ":0")
+	srv := NewServer(nil, nil, nil, ":0")
 	addr, err := srv.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -37,7 +37,7 @@ func TestBindDynamicPort(t *testing.T) {
 // TestServeOnBoundListener verifies Start serves on the pre-bound listener and
 // returns cleanly on ctx cancellation.
 func TestServeOnBoundListener(t *testing.T) {
-	srv := NewServer(nil, nil, ":0")
+	srv := NewServer(nil, nil, nil, ":0")
 	addr, err := srv.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)

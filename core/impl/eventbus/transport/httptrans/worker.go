@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -27,8 +28,8 @@ type WorkerSide struct {
 	credential string
 	client     *stdhttp.Client
 
-	mu       sync.Mutex
-	connCh   chan event.Event
+	mu        sync.Mutex
+	connCh    chan event.Event
 	connected bool
 	cancel    context.CancelFunc
 	closed    bool
@@ -162,9 +163,41 @@ func (w *WorkerSide) publish(ctx context.Context, typ string, evt event.Event, t
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("publish failed (%d): %s", resp.StatusCode, string(body))
+		return remoteAuthError(resp.StatusCode, string(body))
 	}
 	return nil
+}
+
+// ErrRemoteTokenExpired is returned (wrapped) when the bus reports that the
+// presented token has expired — a distinct signal so a caller can tell
+// “re-provision a fresh token” from a request bug.
+var ErrRemoteTokenExpired = errors.New("remote token expired")
+
+// remoteAuthError is ErrRemoteTokenExpired when the bus reported the presented
+// token as expired, otherwise a plain error carrying the status, body and any
+// auth code.
+func remoteAuthError(status int, body string) error {
+	code := authCodeFromBody(body)
+	if code == "expired" {
+		return fmt.Errorf("%w: %s", ErrRemoteTokenExpired, strings.TrimSpace(body))
+	}
+	msg := fmt.Sprintf("bus refused (%d): %s", status, strings.TrimSpace(body))
+	if code != "" {
+		msg = fmt.Sprintf("bus refused (%d) code=%s: %s", status, code, strings.TrimSpace(body))
+	}
+	return errors.New(msg)
+}
+
+// authCodeFromBody extracts the bus-issued auth error code from a 401 JSON
+// body ({"error":"expired"}), returning "" when there is none.
+func authCodeFromBody(body string) string {
+	var m struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &m); err == nil {
+		return m.Error
+	}
+	return ""
 }
 
 func (w *WorkerSide) Receive(ctx context.Context) (<-chan event.Event, error) {

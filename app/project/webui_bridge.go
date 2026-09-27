@@ -10,9 +10,10 @@ import (
 	"sort"
 	"strings"
 
-	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/app/webui"
+	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/workerhost"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
 )
 
 // webuiDeclCreator implements webui.WorkerDeclCreator: it persists a worker
@@ -23,6 +24,7 @@ import (
 type webuiDeclCreator struct {
 	supervisor *UnmanagedSupervisor
 	registry   corebus.IdentityRegistry
+	signer     *eventbus.TokenSigner
 	workerSvc  *workerhost.WorkerService // may be nil; used for duplicate checks only
 	projectID  string
 }
@@ -93,7 +95,7 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 		if err := SaveProject(p); err != nil {
 			return webui.WorkerCreated{}, err
 		}
-		if err := provisionUnmanaged(c.registry, c.projectID, &wc); err != nil {
+		if err := provisionUnmanaged(c.registry, c.projectID, &wc, c.signer); err != nil {
 			return webui.WorkerCreated{}, err
 		}
 		return webui.WorkerCreated{ID: wc.ID, Type: wc.Type, Remote: true, Credential: wc.Credential}, nil
@@ -106,7 +108,7 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 	if err := SaveProject(p); err != nil {
 		return webui.WorkerCreated{}, err
 	}
-	if err := provisionUnmanaged(c.registry, c.projectID, &wc); err != nil {
+	if err := provisionTemp(c.registry, c.signer, &wc); err != nil {
 		return webui.WorkerCreated{}, err
 	}
 	if c.supervisor == nil {
@@ -216,6 +218,7 @@ func (r webuiDeclRemover) RemoveDecl(id string) error {
 type webuiUnmanagedAdapter struct {
 	supervisor *UnmanagedSupervisor
 	registry   corebus.IdentityRegistry
+	signer     *eventbus.TokenSigner
 	workerSvc  *workerhost.WorkerService // optional; identifies live managed workers
 	projectID  string
 }
@@ -238,7 +241,7 @@ func (a *webuiUnmanagedAdapter) Start(id string) error {
 	if spec.Remote {
 		return fmt.Errorf("worker %s is a remotely-connected worker; it connects on its own", id)
 	}
-	if err := provisionUnmanaged(a.registry, a.projectID, &spec); err != nil {
+	if err := provisionTemp(a.registry, a.signer, &spec); err != nil {
 		return err
 	}
 	return a.supervisor.Start(spec)

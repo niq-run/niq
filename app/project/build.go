@@ -8,29 +8,29 @@ import (
 	"path/filepath"
 	"strings"
 
-	corebus "github.com/niq-run/niq/core/itfs/bus"
-	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/llm"
-	programpkg "github.com/niq-run/niq/core/itfs/program"
-	"github.com/niq-run/niq/core/itfs/store"
-	"github.com/niq-run/niq/core/itfs/worker"
 	"github.com/niq-run/niq/app/niqhome"
 	providerpkg "github.com/niq-run/niq/app/project/provider"
+	"github.com/niq-run/niq/core/impl/embedws"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 	"github.com/niq-run/niq/core/impl/workerhost"
-	"github.com/niq-run/niq/core/impl/embedws"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/impl/workers/history"
 	"github.com/niq-run/niq/core/impl/workers/hiw"
 	"github.com/niq-run/niq/core/impl/workers/host"
 	"github.com/niq-run/niq/core/impl/workers/niw"
 	programworker "github.com/niq-run/niq/core/impl/workers/program"
+	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 	"github.com/niq-run/niq/core/impl/workers/reason"
 	"github.com/niq-run/niq/core/impl/workers/timer"
 	"github.com/niq-run/niq/core/impl/workers/workspace"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
+	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/itfs/llm"
+	programpkg "github.com/niq-run/niq/core/itfs/program"
+	"github.com/niq-run/niq/core/itfs/store"
+	"github.com/niq-run/niq/core/itfs/worker"
 )
 
 // BuildContext holds shared dependencies that worker builders need.
@@ -466,8 +466,16 @@ func buildNIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	// side's own PublishAllow is the security boundary for the remote identity
 	// (what it may direct-send on B); see the design doc. A params.publish entry
 	// narrows the LOCAL grant.
+	//
+	// The LOCAL default is narrowed to exactly what a bridge needs to operate:
+	// forward collaborative worker.input, answer request.* control replies, and
+	// announce presence (worker.ready). No `*` — NIW should not be free to
+	// broadcast arbitrary event types on its own bus. Targets stay runtime
+	// (the recipient binding), so grants are type-scoped, not target-scoped.
 	pubAllow := []event.PublishPattern{
-		event.NewPublishPattern("*"),
+		event.NewPublishPattern("worker.input"),
+		event.NewPublishPattern("request.*"),
+		event.NewPublishPattern("worker.ready"),
 	}
 	if pAllow := publishPatterns(p["publish"]); len(pAllow) > 0 {
 		pubAllow = pAllow
