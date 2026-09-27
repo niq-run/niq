@@ -793,6 +793,16 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	// Connection-lifecycle diagnostic: log how long this SSE lived before it
+	// ended, so we can tell whether the stream was closed server-side (a normal
+	// ctx close or an error below) or just vanished from under us (a client /
+	// proxy disconnect the server never saw). Alive duration + the connect time
+	// let us match it to a browser-side "interrupted" console error.
+	started := time.Now()
+	defer func() {
+		log.Printf("[webui] SSE closed path=%s alive=%s", r.URL.Path, time.Since(started).Round(time.Second))
+	}()
+
 	// The stream now carries only events newer than `watermark`; history is
 	// paged in separately by the client. Advertise the watermark up front as a
 	// control event so the client can start its backwards pagination, then

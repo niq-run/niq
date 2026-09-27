@@ -23,6 +23,7 @@ const projectPrefix = "/p/"
 // proxyTarget is resolved per request and carries the project's loopback WebUI
 // address plus the path prefix to strip, from the handler to the proxy Rewrite.
 type proxyTarget struct {
+	id     string // project id (for diagnostics)
 	addr   string // 127.0.0.1:<webui port>
 	prefix string // /p/<id>
 }
@@ -48,7 +49,7 @@ func newProjectProxy() *httputil.ReverseProxy {
 		},
 		ErrorHandler: func(w stdhttp.ResponseWriter, r *stdhttp.Request, err error) {
 			t, _ := r.Context().Value(proxyTargetKey{}).(proxyTarget)
-			log.Printf("[control] proxy %s: %v", t.addr, err)
+			log.Printf("[control] proxy %s p=%s %s: %v", t.addr, t.id, r.URL.RequestURI(), err)
 			stdhttp.Error(w, fmt.Sprintf("project WebUI at %s is unreachable: %v", t.addr, err), stdhttp.StatusBadGateway)
 		},
 	}
@@ -69,6 +70,7 @@ func (c *Control) handleProjectProxy(w stdhttp.ResponseWriter, r *stdhttp.Reques
 		return
 	}
 	t := proxyTarget{
+		id:     id,
 		addr:   "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI),
 		prefix: projectPrefix + id,
 	}
