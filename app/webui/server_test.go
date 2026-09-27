@@ -1,20 +1,24 @@
 package webui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/niq-run/niq/core/impl/eventbus"
+	"github.com/niq-run/niq/core/impl/workerhost"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
-	"github.com/niq-run/niq/core/impl/eventbus"
-	"github.com/niq-run/niq/core/impl/workerhost"
 )
 
 // New only dereferences its dependencies inside route handlers, so a bare
@@ -478,5 +482,67 @@ func TestHandleUnmanagedStartConflict(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("create status = %d, want 404 without a creator", resp.StatusCode)
+	}
+}
+
+// TestHandleUploadPersistsFile is a regression test: POST /api/upload must
+// leave the uploaded file on disk after the request returns. It used to be
+// deleted because the temp file (up-<rand>-<name>) doubles as the final path,
+// so the deferred os.Remove(dst.Name()) removed the very file just "renamed"
+// into place (the rename being a same-path no-op).
+func TestHandleUploadPersistsFile(t *testing.T) {
+	// SetProjectDir pins the default upload dir to <projectDir>/uploads.
+	projDir := filepath.Join(t.TempDir(), "projects", "alpha")
+	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s.SetProjectDir(projDir)
+	addr, err := s.Bind()
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "note.txt")
+	if err != nil {
+		t.Fatalf("form file: %v", err)
+	}
+	if _, err := fw.Write([]byte("hello upload")); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	mw.Close()
+
+	resp, err := http.Post("http://"+addr+"/api/upload", mw.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatalf("POST upload: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("upload status = %d: %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Path string
+		Name string
+		Size int64
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	resp.Body.Close()
+	if !strings.HasPrefix(got.Path, filepath.Join(projDir, "uploads")) {
+		t.Fatalf("path = %q, want under %q", got.Path, filepath.Join(projDir, "uploads"))
+	}
+
+	// The returned file must still exist once the request has fully returned.
+	fi, err := os.Stat(got.Path)
+	if err != nil {
+		t.Fatalf("uploaded file %q missing after request: %v", got.Path, err)
+	}
+	if fi.Size() != int64(len("hello upload")) {
+		t.Fatalf("size = %d, want %d", fi.Size(), len("hello upload"))
 	}
 }

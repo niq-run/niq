@@ -969,19 +969,25 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "create file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer os.Remove(dst.Name()) // no-op after the successful rename below
 	written, err := io.Copy(dst, file)
 	if err != nil {
 		dst.Close()
+		os.Remove(dst.Name())
 		http.Error(w, "write file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if err := dst.Close(); err != nil {
+		os.Remove(dst.Name())
 		http.Error(w, "close file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// The temp file (up-<rand>-<name>) already carries a collision-free base
+	// name, so it doubles as the final destination — the rename below is a
+	// same-path no-op kept for clarity/portability. The temp file must NOT be
+	// removed once uploaded, only on the failure paths above.
 	final := filepath.Join(dir, filepath.Base(dst.Name()))
 	if err := os.Rename(dst.Name(), final); err != nil {
+		os.Remove(dst.Name())
 		http.Error(w, "finalize file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
