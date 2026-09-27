@@ -3,7 +3,7 @@
 #
 # Splits counts into:
 #   - test vs non-test files
-#   - webui (internal/webui/assets/src) counted separately
+#   - webui (app/webui/assets/src) counted separately
 #
 # Only git-tracked files are counted, so build artifacts, node_modules,
 # the compiled `niq` binary and the webui `dist/` bundles are excluded.
@@ -18,7 +18,7 @@ cd "$(git rev-parse --show-toplevel)"
 CODE_EXT='go|ts|tsx|js|jsx|css|html|py|sh|rs'
 
 # Webui source root (the actual TS/React sources, not the built dist/).
-WEBUI_SRC='internal/webui/assets/src'
+WEBUI_SRC='app/webui/assets/src'
 
 is_test() {
   # Go convention: *_test.go
@@ -38,7 +38,7 @@ total_f=0; total_l=0
 
 while IFS= read -r f; do
   [[ "$f" =~ \.($CODE_EXT)$ ]] || continue
-  [[ "$f" == internal/webui/assets/dist/* ]] && continue
+  [[ "$f" == app/webui/assets/dist/* ]] && continue
 
   n=$(wc -l < "$f" | tr -d ' ')
   total_f=$((total_f + 1))

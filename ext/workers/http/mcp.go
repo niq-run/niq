@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/niq-run/niq/core/worker"
+	"github.com/niq-run/niq/core/itfs/worker"
 )
 
 // mcpConn represents a connected MCP server and its discovered tools.
