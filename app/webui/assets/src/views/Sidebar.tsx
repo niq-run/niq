@@ -43,6 +43,9 @@ interface SidebarProps {
   onNavigate: () => void
   // Pending approval requests (HIW-tracked) — shown as a nav badge.
   pendingApprovals?: number
+  // Right-click "mention" action for a talk-partner worker: prefixes the
+  // talk input with an @mention for that worker (let handleMention do it).
+  onMention?: (id: string) => void
 }
 
 // Sidebar resize: the draggable width range, persisted in localStorage.
@@ -54,7 +57,7 @@ function loadSidebarWidth(): number {
   return Math.min(Math.max(v, MIN_SIDEBAR_WIDTH), Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.5))
 }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0 }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, onMention }: SidebarProps) {
   const { dark, toggle, colors, inverted, toggleInverted } = useTheme()
   const { lang, setLang, t } = useI18n()
   // Hovered sidebar option (non-toggle, non-checkbox rows) — shows a full-width
@@ -79,6 +82,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const openRowMenu = (pos: { x: number; y: number }, id: string) => {
     setRowMenu({ id, x: pos.x, y: pos.y })
   }
+  // Whether the worker under the right-click menu is a mentionable talk
+  // partner (the menu then offers an @mention action).
+  const rowMenuMentionable = (() => {
+    if (!rowMenu) return false
+    const w = workers.find(x => x.id === rowMenu.id)
+    return !!w && isTalkPartnerType(w.type)
+  })()
   // Long-press / right-click on the logo band toggles the inverted palette.
   const logoMenu = useContextMenu(() => toggleInverted())
   // Expanded picker modal for the worker selector (open on the expand button).
@@ -739,8 +749,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
 
       {/* Fixed footer: current project on the left, theme + language toggles
           on the right — stays put when the options scroll. The row reads as
-          two blocks: hovering the project name lights up the left half only. */}
-      <div style={{ flexShrink: 0, marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+          two blocks: hovering the project name lights up the left half only.
+          A top border separates this pinned area from the scrolling options
+          above it, so it reads as a distinct region in every mode. */}
+      <div style={{ flexShrink: 0, margin: '16px -' + edgePadX + 'px 0', padding: '16px ' + contentPadX + 'px 0', borderTop: '1px solid ' + colors.border, display: 'flex', alignItems: 'center', gap: 12 }}>
         {mode === 'project' && project && (
           <div style={{ flex: 1, minWidth: 0, position: 'relative', alignSelf: 'stretch', display: 'flex' }}>
             <div
@@ -839,6 +851,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           workers={selectorWorkers}
           selected={selectorSelected}
           onToggle={(id) => { if (view === 'talk') onToggleWorker(id); else onToggleFilterWorker(id) }}
+          onMention={onMention}
           onClose={() => setShowWorkerPicker(false)}
           isMobile={isMobile}
         />
@@ -849,6 +862,8 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           y={rowMenu.y}
           pinned={pinnedIds.includes(rowMenu.id)}
           slept={sleptIds.includes(rowMenu.id)}
+          mentionable={rowMenuMentionable}
+          onMention={() => onMention?.(rowMenu.id)}
           onTogglePin={() => togglePinned(rowMenu.id)}
           onToggleSleep={() => toggleSlept(rowMenu.id)}
           onClose={() => setRowMenu(null)}

@@ -182,6 +182,9 @@ export default function App() {
   // Bumped on each send; TalkView watches it to re-pin and scroll to the bottom
   // even if the user had scrolled up before sending.
   const [sendPulse, setSendPulse] = useState(0)
+  // Diagnostic: the most recent send (timestamp + text) so, if the live stream
+  // drops right after a send, we can tell whether the re-fetch brought it back.
+  const lastSendRef = useRef<{ t: number; text: string } | null>(null)
   const [mentionKey, setMentionKey] = useState(0)
   const [filterWorkers, setFilterWorkers] = useState<Set<string>>(new Set())
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
@@ -497,18 +500,53 @@ export default function App() {
         const merged = mergeEvents(eventsRef.current, filtered)
         eventsRef.current = merged
         setEvents(merged)
+        // Diagnostic: after a history re-pull (initial load or a reconnect
+        // re-fetch), report whether the most recent send is present again. This
+        // tells us, when the live stream dropped right after a send, whether
+        // the re-pull recovered it or it's still missing (and thus being
+        // dropped/taken by seenRef rather than a backfill gap).
+        const ls = lastSendRef.current
+        if (ls && Date.now() - ls.t < 60_000) {
+          const found = merged.some(e => e.type === 'worker.input' &&
+            typeof e.payload?.text === 'string' && (e.payload.text as string).includes(ls.text))
+          console.warn(`[stream-diag] re-pull: recent-send=${found ? 'found' : 'MISSING'} sent='${ls.text}' evts=${merged.length}`)
+        }
       } catch {}
     }
 
     const es = new EventSource(url)
-    es.onopen = () => setStreamDropped(false)
+    // Keep a local "was this a reconnect?" flag so we can log reconnects
+    // (EventSource itself doesn't tell onopen apart from the first connect).
+    let hadOpen = false
+    es.onopen = () => {
+      setStreamDropped(false)
+      hadOpen = true
+      // Treat every (re)open as a clean new stream: reset the per-connection
+      // bookkeeping so a reconnected timeline can't be polluted by the old
+      // connection's already-seen ids / deliveries. The watermark re-pull that
+      // follows (loadInitialHistory) rebuilds both from the recent history, so
+      // nothing is lost — and a message the old connection had consumed but
+      // never rendered is no longer swallowed by the stale seenRef.
+      seenRef.current = new Set()
+      deliveriesRef.current = {}
+      const ls = lastSendRef.current
+      console.debug(`[stream-diag] SSE opened ${url}` + (ls ? ` (${Math.round((Date.now() - ls.t) / 1000)}s since last send)` : ''))
+    }
     // A dropped / erroring stream (server closed the connection, a reconnect
     // failed, or a network blip) surfaces a banner telling the user to grab the
     // project logs — otherwise a silently missing live stream looks like "the
     // app ignored me". EventSource auto-reconnects, so onopen clears it again;
     // the guard drops a stale stream's error so a torn-down subscription can't
     // raise a phantom banner after its view switched.
-    es.onerror = () => { if (streamKeyRef.current === myKey) setStreamDropped(true) }
+    es.onerror = () => {
+      if (streamKeyRef.current === myKey) {
+        setStreamDropped(true)
+        // window.__niqStreamDropped = true // (reserved)
+        const ls = lastSendRef.current
+        console.warn(`[stream-diag] SSE ERROR at ${new Date().toISOString()}` +
+          (ls ? ` — ${Math.round((Date.now() - ls.t) / 1000)}s since last send ("${ls.text}")` : ' — no recent send'))
+      }
+    }
     // The server advertises the subscription watermark as a control event before
     // any data; we use it to kick off backwards pagination for history.
     const onWatermark = (e: MessageEvent) => { watermarkRef.current = e.data as string; loadInitialHistory(e.data as string) }
@@ -658,6 +696,7 @@ export default function App() {
         msgTarget = selectedReasons.length > 0 ? selectedReasons[0] : ''
       }
     }
+    lastSendRef.current = { t: Date.now(), text: msgText.slice(0, 80) }
     sendInput(composeInput(msgText, attachments), msgTarget, currentInputMode).then(() => {
       setInput('')
       setAttachments([])
@@ -1058,6 +1097,7 @@ export default function App() {
         pendingApprovals={pendingApprovalCount}
         isMobile={isMobile}
         open={sidebarOpen}
+        onMention={handleMention}
         onNavigate={() => setSidebarOpen(false)}
       />
 
