@@ -8,6 +8,7 @@ package project
 import (
 	"strings"
 
+	"github.com/niq-run/niq/core/impl/eventbus"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 )
 
@@ -37,4 +38,21 @@ func registerIdentity(registry corebus.IdentityRegistry, id corebus.Identity) er
 		return registry.Register(id)
 	}
 	return registry.Update(id.WorkerID, id.PublishAllow, id.SubscribeAllow)
+}
+
+// registerTempIdentity registers a temporary (process-lifetime) identity. It
+// prefers the in-memory tier of a LayeredRegistry so the id dies with the main
+// process; if the registry has no temp tier it falls back to a durable
+// registration so an unlayered registry still works in isolation. A stale temp
+// entry for the same id (from a prior provision before a respawn) is replaced
+// so re-provisioning is idempotent.
+func registerTempIdentity(registry corebus.IdentityRegistry, id corebus.Identity) error {
+	if lyr, ok := registry.(*eventbus.LayeredRegistry); ok {
+		if err := lyr.RegisterTemp(id); err == nil {
+			return nil
+		}
+		lyr.RevokeTemp(id.WorkerID)
+		return lyr.RegisterTemp(id)
+	}
+	return registerIdentity(registry, id)
 }

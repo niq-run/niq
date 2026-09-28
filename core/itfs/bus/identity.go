@@ -34,8 +34,20 @@ type Identity struct {
 	// Credential is used to authenticate the worker at connect time.
 	// The credential scheme is transport-specific (e.g., token, API key,
 	// peer credential for loopback).
+	//
+	// Under the HTTP/SSE transport this holds (or hands the client) the
+	// signed bus token presented on /events + /publish. In-process managed
+	// workers keep it empty — they never authenticate over the wire.
 	Credential string
 
+	// Remote reports whether this identity may connect over the HTTP/SSE
+	// remote transport. In-process managed workers leave it false (they only
+	// ever attach via the in-process listener); worker identities that are
+	// provisioned with a token (third-party processes we launch, or
+	// remotely-connected peers) set it true. The transport server rejects any
+	// SSE connection whose derived id is not remote-connectable, which is the
+	// guard that stops a remote caller from claiming a managed worker's id.
+	Remote bool
 	// PublishAllow lists what this worker may publish: event types, each
 	// optionally restricted to a specific target worker for directed sends.
 	// Supports "*" (all), "Prefix.*" (prefix), and exact match on type.

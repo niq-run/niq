@@ -37,10 +37,10 @@ import (
 	"sync"
 	"time"
 
-	corebus "github.com/niq-run/niq/core/itfs/bus"
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/httptrans"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // Control event types NIW responds to, mirroring the lark worker's
@@ -460,11 +460,16 @@ func (w *Worker) forwardToRemote(ctx context.Context, evt event.Event) {
 
 // deliverToLocalRecipient hands a far-side event to the LOCAL recipient as a
 // directed send — the "configured receiver" that distinguishes NIW from a
-// broadcast relay. Far-side bus bookkeeping (worker.ready / gone) of its own
-// workers is not collaboration and is dropped.
+// broadcast relay.
+//
+// Only collaborative worker.input crosses the bridge in this direction. The
+// far-side bus's lifecycle and broadcast traffic (worker.ready/gone/discover,
+// reason.start/end, other workers' input) is NOT the conversation and must not
+// be retransmitted as a worker.input flood to the local peer. Without this
+// gate, a NIW whose far-side identity subscribes to broadcasts relays the whole
+// far-side wire on top of the one intended message.
 func (w *Worker) deliverToLocalRecipient(ctx context.Context, evt event.Event) {
-	switch evt.Type {
-	case event.TypeWorkerReady, event.TypeWorkerGone, event.TypeWorkerDiscover:
+	if evt.Type != event.TypeWorkerInput {
 		return
 	}
 	localRecip, _ := w.bindings()

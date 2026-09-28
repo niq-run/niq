@@ -248,9 +248,10 @@ func TestProvisionUnmanaged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	signer := eventbus.NewTokenSigner([]byte("test-secret"))
 
 	spec := p.Workers[0]
-	if err := provisionUnmanaged(registry, "proj", &spec); err != nil {
+	if err := provisionUnmanaged(registry, "proj", &spec, signer); err != nil {
 		t.Fatalf("provision: %v", err)
 	}
 	if spec.Credential == "" {
@@ -280,7 +281,7 @@ func TestProvisionUnmanaged(t *testing.T) {
 
 	// Re-provision reuses the persisted credential.
 	spec2 := reloaded.Workers[0]
-	if err := provisionUnmanaged(registry, "proj", &spec2); err != nil {
+	if err := provisionUnmanaged(registry, "proj", &spec2, signer); err != nil {
 		t.Fatalf("re-provision: %v", err)
 	}
 	if spec2.Credential != spec.Credential {

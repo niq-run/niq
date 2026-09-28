@@ -2,6 +2,7 @@ package project
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log"
 	"net"
@@ -14,8 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/niq-run/niq/core/itfs/store"
-	"github.com/niq-run/niq/core/itfs/worker"
 	evtsqlite "github.com/niq-run/niq/app/project/evtstore/sqlite"
 	providerpkg "github.com/niq-run/niq/app/project/provider"
 	"github.com/niq-run/niq/app/webui"
@@ -25,6 +24,8 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/workerhost"
 	"github.com/niq-run/niq/core/impl/workers/hiw"
+	"github.com/niq-run/niq/core/itfs/store"
+	"github.com/niq-run/niq/core/itfs/worker"
 )
 
 // ProjectRunOptions controls running a single project instance (its own bus and
@@ -175,11 +176,26 @@ func runAssembly(opts assemblyOptions) error {
 		}
 	}
 
-	// Identity registry (file-backed).
-	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(opts.IDDir, "identities.json"))
+	// Identity registry: a durable (file-backed) registry with an in-memory tier
+	// layered over it. The durable tier holds managed workers and provisioned
+	// remote peers; the in-memory tier holds the temporary identities of the
+	// third-party workers the host itself launches (they live only as long as
+	// this process). Both tiers speak the same IdentityRegistry interface, so
+	// engine, transport and builders share one registry.
+	fileReg, err := eventbus.NewFileIdentityRegistry(filepath.Join(opts.IDDir, "identities.json"))
 	if err != nil {
 		return fmt.Errorf("project: create registry: %w", err)
 	}
+	registry := eventbus.NewLayeredRegistry(fileReg)
+
+	// Token signer: the bus's single issuing/verifying authority for remote
+	// connections. Rooted on a persisted per-project secret so long-lived
+	// provisioned tokens survive a restart.
+	secret, err := loadOrCreateRootSecret(opts.IDDir)
+	if err != nil {
+		return fmt.Errorf("project: create signer: %w", err)
+	}
+	signer := eventbus.NewTokenSigner(secret)
 
 	// Event bus engine with an event store: SQLite (per project) when configured,
 	// else in-memory.
@@ -226,7 +242,7 @@ func runAssembly(opts assemblyOptions) error {
 	var busAddr string
 	if opts.BusAddr != "" {
 		startBus := func(addr string) (string, error) {
-			srv := httptrans.NewServer(engine, registry, addr)
+			srv := httptrans.NewServer(engine, registry, signer, addr)
 			b, err := srv.Bind()
 			if err != nil {
 				return "", err
@@ -299,7 +315,7 @@ func runAssembly(opts assemblyOptions) error {
 				log.Printf("[project] unmanaged worker %s: empty command, skipping", s.ID)
 				continue
 			}
-			if err := provisionUnmanaged(registry, opts.ContextInfo.Project, &s); err != nil {
+			if err := provisionTemp(registry, signer, &s); err != nil {
 				log.Printf("[project] provision unmanaged worker %s: %v", s.ID, err)
 				continue
 			}
@@ -334,6 +350,7 @@ func runAssembly(opts assemblyOptions) error {
 						s.SetUnmanagedController(&webuiUnmanagedAdapter{
 							supervisor: supervisor,
 							registry:   registry,
+							signer:     signer,
 							workerSvc:  workerSvc,
 							projectID:  opts.ContextInfo.Project,
 						})
@@ -343,6 +360,7 @@ func runAssembly(opts assemblyOptions) error {
 						s.SetWorkerDeclCreator(&webuiDeclCreator{
 							supervisor: supervisor,
 							registry:   registry,
+							signer:     signer,
 							workerSvc:  workerSvc,
 							projectID:  opts.ContextInfo.Project,
 						})
@@ -487,4 +505,32 @@ func resolvePort(addr string) int {
 		return n
 	}
 	return 0
+}
+
+// rootSecretPath is the file holding the project bus's token-signing secret.
+const rootSecretPath = "root_secret"
+
+// loadOrCreateRootSecret loads the project's signing secret, generating and
+// persisting a fresh random one on first use. The secret anchors the bus's
+// single token-issuing authority; persisting it lets long-lived provisioned
+// tokens remain verifiable across restarts.
+func loadOrCreateRootSecret(dir string) ([]byte, error) {
+	if dir == "" {
+		return nil, fmt.Errorf("root secret requires a dir")
+	}
+	p := filepath.Join(dir, rootSecretPath)
+	if b, err := os.ReadFile(p); err == nil && len(b) > 0 {
+		return b, nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(p, b, 0600); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
