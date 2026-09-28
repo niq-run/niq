@@ -2,7 +2,7 @@ import { useState, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { type WorkerInfo } from '../types'
+import { isTalkPartnerType, type WorkerInfo } from '../types'
 import TagFilterDropdown from './TagFilterDropdown'
 import WorkerRowMenu from './WorkerRowMenu'
 import ContextMenuSurface from './ContextMenuSurface'
@@ -17,6 +17,9 @@ interface WorkerPickerModalProps {
   onToggle: (id: string) => void
   onClose: () => void
   isMobile: boolean
+  // Optional right-click "mention" action: prefixes the talk input with an
+  // @mention for the worker (let App's handleMention do it).
+  onMention?: (id: string) => void
 }
 
 // A row in the modal's grouped list.
@@ -25,7 +28,7 @@ interface Row { kind: 'group' | 'worker'; key: string; group: string; indent?: n
 // WorkerPickerModal is the expanded worker selector: a centered dialog with a
 // search box, tag-grouped rows (slash tags nest by depth) and per-row toggle.
 // It is where you pick when the sidebar's inline checklist gets crowded.
-export default function WorkerPickerModal({ title, workers, selected, onToggle, onClose, isMobile }: WorkerPickerModalProps) {
+export default function WorkerPickerModal({ title, workers, selected, onToggle, onClose, isMobile, onMention }: WorkerPickerModalProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const [query, setQuery] = useState('')
@@ -56,6 +59,13 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
   const openContext = (pos: { x: number; y: number }, id: string) => {
     setMenu({ id, x: pos.x, y: pos.y })
   }
+  // Whether the worker under the right-click menu is a mentionable talk
+  // partner (the menu then offers an @mention action).
+  const menuMentionable = (() => {
+    if (!menu) return false
+    const w = workers.find(x => x.id === menu.id)
+    return !!w && isTalkPartnerType(w.type)
+  })()
 
   // All distinct tags present across the selectable set (stable options for
   // the multi-select tag filter, independent of the current search query).
@@ -346,6 +356,8 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
           y={menu.y}
           pinned={pinnedIds.includes(menu.id)}
           slept={sleptIds.includes(menu.id)}
+          mentionable={menuMentionable}
+          onMention={() => onMention?.(menu.id)}
           onTogglePin={() => togglePinned(menu.id)}
           onToggleSleep={() => toggleSlept(menu.id)}
           onClose={() => setMenu(null)}

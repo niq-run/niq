@@ -1097,6 +1097,7 @@ export default function App() {
         pendingApprovals={pendingApprovalCount}
         isMobile={isMobile}
         open={sidebarOpen}
+        onMention={handleMention}
         onNavigate={() => setSidebarOpen(false)}
       />
 

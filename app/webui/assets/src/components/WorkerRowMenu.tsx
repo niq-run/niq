@@ -8,14 +8,19 @@ interface WorkerRowMenuProps {
   y: number
   pinned: boolean
   slept: boolean
+  // Shown when the worker under the cursor is a mentionable talk partner;
+  // onMention prefixes the input with an @mention for that worker.
+  mentionable?: boolean
+  onMention?: () => void
   onTogglePin: () => void
   onToggleSleep: () => void
   onClose: () => void
 }
 
-// A small context menu anchored at the right-click position, offering 置顶
-// (pin) and 休眠 (sleep) for a worker row. Closes on outside click / Escape.
-export default function WorkerRowMenu({ x, y, pinned, slept, onTogglePin, onToggleSleep, onClose }: WorkerRowMenuProps) {
+// A small context menu anchored at the right-click position, offering 提及
+// (mention) for a talk partner, plus 置顶 (pin) and 休眠 (sleep) for a worker
+// row. Closes on outside click / Escape.
+export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMention, onTogglePin, onToggleSleep, onClose }: WorkerRowMenuProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
@@ -49,6 +54,11 @@ export default function WorkerRowMenu({ x, y, pinned, slept, onTogglePin, onTogg
         borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.18)', padding: '3px 0',
       }}
     >
+      {mentionable && (
+        <div className="btn-hover" style={{ ...item, color: colors.accent, fontWeight: 600 }} onClick={() => { onMention?.(); onClose() }}>
+          {t('picker.mention')}
+        </div>
+      )}
       <div className="btn-hover" style={item} onClick={() => { onTogglePin(); onClose() }}>
         {pinned ? t('pinned.unpin') : t('pinned.pin')}
       </div>
