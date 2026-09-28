@@ -15,6 +15,52 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const IMAGE_MAX_DIM = 1568
 const IMAGE_JPEG_QUALITY = 0.85
 
+// Recursively read a directory entry into a flat list of File objects. A
+// dropped/pasted folder shows up as a directory entry, not a File, so we walk
+// it with the File System API (webkitGetAsEntry) and collect every file inside
+// (preserving each file's own name; nested paths are flattened — the upload
+// endpoint stores files flat in the project's upload dir anyway).
+async function filesFromEntry(entry: FileSystemEntry, out: File[] = []): Promise<File[]> {
+  if (entry.isFile) {
+    const fe = entry as FileSystemFileEntry
+    try {
+      const f = await new Promise<File>((res, rej) => fe.file(res, rej))
+      out.push(f)
+    } catch { /* unreadable file: skip */ }
+    return out
+  }
+  if (entry.isDirectory) {
+    const reader = (entry as FileSystemDirectoryEntry).createReader()
+    // readEntries returns in batches; loop until it reports none left.
+    for (;;) {
+      const batch = await new Promise<FileSystemEntry[]>((res, rej) => reader.readEntries(res, rej))
+      if (batch.length === 0) break
+      for (const child of batch) await filesFromEntry(child, out)
+    }
+  }
+  return out
+}
+
+// Collect every File from a drop or paste payload, expanding folder items via
+// their directory entries. Falls back to the plain file list when the modern
+// entry API is unavailable.
+async function filesFromTransfer(items: DataTransferItemList | undefined, files: FileList | null): Promise<File[]> {
+  const out: File[] = []
+  if (items && items.length) {
+    for (const item of Array.from(items)) {
+      if (item.kind !== 'file') continue
+      if (typeof (item as any).webkitGetAsEntry === 'function') {
+        const entry = (item as any).webkitGetAsEntry() as FileSystemEntry | null
+        if (entry) { await filesFromEntry(entry, out); continue }
+      }
+      const f = item.getAsFile()
+      if (f) out.push(f)
+    }
+    return out
+  }
+  return files ? Array.from(files) : out
+}
+
 interface TalkInputProps {
   talkPartner: string
   input: string
@@ -33,7 +79,10 @@ interface TalkInputProps {
   // Attachments staged for the next send: pasted/picked images (inline
   // base64) and uploaded files (referenced by path).
   attachments: StagedAttachment[]
-  onAttachmentsChange: (a: StagedAttachment[]) => void
+  // Accepts either a full list or an updater fn (the parent's setAttachments)
+  // so TalkInput can append atomically without a stale-closure read of the
+  // current list.
+  onAttachmentsChange: (a: StagedAttachment[] | ((prev: StagedAttachment[]) => StagedAttachment[])) => void
   // Called when the input box gains focus — App trims the list so typing is
   // crisp even if it had grown large while following.
   onFocus?: () => void
@@ -53,6 +102,23 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const [modeOpen, setModeOpen] = useState(false)
   const [uploading, setUploading] = useState(0)
   const [attachNote, setAttachNote] = useState('')
+  // Drag-and-drop: tracks whether a file is being dragged over the input so
+  // the drop target is visibly highlighted. dragDepth counts enter/leave to
+  // survive drag events bubbling over child elements.
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
+  // Running staged-attachment count (attachments.length is the prop, which
+  // is stale inside an async addFiles loop — a folder drop must cap against
+  // what's already committed, not the value at render time).
+  const stagedCountRef = useRef(attachments.length)
+  // Align the running count whenever the committed list moves independently
+  // of stage/removeAttachment — e.g. a send clears attachments directly in
+  // the parent.
+  const lastPropCount = useRef(attachments.length)
+  if (lastPropCount.current !== attachments.length) {
+    lastPropCount.current = attachments.length
+    stagedCountRef.current = attachments.length
+  }
 
   // Talk partners: workers that consume worker.input — reason, and niw /
   // remote-niw bridges. These are the mentionable / targetable workers in the
@@ -61,7 +127,12 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
 
   // ── Attachments ──
   const stage = (a: StagedAttachment) => {
-    onAttachmentsChange([...attachments, a])
+    // Functional update: addFiles stages multiple files in one async pass,
+    // and each call must append to the latest list — not the `attachments`
+    // prop captured when this render's closure was created (which would
+    // clobber earlier appends and show only the last file).
+    onAttachmentsChange(prev => [...prev, a])
+    stagedCountRef.current += 1
     setAttachNote('')
   }
 
@@ -139,7 +210,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   // everything else via the upload endpoint (path reference).
   const addFiles = async (files: FileList | File[]) => {
     for (const f of Array.from(files)) {
-      if (attachments.length + uploading >= MAX_ATTACHMENTS) {
+      if (stagedCountRef.current >= MAX_ATTACHMENTS) {
         setAttachNote(t('talk.attach.tooMany'))
         return
       }
@@ -169,8 +240,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   }
 
   const removeAttachment = (id: string) => {
-    onAttachmentsChange(attachments.filter(a => a.id !== id))
+    onAttachmentsChange(prev => prev.filter(a => a.id !== id))
     setAttachNote('')
+    stagedCountRef.current = Math.max(0, stagedCountRef.current - 1)
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -437,7 +509,37 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   )
 
   return (
-    <div style={{ padding: '12px 24px', borderTop: '1px solid ' + colors.border, position: 'relative', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))' }}>
+    <div
+      onDragEnter={(e) => {
+        if (!e.dataTransfer?.types?.includes('Files')) return
+        e.preventDefault()
+        dragDepth.current += 1
+        setDragging(true)
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer?.types?.includes('Files')) return
+        e.preventDefault()
+      }}
+      onDragLeave={(e) => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1)
+        if (dragDepth.current === 0) setDragging(false)
+      }}
+      onDrop={async (e) => {
+        e.preventDefault()
+        const files = await filesFromTransfer(e.dataTransfer?.items, e.dataTransfer?.files ?? null)
+        if (files.length) addFiles(files)
+        dragDepth.current = 0
+        setDragging(false)
+      }}
+      style={{ padding: '12px 24px', borderTop: '1px solid ' + colors.border, position: 'relative', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', ...(dragging ? { outline: '2px dashed ' + colors.accent, outlineOffset: -2 } : {}) }}
+    >
+      {/* Drag overlay: a full-area hint shown while files hover over the
+          input, so dropping is discoverable. Sits above the text. */}
+      {dragging && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: colors.bgChip, pointerEvents: 'none' }}>
+          <span style={{ color: colors.accent, fontSize: fontSizes.md, fontWeight: 600 }}>{t('talk.attach.drop')}</span>
+        </div>
+      )}
 
       {/* Attachment chips: staged images (thumbnail) and uploaded files
           (name), each removable, plus upload/note status. */}
@@ -484,12 +586,14 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         onChange={handleChange}
         onFocus={onFocus}
         onKeyDown={handleKeyDown}
-        onPaste={(e) => {
-          // Pasted images stage as attachments instead of leaking into the
-          // text as a path or binary junk.
-          if (e.clipboardData?.files?.length) {
+        onPaste={async (e) => {
+          // Pasted images / files stage as attachments instead of leaking into
+          // the text as a path or binary junk. A pasted folder is expanded via
+          // its directory entry so its files upload too.
+          const files = await filesFromTransfer(e.clipboardData?.items, e.clipboardData?.files ?? null)
+          if (files.length) {
             e.preventDefault()
-            addFiles(e.clipboardData.files)
+            addFiles(files)
           }
         }}
         className="talk-input"

@@ -88,6 +88,7 @@ export const en = {
   // ── Talk view ──
   'talk.empty': 'No messages yet. Watching {label}.',
   'talk.attach.add': 'Add',
+  'talk.attach.drop': 'Drop files to attach',
   'talk.attach': 'Attach files (images inline as base64, files upload and reference the path)',
   'talk.attach.uploading': 'Uploading…',
   'talk.attach.tooMany': 'At most 4 attachments',
