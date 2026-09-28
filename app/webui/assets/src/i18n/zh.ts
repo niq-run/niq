@@ -86,6 +86,7 @@ export const zh: Record<StringKey, string> = {
 
   'talk.empty': '还没有消息。正在监听 {label}。',
   'talk.attach.add': '附件',
+  'talk.attach.drop': '松开以添加附件',
   'talk.attach': '添加附件（图片转 base64，文件上传后引用路径）',
   'talk.attach.uploading': '上传中…',
   'talk.attach.tooMany': '最多 4 个附件',
