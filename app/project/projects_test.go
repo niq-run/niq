@@ -244,3 +244,92 @@ func TestSanitizeID(t *testing.T) {
 		t.Fatalf("sanitize = %q, want ok-id_1.x", got)
 	}
 }
+
+// TestLinkProjectExisting verifies opening a directory that is already a niq
+// project: the link keeps the project's own id, ListProjects sees through the
+// symlink, the original project.json is preserved, and a duplicate is rejected.
+func TestLinkProjectExisting(t *testing.T) {
+	setupProjectsRoot(t)
+
+	ext := t.TempDir()
+	proj := &Project{ID: "alpha", CreatedAt: "2026-01-01T00:00:00Z",
+		Workers: []WorkerConfig{{Type: "hiw", ID: "default-hiw"}}}
+	if err := writeProjectJSON(filepath.Join(ext, "project.json"), proj); err != nil {
+		t.Fatalf("seed project.json: %v", err)
+	}
+
+	p, err := LinkProject(ext)
+	if err != nil {
+		t.Fatalf("LinkProject: %v", err)
+	}
+	if p.ID != "alpha" {
+		t.Fatalf("linked id = %q, want alpha", p.ID)
+	}
+
+	// A symlink must exist under the niq root, pointing back to ext.
+	link := ProjectDir("alpha")
+	if info, err := os.Lstat(link); err != nil {
+		t.Fatalf("link missing: %v", err)
+	} else if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected a symlink at %s", link)
+	}
+	if target, err := os.Readlink(link); err != nil || filepath.Clean(target) != filepath.Clean(ext) {
+		t.Fatalf("link target = %q, want %q (%v)", target, ext, err)
+	}
+
+	// The project is now scannable (ListProjects must see through the symlink).
+	projects, err := ListProjects()
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	if len(projects) != 1 || projects[0].ID != "alpha" {
+		t.Fatalf("ListProjects = %+v, want [alpha]", projects)
+	}
+	// The original project.json is left in place.
+	if _, err := os.Stat(filepath.Join(ext, "project.json")); err != nil {
+		t.Fatalf("original project.json missing: %v", err)
+	}
+
+	// Linking the same directory again must fail with a duplicate-id error.
+	if _, err := LinkProject(ext); err == nil {
+		t.Fatal("expected duplicate link error")
+	}
+}
+
+// TestLinkProjectCreatesProjectJSON verifies opening an arbitrary directory
+// derives the id from its base name and seeds a minimal project.json so the
+// project scans and can run with the webui-hiw.
+func TestLinkProjectCreatesProjectJSON(t *testing.T) {
+	setupProjectsRoot(t)
+	ext := t.TempDir() // arbitrary directory, no project.json
+
+	p, err := LinkProject(ext)
+	if err != nil {
+		t.Fatalf("LinkProject: %v", err)
+	}
+	base := sanitizeID(filepath.Base(ext))
+	if p.ID != base {
+		t.Fatalf("linked id = %q, want %q", p.ID, base)
+	}
+	if _, err := os.Stat(filepath.Join(ext, "project.json")); err != nil {
+		t.Fatalf("project.json not seeded: %v", err)
+	}
+	if list, err := ListProjects(); err != nil || len(list) != 1 || list[0].ID != base {
+		t.Fatalf("ListProjects after link = %+v, want [%s] (err %v)", list, base, err)
+	}
+}
+
+func TestLinkProjectRejectsInvalid(t *testing.T) {
+	setupProjectsRoot(t)
+	if _, err := LinkProject(""); err == nil {
+		t.Fatal("expected error for empty path")
+	}
+	// A plain file is not a directory.
+	f := filepath.Join(t.TempDir(), "f.txt")
+	if err := os.WriteFile(f, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LinkProject(f); err == nil {
+		t.Fatal("expected error linking a file")
+	}
+}

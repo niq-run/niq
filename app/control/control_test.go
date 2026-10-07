@@ -8,7 +8,9 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -151,6 +153,57 @@ func TestControlCreateRejectsDuplicate(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 409 {
 		t.Fatalf("duplicate create status=%d, want 409", resp.StatusCode)
+	}
+}
+
+// TestControlLinkProject verifies the POST /api/projects/link endpoint: opening
+// an external directory (even one already a niq project) registers it via a
+// symlink and it appears in the projects list.
+func TestControlLinkProject(t *testing.T) {
+	setupProjectsRoot(t)
+	ext := t.TempDir()
+	proj := `{"id":"linked","workers":[{"type":"hiw","id":"h"}]}`
+	if err := os.WriteFile(filepath.Join(ext, "project.json"), []byte(proj), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	base := newControl(t)
+	resp, err := http.Post(base+"/api/projects/link", "application/json", strings.NewReader(`{"path":"`+ext+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("link status=%d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"id":"linked"`) {
+		t.Fatalf("link response missing id: %s", body)
+	}
+	// Now listed through the symlink.
+	_, list := doGet(t, base+"/api/projects")
+	if !strings.Contains(list, `"id":"linked"`) {
+		t.Fatalf("projects list missing linked: %s", list)
+	}
+}
+
+// TestControlLinkProjectDirs verifies the server-side directory picker returns
+// the immediate subdirectories of a given path.
+func TestControlLinkProjectDirs(t *testing.T) {
+	setupProjectsRoot(t)
+	ext := t.TempDir()
+	sub := filepath.Join(ext, "subdir")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	base := newControl(t)
+	code, body := doGet(t, base+"/api/projects/dirs?path="+url.QueryEscape(ext))
+	if code != 200 {
+		t.Fatalf("dirs status=%d: %s", code, body)
+	}
+	if !strings.Contains(body, `"name":"subdir"`) {
+		t.Fatalf("dirs missing subdir: %s", body)
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	stdhttp "net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"syscall"
 	"time"
@@ -33,6 +35,71 @@ func (c *Control) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Reques
 		views = append(views, projectView{Project: p, Running: c.isRunning(p.ID)})
 	}
 	json.NewEncoder(w).Encode(views)
+}
+
+// dirItem is one subdirectory the server-side directory picker offers.
+type dirItem struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// handleListDirs returns the immediate subdirectories of an absolute path (the
+// webui's server-side directory picker). A browser file picker cannot expose a
+// server-side absolute path even on localhost, so the server browses the
+// filesystem and the UI navigates folders instead — this works locally and
+// remotely alike. It only lists directory names, never file contents. An empty
+// path starts at the niq projects root.
+func (c *Control) handleListDirs(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	root := r.URL.Query().Get("path")
+	if root == "" {
+		root = project.ProjectsRoot()
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		stdhttp.Error(w, err.Error(), 400)
+		return
+	}
+	fi, err := os.Stat(abs)
+	if err != nil || !fi.IsDir() {
+		stdhttp.Error(w, "not a directory: "+abs, 400)
+		return
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		stdhttp.Error(w, err.Error(), 400)
+		return
+	}
+	dirs := make([]dirItem, 0, len(entries))
+	for _, de := range entries {
+		// Resolve symlinks so the picker can descend into linked folders.
+		path := filepath.Join(abs, de.Name())
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		dirs = append(dirs, dirItem{Name: de.Name(), Path: path})
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
+	json.NewEncoder(w).Encode(dirs)
+}
+
+// handleLinkProject opens an external project directory by symlinking it into
+// the niq root (see project.LinkProject). The webui posts the directory the
+// user chose; it may already be a niq project and resume as-is.
+func (c *Control) handleLinkProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Path == "" {
+		stdhttp.Error(w, "path is required", 400)
+		return
+	}
+	p, err := project.LinkProject(body.Path)
+	if err != nil {
+		stdhttp.Error(w, err.Error(), 400)
+		return
+	}
+	json.NewEncoder(w).Encode(projectView{Project: *p, Running: c.isRunning(p.ID)})
 }
 
 // isRunning reports whether a project is actually up. A tracked subprocess is

@@ -164,6 +164,34 @@ export async function createProject(id: string, template: string): Promise<Proje
   return res.json()
 }
 
+// linkProject opens an external directory as a project by symlinking it into
+// the niq root. The path must be an absolute directory on the control plane's
+// machine; the linked project's definition is returned. The directory may
+// already be a niq project and resumes as-is.
+export async function linkProject(path: string): Promise<ProjectInfo> {
+  const res = await fetch(CONTROL + '/api/projects/link', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  if (!res.ok) throw new Error(await errText(res, 'link failed'))
+  return res.json()
+}
+
+// DirEntry is one subdirectory the server-side directory picker offers.
+export interface DirEntry { name: string; path: string }
+
+// fetchDirs lists the immediate subdirectories of a server-side absolute path
+// (empty = the niq projects root), for the project-directory picker. A browser
+// file input cannot expose a real absolute path, so the server browses the
+// filesystem instead — this works from localhost and remote alike.
+export async function fetchDirs(path?: string): Promise<DirEntry[]> {
+  const q = path ? '?path=' + encodeURIComponent(path) : ''
+  const res = await fetch(CONTROL + '/api/projects/dirs' + q)
+  if (!res.ok) throw new Error('fetch dirs failed: ' + res.status)
+  return res.json()
+}
+
 // startProject asks the control plane to launch a project; returns the redirect
 // URL of the project's own WebUI.
 export async function startProject(id: string): Promise<ProjectStartResult> {
