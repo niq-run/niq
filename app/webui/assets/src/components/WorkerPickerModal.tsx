@@ -97,13 +97,17 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
         (w.tags || []).some(tag => tag.toLowerCase().includes(q)))
     : onlineMatched
 
-  // Build the grouped list: pinned workers first, then per-tag groups of the
-  // active (non-slept) workers, then the slept workers in a final group (so -
-  // hiding a worker is reversible by right-clicking it there to wake it).
+  // Build the grouped list: the currently selected workers in their own
+  // top group, then pinned, then per-tag groups of the active (non-slept)
+  // workers, then the slept workers in a final group (so hiding a worker is
+  // reversible by right-clicking it there to wake it). A selected worker is
+  // shown once, in the Selected group, and excluded from the others so the
+  // selection is visible at a glance without duplicating rows.
   const rows = useMemo((): Row[] => {
     const out: Row[] = []
     const isPinned = (w: WorkerInfo) => pinnedIds.includes(w.id)
     const isSlept = (w: WorkerInfo) => sleptIds.includes(w.id)
+    const isSelected = (w: WorkerInfo) => selected.has(w.id)
     let lastGroup: string | null = null
     const emit = (g: string) => {
       if (g !== lastGroup) {
@@ -127,8 +131,19 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
         }
       }
     }
+    // Selected group: always first, driven by the worker order of `filtered`
+    // (which preserves the selectable set's order). Empty when nothing is
+    // picked, in which case it's simply skipped.
+    const selectedList = filtered.filter(isSelected)
+    if (selectedList.length) {
+      out.push({ kind: 'group', key: '__grp_selected', group: t('picker.group.selected') })
+      lastGroup = t('picker.group.selected')
+      for (const w of selectedList) {
+        out.push({ kind: 'worker', key: w.id, group: t('picker.group.selected'), indent: (w.tags?.[0]?.split('/').length ?? 1) - 1, w })
+      }
+    }
     if (pinnedIds.length) {
-      const pinned = filtered.filter(isPinned).slice()
+      const pinned = filtered.filter(w => isPinned(w) && !isSelected(w)).slice()
         .sort((a, b) => pinnedIds.indexOf(a.id) - pinnedIds.indexOf(b.id))
       if (pinned.length) {
         out.push({ kind: 'group', key: '__grp_pinned', group: t('pinned.header') })
@@ -138,8 +153,8 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
         }
       }
     }
-    addTagged(filtered.filter(w => !isPinned(w) && !isSlept(w)))
-    const slept = filtered.filter(isSlept).slice()
+    addTagged(filtered.filter(w => !isPinned(w) && !isSlept(w) && !isSelected(w)))
+    const slept = filtered.filter(w => isSlept(w) && !isSelected(w)).slice()
       .sort((a, b) => sleptIds.indexOf(a.id) - sleptIds.indexOf(b.id))
     if (slept.length) {
       emit(t('pinned.sleep.header'))
@@ -148,7 +163,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
       }
     }
     return out
-  }, [filtered, t, pinnedIds, sleptIds, prefTick])
+  }, [filtered, t, pinnedIds, sleptIds, selected, prefTick])
 
   const checkedCount = workers.filter(w => selected.has(w.id)).length
 

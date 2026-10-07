@@ -2,12 +2,48 @@ package eventbus
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/store"
 )
+
+// TestMemoryStoreTypeBlacklist verifies the exact + prefix type blacklist (with
+// a keep override) matches the SQLite store's behavior — the talk view's
+// "invisible event" filter moved server-side.
+func TestMemoryStoreTypeBlacklist(t *testing.T) {
+	s := NewMemoryEventStore()
+	ctx := context.Background()
+	evs := []event.Event{
+		{ID: "a1", Type: "worker.input"},
+		{ID: "a2", Type: "worker.abort"},
+		{ID: "a3", Type: "worker.updated"},
+		{ID: "a4", Type: "reason.thinking_delta"},
+		{ID: "a5", Type: "reason.response"},
+	}
+	if err := s.Append(ctx, evs...); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	got, err := s.List(ctx, "*", store.QueryOpts{
+		ExcludeTypes:        []string{"reason.thinking_delta"},
+		ExcludeTypePrefixes: []string{"worker."},
+		KeepTypes:           []string{"worker.input", "worker.abort"},
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var types []string
+	for _, e := range got {
+		types = append(types, string(e.Type))
+	}
+	slices.Sort(types)
+	want := []string{"reason.response", "worker.abort", "worker.input"}
+	if !slices.Equal(types, want) {
+		t.Fatalf("blacklist retained %v, want %v", types, want)
+	}
+}
 
 // fakeEvents returns events sharing the same second timestamp (and even the same
 // uuid time prefix) to exercise insertion-order pagination/ordering.

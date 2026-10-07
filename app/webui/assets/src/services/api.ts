@@ -475,14 +475,34 @@ export async function deleteProgram(name: string): Promise<void> {
   if (!res.ok) throw new Error((await res.text()).trim() || 'delete failed: ' + res.status)
 }
 
-export async function loadEventsBefore(anchorId: string, limit = 50, workers: string[] = [], trace = '', roles: string[] = [], request = '', types: string[] = []): Promise<any[]> {
+// EventsBefore options mirror the backend query filter: envelope scope
+// (workers/roles), trace/request correlation, a type whitelist (types), and the
+// blacklist the talk view uses to keep "invisible" event families (worker.*
+// lifecycle noise, delta partials) out of history so pagination counts real
+// rows.
+export interface EventsBeforeOpts {
+  workers?: string[]
+  roles?: string[]
+  trace?: string
+  request?: string
+  types?: string[]
+  exclude?: string[]
+  excludePrefix?: string[]
+  keep?: string[]
+}
+
+export async function loadEventsBefore(anchorId: string, limit = 50, opts: EventsBeforeOpts = {}): Promise<any[]> {
   const params = new URLSearchParams()
   params.set('limit', String(limit))
+  const { workers = [], roles = [], trace = '', request = '', types = [], exclude = [], excludePrefix = [], keep = [] } = opts
   for (const w of workers) params.append('worker', w)
   for (const role of roles) params.append('role', role)
   if (trace) params.set('trace', trace)
   if (request) params.set('request', request)
   for (const t of types) params.append('type', t)
+  for (const t of exclude) params.append('exclude', t)
+  for (const p of excludePrefix) params.append('exclude_prefix', p)
+  for (const t of keep) params.append('keep', t)
   const res = await fetch(p(`/api/events/before/${anchorId}?${params}`))
   return res.json()
 }

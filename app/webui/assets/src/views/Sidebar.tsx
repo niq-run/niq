@@ -18,6 +18,7 @@ interface SidebarProps {
   workers: WorkerInfo[]
   talkWorkers: Set<string>
   onToggleWorker: (id: string) => void
+  onClearWorkers: () => void
   viewSettings: ViewSettings
   onToggleViewSetting: (k: ViewSettingKey) => void
   mode: 'control' | 'project'
@@ -57,7 +58,7 @@ function loadSidebarWidth(): number {
   return Math.min(Math.max(v, MIN_SIDEBAR_WIDTH), Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.5))
 }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, onMention }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, onClearWorkers, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, onMention }: SidebarProps) {
   const { dark, toggle, colors, inverted, toggleInverted } = useTheme()
   const { lang, setLang, t } = useI18n()
   // Hovered sidebar option (non-toggle, non-checkbox rows) — shows a full-width
@@ -314,11 +315,19 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       (w.tags || []).some(tag => tag.toLowerCase().includes(q))
     ))
   // Pinned workers sort to the top; slept workers are hidden from the inline
-  // quick list (the modal still surfaces them so they can be woken).
-  const selectorList = orderWithPinned(
-    shownSelectorWorkers.filter(w => !sleptIds.includes(w.id)),
-    w => w.id,
-  )
+  // quick list (the modal still surfaces them so they can be woken). The
+  // currently selected (watched / filtered) workers then pin ABOVE everything
+  // else — the whole point of the toggle is to say "show me this conversation",
+  // so its members must be visible at a glance without scrolling. A stable sort
+  // keeps the pinned order within each group.
+  const selectorList = (() => {
+    const ordered = orderWithPinned(
+      shownSelectorWorkers.filter(w => !sleptIds.includes(w.id)),
+      w => w.id,
+    )
+    const bySelection = (w: WorkerInfo) => selectorSelected.has(w.id) ? 0 : 1
+    return ordered.slice().sort((a, b) => bySelection(a) - bySelection(b))
+  })()
 
   // Footer project menu: opened by clicking the project name in the bottom
   // row; closes on any click outside the menu and its trigger.
@@ -580,18 +589,21 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         <>
           <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
           <strong style={{ display: 'block', color: colors.text, fontSize: fontSizes.xl, marginBottom: 8 }}>{t('sidebar.workerSelector')}</strong>
-          {/* Control row: the search box takes 2/3 of the width, the expand
-              (opens the picker modal) button takes 1/3. Expand shows text, not
-              an icon. The box is sized to the sibling button and the worker
+        	  {/* Control row: the search box and the action buttons share the width evenly
+              by count — two widgets (search + expand) each get 1/2, three
+              (search + expand + "view all"/clear-filter when something is
+              selected) each get 1/3. The buttons container flexes with that
+              count and its two members split the container, so every label
+              always has room. The box is sized to the buttons and the worker
               rows below so the whole selector reads at one size/height. */}
           <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', marginBottom: 11 }}>
             <input
               value={workerQuery}
               onChange={e => setWorkerQuery(e.target.value)}
               placeholder={t('sidebar.workerSelector.searchPlaceholder')}
-              className="niq-input"
+  	            className="niq-input"
               style={{
-                flex: '2 1 0',
+                flex: '1 1 0',
                 minWidth: 0,
                 boxSizing: 'border-box',
                 // Same total height as the expand button beside it: its line
@@ -609,19 +621,35 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 outline: 'none',
               }}
             />
-            {selectorWorkers.length > 0 && (
-              <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex' }}>
-                <span
-                  onClick={() => setShowWorkerPicker(true)}
-                  title={t('sidebar.workerSelector.expand')}
-                  className="btn-hover"
-                  style={{ flex: 1, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 6px' }}
-                >
-                  {t('sidebar.workerSelector.expandShort')}
-                </span>
-              </div>
-            )}
-          </div>
+  	          {selectorWorkers.length > 0 && (
+                <div style={{ flex: (selectorSelected.size > 0 ? 2 : 1) + ' 1 0', minWidth: 0, display: 'flex', gap: 8 }}>
+                  <span
+                    onClick={() => setShowWorkerPicker(true)}
+                    title={t('sidebar.workerSelector.expand')}
+                    className="btn-hover"
+                    style={{ flex: 1, minWidth: 0, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 6px' }}
+                  >
+                    {t('sidebar.workerSelector.expandShort')}
+                  </span>
+                  {/* "View all / clear filter": once something is selected, drop
+                      the selection with a normal bordered button to the right of
+                      the expand one — the current filter's companion. */}
+	                {selectorSelected.size > 0 && (
+                    <span
+                      onClick={onClearWorkers}
+                      title={t('sidebar.workerSelector.clearFilter')}
+                      className="btn-hover"
+                      // More flex than the "expand" button: "view all" carries
+                      // more text (查看全部 vs 展开), so it takes proportionally
+                      // more width to show its label without truncation.
+                      style={{ flex: 2, minWidth: 0, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 6px' }}
+                    >
+                      {t('sidebar.workerSelector.viewAll')}
+                    </span>
+                  )}
+                </div>
+              )}
+  	          </div>
           {/* Worker list, height-capped to ~10 rows; the rest scrolls so a long
               list doesn't sprawl down the sidebar. overflowY:auto makes the
               flex automatic min-height 0, so it must not shrink (flexShrink:0)

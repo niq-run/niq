@@ -59,5 +59,13 @@ type QueryOpts struct {
 	// for wildcard subscription-style matching a caller would filter in worker
 	// code.
 	Types []string
-	Desc  bool // true = newest first (display), false = oldest first (replay)
+	// ExcludeTypes / ExcludeTypePrefixes / KeepTypes are the blacklist half of
+	// Types: exact event types and type prefixes to exclude, with KeepTypes
+	// overriding a matching prefix. Used to hide broad "invisible" event
+	// families (e.g. worker.* lifecycle noise) server-side so stream and
+	// history stay in sync with the client's visible rows.
+	ExcludeTypes        []string
+	ExcludeTypePrefixes []string
+	KeepTypes           []string
+	Desc                bool // true = newest first (display), false = oldest first (replay)
 }
