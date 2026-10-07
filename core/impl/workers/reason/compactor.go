@@ -3,7 +3,7 @@
 // is NOT a reason-package interface implementation — it is the worker's own
 // strategy. The mechanism fires context.compress under window pressure; this
 // package responds by editing the transcript directly (via the exported
-// Transcript / LLMProvider / KeepTail accessors) and books the completion
+// Transcript / LLMProvider / TailTokens accessors) and books the completion
 // itself. A custom reason worker replaces this by handling the event its own
 // way; there is no second, parallel compression.
 package reason
@@ -14,8 +14,8 @@ import (
 	"log"
 	"strings"
 
-	llm "github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/impl/reason"
+	llm "github.com/niq-run/niq/core/itfs/llm"
 )
 
 // FallbackCompactDirective is the built-in summarizer system prompt used when
@@ -29,13 +29,15 @@ verbose tool output. Output only the summary, in a compact structured form.`
 
 // compactTranscript rewrites w's transcript to shrink it. When rotate is false
 // it summarizes older history into a carried digest (context.compress); when
-// rotate is true it starts a fresh context keeping only this turn's own pair
-// (context.rotate). The summarize call runs without the mechanism lock; the
-// transcript self-buffers concurrent Apply inputs during the edit and merges
-// them on commit. The last keepTail messages are preserved, so a compress/rotate
-// tool pair already in the tail (its placeholder) survives the edit and is
-// filled by the normal tool-result resolution when the op replies.
-func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, rotate bool, directive string) error {
+// rotate is true it starts a fresh context keeping only the most recent
+// user/assistant rounds and discarding tool messages (context.rotate). The
+// summarize call runs without the mechanism lock; the transcript
+// self-buffers concurrent Apply inputs during the edit and merges them on
+// commit. It returns whether the transcript was actually rewritten: a compress
+// can be a no-op when the whole transcript already fits within the tail token
+// budget (no digest head applied), which callers must observe rather than
+// report a misleading success.
+func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, rotate bool, directive string) (bool, error) {
 	t := w.Transcript()
 	msgs := t.BeginEdit()
 	projection := projectTranscript(msgs)
@@ -48,34 +50,57 @@ func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, rotate b
 	prov := w.LLMProvider()
 	if prov == nil {
 		t.AbortEdit()
-		return fmt.Errorf("no LLM provider available for summarization")
+		return false, fmt.Errorf("no LLM provider available for summarization")
 	}
 	digest, err := summarize(ctx, prov, projection, directive, previousDigest)
 	if err != nil {
 		t.AbortEdit()
-		return fmt.Errorf("summarize: %w", err)
+		return false, fmt.Errorf("summarize: %w", err)
 	}
 
-	keepTail := 2 // rotate keeps the rotating call's own message + placeholder
-	if !rotate {
-		keepTail = w.KeepTail()
+	var rewrote bool
+	if rotate {
+		// Rotate keeps the digest plus the last few clean user/assistant rounds,
+		// discarding tool traffic, keyed on round count (not tokens).
+		rounds := w.RotateRounds()
+		rewrote = t.CommitRotate(digest, rounds)
+		log.Printf("[reason] transcript rotated (rounds=%d, digest=%d chars, update=%v, rewrote=%v)",
+			rounds, len(digest), previousDigest != "", rewrote)
+		return rewrote, nil
 	}
-	t.CommitEdit(digest, keepTail)
-	log.Printf("[reason] transcript compacted (rotate=%t, keepTail=%d, digest=%d chars, update=%v)",
-		rotate, keepTail, len(digest), previousDigest != "")
-	return nil
+	rewrote = t.CommitEdit(digest, w.TailTokens())
+	log.Printf("[reason] transcript compacted (tailTokens=%d, digest=%d chars, update=%v, rewrote=%v)",
+		w.TailTokens(), len(digest), previousDigest != "", rewrote)
+	return rewrote, nil
 }
 
 // compactionNote is the human-readable description of a completed compaction,
 // used as the tool result text the model sees for the compress/rotate pair (and
-// the completion echoed to observers) — so it knows the operation ran and does
-// not re-decide to compress every round.
-func compactionNote(label string) string {
+// the completion echoed to observers). rewrote distinguishes a real rewrite
+// from a no-op (already within budget). On a no-op it reports the current
+// transcript token estimate and the tail budget, so the model can judge whether
+// its tail_tokens parameter is larger than necessary.
+func compactionNote(label string, rewrote bool, usedTokens, tailTokens int) string {
+	if !rewrote {
+		// Record the attempted action factually: a compression was triggered
+		// (there is a matching assistant tool_call for this result), but the
+		// transcript was already within the tail budget, so nothing was folded.
+		return fmt.Sprintf("[system] A context compression was attempted but skipped: the transcript is ~%d tokens, within the %d-token tail budget, so nothing was folded.",
+			usedTokens, tailTokens)
+	}
 	if label == "rotate" {
 		return "[system] episode rotated: history was compacted into a carried digest and a fresh context started. Continue the task."
 	}
 	return "[system] context compressed: older messages were summarized into a digest. Continue the task with the recent context."
 }
+
+// autoCompressDoneNote is the system note appended to the transcript after an
+// auto-fired context compression (hard budget / no tool call). Unlike the
+// model-invoked path there is no tool pair to carry the outcome, so the note
+// is the only in-context record that the compression ran. An auto compression
+// is only fired when the hard budget threshold was crossed, so it always
+// rewrites the transcript; there is intentionally no "skipped" variant here.
+const autoCompressDoneNote = "[system] auto context compression done: the transcript now begins with a digest of the older history, followed by the most recent retained messages."
 
 // summarize calls the LLM over a stream and accumulates the digest from the
 // streamed text. Some gateways only support streaming (rejecting non-streaming

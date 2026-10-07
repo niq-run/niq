@@ -48,16 +48,37 @@ type Transcript interface {
 	// lock; Apply calls during this window are buffered.
 	BeginEdit() []llm.Message
 
-	// CommitEdit ends an edit: applies the computed digest (replacing all
-	// but the last keepTail messages, alignment-corrected) and merges any
-	// Apply inputs buffered during the edit. No-op if no edit is in progress.
-	CommitEdit(digest string, keepTail int)
+	// CommitEdit ends an edit: applies the computed digest, retaining only the
+	// most recent messages that fit within the tailTokens token budget
+	// (pairing-preserved: a tool call and its results are never split), and
+	// merges any Apply inputs buffered during the edit. It returns true if the
+	// transcript was actually rewritten (a digest head was applied and older
+	// messages folded away); false means it was a no-op — the whole transcript
+	// already fits within the budget, so nothing changed and no digest head was
+	// added. tailTokens <= 0 keeps nothing (fresh episode). No-op if no edit is
+	// in progress (returns false).
+	CommitEdit(digest string, tailTokens int) bool
+
+	// CommitRotate ends an edit: applies the computed digest and retains only
+	// the most recent keepRounds user/assistant rounds, discarding tool
+	// messages (tool_result role messages and assistant tool-call blocks). A
+	// round is one user input plus the assistant's response to it. It returns
+	// true if the transcript was actually rewritten; false if nothing changed
+	// (keepRounds <= 0 or no messages to fold). No-op if no edit is in
+	// progress (returns false).
+	CommitRotate(digest string, keepRounds int) bool
 
 	// AbortEdit cancels an edit without applying: clears the editing state
 	// and drops nothing (buffered Apply inputs are kept in the main transcript;
 	// if the edit was going to overwrite them, aborting returns it to normal
 	// append-only). No-op if no edit is in progress.
 	AbortEdit()
+
+	// EstimatedTokens returns a rough estimate of the current transcript's token
+	// size (messages only, excluding the system prompt). It is a heuristic used
+	// for budget sizing and reporting (e.g. to tell a caller how much headroom
+	// remains before a compress would become a no-op), not an exact count.
+	EstimatedTokens() int
 
 	// State returns the serializable snapshot (a cache of the projection).
 	State() ([]byte, error)

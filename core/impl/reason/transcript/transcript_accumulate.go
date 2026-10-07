@@ -20,6 +20,46 @@ import (
 // the head with a truncation note so one event cannot flood the context.
 const DefaultMaxPayloadBytes = 20 * 1024
 
+// Rough token-estimation constants. Compaction bounds the retained tail by a
+// token budget instead of a fixed message count (a few large tool results can
+// dwarf dozens of small messages), but there is no tokenizer available at
+// commit time (the transcript is provider-agnostic). These constants give a
+// deterministic, byte-driven approximation: ~4 bytes per token for typical
+// text, plus fixed per-message and per-content-block overhead. The estimate is
+// used only for budget sizing, never for billing or wire-format decisions.
+const (
+	bytesPerToken      = 4
+	messageOverhead    = 4 // role + separators + id fields
+	blockOverhead      = 2 // per content block framing
+	imageTokenFloor    = 128
+	imageTokensPerByte = 1024
+)
+
+// estimateMessageTokens returns a rough token estimate for one message: text at
+// ~4 bytes/token plus fixed per-message and per-block overhead. Oversized text
+// (already capped by the payload limiter) and modest images scale the count;
+// the exact value is a heuristic bound, not a provider token count.
+func estimateMessageTokens(m llm.Message) int {
+	n := messageOverhead
+	if m.ToolCallID != "" {
+		n += 2
+	}
+	if m.ToolName != "" {
+		n += len(m.ToolName)/bytesPerToken + 1
+	}
+	for _, b := range m.Content {
+		switch b.Type {
+		case llm.ContentText, llm.ContentThinking:
+			n += blockOverhead + len(b.Text)/bytesPerToken
+		case llm.ContentToolCall:
+			n += blockOverhead + (len(b.ToolName)+len(b.ToolArguments))/bytesPerToken
+		case llm.ContentImage:
+			n += imageTokenFloor + len(b.Data)/imageTokensPerByte
+		}
+	}
+	return n
+}
+
 // digestMessage wraps a compacted transcript summary as the head message of
 // the new projection. User role: it must read as system-provided context to
 // the model without violating any pairing invariant. The [context digest]
@@ -199,6 +239,18 @@ func (b *AccumulateTranscript) Render() []llm.Message {
 	return b.messages
 }
 
+// EstimatedTokens returns a rough estimate of the current transcript's token
+// size (messages only). See the package-level estimateMessageTokens heuristic.
+func (b *AccumulateTranscript) EstimatedTokens() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var n int
+	for _, m := range b.messages {
+		n += estimateMessageTokens(m)
+	}
+	return n
+}
+
 // BeginEdit starts an edit: marks the transcript as editing and returns a
 // snapshot. The lock is released before returning, so the caller can compute
 // off-transcript (e.g. an LLM summary); Apply calls during the edit are
@@ -210,20 +262,22 @@ func (b *AccumulateTranscript) BeginEdit() []llm.Message {
 	return b.messages
 }
 
-// CommitEdit applies an edit: replaces all but the last keepTail messages
-// with a digest (alignment-corrected), then merges the Apply inputs buffered
-// during the edit. No-op if no edit is in progress.
-func (b *AccumulateTranscript) CommitEdit(digest string, keepTail int) {
+// CommitEdit applies an edit: it rewrites the transcript to a digest head,
+// retaining only the most recent messages that fit within the tailTokens token
+// budget (pairing-preserving), then merges the Apply inputs buffered during
+// the edit. No-op when the whole transcript already fits within the budget
+// (no digest is applied); tailTokens <= 0 keeps nothing (fresh episode).
+func (b *AccumulateTranscript) CommitEdit(digest string, tailTokens int) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.editing {
-		return
+		return false
 	}
 	b.editing = false
 
-	n := len(b.messages)
-	if n > keepTail {
-		cut := alignCutToPairing(b.messages, n-keepTail)
+	cut := tailTokensCut(b.messages, tailTokens)
+	rewrote := cut > 0
+	if rewrote {
 		b.messages = append([]llm.Message{digestMessage(digest)}, b.messages[cut:]...)
 	}
 	if len(b.pendingInput) > 0 {
@@ -231,6 +285,108 @@ func (b *AccumulateTranscript) CommitEdit(digest string, keepTail int) {
 		b.pendingInput = nil
 	}
 	sanitizeDanglingToolCalls(b.messages)
+	return rewrote
+}
+
+// CommitRotate applies an edit that turns the page to a clean conversation: it
+// retains only the most recent keepRounds user/assistant rounds (a round is one
+// user input plus the assistant's response to it) and discards tool messages.
+// tool_result role messages are dropped and tool-call blocks are stripped from
+// assistant messages, so the fresh episode reads as a digest head followed by
+// a few exchanges rather than a pile of tool traffic. Consistent-message
+// normalization (merging consecutive same-role messages) is left to the
+// provider layer, which knows its API contract; the transcript keeps the
+// retained messages as-is. keepRounds <= 0 keeps nothing (fresh episode). No-op
+// if no edit is in progress.
+func (b *AccumulateTranscript) CommitRotate(digest string, keepRounds int) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.editing {
+		return false
+	}
+	b.editing = false
+
+	tail := lastRoundsClean(b.messages, keepRounds)
+	rewrote := true
+	if len(b.messages) == 0 {
+		rewrote = false
+	}
+	b.messages = append([]llm.Message{digestMessage(digest)}, tail...)
+	if len(b.pendingInput) > 0 {
+		b.messages = append(b.messages, b.pendingInput...)
+		b.pendingInput = nil
+	}
+	sanitizeDanglingToolCalls(b.messages)
+	return rewrote
+}
+
+// lastRoundsClean returns the most recent keepRounds user/assistant rounds of
+// msgs as clean messages: tool_result role messages are dropped and assistant
+// tool-call blocks are stripped, so only the conversational spine (user inputs
+// and assistant responses) survives. Messages are kept as-is (no same-role
+// merging); consecutive-message normalization is the provider layer's
+// responsibility. keepRounds <= 0 (or no user messages) yields nothing.
+func lastRoundsClean(msgs []llm.Message, keepRounds int) []llm.Message {
+	if keepRounds <= 0 {
+		return nil
+	}
+	// Locate round boundaries: each round starts at a user message.
+	userIdx := make([]int, 0, 4)
+	for i, m := range msgs {
+		if m.Role == llm.RoleUser {
+			userIdx = append(userIdx, i)
+		}
+	}
+	if len(userIdx) == 0 {
+		return nil
+	}
+	start := 0
+	first := len(userIdx) - keepRounds
+	if first > start {
+		start = userIdx[first]
+	}
+
+	var out []llm.Message
+	for i := start; i < len(msgs); i++ {
+		m := msgs[i]
+		switch m.Role {
+		case llm.RoleToolResult:
+			continue // discard tool messages
+		case llm.RoleAssistant:
+			m = stripToolCallBlocks(m)
+			if len(m.Content) == 0 {
+				continue // an assistant message that was only a tool call
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// stripToolCallBlocks returns a copy of m with all tool-call content blocks
+// removed, keeping text/thinking. The original message is not mutated.
+func stripToolCallBlocks(m llm.Message) llm.Message {
+	out := m
+	if !hasContentBlocks(out.Content, llm.ContentToolCall) {
+		return out
+	}
+	kept := make([]llm.ContentBlock, 0, len(out.Content))
+	for _, b := range out.Content {
+		if b.Type != llm.ContentToolCall {
+			kept = append(kept, b)
+		}
+	}
+	out.Content = kept
+	return out
+}
+
+func hasContentBlocks(blocks []llm.ContentBlock, typ llm.ContentBlockType) bool {
+	for _, b := range blocks {
+		if b.Type == typ {
+			return true
+		}
+	}
+	return false
 }
 
 // sanitizeDanglingToolCalls strips tool_calls from assistant messages that
@@ -284,13 +440,41 @@ func (b *AccumulateTranscript) AbortEdit() {
 	// inputs received during an aborted edit rather than dropping them.
 }
 
-// alignCutToPairing moves a cut point forward past tool_result messages that
-// belong to an assistant tool_calls message left of the cut: a tail starting
-// with orphan tool_results would violate the pairing invariant. The tail
-// shrinks (more history is compacted) - never grows.
-func alignCutToPairing(msgs []llm.Message, cut int) int {
-	for cut < len(msgs) && msgs[cut].Role == llm.RoleToolResult {
-		cut++
+// tailTokensCut returns the cut index (start of the retained tail) for a
+// compaction under a tailTokens token budget. The most recent message is
+// always kept; older messages are added while the running token estimate stays
+// within budget. The cut is then snapped backward so it never opens a tail
+// with an orphan tool_result: a tool call and its results are kept together
+// even when that pushes the tail slightly over budget, so a pairing is never
+// truncated by the cut.
+func tailTokensCut(msgs []llm.Message, tailTokens int) int {
+	n := len(msgs)
+	if n == 0 || tailTokens <= 0 {
+		return n // keep nothing (fresh episode / digest only)
+	}
+
+	cut := n - 1 // start by keeping the newest message
+	tokens := estimateMessageTokens(msgs[cut])
+	for cut > 0 {
+		mt := estimateMessageTokens(msgs[cut-1])
+		if tokens+mt > tailTokens {
+			break
+		}
+		tokens += mt
+		cut--
+	}
+
+	// Never let the tail open with an orphan tool_result: if the budget ran out
+	// right after an assistant tool_call (its results would be kept but its
+	// assistant compacted), pull the assistant in so the pairing survives. A
+	// tool_result always immediately follows its assistant tool_call (the
+	// placeholders are inserted together), so stepping back to the first
+	// non-tool_result lands on the owning assistant and keeps its whole group.
+	for cut < n && msgs[cut].Role == llm.RoleToolResult {
+		cut--
+	}
+	if cut < 0 {
+		cut = 0
 	}
 	return cut
 }

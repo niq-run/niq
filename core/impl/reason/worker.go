@@ -57,9 +57,10 @@ type EventPublish struct {
 }
 
 const (
-	DefaultBudgetSoft = 0.85
-	DefaultBudgetHard = 0.97
-	DefaultKeepTail   = 8
+	DefaultBudgetSoft   = 0.85
+	DefaultBudgetHard   = 0.97
+	DefaultTailTokens   = 10000
+	DefaultRotateRounds = 2
 )
 
 // Config holds the inputs to BaseReasonWorker — the pieces a reasoning node
@@ -91,7 +92,8 @@ type Config struct {
 	ContextWindow int
 	BudgetSoft    float64
 	BudgetHard    float64
-	KeepTail      int
+	TailTokens    int
+	RotateRounds  int
 
 	// MaxPayloadBytes caps a single text payload (tool result, external input
 	// message) folded into the transcript; oversized payloads are truncated to
@@ -115,8 +117,11 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	if cfg.BudgetHard <= 0 {
 		cfg.BudgetHard = DefaultBudgetHard
 	}
-	if cfg.KeepTail <= 0 {
-		cfg.KeepTail = DefaultKeepTail
+	if cfg.TailTokens <= 0 {
+		cfg.TailTokens = DefaultTailTokens
+	}
+	if cfg.RotateRounds <= 0 {
+		cfg.RotateRounds = DefaultRotateRounds
 	}
 	if cfg.ReasoningEffort == nil {
 		d := "medium"
@@ -133,24 +138,24 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	}
 
 	w := &BaseReasonWorker{
-		BaseWorker:           baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
-		llmProvider:          initialProvider,
-		providerSources:      cfg.ProviderSources,
-		providerName:         cfg.ProviderName,
-		providerModel:        cfg.ProviderModel,
-		transcript:           cfg.Transcript,
-		tools:                make(map[string]worker.Tool),
-		publishMap:           make(map[string][]EventPublish),
-		toolListBuilder:      defaultToolListBuilder,
-		eventConverters:      cfg.EventConverters,
-		programs:             cfg.Programs,
-		requestTracker:       requesttracker.NewRequestTracker(),
-		transcriptEditEvents: make(map[event.EventType]bool),
-		contextWindow:        cfg.ContextWindow,
-		budgetSoft:           cfg.BudgetSoft,
-		budgetHard:           cfg.BudgetHard,
-		keepTail:             cfg.KeepTail,
-		reasoningEffort:      cfg.ReasoningEffort,
+		BaseWorker:      baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
+		llmProvider:     initialProvider,
+		providerSources: cfg.ProviderSources,
+		providerName:    cfg.ProviderName,
+		providerModel:   cfg.ProviderModel,
+		transcript:      cfg.Transcript,
+		tools:           make(map[string]worker.Tool),
+		publishMap:      make(map[string][]EventPublish),
+		toolListBuilder: defaultToolListBuilder,
+		eventConverters: cfg.EventConverters,
+		programs:        cfg.Programs,
+		requestTracker:  requesttracker.NewRequestTracker(),
+		contextWindow:   cfg.ContextWindow,
+		budgetSoft:      cfg.BudgetSoft,
+		budgetHard:      cfg.BudgetHard,
+		tailTokens:      cfg.TailTokens,
+		rotateRounds:    cfg.RotateRounds,
+		reasoningEffort: cfg.ReasoningEffort,
 	}
 	// Durable-change signalling is the base's machinery (baseworker); the
 	// mechanism only decides when to raise it (see handleSetLLMProvider).
@@ -195,9 +200,16 @@ func (w *BaseReasonWorker) CurrentTraceID() string { return w.currentTraceID }
 // BeginEdit..CommitEdit window.
 func (w *BaseReasonWorker) Transcript() transcript.Transcript { return w.transcript }
 
-// KeepTail returns how many recent messages the default context strategy keeps
-// when compressing (the worker's own policy; the mechanism does not use it).
-func (w *BaseReasonWorker) KeepTail() int { return w.keepTail }
+// TailTokens returns the token budget the default context strategy retains from
+// the tail of the transcript when compressing (the worker's own policy; the
+// mechanism does not use it).
+func (w *BaseReasonWorker) TailTokens() int { return w.tailTokens }
+
+// RotateRounds returns how many recent user/assistant rounds the default
+// context strategy retains when rotating (the worker's own policy; the
+// mechanism does not use it). Tool messages are discarded from the rotated
+// tail, so this is a round count, not a token budget.
+func (w *BaseReasonWorker) RotateRounds() int { return w.rotateRounds }
 
 // TryReason asks the mechanism to schedule the next reasoning round after the
 // worker has finished a context edit. The worker drives this (it knows when
@@ -208,25 +220,6 @@ func (w *BaseReasonWorker) TryReason(ctx context.Context) {
 	w.mu.Unlock()
 	w.tryReason(ctx)
 }
-
-// RegisterTranscriptEditEvent declares an event type whose call EDITS this
-// worker's own working transcript (e.g. context.compress / context.rotate).
-//
-// This is a subset of the worker's self-invoked (meta) extensions: a call to
-// any own extension is routed to self by its own event, but only a
-// transcript-editing one needs special treatment — its call is excluded from
-// the transcript, because the edit produces a brand-new context that must not
-// contain a pairing marker for the edit action itself, only the trigger
-// signal. Other meta operations (e.g. provider.switch) are ordinary calls with
-// a normal request.* result. Reason-worker specific: only reason workers have
-// a transcript to edit.
-func (w *BaseReasonWorker) RegisterTranscriptEditEvent(typ event.EventType) {
-	w.transcriptEditEvents[typ] = true
-}
-
-// StripToolCalls returns a copy of msg with all tool-call blocks removed,
-// keeping thinking/text. Exported for embedding workers and tests.
-func StripToolCalls(msg llm.Message) llm.Message { return stripToolCalls(msg) }
 
 // HandleWorkerReady applies a peer (or self) worker.ready announcement,
 // replacing that worker's whole contract. Exported for embedding workers and
@@ -462,18 +455,17 @@ type BaseReasonWorker struct {
 	baseworker.BaseWorker
 	mu sync.Mutex
 
-	llmProvider          llm.LLMProvider
-	providerSources      ProviderSources
-	providerName         string // active provider name (status reporting)
-	providerModel        string // active provider model (status reporting)
-	transcript           transcript.Transcript
-	tools                map[string]worker.Tool // tools from the bus + built-ins; read by dispatch
-	discovered           []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
-	toolListBuilder      ToolListBuilder        // LLM tool list policy (extension point)
-	programs             []program.Program
-	publishMap           map[string][]EventPublish // worker ID -> published events
-	requestTracker       *requesttracker.RequestTracker
-	transcriptEditEvents map[event.EventType]bool // self-editing events, excluded from the transcript (see RegisterTranscriptEditEvent)
+	llmProvider     llm.LLMProvider
+	providerSources ProviderSources
+	providerName    string // active provider name (status reporting)
+	providerModel   string // active provider model (status reporting)
+	transcript      transcript.Transcript
+	tools           map[string]worker.Tool // tools from the bus + built-ins; read by dispatch
+	discovered      []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
+	toolListBuilder ToolListBuilder        // LLM tool list policy (extension point)
+	programs        []program.Program
+	publishMap      map[string][]EventPublish // worker ID -> published events
+	requestTracker  *requesttracker.RequestTracker
 	// toolCallSeq mints globally-unique tool-call ids for calls whose model
 	// omitted one. It must be monotonic across rounds (not per-turn) because the
 	// tracker persists pending calls between rounds — a per-turn "call_0" would
@@ -503,7 +495,8 @@ type BaseReasonWorker struct {
 	contextWindow   int
 	budgetSoft      float64
 	budgetHard      float64
-	keepTail        int
+	tailTokens      int
+	rotateRounds    int
 	lastUsageTokens int
 	budgetReminded  bool
 }

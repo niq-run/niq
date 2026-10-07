@@ -34,7 +34,7 @@ Division between the loop and dispatch:
 | File | Responsibility |
 |---|---|
 | `worker.go` | `BaseReasonWorker` — the generic reasoning body (embeds `baseworker.BaseWorker`) + `Config` + `NewBaseReasonWorker` + lifecycle (`Start`/`Stop`/`Snapshot`/`Restore`/`Messages`) + the event loop (`watch`) + the `tryReason` decision gate + the exported accessors the concrete worker builds on (`Transcript`, `TryReason`, `LLMToolDefs`, ...) |
-| `reason.go` | the reasoning round: prepareReasoning / consumeStream / finishReasoning + lifecycle broadcasts (reason.start/end/response/thinking) + tool dispatch handleToolCalls + meta-tool routing + `handleContextBudget` (context-window pressure) + tool-call id synthesis |
+| `reason.go` | the reasoning round: prepareReasoning / consumeStream / finishReasoning + lifecycle broadcasts (reason.start/end/response/thinking) + tool dispatch handleToolCalls + `handleContextBudget` (context-window pressure) + tool-call id synthesis |
 | `process.go` | event dispatch `process` + handlers (abort/timeout/reminder/tool-result/input) + `emitContextCompress` and the `ContextCompressOpEvent` convention it fires |
 | `discovery.go` | **inbound** presence: `worker.ready`/`worker.gone` handling, the `DiscoveredCapability` universe, `DiscoveredWorkers` (payload behind `list_workers`), the dispatch table derived from it, tool-name encoding |
 | `announce.go` | **outbound** presence: `broadcastReady` (two-batch: peers then self) + rendering the `worker.ready` contract entries (`extensionEntries` / `extensionEntry`) |
@@ -194,17 +194,20 @@ side channel.
   asynchronously, and the next round starts on the shrunk context.
 
 Compaction = snapshot via `BeginEdit` → summarize the projected transcript →
-`CommitEdit(digest, keepTail)`. The summarizer prompt is overridable via
+`CommitEdit(digest, tailTokens)`. The summarizer prompt is overridable via
 `compact_directive` (program/config); a built-in fallback exists, and when a
 digest is already present the merge is incremental (early goals/constraints
 survive). Projection comes first: strips image/thinking, truncates oversized
-tool results; the cut point aligns to pairing boundaries. Because the
-transcript is self-synchronized, compaction runs on its own goroutine: the
-summary is computed without holding any lock, and inputs arriving meanwhile are
-buffered and merged on commit, so the event loop never blocks.
-`context.rotate` is `Compact` with keepTail=2 (turn the page, keeping this
-call's placeholder so the result stays visible); the fresh episode starts from
-the digest.
+tool results. The retained tail is bounded by a **token budget** (`tailTokens`,
+not a fixed message count) and the cut snaps to pairing boundaries, so a tool
+call and its results are never split. Because the transcript is
+self-synchronized, compaction runs on its own goroutine: the summary is
+computed without holding any lock, and inputs arriving meanwhile are buffered
+and merged on commit, so the event loop never blocks.
+`context.rotate` turns the page differently: it keeps only the most recent
+`rotate_rounds` user/assistant rounds and discards tool messages (the fresh
+episode reads as a few clean exchanges after the digest instead of tool
+traffic).
 
 ### Tool-call timeout
 

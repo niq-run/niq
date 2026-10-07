@@ -16,10 +16,12 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/program"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	reasonBase "github.com/niq-run/niq/core/impl/reason"
+	"github.com/niq-run/niq/core/impl/reason/transcript"
+	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/itfs/llm"
+	"github.com/niq-run/niq/core/itfs/program"
 )
 
 // registerDefaultExtensions registers the toolkit the generic reason worker
@@ -168,7 +170,8 @@ func handleSendMessage(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 // Two paths: when the request carries a tool call id (the model called the
 // compress/rotate tool), the call is already tracked as a normal tool with its
 // placeholder in the transcript — the replace with the placeholder survives the
-// edit because compaction keeps the last keepTail messages — so the handler
+// edit because compaction keeps a token-budgeted, pairing-preserved tail —
+// so the handler
 // replies with a self-directed request.completed echoing that id. That resolves
 // the tracked request through the ordinary tool-result pairing (filling the
 // placeholder and setting needReason), scheduling the next round naturally.
@@ -201,8 +204,8 @@ func handleContextOp(w *reasonBase.BaseReasonWorker, evt event.Event, overrideDi
 	callID := evt.RequestId
 
 	go func() {
-		err := compactTranscript(w, context.Background(), isRotate, directive)
-		log.Printf("[reason %s] context op %s done: %v", w.ID(), evt.Type, err)
+		rewrote, err := compactTranscript(w, context.Background(), isRotate, directive)
+		log.Printf("[reason %s] context op %s done: rewrote=%v err=%v", w.ID(), evt.Type, rewrote, err)
 		if callID != "" {
 			// Model-invoked: resolve the already-tracked request via the normal
 			// pairing (fills the placeholder that survived the edit); the
@@ -215,20 +218,43 @@ func handleContextOp(w *reasonBase.BaseReasonWorker, evt event.Event, overrideDi
 			if isRotate {
 				label = "rotate"
 			}
-			w.ReplyCompleted(w.ID(), callID, compactionNote(label), traceID)
+			// Tell the model the real outcome, including how much of the tail budget
+			// the transcript currently occupies so it can size tail_tokens sensibly
+			// when compression is a no-op.
+			usedTokens := w.Transcript().EstimatedTokens()
+			w.ReplyCompleted(w.ID(), callID, compactionNote(label, rewrote, usedTokens, w.TailTokens()), traceID)
 			return
 		}
 		// Auto-fired (hard budget): no tool call, so no pairing — broadcast a
 		// completion only for observation; the transcript sees no tool marker.
 		typ := event.TypeRequestCompleted
-		payload := map[string]any{"error": fmt.Sprintf("%v", err)}
+		payload := map[string]any{"error": "", "rewrote": rewrote}
 		if err != nil {
 			typ = event.TypeRequestFailed
+			payload["error"] = err.Error()
+		}
+		// An auto compression is only ever fired when the hard budget threshold was
+		// crossed, so it always rewrites the transcript (never a no-op). Record the
+		// completion in the transcript as a system note so the model still sees
+		// that a compression ran. Only on success: on error the edit was aborted.
+		if err == nil && rewrote {
+			w.Transcript().Apply(transcript.InputPatch{Messages: []llm.Message{{
+				Role:    llm.RoleUser,
+				Content: []llm.ContentBlock{{Type: llm.ContentText, Text: autoCompressDoneNote}},
+			}}})
 		}
 		done := event.New(typ, w.ID(), payload)
 		done.TraceID = traceID
 		_ = w.Channel.Broadcast(context.Background(), done)
-		w.TryReason(context.Background())
+		// Only schedule the next round when something actually changed; a no-op
+		// compress must not pull the model back for another (fruitless) round.
+		reasonForRound := rewrote
+		if isRotate {
+			reasonForRound = true
+		}
+		if reasonForRound {
+			w.TryReason(context.Background())
+		}
 	}()
 }
 

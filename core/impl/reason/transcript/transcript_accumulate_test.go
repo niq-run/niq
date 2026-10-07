@@ -119,16 +119,20 @@ func TestToolResultUnknownCallIsSafe(t *testing.T) {
 }
 
 // TestCompactAppliesDigestAndKeepsTail verifies Compact replaces everything
-// before the last keepTail messages with a digest message, tail preserved in
-// order, and that it is a no-op when the transcript is already within the tail.
+// before the retained tail with a digest message, keeps the tail within the
+// token budget (not a fixed count), preserves order, and is a no-op when the
+// whole transcript already fits within the budget.
 func TestCompactAppliesDigestAndKeepsTail(t *testing.T) {
 	b := NewAccumulateTranscript()
 	for i := 0; i < 5; i++ {
 		b.Apply(InputPatch{Messages: []llm.Message{userMsg(fmt.Sprintf("m%d", i))}})
 	}
+	// Each "mN" message estimates evenly; a budget covering ~2 of them retains
+	// exactly the newest two (the budget, not a count, bounds the tail).
+	twoMsgTokens := estimateMessageTokens(userMsg("m0")) * 2
 
 	b.BeginEdit()
-	b.CommitEdit("summary of m0-m2", 2)
+	b.CommitEdit("summary of m0-m2", twoMsgTokens)
 
 	got := b.Render()
 	if len(got) != 3 {
@@ -141,18 +145,18 @@ func TestCompactAppliesDigestAndKeepsTail(t *testing.T) {
 		t.Fatalf("tail order disturbed: %q, %q", got[1].Content[0].Text, got[2].Content[0].Text)
 	}
 
-	// No-op when everything fits in the tail.
+	// No-op when everything fits in the budget.
 	b.BeginEdit()
-	b.CommitEdit("again", 10)
+	b.CommitEdit("again", estimateMessageTokens(userMsg("m0"))*10)
 	if len(b.Render()) != 3 {
-		t.Fatal("compact within tail must be a no-op")
+		t.Fatal("compact within budget must be a no-op")
 	}
 }
 
-// TestCompactAlignsCutToPairing verifies the cut point never leaves orphan
-// tool_results at the tail head: a keepTail that would cut between an
-// assistant(tool_calls) and its placeholder absorbs the placeholder into the
-// compacted side.
+// TestCompactAlignsCutToPairing verifies the cut never leaves orphan
+// tool_results at the tail head: a budget that would cut between an
+// assistant(tool_calls) and its placeholder drops the placeholder so the tail
+// never opens with an orphan tool_result.
 func TestCompactAlignsCutToPairing(t *testing.T) {
 	b := NewAccumulateTranscript()
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("q")}})
@@ -165,8 +169,8 @@ func TestCompactAlignsCutToPairing(t *testing.T) {
 	}})
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("after")}})
 
-	// keepTail=1 would cut before the placeholder (orphan tool_result);
-	// alignment must move the cut past it.
+	// A tiny budget keeps only the newest message and its pairing; the tail must
+	// not open with an orphan tool_result.
 	b.BeginEdit()
 	b.CommitEdit("digest", 1)
 
@@ -184,7 +188,40 @@ func TestCompactAlignsCutToPairing(t *testing.T) {
 	}
 }
 
-// TestCompactTurnsThePage verifies keepTail = 0 starts a fresh episode from
+// TestCompactBudgetKeepsToolPairingTogether verifies the token-budget cut snaps
+// back to include an assistant tool_call when a small budget would otherwise
+// retain an orphan tool_result at the tail head. The tail must never split a
+// tool call from its results, even if that keeps slightly more than the budget.
+func TestCompactBudgetKeepsToolPairingTogether(t *testing.T) {
+	b := NewAccumulateTranscript()
+	b.Apply(InputPatch{Messages: []llm.Message{userMsg("older")}})
+	b.Apply(AssistantOutputPatch{Message: llm.Message{
+		Role: llm.RoleAssistant, StopReason: "tool_calls",
+		Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"}},
+	}})
+	b.Apply(ToolPlaceholdersPatch{Calls: []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"},
+	}})
+
+	// A tiny budget would naturally fit only the newest tool_result; the cut
+	// must snap back to keep its assistant tool_call so the pair survives.
+	tailBudget := estimateMessageTokens(userMsg("older")) - 1
+	b.BeginEdit()
+	b.CommitEdit("digest", tailBudget)
+
+	got := b.Render()
+	if len(got) != 3 {
+		t.Fatalf("got %d messages, want 3 (digest + tool pairing), got %+v", len(got), got)
+	}
+	if got[1].Role != llm.RoleAssistant {
+		t.Fatalf("tail must open with the tool-call assistant, got %+v", got[1])
+	}
+	if got[2].Role != llm.RoleToolResult || got[2].ToolCallID != "c1" {
+		t.Fatalf("tail must carry the paired tool_result for c1, got %+v", got[2])
+	}
+}
+
+// TestCompactTurnsThePage verifies tailTokens <= 0 starts a fresh episode from
 // the digest alone.
 func TestCompactTurnsThePage(t *testing.T) {
 	b := NewAccumulateTranscript()
@@ -444,5 +481,94 @@ func TestPayloadTruncationDuringEdit(t *testing.T) {
 	text := got[1].Content[0].Text
 	if !strings.Contains(text, "[truncated, kept") || len(text) > 64 {
 		t.Fatalf("buffered input during edit must be truncated: %q (%d bytes)", text, len(text))
+	}
+}
+
+// TestCommitRotateKeepsRounds verifies CommitRotate retains only the last
+// keepRounds user/assistant rounds (a round starts at each user message), and
+// keeps the retained messages as-is — no same-role merging (consecutive-message
+// normalization is the provider layer's job).
+func TestCommitRotateKeepsRounds(t *testing.T) {
+	b := NewAccumulateTranscript()
+	for i := 0; i < 4; i++ {
+		b.Apply(InputPatch{Messages: []llm.Message{userMsg(fmt.Sprintf("u%d", i))}})
+		b.Apply(AssistantOutputPatch{Message: assistantMsg(fmt.Sprintf("a%d", i))})
+	}
+
+	// keepRounds=2 keeps the last two user/assistant exchanges.
+	b.BeginEdit()
+	b.CommitRotate("digest", 2)
+
+	got := b.Render()
+	// digest + u2 + a2 + u3 + a3 (messages kept as-is, not merged).
+	if len(got) != 5 {
+		t.Fatalf("got %d messages, want 5 (digest + 2 rounds), got %+v", len(got), got)
+	}
+	if !strings.Contains(got[0].Content[0].Text, "digest") {
+		t.Fatalf("digest head missing: %+v", got[0])
+	}
+	for i, want := range []string{"u2", "a2", "u3", "a3"} {
+		if got[i+1].Content[0].Text != want {
+			t.Fatalf("message %d = %q, want %q", i+1, got[i+1].Content[0].Text, want)
+		}
+	}
+}
+
+// TestCommitRotateDiscardsToolMessages verifies tool_result messages and
+// assistant tool-call blocks are dropped from the rotated tail, leaving only
+// the conversational spine. Messages are kept as-is (consecutive same-role
+// normalization is left to the provider layer).
+func TestCommitRotateDiscardsToolMessages(t *testing.T) {
+	b := NewAccumulateTranscript()
+	b.Apply(InputPatch{Messages: []llm.Message{userMsg("do it")}})
+	b.Apply(AssistantOutputPatch{Message: llm.Message{
+		Role: llm.RoleAssistant, StopReason: "tool_calls",
+		Content: []llm.ContentBlock{
+			{Type: llm.ContentText, Text: "thinking inside"},
+			toolCall("c1", "bash"),
+		},
+	}})
+	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Text: "out"})
+	b.Apply(AssistantOutputPatch{Message: assistantMsg("done")})
+
+	b.BeginEdit()
+	b.CommitRotate("digest", 1)
+
+	got := b.Render()
+	// digest + user(do it) + assistant(thinking) + assistant(done); tool_result
+	// dropped and the assistant tool_call block stripped, no same-role merging.
+	if len(got) != 4 {
+		t.Fatalf("got %d messages, want 4 (digest + user + 2 assistant), got %+v", len(got), got)
+	}
+	if got[0].Role != llm.RoleUser || !strings.Contains(got[0].Content[0].Text, "digest") {
+		t.Fatalf("digest head wrong: %+v", got[0])
+	}
+	if got[1].Role != llm.RoleUser || got[1].Content[0].Text != "do it" {
+		t.Fatalf("user message disturbed: %+v", got[1])
+	}
+	if got[2].Role != llm.RoleAssistant || got[3].Role != llm.RoleAssistant {
+		t.Fatalf("expected two kept assistant messages (thinking + done), got %+v", got)
+	}
+	// The tool_call block was dropped from the first assistant message.
+	for _, blk := range got[2].Content {
+		if blk.Type == llm.ContentToolCall {
+			t.Fatalf("tool_call block survived rotate: %+v", blk)
+		}
+	}
+}
+
+// TestCommitRotateZeroKeepsNothing verifies keepRounds <= 0 yields a fresh
+// episode: only the digest, no retained messages.
+func TestCommitRotateZeroKeepsNothing(t *testing.T) {
+	b := NewAccumulateTranscript()
+	b.Apply(InputPatch{Messages: []llm.Message{userMsg("a")}})
+	b.Apply(AssistantOutputPatch{Message: assistantMsg("b")})
+
+	b.BeginEdit()
+	b.CommitRotate("digest", 0)
+
+	got := b.Render()
+	if len(got) != 1 {
+		t.Fatalf("got %d messages, want 1 (digest only), got %+v", len(got), got)
 	}
 }

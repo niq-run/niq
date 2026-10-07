@@ -6,10 +6,9 @@ import (
 	"testing"
 	"time"
 
+	reasonBase "github.com/niq-run/niq/core/impl/reason"
 	"github.com/niq-run/niq/core/itfs/event"
 	llm "github.com/niq-run/niq/core/itfs/llm"
-	"github.com/niq-run/niq/core/impl/baseworker"
-	reasonBase "github.com/niq-run/niq/core/impl/reason"
 )
 
 // TestCoreExtensionsRegistered verifies the default worker registers its
@@ -160,55 +159,6 @@ func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
 	}
 	if !watchHasEvent(*directed, "send_message") {
 		t.Fatal("directed announcement must carry the full contract, SelfOnly included")
-	}
-}
-
-// TestTranscriptEditCallAndStripToolCalls verifies transcript-edit detection
-// and that a meta call (which never produces a tool result) is excluded from
-// the transcript: TranscriptEditCall flags the response by LLMName, and
-// StripToolCalls removes all tool_calls while keeping thinking/text. The
-// context.compress / context.rotate meta ops are the default worker's toolkit.
-func TestTranscriptEditCallAndStripToolCalls(t *testing.T) {
-	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()}) // default toolkit registered at construction
-
-	// compress/rotate are now ordinary self-tools (they pair normally), so a
-	// call to them is not an "edit call" and must not be stripped.
-	compressMsg := llm.Message{
-		Role: llm.RoleAssistant, StopReason: "tool_calls",
-		Content: []llm.ContentBlock{
-			{Type: llm.ContentThinking, Text: "need to compress"},
-			{Type: llm.ContentToolCall, ToolCallID: "m1", ToolName: "context_compress"},
-		},
-	}
-	if _, ok := w.TranscriptEditCall(compressMsg); ok {
-		t.Fatal("context_compress is an ordinary tool and must not be flagged as a transcript-edit call")
-	}
-
-	// The transcript-edit mechanism still exists for custom self-editing tools.
-	const editEvent event.EventType = "custom_editor.edit"
-	w.Register(baseworker.Extension{Event: editEvent, Description: "custom"}, func(evt event.Event) {})
-	w.RegisterTranscriptEditEvent(editEvent)
-
-	metaMsg := llm.Message{
-		Role: llm.RoleAssistant, StopReason: "tool_calls",
-		Content: []llm.ContentBlock{
-			{Type: llm.ContentThinking, Text: "need to compress"},
-			{Type: llm.ContentToolCall, ToolCallID: "m1", ToolName: "custom_editor_edit"},
-			{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "ws-tmp-niq-test__ls"},
-		},
-	}
-	if _, ok := w.TranscriptEditCall(metaMsg); !ok {
-		t.Fatal("TranscriptEditCall should detect a registered transcript-edit call")
-	}
-
-	stripped := reasonBase.StripToolCalls(metaMsg)
-	if len(stripped.Content) != 1 || stripped.Content[0].Type != llm.ContentThinking {
-		t.Fatalf("StripToolCalls should keep only thinking, got %+v", stripped.Content)
-	}
-
-	plain := llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}}
-	if _, ok := w.TranscriptEditCall(plain); ok {
-		t.Fatal("TranscriptEditCall must be false without a transcript-edit call")
 	}
 }
 
