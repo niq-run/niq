@@ -1,11 +1,11 @@
 package reason
 
 import (
+	reasonBase "github.com/niq-run/niq/core/impl/reason"
+	"github.com/niq-run/niq/core/impl/reason/transcript"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/itfs/program"
-	reasonBase "github.com/niq-run/niq/core/impl/reason"
-	"github.com/niq-run/niq/core/impl/reason/transcript"
 )
 
 // Config holds the configuration for a generic "reason" worker.
@@ -33,14 +33,17 @@ type Config struct {
 
 	// Context budget (see handleContextBudget in pkg/reason/reason.go).
 	// ContextWindow is the model's window in tokens; 0 disables budget
-	// handling. BudgetSoft/BudgetHard are occupancy ratios; KeepTail is how
-	// many recent messages compaction preserves; CompactDirective overrides
-	// the worker's own fallback summarizer prompt (the mechanism never sees
-	// it).
+	// handling. BudgetSoft/BudgetHard are occupancy ratios; TailTokens is the
+	// token budget of recent transcript retained after a compaction (pairing-
+	// preserved); RotateRounds is how many recent user/assistant rounds
+	// context.rotate retains (tool messages discarded); CompactDirective
+	// overrides the worker's own fallback summarizer prompt (the mechanism
+	// never sees it).
 	ContextWindow    int
 	BudgetSoft       float64
 	BudgetHard       float64
-	KeepTail         int
+	TailTokens       int
+	RotateRounds     int
 	CompactDirective string
 
 	// MaxPayloadBytes caps a single text payload folded into the transcript
@@ -90,7 +93,8 @@ func NewWorker(cfg Config) *Worker {
 		ContextWindow:   cfg.ContextWindow,
 		BudgetSoft:      cfg.BudgetSoft,
 		BudgetHard:      cfg.BudgetHard,
-		KeepTail:        cfg.KeepTail,
+		TailTokens:      cfg.TailTokens,
+		RotateRounds:    cfg.RotateRounds,
 		MaxPayloadBytes: cfg.MaxPayloadBytes,
 		SeedMessages:    cfg.SeedMessages,
 	})

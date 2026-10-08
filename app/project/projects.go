@@ -241,12 +241,19 @@ func saveProject(p *Project) error {
 	if err := os.MkdirAll(ProjectDir(p.ID), 0755); err != nil {
 		return fmt.Errorf("project: mkdir: %w", err)
 	}
+	return writeProjectJSON(ProjectPath(p.ID), p)
+}
+
+// writeProjectJSON marshals a project definition and writes it to an explicit
+// path. saveProject (via ProjectPath) is the normal in-root writer; the linker
+// uses it to seed project.json into an external directory.
+func writeProjectJSON(path string, p *Project) error {
 	raw, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return fmt.Errorf("project: marshal %s: %w", p.ID, err)
 	}
 	raw = append(raw, '\n')
-	if err := os.WriteFile(ProjectPath(p.ID), raw, 0644); err != nil {
+	if err := os.WriteFile(path, raw, 0644); err != nil {
 		return fmt.Errorf("project: write %s: %w", p.ID, err)
 	}
 	return nil
@@ -263,7 +270,12 @@ func ListProjects() ([]Project, error) {
 	}
 	var out []Project
 	for _, de := range entries {
-		if !de.IsDir() {
+		// os.ReadDir's DirEntry.IsDir reflects the dirent type (lstat), which is
+		// false for a symlink even when it points at a directory. Stat through
+		// the entry so linked projects (symlinked into the root) are enumerated;
+		// a broken link simply stays a non-directory.
+		fi, err := os.Stat(filepath.Join(ProjectsRoot(), de.Name()))
+		if err != nil || !fi.IsDir() {
 			continue
 		}
 		p, err := LoadProject(de.Name())
@@ -274,6 +286,91 @@ func ListProjects() ([]Project, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+// LinkProject registers an external directory as a niq project by symlinking
+// it into <niq root>/projects/<id>. The directory's content stays where it is;
+// only a link is created under the niq root, so the project is scannable (and
+// every runtime write — ports, worker state, logs — follows the link back into
+// the original directory).
+//
+// The project id is taken from an existing project.json id when the directory
+// is already a niq project, so a moved/exported project keeps its identity and
+// resumes where it left off; otherwise it is the directory's (sanitized) base
+// name. A duplicate id (real dir or existing link) is rejected.
+func LinkProject(dir string) (*Project, error) {
+	if dir == "" {
+		return nil, fmt.Errorf("project: directory is required")
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("project: resolve %q: %w", dir, err)
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("project: %q: %w", dir, err)
+	}
+	if !fi.IsDir() {
+		return nil, fmt.Errorf("project: %q is not a directory", dir)
+	}
+
+	// Pick the id: an existing niq project keeps its own id; otherwise fall
+	// back to the directory's (sanitized) base name.
+	id := sanitizeID(filepath.Base(abs))
+	if raw, err := os.ReadFile(filepath.Join(abs, "project.json")); err == nil {
+		var p Project
+		if json.Unmarshal(raw, &p) == nil && p.ID != "" {
+			id = sanitizeID(p.ID)
+		}
+	}
+
+	link := ProjectDir(id)
+	if _, err := os.Lstat(link); err == nil {
+		return nil, fmt.Errorf("project: %q already exists at %s", id, link)
+	}
+	if err := os.MkdirAll(ProjectsRoot(), 0755); err != nil {
+		return nil, fmt.Errorf("project: mkdir: %w", err)
+	}
+	if err := os.Symlink(filepath.Clean(abs), link); err != nil {
+		return nil, fmt.Errorf("project: link %s -> %s: %w", link, abs, err)
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			// Roll back a half-created link on failure so no dangling project
+			// is left behind.
+			_ = os.Remove(link)
+		}
+	}()
+
+	// Ensure a scannable project.json exists in the linked directory.
+	if err := ensureProjectJSON(abs, id); err != nil {
+		return nil, err
+	}
+	ok = true
+	return LoadProject(id)
+}
+
+// ensureProjectJSON makes sure the linked directory carries a project.json
+// declaring id, creating it when absent or backfilling the id when present. It
+// never touches existing worker declarations — when the directory is already a
+// niq project that file is the source of truth.
+func ensureProjectJSON(dir, id string) error {
+	path := filepath.Join(dir, "project.json")
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return writeProjectJSON(path, &Project{ID: id, CreatedAt: time.Now().Format(time.RFC3339)})
+	}
+	if err != nil {
+		return fmt.Errorf("project: read %s: %w", path, err)
+	}
+	var p Project
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return fmt.Errorf("project: parse %s: %w", path, err)
+	}
+	// Align the recorded id with the link name (list scans by entry name).
+	p.ID = id
+	return writeProjectJSON(path, &p)
 }
 
 // projectArchiver implements the webui.ArchivedStore backed by a project's

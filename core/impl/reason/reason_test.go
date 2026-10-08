@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/reason/transcript"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
-	"github.com/niq-run/niq/core/impl/reason/transcript"
 )
 
 // TestPrepareReasoningBuildsRequest verifies prepareReasoning parks leftover
@@ -360,10 +360,6 @@ func TestMixedRoundPublishesLeadingText(t *testing.T) {
 	}, "tool-call round to emit reason.end")
 }
 
-// TestTranscriptEditCallAndStripToolCalls moved to pkg/worker/reason:
-// context.compress / context.rotate are now the default worker's toolkit, not
-// the shared mechanism's.
-
 // summarizeProvider routes Complete (summarizer) and CompleteStream (reasoning)
 // to different fixed messages, recording the summarizer's system prompt.
 type summarizeProvider struct {
@@ -483,7 +479,7 @@ func TestHardBudgetEmitsMetaRequest(t *testing.T) {
 		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
 	ch := newTestChannel()
 	w := NewBaseReasonWorker(Config{ID: "r1", Provider: prov, Bus: ch,
-		ContextWindow: 1000, BudgetSoft: 0.85, BudgetHard: 0.97, KeepTail: 2})
+		ContextWindow: 1000, BudgetSoft: 0.85, BudgetHard: 0.97, TailTokens: 2})
 
 	seed := func(n int) {
 		for i := 0; i < n; i++ {

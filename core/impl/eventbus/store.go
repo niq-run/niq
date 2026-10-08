@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/niq-run/niq/core/itfs/event"
@@ -80,6 +81,9 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 		if len(opts.Types) > 0 && !slices.Contains(opts.Types, string(e.Type)) {
 			continue
 		}
+		if hiddenType(string(e.Type), opts.ExcludeTypes, opts.ExcludeTypePrefixes, opts.KeepTypes) {
+			continue
+		}
 		// Insertion-order pagination: strictly after/before the anchor index.
 		if afterIdx >= 0 && idx <= afterIdx {
 			continue
@@ -132,6 +136,24 @@ func workerInRecipients(e event.Event, id string) bool {
 // IDs on at least one of the requested roles. Roles are store.RoleSent
 // (the event's source) / store.RoleReceived (target or recipient); empty
 // means both.
+// hiddenType reports whether an event type is hidden by the blacklist:
+// excluded by exact or prefix match, unless explicitly kept. Kept mirrors the
+// eventbus api package's rule so memory and SQLite stores filter identically.
+func hiddenType(t string, exclude, prefixes, keep []string) bool {
+	if slices.Contains(keep, t) {
+		return false
+	}
+	if slices.Contains(exclude, t) {
+		return true
+	}
+	for _, p := range prefixes {
+		if len(p) > 0 && strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func workerMatchesAny(e event.Event, ids, roles []string) bool {
 	sent := len(roles) == 0 || slices.Contains(roles, store.RoleSent)
 	received := len(roles) == 0 || slices.Contains(roles, store.RoleReceived)

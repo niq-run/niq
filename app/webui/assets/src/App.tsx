@@ -408,30 +408,52 @@ export default function App() {
   // re-establishes the stream scoped to that worker server-side — the events
   // array holds only that conversation, so the newest-N trim can never drop it
   // and the earlier client-side re-scope fetch is unnecessary.
-  const responseOnly = viewSettings.responseOnly
+  	const responseOnly = viewSettings.responseOnly
+  const streamingMode = viewSettings.streamingMode
+
+  // The talk view's conversation scope: the reason workers it's currently
+  // watching (worker_id OR target OR recipient — the same envelope semantics
+  // as TalkView's relevantEvents and the backend's workerMatchesAny). With no
+  // explicit selection it resolves to every talk-partner worker; passing this
+  // to BOTH the stream and the events/before API means the server scopes the
+  // tail and pages over the conversation, instead of the client discarding
+  // out-of-conversation noise.
+  // partnerIds is a stable string (regex-free id sort) so talkScope's array
+  // ref only changes when the partner set actually changes — the worker poll
+  // rebuilds the array every tick, and we must not reconnect on identical sets.
+  const partnerIds = useMemo(() =>
+    workers.filter(w => isTalkPartnerType(w.type)).map(w => w.id).sort().join(','),
+  [workers])
+  const talkScope = useMemo(() => {
+    if (talkWorkers.size > 0) return [...talkWorkers]
+    return partnerIds ? partnerIds.split(',') : []
+  }, [talkWorkers, partnerIds])
+
+  // The talk stream scopes server-side over talkScope, so the key must follow
+  // it (an empty selection becomes the all-partners scope once workers load).
+  // streamingMode is part of the key because it decides whether delta partials
+  // are needed on the live stream — toggling it re-scopes the stream's blacklist.
+  const talkScopeKey = talkScope.join(',')
   const streamKey = view === 'events'
     ? 'events-' + [...filterWorkers].sort().join(',') + '-' + [...filterRoles].sort().join(',') + '-' + traceFilter
     : view === 'talk'
-      ? 'talk-' + [...talkWorkers].sort().join(',') + (responseOnly ? '-ro' : '')
+      ? 'talk-' + talkScopeKey + (responseOnly ? '-ro' : '') + (streamingMode ? '-live' : '')
       : 'all'
   // Mirrors streamKey for async callbacks (the history fetch) to detect that
   // their stream was torn down while the request was in flight.
   const streamKeyRef = useRef(streamKey)
   streamKeyRef.current = streamKey
 
-  // The talk view's pagination scope: the reason workers it's currently
-  // watching. Passed to the events/before API (worker_id OR target OR
-  // recipient, the same envelope semantics as TalkView's relevantEvents) so
-  // older talk events page back directly over the conversation. Without this,
-  // entering the talk view (or selecting a worker) walks whole mostly
-  // system-noise history pages, firing a burst of requests and delaying first
-  // paint until the walk happens to reach a reason event.
-  const talkScope = useMemo(() => {
-    if (talkWorkers.size > 0) return [...talkWorkers]
-    const reason: string[] = []
-    for (const w of workers) if (isTalkPartnerType(w.type)) reason.push(w.id)
-    return reason
-  }, [talkWorkers, workers])
+  // The talk view's blacklist of "invisible" events — the families relevantEvents
+  // would have dropped client-side. Moving it into the request params keeps them
+  // off both the SSE tail and the history pages, so pagination counts only real
+  // conversation rows and a fresh talk view isn't dominated by hidden noise.
+  // worker.* lifecycle is always hidden (except input/abort); delta partials
+  // are hidden unless streaming is on, because the live stream needs them to
+  // render in-flight thinking/text while history never does.
+  const talkExclude: string[] = streamingMode ? [] : ['reason.thinking_delta', 'reason.text_delta', 'request.progressed']
+  const talkExcludePrefix = ['worker.']
+  const talkKeep = ['worker.input', 'worker.abort']
 
   useEffect(() => {
     // No project → no event stream.
@@ -443,13 +465,19 @@ export default function App() {
     // the backend's workerMatchesAny), so the stream only ever ships that
     // conversation. An empty talk selection means the unfiltered stream.
     const params = new URLSearchParams()
-    if (view === 'events') {
+  	  if (view === 'events') {
       for (const id of filterWorkers) params.append('worker', id)
       for (const role of filterRoles) params.append('role', role)
       if (traceFilter) params.set('trace', traceFilter)
     } else if (view === 'talk') {
-      for (const id of talkWorkers) params.append('worker', id)
+      // Always send the resolved conversation scope (selection, or all
+      // partners when nothing is picked) so the server drops out-of-scope
+      // events up front — never an unfiltered stream.
+      for (const id of talkScope) params.append('worker', id)
       if (responseOnly) for (const t of RESPONSE_ONLY_TYPES) params.append('type', t)
+      for (const t of talkExclude) params.append('exclude', t)
+      for (const p of talkExcludePrefix) params.append('exclude_prefix', p)
+      for (const t of talkKeep) params.append('keep', t)
     }
     const url = projectBase + `/api/stream?${params}`
 
@@ -479,13 +507,20 @@ export default function App() {
     // ordered timeline a rebuild would produce.
     const myKey = streamKey
     const loadInitialHistory = async (watermark: string) => {
-      if (!watermark) return
+    	  if (!watermark) return
       noMoreRef.current = false
       const limit = HISTORY_PAGE
-      const workers = view === 'events' ? [...filterWorkers] : view === 'talk' ? talkScope : []
+      const isTalk = view === 'talk'
+      const workers = view === 'events' ? [...filterWorkers] : isTalk ? talkScope : []
       const roles = view === 'events' ? [...filterRoles] : []
       const trace = view === 'events' ? traceFilter : ''
-      const types = view === 'talk' && responseOnly ? [...RESPONSE_ONLY_TYPES] as string[] : []
+      const opts = isTalk
+        // History never streams, so delta partials are hidden here even when
+        // the live stream keeps them for in-flight rendering.
+        ? { workers: talkScope, types: responseOnly ? [...RESPONSE_ONLY_TYPES] as string[] : [],
+            exclude: ['reason.thinking_delta', 'reason.text_delta', 'request.progressed'],
+            excludePrefix: ['worker.'], keep: ['worker.input', 'worker.abort'] }
+        : { workers, roles, trace }
       try {
         // Merge history into whatever the live stream has already delivered
         // (the watermark event itself arrives this way) instead of wiping:
@@ -494,7 +529,7 @@ export default function App() {
         // by id and sorts, so the result is the clean timeline a rebuild
         // would produce. The streamKey guard drops responses from a torn-
         // down stream, so a slow fetch can't pollute the successor timeline.
-        const older = (await loadEventsBefore(watermark, limit, workers, trace, roles, '', types)) as EventPayload[]
+      	  const older = (await loadEventsBefore(watermark, limit, opts)) as EventPayload[]
         if (streamKeyRef.current !== myKey) return
         const filtered = older.filter((e) => e.type !== 'event.delivered')
         const merged = mergeEvents(eventsRef.current, filtered)
@@ -876,6 +911,21 @@ export default function App() {
     })
   }, [])
 
+  // Sidebar "view all / clear filter": drop whichever worker set is active in
+  // the current view. In talk, clearing the watched set returns to the all-
+  // partners conversation (and clears the stale @mention target); in events it
+  // unfilters back to every worker.
+  const clearWorkerFilter = useCallback(() => {
+    if (view === 'talk') {
+      const next = new Set<string>()
+      setTalkWorkers(next)
+      writeTalkWorkersToUrl(next)
+      setMentionTarget('')
+    } else {
+      setFilterWorkers(new Set())
+    }
+  }, [view])
+
   // Jump from a worker list / worker ID link into that worker's event stream.
   const handleSelectWorker = useCallback((id: string) => {
     setFilterWorkers(new Set([id]))
@@ -913,13 +963,15 @@ export default function App() {
     if (events.length === 0) return
     loadingMoreRef.current = true
     try {
-      const anchorEl = listRef.current
+    	  const anchorEl = listRef.current
       const anchor = anchorEl ? { top: anchorEl.scrollTop, height: anchorEl.scrollHeight } : null
-      const workers = view === 'events' ? [...filterWorkers] : view === 'talk' ? talkScope : []
-      const roles = view === 'events' ? [...filterRoles] : []
-      const trace = view === 'events' ? traceFilter : ''
-      const types = view === 'talk' && responseOnly ? [...RESPONSE_ONLY_TYPES] as string[] : []
-      const older = (await loadEventsBefore(events[0].id, HISTORY_PAGE, workers, trace, roles, '', types)) as EventPayload[]
+      const isTalk = view === 'talk'
+      const opts = isTalk
+        ? { workers: talkScope, types: responseOnly ? [...RESPONSE_ONLY_TYPES] as string[] : [],
+            exclude: ['reason.thinking_delta', 'reason.text_delta', 'request.progressed'],
+            excludePrefix: ['worker.'], keep: ['worker.input', 'worker.abort'] }
+        : { workers: [...filterWorkers], roles: [...filterRoles], trace: traceFilter }
+      const older = (await loadEventsBefore(events[0].id, HISTORY_PAGE, opts)) as EventPayload[]
       // Fewer than a full page means the store has nothing older that matches.
       if (older.length < HISTORY_PAGE) noMoreRef.current = true
       const filtered = older.filter((e) => e.type !== 'event.delivered')
@@ -1078,8 +1130,9 @@ export default function App() {
         filterWorkers={filterWorkers}
         onToggleFilterWorker={toggleFilterWorker}
         workers={workers}
-        talkWorkers={talkWorkers}
+      	  talkWorkers={talkWorkers}
         onToggleWorker={toggleWorker}
+        onClearWorkers={clearWorkerFilter}
         viewSettings={viewSettings}
         onToggleViewSetting={toggleViewSetting}
         mode={mode}

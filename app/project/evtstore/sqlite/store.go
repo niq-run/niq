@@ -285,6 +285,41 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 			args = append(args, t)
 		}
 	}
+	// Blacklist: exclude exact and prefixed types, unless kept. Rendered as
+	// `type IN keep OR NOT (excluded OR preface-matched)` so an explicitly kept
+	// exact type (worker.input / worker.abort) survives a covering prefix.
+	// The keep placeholders precede the hide ones in the SQL, so their args are
+	// appended in that same order.
+	if len(opts.ExcludeTypes) > 0 || len(opts.ExcludeTypePrefixes) > 0 {
+		expr := ""
+		if len(opts.KeepTypes) > 0 {
+			expr += "type IN (" + strings.TrimRight(strings.Repeat("?,", len(opts.KeepTypes)), ",") + ")"
+			for _, t := range opts.KeepTypes {
+				args = append(args, t)
+			}
+		}
+		var hide []string
+		if len(opts.ExcludeTypes) > 0 {
+			hide = append(hide, "type IN ("+strings.TrimRight(strings.Repeat("?,", len(opts.ExcludeTypes)), ",")+")")
+			for _, t := range opts.ExcludeTypes {
+				args = append(args, t)
+			}
+		}
+		for _, p := range opts.ExcludeTypePrefixes {
+			if p == "" {
+				continue
+			}
+			hide = append(hide, "type LIKE ?")
+			args = append(args, p+"%")
+		}
+		hideExpr := "(" + strings.Join(hide, " OR ") + ")"
+		if expr != "" {
+			expr += " OR NOT " + hideExpr
+		} else {
+			expr = "NOT " + hideExpr
+		}
+		query += " AND (" + expr + ")"
+	}
 	// Order and paginate by (timestamp, id) — a total order on the event id,
 	// matching the client's sort. Do NOT page by rowid: events are persisted
 	// asynchronously, so rowid (insertion order) does not reliably match

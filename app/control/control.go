@@ -122,6 +122,8 @@ func (c *Control) Start(ctx context.Context) error {
 	mux.HandleFunc("PUT /api/templates/{name}", c.handleUpdateTemplate)
 	mux.HandleFunc("DELETE /api/templates/{name}", c.handleDeleteTemplate)
 	mux.HandleFunc("GET /api/projects", c.handleListProjects)
+	mux.HandleFunc("GET /api/projects/dirs", c.handleListDirs)
+	mux.HandleFunc("POST /api/projects/link", c.handleLinkProject)
 	mux.HandleFunc("GET /api/providers", c.handleGetProviders)
 	mux.HandleFunc("PUT /api/providers", c.handleUpdateProviders)
 	mux.HandleFunc("GET /api/projects/{id}/template-preview", c.handleTemplatePreview)

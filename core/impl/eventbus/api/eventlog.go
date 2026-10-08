@@ -10,6 +10,7 @@ import (
 	"context"
 	"log"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/niq-run/niq/core/impl/eventbus"
@@ -33,6 +34,16 @@ type Filter struct {
 	// blacklist it enumerates what SHOULD show, so it never has to know the
 	// full set of (dynamically named) tool types.
 	Types []string
+
+	// ExcludeTypes / ExcludeTypePrefixes are the blacklist half of Types —
+	// exact event types and type prefixes to NEVER include. Where Types
+	// whitelists a small closed set, the blacklist can hide a broad* dynamic
+	// family (e.g. every worker.* lifecycle event) without enumerating it. An
+	// event whose type is in KeepTypes survives a matching prefix, so the talk
+	// view can hide worker.* yet still show worker.input / worker.abort.
+	ExcludeTypes        []string
+	ExcludeTypePrefixes []string
+	KeepTypes           []string
 }
 
 // matchesFilter checks whether an event satisfies the filter.
@@ -53,7 +64,29 @@ func matchesFilter(evt event.Event, f Filter) bool {
 	if len(f.Types) > 0 && !slices.Contains(f.Types, string(evt.Type)) {
 		return false
 	}
+	if hiddenType(string(evt.Type), f.ExcludeTypes, f.ExcludeTypePrefixes, f.KeepTypes) {
+		return false
+	}
 	return true
+}
+
+// hiddenType reports whether an event type is hidden by the blacklist:
+// excluded by exact match or prefix match, unless it is explicitly kept. The
+// KeepTypes override lets a prefix cover a whole family while a few exact
+// members stay visible (worker.* minus worker.input/worker.abort).
+func hiddenType(t string, exclude, prefixes, keep []string) bool {
+	if slices.Contains(keep, t) {
+		return false
+	}
+	if slices.Contains(exclude, t) {
+		return true
+	}
+	for _, p := range prefixes {
+		if len(p) > 0 && strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // workerMatchesAny reports whether the event involves any of the given worker
@@ -217,14 +250,17 @@ func (l *EventLog) LoadBefore(ctx context.Context, filter Filter, anchor string,
 		limit = 50
 	}
 	return l.store.List(ctx, "*", store.QueryOpts{
-		BeforeID:    anchor,
-		Limit:       limit,
-		Desc:        true,
-		WorkerIDs:   filter.WorkerIDs,
-		WorkerRoles: filter.WorkerRoles,
-		TraceID:     filter.TraceID,
-		RequestID:   filter.RequestID,
-		Types:       filter.Types,
+		BeforeID:            anchor,
+		Limit:               limit,
+		Desc:                true,
+		WorkerIDs:           filter.WorkerIDs,
+		WorkerRoles:         filter.WorkerRoles,
+		TraceID:             filter.TraceID,
+		RequestID:           filter.RequestID,
+		Types:               filter.Types,
+		ExcludeTypes:        filter.ExcludeTypes,
+		ExcludeTypePrefixes: filter.ExcludeTypePrefixes,
+		KeepTypes:           filter.KeepTypes,
 	})
 }
 

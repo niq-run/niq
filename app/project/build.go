@@ -10,7 +10,7 @@ import (
 
 	"github.com/niq-run/niq/app/niqhome"
 	providerpkg "github.com/niq-run/niq/app/project/provider"
-	"github.com/niq-run/niq/core/impl/embedws"
+	wsbackend "github.com/niq-run/niq/core/impl/embedws"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
@@ -152,10 +152,17 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	}
 
 	// Context budget params (optional; defaults live in the reason package).
-	contextWindow, _ := p["context_window"].(int)
+	contextWindow := pInt(p, "context_window")
 	budgetSoft, _ := p["budget_soft"].(float64)
 	budgetHard, _ := p["budget_hard"].(float64)
-	keepTail, _ := p["keep_tail"].(int)
+	// Tail retention is a token budget now, not a fixed message count. Accept
+	// tail_tokens first with keep_tail as a legacy alias. pInt handles JSON
+	// numbers, which arrive as float64 from the persisted project.json.
+	tailTokens := pInt(p, "tail_tokens")
+	if tailTokens == 0 {
+		tailTokens = pInt(p, "keep_tail")
+	}
+	rotateRounds := pInt(p, "rotate_rounds")
 	compactDirective, _ := p["compact_directive"].(string)
 
 	connect := specConnect(ctx, id, "reason", pubAllow, subAllow)
@@ -174,7 +181,8 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 			ContextWindow:    contextWindow,
 			BudgetSoft:       budgetSoft,
 			BudgetHard:       budgetHard,
-			KeepTail:         keepTail,
+			TailTokens:       tailTokens,
+			RotateRounds:     rotateRounds,
 			CompactDirective: compactDirective,
 			// Fixed per-message payload cap for tool results / inputs; not
 			// configurable through worker params.

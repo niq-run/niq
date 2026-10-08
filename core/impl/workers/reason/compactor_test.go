@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	reasonBase "github.com/niq-run/niq/core/impl/reason"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
-	reasonBase "github.com/niq-run/niq/core/impl/reason"
 )
 
 // summarizeProvider routes Complete (summarizer) to a fixed digest, recording
@@ -75,15 +75,15 @@ func isSummarizeRequest(req *llm.CompletionRequest) bool {
 	return len(msgs) == 1 && msgs[0].Role == llm.RoleUser
 }
 
-// newReasonBase builds a bare BaseReasonWorker wired like NewWorker (keepTail
+// newReasonBase builds a bare BaseReasonWorker wired like NewWorker (tailTokens
 // flows through Config) but without starting the watch loop — enough for
 // exercising the context meta ops synchronously from a test. The context edit
 // is driven by handleContextOp, which edits the transcript directly.
-func newReasonBase(t *testing.T, prov llm.LLMProvider, keepTail int, seed []llm.Message) *reasonBase.BaseReasonWorker {
+func newReasonBase(t *testing.T, prov llm.LLMProvider, tailTokens int, seed []llm.Message) *reasonBase.BaseReasonWorker {
 	t.Helper()
 	w := reasonBase.NewBaseReasonWorker(reasonBase.Config{
 		ID: "r1", Provider: prov, Bus: newMockChannel(),
-		ContextWindow: 1000, KeepTail: keepTail, SeedMessages: seed,
+		ContextWindow: 1000, TailTokens: tailTokens, SeedMessages: seed,
 	})
 	return w
 }
@@ -349,8 +349,8 @@ func (p *compressFlowProvider) ListModels(context.Context) ([]llm.ModelInfo, err
 // records a real tool pair in the compressed transcript — an assistant
 // context_compress tool_call followed by a matching tool result — via the
 // ordinary placeholder + tracker pairing. The compress tool call is kept in the
-// transcript and its placeholder survives compaction (keepTail), then the
-// self request.completed resolution fills it.
+// transcript and its placeholder survives compaction (token-budgeted tail),
+// then the self request.completed resolution fills it.
 func TestMetaCompressRecordsToolPair(t *testing.T) {
 	prov := &compressFlowProvider{}
 	w, ch, cancel := startWorker(t, prov)

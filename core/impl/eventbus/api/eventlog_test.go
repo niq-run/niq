@@ -4,9 +4,35 @@ import (
 	"context"
 	"testing"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/eventbus"
+	"github.com/niq-run/niq/core/itfs/event"
 )
+
+// TestMatchesFilterTypeBlacklist verifies the live-stream filter applies the
+// exact + prefix type blacklist with a keep override — the same "invisible
+// event" rule the stores apply to history, so stream and pages stay in sync.
+func TestMatchesFilterTypeBlacklist(t *testing.T) {
+	f := Filter{
+		ExcludeTypes:        []string{"reason.thinking_delta"},
+		ExcludeTypePrefixes: []string{"worker."},
+		KeepTypes:           []string{"worker.input", "worker.abort"},
+	}
+	cases := []struct {
+		typ  string
+		want bool
+	}{
+		{"worker.input", true},
+		{"worker.abort", true},
+		{"worker.updated", false},
+		{"reason.thinking_delta", false},
+		{"reason.response", true},
+	}
+	for _, c := range cases {
+		if got := matchesFilter(event.Event{Type: event.EventType(c.typ)}, f); got != c.want {
+			t.Fatalf("matchesFilter(%q) = %v, want %v", c.typ, got, c.want)
+		}
+	}
+}
 
 // TestFollowLiveWatermarkForNonMatchingLatest verifies that a filter which does
 // NOT match the most recent persisted event still gets a filter-agnostic

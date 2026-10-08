@@ -4,12 +4,57 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/store"
 	_ "modernc.org/sqlite"
 )
+
+// TestListTypeBlacklist verifies the exact + prefix type blacklist with a keep
+// override — the talk view's "invisible event" filter moved server-side so
+// history pages count real conversation rows instead of worker.* lifecycle
+// noise and delta partials.
+func TestListTypeBlacklist(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	events := []event.Event{
+		event.New("worker.input", "hiw", map[string]any{"text": "hi"}),
+		event.New("worker.abort", "hiw", map[string]any{}),
+		event.New("worker.updated", "niq", map[string]any{}),
+		event.New("reason.thinking_delta", "niq", map[string]any{}),
+		event.New("reason.response", "niq", map[string]any{}),
+	}
+	if err := s.Append(ctx, events...); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	// worker.* is hidden except input/abort; the delta partial is hidden for
+	// good measure.
+	got, err := s.List(ctx, "*", store.QueryOpts{
+		ExcludeTypes:        []string{"reason.thinking_delta"},
+		ExcludeTypePrefixes: []string{"worker."},
+		KeepTypes:           []string{"worker.input", "worker.abort"},
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var types []string
+	for _, e := range got {
+		types = append(types, string(e.Type))
+	}
+	slices.Sort(types)
+	want := []string{"reason.response", "worker.abort", "worker.input"}
+	if !slices.Equal(types, want) {
+		t.Fatalf("blacklist retained %v, want %v", types, want)
+	}
+}
 
 // TestRequestIDRoundtrip verifies the request_id pairing field survives a
 // write + read cycle. The webui correlates a tool invocation with its

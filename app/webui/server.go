@@ -771,12 +771,15 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter := eventbusapi.Filter{
-		WorkerIDs:   r.URL.Query()["worker"],
-		WorkerRoles: parseWorkerRoles(r.URL.Query()),
-		TraceID:     r.URL.Query().Get("trace"),
-		RequestID:   r.URL.Query().Get("request"),
-		Type:        event.EventType(r.URL.Query().Get("type")),
-		Types:       cleanTypeList(r.URL.Query()["type"]),
+		WorkerIDs:           r.URL.Query()["worker"],
+		WorkerRoles:         parseWorkerRoles(r.URL.Query()),
+		TraceID:             r.URL.Query().Get("trace"),
+		RequestID:           r.URL.Query().Get("request"),
+		Type:                event.EventType(r.URL.Query().Get("type")),
+		Types:               cleanTypeList(r.URL.Query()["type"]),
+		ExcludeTypes:        cleanTypeList(r.URL.Query()["exclude"]),
+		ExcludeTypePrefixes: cleanTypeList(r.URL.Query()["exclude_prefix"]),
+		KeepTypes:           cleanTypeList(r.URL.Query()["keep"]),
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1778,12 +1781,15 @@ func (s *Server) handleLoadBefore(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 
 	filter := eventbusapi.Filter{
-		WorkerIDs:   r.URL.Query()["worker"],
-		WorkerRoles: parseWorkerRoles(r.URL.Query()),
-		TraceID:     r.URL.Query().Get("trace"),
-		RequestID:   r.URL.Query().Get("request"),
-		Type:        event.EventType(r.URL.Query().Get("type")),
-		Types:       cleanTypeList(r.URL.Query()["type"]),
+		WorkerIDs:           r.URL.Query()["worker"],
+		WorkerRoles:         parseWorkerRoles(r.URL.Query()),
+		TraceID:             r.URL.Query().Get("trace"),
+		RequestID:           r.URL.Query().Get("request"),
+		Type:                event.EventType(r.URL.Query().Get("type")),
+		Types:               cleanTypeList(r.URL.Query()["type"]),
+		ExcludeTypes:        cleanTypeList(r.URL.Query()["exclude"]),
+		ExcludeTypePrefixes: cleanTypeList(r.URL.Query()["exclude_prefix"]),
+		KeepTypes:           cleanTypeList(r.URL.Query()["keep"]),
 	}
 
 	events, err := s.eventLog.LoadBefore(r.Context(), filter, anchor, limit)

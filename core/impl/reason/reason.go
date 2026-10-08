@@ -5,7 +5,6 @@ package reason
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -13,11 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/niq-run/niq/core/itfs/event"
-	llm "github.com/niq-run/niq/core/itfs/llm"
-	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/impl/reason/requesttracker"
 	"github.com/niq-run/niq/core/impl/reason/transcript"
+	"github.com/niq-run/niq/core/itfs/event"
+	llm "github.com/niq-run/niq/core/itfs/llm"
 )
 
 func (w *BaseReasonWorker) reason(ctx context.Context) {
@@ -333,15 +331,11 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	log.Printf("[reason %s] LLM response: stop_reason=%s, content_blocks=%d",
 		w.ID(), finalMsg.StopReason, len(finalMsg.Content))
 
-	// If the response contains a meta tool call, ALL tool calls are discarded:
-	// a meta operation edits the transcript itself, so its call never enters it.
-	// The applied assistant message carries only thinking/text; handleToolCalls
-	// still sees the calls and emits worker.update.
+	// The applied assistant message is the model's response verbatim (tool calls
+	// included); handleToolCalls dispatches those calls as ordinary tools. There
+	// is no "meta" variant anymore: every tool call, including self-editing
+	// context ops, flows through the same placeholder + dispatch lifecycle.
 	appliedMsg := finalMsg
-	_, isMeta := w.TranscriptEditCall(finalMsg)
-	if isMeta {
-		appliedMsg = stripToolCalls(finalMsg)
-	}
 	// Guarantee every tool call carries a stable id before it enters the
 	// transcript. Some models omit the tool_call id; an empty id makes the
 	// OpenAI-format pair (assistant tool_call + its tool_result) invalid, and
@@ -350,14 +344,10 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// the guarantee provider-agnostic and ensures the matching tool_result
 	// reuses the same id via the tracker.
 	w.ensureToolCallIDs(finalMsg)
-	// Only persist the round when the applied message actually carries
-	// content. A meta response that contained nothing but a tool call
-	// collapses to an empty assistant message after stripToolCalls; the
-	// meta op edits the transcript itself, so there is nothing meaningful to
-	// keep. Persisting an empty message is worse than skipping it:
-	// json:"content,omitempty" drops the empty slice, it restores as nil,
-	// and every later request built from this snapshot is rejected upstream
-	// with a 400 (the worker is wedged until state is wiped).
+	// Persist the round when it carries any content. An empty message is worse
+	// than skipping it: json:"content,omitempty" drops the empty slice, it
+	// restores as nil, and every later request built from this snapshot is
+	// rejected upstream with a 400 (the worker is wedged until state is wiped).
 	if len(appliedMsg.Content) > 0 {
 		w.transcript.Apply(transcript.AssistantOutputPatch{Message: appliedMsg})
 	}
@@ -367,8 +357,7 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// what keeps the inline soft-budget reminder (handleContextBudget's last
 	// transcript write of the round) from ever landing between an assistant
 	// tool_call and its tool_result: placeholders are in place first, and the
-	// reminder appends after them. Meta rounds edit the transcript themselves
-	// and take no placeholders.
+	// reminder appends after them.
 	var toolCalls []llm.ContentBlock
 	var thinkingBlocks []llm.ContentBlock
 	for _, block := range finalMsg.Content {
@@ -379,7 +368,7 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 			thinkingBlocks = append(thinkingBlocks, block)
 		}
 	}
-	if !isMeta && len(toolCalls) > 0 {
+	if len(toolCalls) > 0 {
 		w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: toolCalls})
 	}
 
@@ -488,37 +477,6 @@ func (w *BaseReasonWorker) handleContextBudget(ctx context.Context, msg llm.Mess
 	}
 }
 
-// TranscriptEditCall reports whether any tool call in msg targets a registered
-// transcript-editing extension (a self-invoked op that rewrites this worker's
-// own context). When present, the round's tool calls are excluded from the
-// transcript — the edit produces a fresh context, so no pairing marker for the
-// edit action itself — and the call runs via its own event.
-func (w *BaseReasonWorker) TranscriptEditCall(msg llm.Message) (llm.ContentBlock, bool) {
-	for _, b := range msg.Content {
-		if b.Type == llm.ContentToolCall {
-			if cap, ok := w.ExtensionByToolName(b.ToolName); ok && w.transcriptEditEvents[cap.Event] {
-				return b, true
-			}
-		}
-	}
-	return llm.ContentBlock{}, false
-}
-
-// stripToolCalls returns a copy of msg with all ContentToolCall blocks removed,
-// keeping thinking/text. Used when a meta tool call is present, since meta
-// operations never produce a tool result (their call must not enter the
-// transcript, or it would dangle without a paired tool_result).
-func stripToolCalls(msg llm.Message) llm.Message {
-	cleaned := make([]llm.ContentBlock, 0, len(msg.Content))
-	for _, b := range msg.Content {
-		if b.Type != llm.ContentToolCall {
-			cleaned = append(cleaned, b)
-		}
-	}
-	msg.Content = cleaned
-	return msg
-}
-
 // ensureToolCallIDs assigns a globally-unique id to every tool call in msg
 // that lacks one. It mutates the message in place: the same blocks are later
 // read by the transcript, the tracker and the tool-result patch, so a
@@ -537,56 +495,11 @@ func (w *BaseReasonWorker) ensureToolCallIDs(msg llm.Message) {
 func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.ContentBlock, traceID string) {
 	busCalls := toolCalls
 
-	// Meta extensions (self-editing, see RegisterTranscriptEditEvent) directly
-	// edit this worker's own state and bypass the tool lifecycle: no
-	// placeholder, no tracker, no dispatch. If any call in this batch targets
-	// a meta extension, the batch is handled by the meta path: the meta call
-	// is converted back into the extension's own event and sent to self,
-	// which reason processes asynchronously.
-	var metaCall *llm.ContentBlock
-	var metaCap baseworker.Extension
-	for i := range busCalls {
-		if cap, ok := w.ExtensionByToolName(busCalls[i].ToolName); ok && w.transcriptEditEvents[cap.Event] {
-			metaCall = &busCalls[i]
-			metaCap = cap
-			break
-		}
-	}
-	if metaCall != nil {
-		// All tool calls were already excluded from the transcript in
-		// finishReasoning once a meta extension was present, so nothing here
-		// needs pairing. If a newer input already requested reasoning, the
-		// meta operation yields (dropped — nothing is dispatched or applied);
-		// the next round re-decides.
-		if w.needReason {
-			log.Printf("[reason %s] meta extension %s yielded to pending input", w.ID(), metaCall.ToolName)
-			w.isReasoning = false
-			w.mu.Unlock()
-			w.tryReason(ctx)
-			return
-		}
-
-		// Convert the tool call back into the extension's own event (e.g.
-		// context_compress → context.compress) and send it to self, routed via
-		// the bus for audit; the meta operation completes asynchronously and
-		// schedules the next round. The tool call id rides along as the
-		// RequestId so the handler's request.* echo pairs with it (the talk
-		// view pairs request and completion by that id).
-		argsMap := map[string]any{}
-		if metaCall.ToolArguments != "" {
-			json.Unmarshal([]byte(metaCall.ToolArguments), &argsMap)
-		}
-		evt := event.New(metaCap.Event, w.ID(), argsMap)
-		evt.RequestId = metaCall.ToolCallID
-		evt.TraceID = w.currentTraceID
-		_ = w.Channel.Send(ctx, evt, w.ID())
-
-		w.isReasoning = false
-		w.mu.Unlock()
-		// No tryReason here: the next round is scheduled when the meta
-		// operation completes (and buffered input is flushed).
-		return
-	}
+	// Every tool call — including the worker's own self-editing context ops —
+	// is an ordinary tool: finishReasoning already inserted the matching
+	// placeholder, and these calls are dispatched to their owning worker (this
+	// worker for own capabilities) like any other. The tool-call id rides along
+	// as RequestId so the handler's request.* echo pairs with it.
 
 	// Record the current round's single timeout timer, if any. At most one
 	// is meaningful - the first timer to fire parks all pending tools; a
