@@ -810,6 +810,9 @@ func isContextLengthError(ae anthropicAPIError) bool {
 		"token limit",
 		"exceeds the context",
 		"too many tokens",
+		"maximum length",
+		"exceeds the maximum",
+		"prompt is too long",
 	} {
 		if strings.Contains(msg, needle) {
 			return true
