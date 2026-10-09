@@ -1,7 +1,7 @@
 .log/
 .bin/
 bin/
-!npm/bin/
+!app/publish/npm/bin/
 .DS_Store
 /niq
 # goreleaser output at the repo root. NOT the embedded webui dist —

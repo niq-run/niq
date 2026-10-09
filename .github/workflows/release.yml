@@ -52,6 +52,6 @@ jobs:
       # goreleaser leaves cross-platform archives in dist/; turn them into
       # npm packages and publish (subpackages first, then the main package).
       - name: Publish npm packages
-        run: ./npm/publish-npm.sh "${GITHUB_REF_NAME#v}" ./dist
+        run: ./app/publish/npm/publish-npm.sh "${GITHUB_REF_NAME#v}" ./dist
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
