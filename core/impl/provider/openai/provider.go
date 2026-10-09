@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/niq-run/niq/core/itfs/llm"
@@ -819,6 +820,7 @@ func (p *Provider) readStream(body io.ReadCloser, es *llm.EventStream) {
 type apiError struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
+	Code    any    `json:"code,omitempty"` // may be a JSON number (DeepSeek: 11115) or string
 }
 
 type apiErrorWrapper struct {
@@ -870,6 +872,11 @@ func classifyError(code int, ae apiError) llm.ErrorType {
 // compression. Detection keys off both the structured error type and common
 // message phrasing, because providers vary in how they flag the overflow.
 func isContextLengthError(ae apiError) bool {
+	// DeepSeek signals a too-long prompt with a stable error code (11115), so
+	// trust the code when present before falling back to message/type phrasing.
+	if deepSeekCode(ae.Code) == 11115 {
+		return true
+	}
 	if ae.Type == "context_length_exceeded" || ae.Type == "context_length" {
 		return true
 	}
@@ -881,12 +888,35 @@ func isContextLengthError(ae apiError) bool {
 		"token limit",
 		"exceeds the context",
 		"too many tokens",
+		"maximum length",
+		"exceeds the maximum",
+		"prompt is too long", // DeepSeek: 11115 "prompt is too long"
 	} {
 		if strings.Contains(msg, needle) {
 			return true
 		}
 	}
 	return false
+}
+
+// deepSeekCode extracts an integer provider error code from the apiError.Code
+// field, which JSON decoding may hand back as float64 (plain number) or string
+// (e.g. a quoted code). Returns 0 when it is absent or not numeric.
+func deepSeekCode(code any) int {
+	switch v := code.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0
+		}
+		return n
+	default:
+		return 0
+	}
 }
 
 func errorTypeFromStatus(code int) llm.ErrorType {
