@@ -17,3 +17,7 @@ app/webui/assets/.vite/
 # local ad-hoc probe (a throwaway main package for testing a two-project niw
 # link by hand); kept out of the repo.
 scratch-probe/
+
+# worker-sdk (@niq.run/worker-sdk) node project
+sdk/ts/node_modules/
+sdk/ts/dist/
