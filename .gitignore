@@ -1,23 +1,33 @@
+# Anything ignored below is re-included only by an explicit negation.
+# Keep rule ordering: a later rule can un-ignore an earlier one.
+
+# --- OS / editor cruft -----------------------------------------------
+.DS_Store
+*.log
 .log/
 .bin/
-bin/
-!app/publish/npm/bin/
-.DS_Store
-/niq
-# goreleaser output at the repo root. NOT the embedded webui dist —
-# app/webui/assets/dist is go:embed'd and must be committed, so it
-# deliberately stays unignored (a rebuild only changes it when the UI
-# actually changed: vite bundles are content-hashed).
-/dist/
 
-# frontend dependencies / build caches
-app/webui/assets/node_modules/
+# --- Local builds / stray binaries ------------------------------------
+bin/
+# This committed npm shim must not be swept up by `bin/` above.
+!app/publish/npm/bin/
+# Stray root binary from an ad-hoc `go build -o niq`.
+/niq
+
+# --- GoReleaser output (repo root) ------------------------------------
+/dist/
+# NOTE: app/webui/assets/dist is go:embed'd and MUST stay committed, so it is
+# deliberately NOT ignored (a rebuild only changes it when the UI changed:
+# vite bundles are content-hashed).
+
+# --- npm / node build artifacts ----------------------------------------
+**/node_modules/
+# worker-sdk (@niq.run/worker-sdk) node project
+sdk/ts/dist/
+
+# --- Frontend caches (app/webui) ---------------------------------------
 app/webui/assets/.vite/
 
-# local ad-hoc probe (a throwaway main package for testing a two-project niw
-# link by hand); kept out of the repo.
+# --- Local scratch ------------------------------------------------------
+# A throwaway main package for hand-testing a two-project link; kept out of repo.
 scratch-probe/
-
-# worker-sdk (@niq.run/worker-sdk) node project
-sdk/ts/node_modules/
-sdk/ts/dist/
