@@ -32,7 +32,7 @@ jobs:
       - name: Determine release notes
         id: notes
         run: |
-          args="release --clean"
+          args="release --clean --config app/publish/.goreleaser.yaml"
           if [ -f "RELEASE_NOTES.md" ]; then
             echo "Using RELEASE_NOTES.md as the release body."
             args="$args --release-notes RELEASE_NOTES.md"

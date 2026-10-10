@@ -8,7 +8,7 @@ build:
 
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:
-	goreleaser release --snapshot --clean
+	goreleaser release --snapshot --clean --config app/publish/.goreleaser.yaml
 	./app/publish/npm/publish-npm.sh "$(VERSION:v%=%)" ./dist --dry-run
 
 # Publish npm packages from a goreleaser dist/ directory (run snapshot or
