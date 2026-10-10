@@ -1,33 +1,24 @@
 # Anything ignored below is re-included only by an explicit negation.
 # Keep rule ordering: a later rule can un-ignore an earlier one.
 
-# --- OS / editor cruft -----------------------------------------------
+# OS / editor cruft
 .DS_Store
-*.log
-.log/
-.bin/
 
-# --- Local builds / stray binaries ------------------------------------
+# Local builds
 bin/
 # This committed npm shim must not be swept up by `bin/` above.
 !app/publish/npm/bin/
-# Stray root binary from an ad-hoc `go build -o niq`.
-/niq
 
-# --- GoReleaser output (repo root) ------------------------------------
+# GoReleaser output (repo root)
 /dist/
 # NOTE: app/webui/assets/dist is go:embed'd and MUST stay committed, so it is
 # deliberately NOT ignored (a rebuild only changes it when the UI changed:
 # vite bundles are content-hashed).
 
-# --- npm / node build artifacts ----------------------------------------
+# npm / node build artifacts
 **/node_modules/
 # worker-sdk (@niq.run/worker-sdk) node project
 sdk/ts/dist/
 
-# --- Frontend caches (app/webui) ---------------------------------------
+# Frontend caches (app/webui)
 app/webui/assets/.vite/
-
-# --- Local scratch ------------------------------------------------------
-# A throwaway main package for hand-testing a two-project link; kept out of repo.
-scratch-probe/
