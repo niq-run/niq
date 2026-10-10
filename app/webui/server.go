@@ -792,8 +792,13 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 	// proxy disconnect the server never saw). Alive duration + the connect time
 	// let us match it to a browser-side "interrupted" console error.
 	started := time.Now()
+	var sentEvents, sentPings int
+	closedReason := "unknown"
 	defer func() {
-		log.Printf("[webui] SSE closed path=%s alive=%s", r.URL.Path, time.Since(started).Round(time.Second))
+		log.Printf(
+			"[webui] SSE closed path=%s alive=%s reason=%s events=%d pings=%d",
+			r.URL.Path, time.Since(started).Round(time.Second), closedReason, sentEvents, sentPings,
+		)
 	}()
 
 	// The stream now carries only events newer than `watermark`; history is
@@ -828,13 +833,33 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case evt, ok := <-ch:
 			if !ok {
+				// The event stream closed. A canceled request context means the
+				// client (or a proxy in front of it) went away; otherwise the
+				// event log itself ended (bus / project shutdown) and every
+				// browser on this stream reconnects at the same moment.
+				if r.Context().Err() != nil {
+					closedReason = "client_disconnected"
+				} else {
+					closedReason = "eventlog_ended"
+				}
 				return
 			}
+			sentEvents++
 			data, _ := json.Marshal(evt)
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			// A broken pipe surfaces as an error on the next write (http.Flusher
+			// has no error itself); that is how a client / proxy disconnect that
+			// the server never noticed shows up.
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				closedReason = "write_failed"
+				return
+			}
 			flusher.Flush()
 		case <-heartbeat.C:
-			fmt.Fprint(w, ": ping\n\n")
+			sentPings++
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				closedReason = "write_failed"
+				return
+			}
 			flusher.Flush()
 		}
 	}
