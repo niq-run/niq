@@ -622,12 +622,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               }}
             />
   	          {selectorWorkers.length > 0 && (
-                <div style={{ flex: (selectorSelected.size > 0 ? 2 : 1) + ' 1 0', minWidth: 0, display: 'flex', gap: 8 }}>
+                <div style={{ flex: '0 1 auto', display: 'flex', gap: 8, alignItems: 'stretch' }}>
                   <span
                     onClick={() => setShowWorkerPicker(true)}
                     title={t('sidebar.workerSelector.expand')}
                     className="btn-hover"
-                    style={{ flex: 1, minWidth: 0, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 6px' }}
+                    style={{ flex: '0 0 auto', cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 8px' }}
                   >
                     {t('sidebar.workerSelector.expandShort')}
                   </span>
@@ -639,10 +639,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                       onClick={onClearWorkers}
                       title={t('sidebar.workerSelector.clearFilter')}
                       className="btn-hover"
-                      // More flex than the "expand" button: "view all" carries
-                      // more text (查看全部 vs 展开), so it takes proportionally
-                      // more width to show its label without truncation.
-                      style={{ flex: 2, minWidth: 0, cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 6px' }}
+                      style={{ flex: '0 0 auto', cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 8px' }}
                     >
                       {t('sidebar.workerSelector.viewAll')}
                     </span>
