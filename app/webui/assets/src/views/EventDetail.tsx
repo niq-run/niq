@@ -8,6 +8,7 @@ import { getTypeColor, formatTime, parseAttachments } from '../components/talk-u
 import { makeMdComponents } from '../components/MarkdownComponents'
 import PayloadGate from '../components/PayloadGate'
 import CollapsibleCode from '../components/CollapsibleCode'
+import DetailRow from '../components/DetailRow'
 
 interface EventDetailProps {
   evt: EventPayload;
@@ -122,7 +123,7 @@ export default function EventDetail({ evt, deliveries, onClose, canGoBack, onBac
         )}
 
         <div style={{ padding: "10px 12px", background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
-          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 16px", alignItems: "baseline" }}>
+          <div style={{ display: "flex", flexDirection: "column" }}>
             <DetailRow label={t('detail.id')} value={evt.id} colors={colors} />
             <DetailRow label={t('detail.traceId')} value={evt.trace_id || t('detail.none')} colors={colors} />
             {evt.request_id && (
@@ -186,11 +187,4 @@ export default function EventDetail({ evt, deliveries, onClose, canGoBack, onBac
   )
 }
 
-function DetailRow({ label, value, colors }: { label: string; value: string; colors: import('../theme').Palette }) {
-  return (
-    <>
-      <span style={{ color: colors.detailLabel, fontSize: fontSizes.base }}>{label}</span>
-      <span style={{ color: colors.detailValue, fontSize: fontSizes.base, wordBreak: "break-all" }}>{value}</span>
-    </>
-  )
-}
+

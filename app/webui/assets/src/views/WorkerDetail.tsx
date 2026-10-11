@@ -5,6 +5,7 @@ import { type WorkerInfo, type ProviderOption, type ProviderSelection, type Watc
 import { getWorkerTypeColor } from '../components/talk-utils'
 import SendEventForm from '../components/SendEventForm'
 import SelectDropdown from '../components/SelectDropdown'
+import DetailRow from '../components/DetailRow'
 import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, updateWorkerAllow, updateWorkerMeta } from '../services/api'
 
 interface WorkerDetailProps {
@@ -1077,11 +1078,4 @@ function PublishAllowEditor({ worker, allWorkers = [], readOnly = false, onDone 
   )
 }
 
-function DetailRow({ label, value, colors }: { label: string; value: string; colors: import('../theme').Palette }) {
-  return (
-    <div style={{ display: 'flex', gap: 16, alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid ' + colors.detailBorder }}>
-      <span style={{ width: 120, flexShrink: 0, color: colors.detailLabel, fontSize: fontSizes.base }}>{label}</span>
-      <span style={{ minWidth: 0, color: colors.detailValue, fontSize: fontSizes.base }}>{value}</span>
-    </div>
-  )
-}
+
