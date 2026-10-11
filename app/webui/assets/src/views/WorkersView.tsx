@@ -1,9 +1,8 @@
 import { useMemo, useState } from 'react'
-import { useTheme, fontSizes } from '../theme'
+import { useTheme, fontSizes, type Palette } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
-import TagFilterDropdown from '../components/TagFilterDropdown'
 import CreateWorkerDialog from './CreateWorkerDialog'
 import ViewHeader from '../components/ViewHeader'
 
@@ -26,9 +25,16 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
   // ── Search + filter (mirrors the sidebar's worker picker modal): free-text
   // search, a multi-select tag filter and an online/offline status filter. The
   // filtered set drives the table below.
-  const [query, setQuery] = useState('')
-  const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [onlineFilter, setOnlineFilter] = useState<'' | 'online' | 'offline'>('online')
+  // ── Filter: three dropdowns (type, tag, online status) drive the table.
+  const [typeFilter, setTypeFilter] = useState('')
+  const [tagFilter, setTagFilter] = useState('')
+  const [onlineFilter, setOnlineFilter] = useState<'' | 'online' | 'offline'>('')
+
+  const availableTypes = useMemo(() => {
+    const set = new Set<string>()
+    for (const w of workers) if (w.type) set.add(w.type)
+    return [...set].sort()
+  }, [workers])
 
   const availableTags = useMemo(() => {
     const set = new Set<string>()
@@ -36,26 +42,12 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
     return [...set].sort()
   }, [workers])
 
-  const toggleTag = (tag: string) => {
-    setSelectedTags(prev => prev.includes(tag) ? prev.filter(x => x !== tag) : [...prev, tag])
-  }
-
-  // Same filtering pipeline as the picker modal: tag (OR), then online status,
-  // then the free-text search.
-  const tagMatched = selectedTags.length === 0
-    ? workers
-    : workers.filter(w => (w.tags || []).some(tag => selectedTags.includes(tag)))
-  const onlineMatched = onlineFilter === ''
-    ? tagMatched
-    : tagMatched.filter(w => onlineFilter === 'online' ? w.online !== false : w.online === false)
-  const q = query.trim().toLowerCase()
-  const filtered = q
-    ? onlineMatched.filter(w =>
-        w.id.toLowerCase().includes(q) ||
-        (w.type || '').toLowerCase().includes(q) ||
-        (w.description || '').toLowerCase().includes(q) ||
-        (w.tags || []).some(tag => tag.toLowerCase().includes(q)))
-    : onlineMatched
+  // Type / tag / online-status filters combine with AND.
+  const filtered = workers.filter(w =>
+    (typeFilter === '' || w.type === typeFilter) &&
+    (tagFilter === '' || (w.tags || []).includes(tagFilter)) &&
+    (onlineFilter === '' || (onlineFilter === 'online' ? w.online !== false : w.online === false))
+  )
 
   // Single-line cells with ellipsis (same as the events table), with a taller
   // row: the worker list is less dense than the event stream. Mobile rows are
@@ -131,54 +123,30 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
           </span>
         </div>
       )}
-      {/* Search + filter toolbar (same controls as the sidebar worker picker
-          modal): a text search, a multi-select tag filter and an online/offline
-          status filter. Renders above the table in both desktop and mobile and
-          stays put while the table scrolls. */}
-      {(workers.length > 0 || query || selectedTags.length > 0 || onlineFilter !== '') && (
-        <div style={{ flexShrink: 0, display: 'flex', gap: 8, padding: isMobile ? '4px 24px 8px' : '10px 24px 8px', flexWrap: 'wrap', alignItems: 'stretch', borderBottom: '1px solid ' + colors.border }}>
-          <input
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder={t('workerPicker.search')}
-            className="niq-input"
-            style={{
-              flex: '1 1 160px', boxSizing: 'border-box', background: colors.bgLight,
-              border: '1px solid ' + colors.border, borderRadius: 4, padding: '6px 9px',
-              color: colors.text, fontSize: fontSizes.base, outline: 'none', minWidth: 0,
-            }}
-          />
-          <div style={{ flex: '1 1 180px', maxWidth: 280 }}>
-            <TagFilterDropdown
-              tags={availableTags}
-              selected={selectedTags}
-              onToggle={toggleTag}
-              onClear={() => setSelectedTags([])}
-            />
-          </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {([['', t('workerPicker.online.all')], ['online', t('worker.online')], ['offline', t('worker.offline')]] as ['' | 'online' | 'offline', string][]).map(([val, label]) => {
-              const on = onlineFilter === val
-              return (
-                <span
-                  key={val || 'all'}
-                  onClick={() => setOnlineFilter(val)}
-                  className="btn-hover"
-                  style={{
-                    cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', padding: '0 12px',
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: fontSizes.sm, lineHeight: '28px',
-                    color: on ? colors.accent : colors.textDim,
-                    border: '1px solid ' + (on ? colors.accent : colors.border),
-                    borderRadius: 4,
-                    background: on ? colors.bgChip : undefined,
-                  }}
-                >
-                  {label}
-                </span>
-              )
-            })}
-          </div>
+      {/* Filter toolbar: three dropdowns (type / tag / online status).
+          Renders above the table on desktop and mobile and stays put while
+          the table scrolls. */}
+      {workers.length > 0 && (
+        <div style={{ flexShrink: 0, display: 'flex', gap: 16, padding: isMobile ? '4px 24px 8px' : '10px 24px 8px', flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid ' + colors.border }}>
+          <FilterField label={t('worker.filter.type')} colors={colors}>
+            <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={filterSelect(colors)}>
+              <option value="">{t('worker.filter.all')}</option>
+              {availableTypes.map(tp => <option key={tp} value={tp}>{tp}</option>)}
+            </select>
+          </FilterField>
+          <FilterField label={t('worker.filter.tag')} colors={colors}>
+            <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} style={filterSelect(colors)}>
+              <option value="">{t('worker.filter.all')}</option>
+              {availableTags.map(tg => <option key={tg} value={tg}>#{tg}</option>)}
+            </select>
+          </FilterField>
+          <FilterField label={t('worker.filter.status')} colors={colors}>
+            <select value={onlineFilter} onChange={e => setOnlineFilter(e.target.value as '' | 'online' | 'offline')} style={filterSelect(colors)}>
+              <option value="">{t('worker.filter.all')}</option>
+              <option value="online">{t('worker.online')}</option>
+              <option value="offline">{t('worker.offline')}</option>
+            </select>
+          </FilterField>
         </div>
       )}
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '0 24px 16px' }}>
@@ -307,6 +275,30 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
         busPort={busPort}
       />
       </div>
+    </div>
+  )
+}
+
+// filterSelect styles a dropdown the same as the previous text input.
+const filterSelect = (colors: Palette): React.CSSProperties => ({
+  width: '100%',
+  boxSizing: 'border-box',
+  background: colors.bgLight,
+  border: '1px solid ' + colors.border,
+  borderRadius: 4,
+  padding: '6px 9px',
+  color: colors.text,
+  fontSize: fontSizes.base,
+  outline: 'none',
+})
+
+// FilterField is a labelled dropdown group (label + the caller's <select>) for
+// the toolbar.
+function FilterField({ label, colors, children }: { label: string; colors: Palette; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 150 }}>
+      <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed, whiteSpace: 'nowrap' }}>{label}</span>
+      <div style={{ flex: '1 1 auto', minWidth: 110 }}>{children}</div>
     </div>
   )
 }
