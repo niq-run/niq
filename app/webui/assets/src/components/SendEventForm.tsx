@@ -3,6 +3,7 @@ import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import type { EventPayload, WatchEntry } from '../types'
 import { fetchEventsByRequest, sendWorkerEvent } from '../services/api'
+import CollapsibleCode from './CollapsibleCode'
 
 interface SendEventFormProps {
   workerId: string
@@ -188,15 +189,18 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
                 {t('wd.eventSentPreview')} <strong style={{ color: colors.text }}>{sent.type}</strong>
               </div>
               {Object.keys(sent.payload).length > 0 && (
-                <pre style={{ margin: 0, padding: 8, background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 4, fontSize: fontSizes.xs, color: colors.text, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{JSON.stringify(sent.payload, null, 2)}</pre>
+                <div style={{ minWidth: 0 }}>
+                  <CollapsibleCode code={JSON.stringify(sent.payload, null, 2)} language="json" />
+                </div>
               )}
               <div style={{ fontSize: fontSizes.sm, color: colors.textDim }}>{t('wd.eventResponse')}:</div>
               {sent.reply ? (
-                <pre
-                  style={{ margin: 0, padding: 8, background: colors.bgLight, border: '1px solid ' + (sent.reply.type === 'request.failed' ? '#c55' : colors.accentBorder), borderRadius: 4, fontSize: fontSizes.xs, color: sent.reply.type === 'request.failed' ? '#c55' : colors.text, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
-                >
-                  {JSON.stringify(sent.reply.payload ?? {}, null, 2)}
-                </pre>
+                <div style={{ minWidth: 0 }}>
+                  <CollapsibleCode
+                    code={JSON.stringify(sent.reply.payload ?? {}, null, 2)}
+                    language="json"
+                  />
+                </div>
               ) : (
                 <span style={{ fontSize: fontSizes.sm, color: colors.textDimmed }}>{t('wd.eventWaiting')}</span>
               )}
