@@ -237,7 +237,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                 </div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '5px 16px', alignItems: 'baseline' }}>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
                 <DetailRow label={t('wd.id')} value={worker.id} colors={colors} />
                 <DetailRow label={t('wd.type')} value={worker.type || '(none)'} colors={colors} />
                 {(worker.tags && worker.tags.length > 0) && (
@@ -1079,9 +1079,9 @@ function PublishAllowEditor({ worker, allWorkers = [], readOnly = false, onDone 
 
 function DetailRow({ label, value, colors }: { label: string; value: string; colors: import('../theme').Palette }) {
   return (
-    <>
-      <span style={{ color: colors.detailLabel, fontSize: fontSizes.base }}>{label}</span>
-      <span style={{ color: colors.textDimmed, fontSize: fontSizes.base, wordBreak: 'break-all' }}>{value}</span>
-    </>
+    <div style={{ display: 'flex', gap: 16, alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid ' + colors.detailBorder }}>
+      <span style={{ width: 120, flexShrink: 0, color: colors.detailLabel, fontSize: fontSizes.base }}>{label}</span>
+      <span style={{ minWidth: 0, color: colors.detailValue, fontSize: fontSizes.base }}>{value}</span>
+    </div>
   )
 }
