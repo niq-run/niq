@@ -37,6 +37,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
   // Display metadata (tags / description) inline editing.
   const [editingMeta, setEditingMeta] = useState(false)
   const [metaNote, setMetaNote] = useState('')
+  const [tab, setTab] = useState<'info' | 'actions' | 'events' | 'perms'>('info')
   const [draftTags, setDraftTags] = useState('')
   const [draftDesc, setDraftDesc] = useState('')
   const [editingSub, setEditingSub] = useState(false)
@@ -172,8 +173,30 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
       {/* Scrollable content: a column of independent cards, each a bg block
           with a gap of bare page background between them (no separators). */}
       <div style={{ padding: 14 }}>
+        {/* Top tabs: Info / Actions / Events / Permissions. Each tab shows only
+            its own card(s); the rest are hidden via display. */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+          {([['info', t('wd.tab.info')], ['actions', t('wd.actions')], ['events', t('wd.sendEvent')], ['perms', t('wd.permissions')]] as const).map(([k, label]) => (
+            <span
+              key={k}
+              onClick={() => setTab(k)}
+              className="btn-hover"
+              style={{
+                cursor: 'pointer',
+                padding: '4px 12px',
+                borderRadius: 4,
+                userSelect: 'none',
+                fontSize: fontSizes.sm,
+                color: tab === k ? colors.accent : colors.textDim,
+                borderBottom: tab === k ? '2px solid ' + colors.accent : '2px solid transparent',
+              }}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base, display: tab === 'info' ? undefined : 'none' }}>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
               <span style={{ color: colors.detailLabel, fontSize: fontSizes.sm, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('wd.meta.label')}</span>
               {/* Edit toggles an inline editor for tags / description. Opening
@@ -230,7 +253,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
             )}
           </div>
 
-          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: tab === 'perms' ? undefined : 'none' }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.publishAllow')}
               <span
@@ -268,7 +291,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
           </div>
 
           {/* Action area — its own card. */}
-          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: tab === 'actions' ? undefined : 'none' }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.actions')}
             </div>
@@ -421,7 +444,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 
 					{/* Send the worker an event from its announced watch contract —
 						 drive its behaviour/state from the UI. */}
-					<div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+					<div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: tab === 'events' ? undefined : 'none' }}>
 						<div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
 							{t('wd.sendEvent')}
 						</div>
@@ -431,12 +454,12 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 					{/* Model / Provider — only reason workers carry ProviderSources.
 							 Keyed by worker id so switching workers cannot leak one worker's
 								 provider state into another. */}
-					{worker.type === 'reason' && <ProviderSection key={worker.id} workerId={worker.id} />}
+					{worker.type === 'reason' && tab === 'info' && <ProviderSection key={worker.id} workerId={worker.id} />}
 
 					{/* Mounts — the workspace counterpart: the worker's mounted
 							 directories are its read/write boundary; list, mount and
 								 unmount them here. */}
-					{worker.type === 'workspace' && <MountsSection key={worker.id} workerId={worker.id} />}
+					{worker.type === 'workspace' && tab === 'info' && <MountsSection key={worker.id} workerId={worker.id} />}
         </div>
       </div>
     </div>

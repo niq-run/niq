@@ -248,6 +248,8 @@ export const en = {
   'workers.create.niwRecipient': 'recipient (optional)',
   'workers.create.niwErr': 'paste a config carrying NIQ_BUS_URL and NIQ_WORKER_ID',
   'workers.create.mcpJsonErr': 'MCP servers must be a JSON array of {name, url, protocol?, headers?}',
+  'wd.tab.info': 'Info',
+  'wd.permissions': 'Permissions',
   'workers.create.subscriptions': 'subscriptions (comma-separated, optional)',
   'workers.create.publish': 'publish (comma-separated, optional)',
   'workers.create.emptyDefault': 'empty = default',

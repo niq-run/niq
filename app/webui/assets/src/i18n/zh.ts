@@ -239,6 +239,8 @@ export const zh: Record<StringKey, string> = {
   'workers.create.niwRecipient': '接收方 (可选)',
   'workers.create.niwErr': '粘贴的配置需包含 NIQ_BUS_URL 和 NIQ_WORKER_ID',
   'workers.create.mcpJsonErr': 'MCP servers 需为 {name, url, protocol?, headers?} 的 JSON 数组',
+  'wd.tab.info': '基础信息',
+  'wd.permissions': '订阅发布许可',
   'workers.create.subscriptions': '订阅事件 (逗号分隔，可选)',
   'workers.create.publish': '发布事件 (逗号分隔，可选)',
   'workers.create.emptyDefault': '留空 = 默认值',
