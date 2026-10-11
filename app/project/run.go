@@ -268,6 +268,7 @@ func runAssembly(opts assemblyOptions) error {
 		EventLog:     eventLog,
 		EventStore:   evtStore,
 		ProgramsRoot: opts.ProgramsRoot,
+		StateDir:     opts.StateDir,
 	}
 	RegisterBuilders(buildCtx, workerSvc)
 

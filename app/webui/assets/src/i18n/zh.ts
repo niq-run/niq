@@ -238,6 +238,7 @@ export const zh: Record<StringKey, string> = {
   'workers.create.niwConfigPlaceholder': 'NIQ_BUS_URL=http://host:port\nNIQ_WORKER_ID=from-b\nNIQ_WORKER_CREDENTIAL=...',
   'workers.create.niwRecipient': '接收方 (可选)',
   'workers.create.niwErr': '粘贴的配置需包含 NIQ_BUS_URL 和 NIQ_WORKER_ID',
+  'workers.create.mcpJsonErr': 'MCP servers 需为 {name, url, protocol?, headers?} 的 JSON 数组',
   'workers.create.subscriptions': '订阅事件 (逗号分隔，可选)',
   'workers.create.publish': '发布事件 (逗号分隔，可选)',
   'workers.create.emptyDefault': '留空 = 默认值',

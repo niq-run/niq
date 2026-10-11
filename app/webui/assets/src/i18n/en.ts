@@ -247,6 +247,7 @@ export const en = {
   'workers.create.niwConfigPlaceholder': 'NIQ_BUS_URL=http://host:port\nNIQ_WORKER_ID=from-b\nNIQ_WORKER_CREDENTIAL=...',
   'workers.create.niwRecipient': 'recipient (optional)',
   'workers.create.niwErr': 'paste a config carrying NIQ_BUS_URL and NIQ_WORKER_ID',
+  'workers.create.mcpJsonErr': 'MCP servers must be a JSON array of {name, url, protocol?, headers?}',
   'workers.create.subscriptions': 'subscriptions (comma-separated, optional)',
   'workers.create.publish': 'publish (comma-separated, optional)',
   'workers.create.emptyDefault': 'empty = default',
