@@ -176,7 +176,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
         {/* Top tabs: Info / Actions / Events / Permissions. Each tab shows only
             its own card(s); the rest are hidden via display. */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-          {([['info', t('wd.tab.info')], ['actions', t('wd.actions')], ['events', t('wd.sendEvent')], ['perms', t('wd.permissions')]] as const).map(([k, label]) => (
+          {([['info', t('wd.tab.info')], ['events', t('wd.sendEvent')], ['perms', t('wd.permissions')]] as const).map(([k, label]) => (
             <span
               key={k}
               onClick={() => setTab(k)}
@@ -291,7 +291,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
           </div>
 
           {/* Action area — its own card. */}
-          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: tab === 'actions' ? undefined : 'none' }}>
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: tab === 'info' ? undefined : 'none' }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.actions')}
             </div>
@@ -369,7 +369,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                     : t('wd.unmanaged.start.desc')}
                 </div>
                 {worker.unmanaged_state === 'running' ? (
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <span
                       onClick={() => unmanagedAction('stop')}
                       className="btn-hover"
