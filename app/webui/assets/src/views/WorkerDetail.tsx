@@ -183,12 +183,12 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
               className="btn-hover"
               style={{
                 cursor: 'pointer',
-                padding: '4px 12px',
-                borderRadius: 4,
+                padding: '4px 14px',
+                borderRadius: 6,
                 userSelect: 'none',
                 fontSize: fontSizes.sm,
-                color: tab === k ? colors.accent : colors.textDim,
-                borderBottom: tab === k ? '2px solid ' + colors.accent : '2px solid transparent',
+                background: tab === k ? colors.accent : 'transparent',
+                color: tab === k ? colors.bg : colors.textDim,
               }}
             >
               {label}
