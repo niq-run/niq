@@ -352,7 +352,7 @@ func (w *Worker) handleServerAdd(evt event.Event) {
 		return
 	}
 	w.persist()
-	w.reply(tc, "", fmt.Sprintf("added server %s (%d tools)", sc.Name, w.toolsForCached(sc.Name)))
+	w.reply(tc, fmt.Sprintf("added server %s (%d tools)", sc.Name, w.toolsForCached(sc.Name)), "")
 }
 
 func (w *Worker) handleServerRemove(evt event.Event) {
@@ -374,7 +374,7 @@ func (w *Worker) handleServerRemove(evt event.Event) {
 		return
 	}
 	w.persist()
-	w.reply(tc, "", fmt.Sprintf("removed server %s", name))
+	w.reply(tc, fmt.Sprintf("removed server %s", name), "")
 }
 
 func (w *Worker) handleServerUpdate(evt event.Event) {
@@ -407,7 +407,7 @@ func (w *Worker) handleServerUpdate(evt event.Event) {
 	w.mu.Unlock()
 
 	w.persist()
-	w.reply(tc, "", fmt.Sprintf("updated server %s", name))
+	w.reply(tc, fmt.Sprintf("updated server %s", name), "")
 }
 
 // ── helpers ──
