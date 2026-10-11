@@ -86,7 +86,8 @@ func TestApprovalLifecycle(t *testing.T) {
 func TestSendEventCarriesRequestId(t *testing.T) {
 	ch := &stubChannel{}
 	w := New(Config{ID: "webui-hiw", Bus: ch})
-	if err := w.SendEvent(context.Background(), "mount.list", "ws-1", nil); err != nil {
+	reqID, err := w.SendEvent(context.Background(), "mount.list", "ws-1", nil)
+	if err != nil {
 		t.Fatalf("SendEvent: %v", err)
 	}
 	if len(ch.sent) != 1 {
@@ -95,6 +96,9 @@ func TestSendEventCarriesRequestId(t *testing.T) {
 	evt := ch.sent[0]
 	if evt.RequestId == "" || evt.RequestId != evt.ID {
 		t.Fatalf("RequestId = %q, must be the event's own id %q", evt.RequestId, evt.ID)
+	}
+	if reqID != evt.ID {
+		t.Fatalf("SendEvent returned request id %q, want %q", reqID, evt.ID)
 	}
 	if evt.TraceID != evt.ID {
 		t.Fatalf("TraceID = %q, want %q", evt.TraceID, evt.ID)

@@ -287,11 +287,16 @@ func (w *Worker) SendInput(ctx context.Context, text string, target string, mode
 // worker's reply echoes it back so the UI can pair the response with the card
 // that raised it. The bus ACL still gates it: HIW may only publish event types
 // its identity grants.
-func (w *Worker) SendEvent(ctx context.Context, evtType event.EventType, target string, payload map[string]any) error {
+// SendEvent returns the request id (the event's own id) so a caller can
+// correlate the worker's request.completed / request.failed reply to it.
+func (w *Worker) SendEvent(ctx context.Context, evtType event.EventType, target string, payload map[string]any) (string, error) {
 	evt := event.New(evtType, w.ID(), payload)
 	evt.TraceID = evt.ID
 	evt.RequestId = evt.ID
-	return w.Channel.Send(context.Background(), evt, target)
+	if err := w.Channel.Send(context.Background(), evt, target); err != nil {
+		return "", err
+	}
+	return evt.ID, nil
 }
 
 // publishReady announces HIW on the bus.

@@ -1712,11 +1712,13 @@ func (s *Server) handleWorkerEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.hiw.SendEvent(r.Context(), event.EventType(body.Type), id, body.Payload); err != nil {
+	reqID, err := s.hiw.SendEvent(r.Context(), event.EventType(body.Type), id, body.Payload)
+	if err != nil {
 		http.Error(w, "send event: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"request_id": reqID})
 }
 
 // handleApprovals serves GET /api/approvals: the approval entries the HIW
