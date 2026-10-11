@@ -350,13 +350,16 @@ export async function sendWorkerEvent(
   id: string,
   type: string,
   payload: Record<string, unknown>,
-): Promise<void> {
+): Promise<string> {
   const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/event`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, payload }),
   })
   if (!res.ok) throw new Error((await res.text()).trim() || 'send event failed: ' + res.status)
+  // The server returns the request id so the UI can correlate + show the reply.
+  const data = await res.json().catch(() => null)
+  return data?.request_id ?? ''
 }
 
 // fetchWorkerProviders asks a reason worker for its selectable providers and

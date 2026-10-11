@@ -3,6 +3,7 @@ import { useTheme, fontSizes, type Palette } from '../theme'
 import { useI18n } from '../i18n'
 import { type WorkerInfo } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
+import SelectDropdown from '../components/SelectDropdown'
 import CreateWorkerDialog from './CreateWorkerDialog'
 import ViewHeader from '../components/ViewHeader'
 
@@ -129,23 +130,19 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
       {workers.length > 0 && (
         <div style={{ flexShrink: 0, display: 'flex', gap: 16, padding: isMobile ? '4px 24px 8px' : '10px 24px 8px', flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid ' + colors.border }}>
           <FilterField label={t('worker.filter.type')} colors={colors}>
-            <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={filterSelect(colors)}>
-              <option value="">{t('worker.filter.all')}</option>
-              {availableTypes.map(tp => <option key={tp} value={tp}>{tp}</option>)}
-            </select>
+            <SelectDropdown value={typeFilter} options={availableTypes} placeholder={t('worker.filter.all')} onChange={setTypeFilter} />
           </FilterField>
           <FilterField label={t('worker.filter.tag')} colors={colors}>
-            <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} style={filterSelect(colors)}>
-              <option value="">{t('worker.filter.all')}</option>
-              {availableTags.map(tg => <option key={tg} value={tg}>#{tg}</option>)}
-            </select>
+            <SelectDropdown value={tagFilter} options={availableTags} placeholder={t('worker.filter.all')} onChange={setTagFilter} render={(o) => '#' + o} />
           </FilterField>
           <FilterField label={t('worker.filter.status')} colors={colors}>
-            <select value={onlineFilter} onChange={e => setOnlineFilter(e.target.value as '' | 'online' | 'offline')} style={filterSelect(colors)}>
-              <option value="">{t('worker.filter.all')}</option>
-              <option value="online">{t('worker.online')}</option>
-              <option value="offline">{t('worker.offline')}</option>
-            </select>
+            <SelectDropdown
+              value={onlineFilter}
+              options={['online', 'offline']}
+              placeholder={t('worker.filter.all')}
+              onChange={(v) => setOnlineFilter(v as '' | 'online' | 'offline')}
+              render={(o) => (o === 'online' ? t('worker.online') : t('worker.offline'))}
+            />
           </FilterField>
         </div>
       )}
@@ -279,21 +276,8 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
   )
 }
 
-// filterSelect styles a dropdown the same as the previous text input.
-const filterSelect = (colors: Palette): React.CSSProperties => ({
-  width: '100%',
-  boxSizing: 'border-box',
-  background: colors.bgLight,
-  border: '1px solid ' + colors.border,
-  borderRadius: 4,
-  padding: '6px 9px',
-  color: colors.text,
-  fontSize: fontSizes.base,
-  outline: 'none',
-})
-
-// FilterField is a labelled dropdown group (label + the caller's <select>) for
-// the toolbar.
+// FilterField is a labelled dropdown group (label + the caller's SelectDropdown)
+// for the toolbar.
 function FilterField({ label, colors, children }: { label: string; colors: Palette; children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 150 }}>

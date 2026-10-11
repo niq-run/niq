@@ -4,6 +4,7 @@ import { useI18n } from '../i18n'
 import { type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
 import SendEventForm from '../components/SendEventForm'
+import SelectDropdown from '../components/SelectDropdown'
 import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, updateWorkerAllow, updateWorkerMeta } from '../services/api'
 
 interface WorkerDetailProps {
@@ -404,9 +405,6 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 
 					{/* Danger: permanently remove this worker. — within the actions card */}
 					<div style={{ marginTop: 18 }}>
-						<div style={{ color: colors.detailLabel, fontSize: fontSizes.sm, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-							{t('wd.delete')}
-						</div>
 				                {confirmDel ? (
 				                  <>
 				                    <div style={{ color: colors.textDim, fontSize: fontSizes.sm, marginBottom: 8 }}>{t('wd.delete.confirm', { id: worker.id })}</div>
@@ -454,12 +452,12 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 					{/* Model / Provider — only reason workers carry ProviderSources.
 							 Keyed by worker id so switching workers cannot leak one worker's
 								 provider state into another. */}
-					{worker.type === 'reason' && tab === 'info' && <ProviderSection key={worker.id} workerId={worker.id} />}
+					{worker.type === 'reason' && tab === 'events' && <ProviderSection key={worker.id} workerId={worker.id} />}
 
 					{/* Mounts — the workspace counterpart: the worker's mounted
 							 directories are its read/write boundary; list, mount and
 								 unmount them here. */}
-					{worker.type === 'workspace' && tab === 'info' && <MountsSection key={worker.id} workerId={worker.id} />}
+					{worker.type === 'workspace' && tab === 'events' && <MountsSection key={worker.id} workerId={worker.id} />}
         </div>
       </div>
     </div>
@@ -520,17 +518,6 @@ function ProviderSection({ workerId }: { workerId: string }) {
     load(ac.signal)
     return () => ac.abort()
   }, [expanded, load])
-
-  const selectStyle: React.CSSProperties = {
-    width: '100%',
-    maxWidth: 260,
-    padding: '6px 8px',
-    fontSize: fontSizes.md,
-    background: colors.bgLight,
-    color: colors.text,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-  }
 
   const active = providers.find((p) => p.name === selProvider)
   const models = active?.models ?? []
@@ -601,24 +588,28 @@ function ProviderSection({ workerId }: { workerId: string }) {
             <>
               <div style={{ marginBottom: 10 }}>
                 <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginBottom: 4 }}>{t('wd.provider')}</div>
-                <select value={selProvider} onChange={(e) => pickProvider(e.target.value)} style={selectStyle}>
-                  {providers.map((p) => (
-                    <option key={p.name} value={p.name} style={{ background: colors.bgLight, color: colors.text }}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+                <div style={{ maxWidth: 260 }}>
+                  <SelectDropdown
+                    value={selProvider}
+                    options={providers.map((p) => p.name)}
+                    placeholder={t('wd.provider')}
+                    onChange={pickProvider}
+                    allowClear={false}
+                  />
+                </div>
               </div>
 
               <div style={{ marginBottom: 10 }}>
                 <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginBottom: 4 }}>{t('wd.model')}</div>
-                <select value={selModel} onChange={(e) => { setSelModel(e.target.value); setDoneNote('') }} style={selectStyle}>
-                  {(models.includes(selModel) ? models : [selModel, ...models]).filter(Boolean).map((m) => (
-                    <option key={m} value={m} style={{ background: colors.bgLight, color: colors.text }}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                <div style={{ maxWidth: 260 }}>
+                  <SelectDropdown
+                    value={selModel}
+                    options={(models.includes(selModel) ? models : [selModel, ...models]).filter(Boolean)}
+                    placeholder={t('wd.model')}
+                    onChange={(v) => { setSelModel(v); setDoneNote('') }}
+                    allowClear={false}
+                  />
+                </div>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
