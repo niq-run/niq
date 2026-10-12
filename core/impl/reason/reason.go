@@ -5,6 +5,7 @@ package reason
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -537,6 +538,52 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 				Text:   "Unknown tool '" + tc.ToolName + "': tool not available - not dispatched.",
 				IsErr:  true,
 			})
+			continue
+		}
+		// The worker's own "request" escape hatch: the model named a peer
+		// capability (target + event + arguments) instead of the tool being in
+		// the API list. Reuse the request call's own id as the forwarded
+		// invocation's RequestId, so the peer's request.completed resolves the
+		// model's request placeholder through the normal tracker — no extra tool
+		// is ever added to the list (stable LLMToolDefs → cache-friendly).
+		if w.isRequestCap(cap) {
+			reqArgs := map[string]any{}
+			if tc.ToolArguments != "" {
+				if err := json.Unmarshal([]byte(tc.ToolArguments), &reqArgs); err != nil {
+					w.transcript.Apply(transcript.ToolResultPatch{
+						CallID: tc.ToolCallID, Name: tc.ToolName,
+						Text: "request: bad arguments: " + err.Error(), IsErr: true,
+					})
+					continue
+				}
+			}
+			target, _ := reqArgs["target"].(string)
+			eventType, _ := reqArgs["event"].(string)
+			args, _ := reqArgs["arguments"].(map[string]any)
+			if args == nil {
+				args = map[string]any{}
+			}
+			pcap, ok2 := w.capabilityFor(target, eventType)
+			if !ok2 {
+				log.Printf("[reason %s] request: unknown capability %s/%s", w.ID(), target, eventType)
+				unavailable = append(unavailable, fmt.Sprintf("%s(%s/%s)", tc.ToolName, target, eventType))
+				w.transcript.Apply(transcript.ToolResultPatch{
+					CallID: tc.ToolCallID, Name: tc.ToolName,
+					Text:   fmt.Sprintf("unknown capability %s/%s - not dispatched.", target, eventType),
+					IsErr:  true,
+				})
+				continue
+			}
+			// Track the request call under its own id so the peer's reply pairs
+			// with the model's request placeholder; the id is ALSO the RequestId
+			// we send to the peer, so no second placeholder is needed.
+			w.requestTracker.Add(pcap.Source, []llm.ContentBlock{{
+				Type: llm.ContentToolCall, ToolCallID: tc.ToolCallID, ToolName: tc.ToolName,
+			}})
+			evt := event.New(pcap.Event, w.ID(), args)
+			evt.RequestId = tc.ToolCallID
+			evt.TraceID = traceID
+			_ = w.Channel.Send(context.Background(), evt, pcap.Source)
 			continue
 		}
 		callsByTarget[cap.Source] = append(callsByTarget[cap.Source], tc)

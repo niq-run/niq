@@ -2,6 +2,7 @@ package reason
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -70,6 +71,81 @@ func TestHandleToolCallsDispatches(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected a bash event to workspace with RequestId c1")
+	}
+}
+
+// TestRequestToolForwards verifies the self "request" tool forwards a model-led
+// (target, event, arguments) call as the peer capability event, reusing the
+// request call's own id as the RequestId so the peer reply resolves it. The
+// peer capability never enters the tool list.
+func TestRequestToolForwards(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+	// Announce this worker's own "request" tool and a peer workspace's "bash".
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "r1", map[string]any{
+		"watch": []map[string]any{{"event": "request", "desc": "forward a call"}},
+	}))
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "workspace", map[string]any{
+		"watch": []map[string]any{{"event": "bash", "desc": "Run a command"}},
+	}))
+
+	args, _ := json.Marshal(map[string]any{
+		"target": "workspace", "event": "bash", "arguments": map[string]any{"cmd": "ls"},
+	})
+	calls := []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "req-1", ToolName: "request", ToolArguments: string(args)},
+	}
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), calls, "trace1")
+
+	// Forwarded as a bash event to workspace with RequestId == the request id.
+	found := false
+	for _, e := range ch.eventsOf("bash") {
+		if e.RequestId == "req-1" {
+			found = true
+			if e.Payload["cmd"] != "ls" {
+				t.Fatalf("forwarded payload = %v, want cmd=ls", e.Payload)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected request to forward a bash event to workspace with RequestId req-1")
+	}
+	// No "request" dispatch to self (the forward path takes over).
+	if n := len(ch.eventsOf("request")); n != 0 {
+		t.Fatalf("expected no self dispatch of request, got %d", n)
+	}
+}
+
+// TestRequestToolUnknownTargetFails verifies request to an unknown worker/event
+// resolves as an error in place and is not dispatched.
+func TestRequestToolUnknownTargetFails(t *testing.T) {
+	ch := newTestChannel()
+	prov := &staticProvider{msg: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
+	w := newTestWorker(prov, ch)
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "r1", map[string]any{
+		"watch": []map[string]any{{"event": "request"}},
+	}))
+
+	args, _ := json.Marshal(map[string]any{"target": "workspace", "event": "bash"})
+	calls := []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "request", ToolArguments: string(args)},
+	}
+	w.mu.Lock()
+	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: calls})
+	w.handleToolCalls(context.Background(), calls, "trace1")
+
+	if n := len(ch.eventsOf("bash")); n != 0 {
+		t.Fatalf("expected no dispatch for unknown target/event, got %d", n)
+	}
+	foundErr := false
+	for _, m := range w.transcript.Render() {
+		if m.ToolCallID == "c1" && m.IsError {
+			foundErr = true
+		}
+	}
+	if !foundErr {
+		t.Fatal("transcript should carry an error result for the unknown request target")
 	}
 }
 

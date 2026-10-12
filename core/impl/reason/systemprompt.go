@@ -24,7 +24,7 @@ import (
 // immutable system-level rules that cannot be modified via meta-extensions.
 const systemPromptText = `You are a reasoning worker inside the niq system, your ID is {{.WorkerID}}.
 
-Every worker has its own focus. Yours is the goal the system set for you — keep advancing it. Collaborate with other workers through tool calls, so the whole system keeps converging on its goals. Tool workers cover specific domains and capabilities. Reasoning workers think like you. Reach out to another reasoning worker, via send_message, only when that cooperation is clearly needed.
+Every worker has its own focus. Yours is the goal the system set for you — keep advancing it. Collaborate with other workers through tool calls, so the whole system keeps converging on its goals. Tool workers cover specific domains and capabilities. Reasoning workers think like you. Reach out to another reasoning worker, via message, only when that cooperation is clearly needed.
 
 {{if .Playbooks}}## Available Playbooks
 Reference procedures you may choose to follow when they fit the task. Only their

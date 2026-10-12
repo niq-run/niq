@@ -23,6 +23,15 @@ import (
 	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
+// The reason worker's own "generated" self tools:
+//   message — fire-and-forget worker.input to a peer (no result, no tracker);
+//   request — forward a peer capability call and await its request.completed
+//             via the normal tracker (the peer's reply resolves this call's id).
+const (
+	TypeMessage event.EventType = "message"
+	TypeRequest event.EventType = "request"
+)
+
 // ToolListBuilder produces the LLM tool list from the discovered capability
 // universe. Extensions carry no exposure marks — the builder decides, by its
 // own policy, which capabilities the LLM sees and under what names. This is an
@@ -66,6 +75,27 @@ func toolNameFor(w *BaseReasonWorker, cap DiscoveredCapability) string {
 		return strings.ReplaceAll(id, ".", "_")
 	}
 	return encodeToolName(w, worker.Tool{Name: id, Provider: cap.Source})
+}
+
+// isRequestCap reports whether a capability is THIS worker's own "request"
+// tool (a reason worker's directed-call escape hatch). Only the bare name
+// "request" on this reason worker qualifies — a peer reason's request is
+// encoded provider__request and never treated as this escape hatch.
+func (w *BaseReasonWorker) isRequestCap(cap DiscoveredCapability) bool {
+	return cap.Source == w.ID() && string(cap.Event) == string(TypeRequest)
+}
+
+// capabilityFor finds a discovered capability addressed as (source worker id,
+// bare event type). It backs the "request" tool: the model names the target
+// worker and the capability event it wants invoked. Refuses peer-reason
+// capabilities (not callable tools to this worker).
+func (w *BaseReasonWorker) capabilityFor(target, eventType string) (DiscoveredCapability, bool) {
+	for _, cap := range w.discoveredCapabilities() {
+		if cap.Source == target && string(cap.Event) == eventType && cap.Source != w.ID() {
+			return cap, true
+		}
+	}
+	return DiscoveredCapability{}, false
 }
 
 // capabilityByToolName finds a discovered capability by its LLM-facing tool

@@ -37,7 +37,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	}
 
 	w.Register(baseworker.Extension{
-		Event: TypeSendMessage,
+		Event: reasonBase.TypeMessage,
 		// SelfOnly: a worker's own addressed-messaging tool is not something
 		// peers should be able to call, so it is announced only to itself.
 		SelfOnly:    true,
@@ -49,6 +49,29 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
 		handleSendMessage(w, tc.CallID, string(evt.Type), tc.CallerID, tc.TraceID, tc.Args)
+	})
+
+	w.Register(baseworker.Extension{
+		Event: reasonBase.TypeRequest,
+		// SelfOnly: this is the worker's own directed-call escape hatch — peers
+		// call it here only indirectly (a peer reason invokes its own request).
+		// The actual forwarding is done in handleToolCalls (pkg/reason): the
+		// peer capability event goes out under THIS call's id, so no second
+		// placeholder is needed. This handler is defensive only (normally never
+		// reached).
+		SelfOnly:    true,
+		Description: "Invoke a capability on another worker without it being a listed tool: provide target (worker id), event (the capability event type, as shown by get_worker_info), and arguments. The call awaits the worker's request.completed and returns its result.",
+		Parameters: obj(map[string]any{
+			"target":    map[string]any{"type": "string", "description": "Target worker ID"},
+			"event":     map[string]any{"type": "string", "description": "Capability event type on the target worker"},
+			"arguments": map[string]any{"type": "object", "description": "Capability arguments"},
+		}),
+	}, func(evt event.Event) {
+		// Defensive: handleToolCalls pre-expands request into a real peer call,
+		// so this should not be dispatched. If it somehow is, fail loudly rather
+		// than leaving the call unresolved.
+		tc := baseworker.ParseToolCall(evt)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "request must be dispatched via the forward path", tc.TraceID)
 	})
 
 	w.Register(baseworker.Extension{
@@ -124,9 +147,16 @@ const TypeContextRotate event.EventType = "context.rotate"
 // deliberately live on the HOST worker, not here: a reason worker must not
 // treat peer reasons' ready events as callable tools, and the fleet roster is
 // the host's directory service.
+// TypeMessage / TypeRequest are the default worker's generated self tools:
+// message (fire-and-forget worker.input) and request (forward a peer capability
+// call and await its request.completed via the normal tracker).
 const (
-	TypeSendMessage event.EventType = "send_message"
+	TypeMessage event.EventType = reasonBase.TypeMessage
+	TypeRequest event.EventType = reasonBase.TypeRequest
 )
+
+// TypeProgramUpdate / TypeProgramAdd / TypeProgramRemove are the program
+// management tools (see the consts below the registerDefaultExtensions block).
 
 // TypeProgramQuery / TypeProgramUpdate are the program-management extensions:
 // read this worker's instruction/playbook list, or add/remove one entry. They

@@ -18,8 +18,8 @@ import (
 func TestCoreExtensionsRegistered(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 
-	if cap, ok := w.ExtensionByToolName("send_message"); !ok || cap.Event != event.EventType("send_message") {
-		t.Fatalf("send_message not registered under its own event type: %+v ok=%v", cap, ok)
+	if cap, ok := w.ExtensionByToolName("message"); !ok || cap.Event != event.EventType("message") {
+		t.Fatalf("message not registered under its own event type: %+v ok=%v", cap, ok)
 	}
 	if cap, ok := w.ExtensionByToolName("context_compress"); !ok || cap.Event != reasonBase.TypeContextCompress {
 		t.Fatalf("context_compress not registered as context.compress extension: %+v ok=%v", cap, ok)
@@ -84,7 +84,7 @@ func TestCoreExtensionsExposedToLLM(t *testing.T) {
 	}
 	// The fleet roster is NOT an LLM tool here — that is the host's
 	// list_workers directory. This worker's own tools are its self tools.
-	for _, want := range []string{"send_message", "context_compress", "context_rotate"} {
+	for _, want := range []string{"message", "context_compress", "context_rotate"} {
 		if !got[want] {
 			t.Fatalf("expected %q in LLM tool list, got %v", want, keysOf(got))
 		}
@@ -151,13 +151,13 @@ func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
 	if presence == nil || directed == nil {
 		t.Fatal("expected one presence broadcast (self excluded) and one directed announcement")
 	}
-	if watchHasEvent(*presence, "send_message") {
+	if watchHasEvent(*presence, "message") {
 		t.Fatal("presence broadcast must not carry the SelfOnly core tools")
 	}
 	if !watchHasEvent(*presence, "provider.switch") {
 		t.Fatal("presence broadcast must keep non-SelfOnly extensions")
 	}
-	if !watchHasEvent(*directed, "send_message") {
+	if !watchHasEvent(*directed, "message") {
 		t.Fatal("directed announcement must carry the full contract, SelfOnly included")
 	}
 }
