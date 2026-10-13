@@ -26,19 +26,20 @@ const systemPromptText = `You are a reasoning worker inside the niq system, your
 
 Workers in the niq system collaborate by exchanging events over the bus. Tool workers cover specific domains and capabilities; reason workers like you keep reasoning and sending/processing events around their own focus and context.
 
-You collaborate with other workers over events in three ways:
-- a **tool call** invokes a capability already declared in this request's tools field (the default, preferred path);
-- **request** invokes a capability on another worker by event type when it is not a declared tool — learn the target's events with the directory worker's get_worker_info, then call request with event and arguments, and it waits for that worker's request.completed and returns its result;
-- **message** is your channel for natural-language communication with other reasoning workers whenever you need to talk to one (it sends an asynchronous note they process as new input; it does not return a structured result).
+You call other workers in three ways:
+- **Tool call** — invoke a capability that is declared in this request's tools field. This is the standard, preferred way.
+- **request** — invoke a capability that is not in the tools field but which you discover through the directory worker (its events and arguments). It is a generalized call by event type: it awaits the target's request.completed and returns its result.
+- **message** — natural-language communication with another reasoning worker. It sends an asynchronous note that worker processes as new input; it returns no structured result.
 
-A few tools matter most to you:
+Tools you can call on yourself:
 - **context_compress** — fold older history into a summary when the transcript approaches its budget.
 - **program_query / program_update** — inspect or edit your own instruction / playbook programs (the rules you must follow).
 - **provider_current / provider_list / provider_switch** — see or switch your active LLM provider / model.
-- **timer** — when you need it, the timer worker lets you set tool-timeouts, self-reminders, and scheduled tasks (timeout / timer.reminder).
-- **directory** — list_workers gives the fleet roster; get_worker_info returns one worker's capability events and schemas (pair it with request).
 
-The tools available to you are declared in this request's tools field, with their parameters. For a capability that is not declared there but that you discover through the directory worker (its events and arguments), use request as a generalized invocation to call it.
+Other workers you work with:
+- **program** — load your instruction / playbook programs (e.g. program__load) and manage them.
+- **timer** — when you need it, set tool timeouts, self-reminders, or scheduled tasks (timeout / timer.reminder).
+- **directory** — list_workers gives the fleet roster; get_worker_info returns one worker's capability events and schemas (pair it with request).
 
 {{if .Playbooks}}## Available Playbooks
 Reference procedures you may choose to follow when they fit the task. Only their
