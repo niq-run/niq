@@ -18,6 +18,11 @@ func TestBuildInstructionEmpty(t *testing.T) {
 	if !strings.Contains(s, "own focus") || !strings.Contains(s, "message") {
 		t.Fatalf("prompt should describe focus and worker collaboration: %q", s)
 	}
+	for _, want := range []string{"## Built-in tools", "- request", "context_compress", "provider_switch"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("prompt should describe built-in tool usage (%q missing): %q", want, s)
+		}
+	}
 }
 
 // TestBuildInstructionInstruction verifies instruction programs contribute

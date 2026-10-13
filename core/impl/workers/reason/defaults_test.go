@@ -84,7 +84,7 @@ func TestCoreExtensionsExposedToLLM(t *testing.T) {
 	}
 	// The fleet roster is NOT an LLM tool here — that is the host's
 	// list_workers directory. This worker's own tools are its self tools.
-	for _, want := range []string{"message", "context_compress", "context_rotate"} {
+	for _, want := range []string{"message", "context_compress"} {
 		if !got[want] {
 			t.Fatalf("expected %q in LLM tool list, got %v", want, keysOf(got))
 		}
@@ -204,6 +204,9 @@ func (p *rotateFlowProvider) CompleteStream(_ context.Context, _ *llm.Completion
 // result. Rotate routes as a normal self-tool, so self-discovery must be in
 // place for the call to dispatch.
 func TestMetaRotateEchoesToolCallID(t *testing.T) {
+	// context.rotate is temporarily disabled (registration commented out);
+	// skip until the tool is re-enabled.
+	t.Skip("context.rotate temporarily disabled")
 	prov := &rotateFlowProvider{}
 	w, ch, cancel := startWorker(t, prov)
 	defer cancel()

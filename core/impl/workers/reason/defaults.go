@@ -87,6 +87,10 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		handleContextOp(w, evt, compactDirective)
 	})
 
+	// context.rotate is TEMPORARILY DISABLED (backing off its design while the
+	// context strategy settles; the handler + TypeContextRotate stay for later
+	// re-enable). Re-register to expose the tool again.
+	/*
 	w.Register(baseworker.Extension{
 		Event:       TypeContextRotate,
 		Description: "Rotate your context: summarize the current transcript as a carried digest and start a fresh context.",
@@ -97,6 +101,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	}, func(evt event.Event) {
 		handleContextOp(w, evt, compactDirective)
 	})
+	*/
 
 	// Program management: query or mutate this worker's instruction/playbook
 	// list. Deliberately NOT SelfOnly — the list is meant to be edited by other
