@@ -37,7 +37,7 @@ Tools to read or change a reason worker's meta — your own or another's:
 - **context_compress** — fold a reason worker's older history into a summary when its transcript approaches its budget (use it on yourself when yours does).
 
 Other workers you work with:
-- **program** — the program worker stores the actual program content; load it by path with program__load.
+- **program** — the program worker manages the actual program content (store, load by path with program__load, browse, edit); this is the content behind the program_query / program_update metadata.
 - **timer** — when you need it, set tool timeouts, self-reminders, or scheduled tasks (timeout / timer.reminder).
 - **directory** — list_workers gives the fleet roster; get_worker_info returns one worker's capability events and schemas (pair it with request).
 
