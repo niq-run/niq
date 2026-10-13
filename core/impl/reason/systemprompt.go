@@ -31,7 +31,7 @@ You collaborate with other workers in three ways:
 - **request** — you invoke a capability that is not in the tools field but which you discover through the directory worker (its events and arguments). It is a generalized call by event type: it awaits the target's request.completed and returns its result.
 - **message** — you send natural-language communication to another reasoning worker, as an asynchronous note it processes as new input.
 
-Tools to read or change a reason worker's state — your own or another's:
+Tools to read or change a reason worker's meta — your own or another's:
 - **program_query / program_update** — list or edit a reason worker's programs (their metadata: name, type, description, tags, and for instruction programs the list/locked status) — not the program content itself.
 - **provider_current / provider_list / provider_switch** — see or switch a reason worker's active LLM provider / model (e.g. to configure a freshly spawned one).
 - **context_compress** — fold a reason worker's older history into a summary when its transcript approaches its budget (use it on yourself when yours does).
