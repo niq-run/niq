@@ -92,7 +92,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeElapse,
-		Description: "Set a reminder timer. After the specified duration, you will receive a timer.elapsed event. Unlike the timeout tool, this timer is never automatically cancelled — it always fires. Use this for general-purpose timing and reminders.",
+		Description: "Set a reminder timer. After the specified duration, you will receive a timer.reminder event. Unlike the timeout tool, this timer is never automatically cancelled — it always fires. Use this for general-purpose timing and reminders.",
 		Parameters: obj(map[string]any{
 			"duration_ms": map[string]any{
 				"type":        "integer",
