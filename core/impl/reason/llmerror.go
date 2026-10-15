@@ -123,7 +123,7 @@ func (w *BaseReasonWorker) dispatchElapseReminder(traceID string, attempt int) {
 	// worker can offer "elapse"). Absent a provider, the retry is simply not
 	// scheduled — logged, not fatal.
 	w.mu.Lock()
-	provider, ok := w.peerCapability(elapseTool)
+	provider, ok := w.findProvider(elapseTool)
 	w.mu.Unlock()
 	if !ok {
 		log.Printf("[reason %s] no peer offers the %q capability; rate-limit retry reminder not scheduled", w.ID(), elapseTool)

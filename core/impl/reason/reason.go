@@ -591,18 +591,6 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	// worker for own capabilities) like any other. The tool-call id rides along
 	// as RequestId so the handler's request.* echo pairs with it.
 
-	// Record the current round's single timeout timer, if any. At most one
-	// is meaningful - the first timer to fire parks all pending tools; a
-	// second timeout in the same round is treated as a misplaced
-	// config and overwrites the first (leak accepted). Only record if a
-	// provider actually offers the timeout tool.
-	for _, tc := range busCalls {
-		if provider, ok := w.timeoutProvider(tc.ToolName); ok {
-			w.activeTimeout = tc.ToolCallID
-			w.activeTimeoutProvider = provider
-		}
-	}
-
 	// NOTE: tool placeholders are inserted in finishReasoning BEFORE the budget
 	// check (so the inline soft-budget reminder never interleaves the assistant
 	// tool_call with its result). handleToolCalls only dispatches; it does not
@@ -629,6 +617,14 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 				IsErr: true,
 			})
 			continue
+		}
+		// Record the round's timeout timer if this call is the timeout
+		// capability (bare event "timeout", provider-agnostic). At most one is
+		// meaningful: the first timer to fire parks all pending tools; a second
+		// one in the same round overwrites the first (leak accepted).
+		if cap.Source != w.ID() && string(cap.Event) == timeoutTool {
+			w.activeTimeout = tc.ToolCallID
+			w.activeTimeoutProvider = cap.Source
 		}
 		// The worker's own "request" escape hatch: the model named a peer
 		// capability (target + event + arguments) instead of the tool being in

@@ -144,33 +144,19 @@ func encodeToolName(w *BaseReasonWorker, t worker.Tool) string {
 // need not be named "timer". If no peer provides it, the feature is disabled.
 const timeoutTool = "timeout"
 
-// timeoutProvider returns the peer worker providing the built-in timeout
-// capability, when name is that capability's LLM-facing tool name (e.g.
-// "timer__timeout"). Convention-based and provider-agnostic: any peer whose
-// capability has the bare event "timeout" qualifies, so the timer worker need
-// not be named "timer". Built on the generic capabilityByToolName lookup.
-func (w *BaseReasonWorker) timeoutProvider(name string) (string, bool) {
-	cap, ok := w.capabilityByToolName(name)
-	if !ok || cap.Source == w.ID() || string(cap.Event) != timeoutTool {
-		return "", false
-	}
-	return cap.Source, true
-}
-
 // elapseTool is the bare-name contract for a one-shot reminder capability: the
 // peer publishing a capability named "elapse" fires the rate-limit retry
 // reminder. Provider-agnostic like timeoutTool — the worker need not be named
 // "timer".
 const elapseTool = "elapse"
 
-// peerCapability returns the peer worker exposing the capability with the given
-// bare event name (the name it is addressed by on the bus), or false if no peer
-// offers it. Own capabilities never qualify. Callers must hold w.mu. It lets the
-// mechanism reach a peer's capability by its name rather than a hardcoded
-// worker id.
-func (w *BaseReasonWorker) peerCapability(bareEvent string) (string, bool) {
+// findProvider returns the peer worker providing the capability with the given
+// bare event name (e.g. "elapse"), or false if none does. Own capabilities never
+// qualify. Callers must hold w.mu. It is how the mechanism reaches a peer's
+// capability by name rather than by a hardcoded worker id.
+func (w *BaseReasonWorker) findProvider(capabilityEvent string) (string, bool) {
 	for _, cap := range w.discovered {
-		if cap.Source != w.ID() && string(cap.Event) == bareEvent {
+		if cap.Source != w.ID() && string(cap.Event) == capabilityEvent {
 			return cap.Source, true
 		}
 	}

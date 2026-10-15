@@ -136,7 +136,7 @@ func TestRateLimitRoundTrip(t *testing.T) {
 		"watch":     []map[string]any{{"event": "elapse", "desc": "reminder timer"}},
 	})
 	waitCond(t, testTimeout, func() bool {
-		_, ok := w.peerCapability(elapseTool)
+		_, ok := w.findProvider(elapseTool)
 		return ok
 	}, "elapse peer discovered")
 
