@@ -15,6 +15,7 @@ package reason
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/niq-run/niq/core/itfs/event"
@@ -54,6 +55,11 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 			Parameters:  cap.Parameters,
 		})
 	}
+	// Sort by name so the tool list is byte-identical across re-discovery: the
+	// capability universe is filled in worker.ready arrival order, which is not
+	// stable across a restart, and the tools sit at the front of every request —
+	// a reordered list busts the provider's prefix cache on the first round.
+	sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
 	return defs
 }
 
