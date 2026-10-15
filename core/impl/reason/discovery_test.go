@@ -33,26 +33,18 @@ func condStr(ok bool, a, b string) string {
 func TestPeerReasonReadyIsNotATool(t *testing.T) {
 	w, _ := newTestWorker2()
 
-	// An infra worker's ready becomes a callable tool (workspace__bash).
+	// An infra worker's ready becomes a callable capability (workspace__bash).
 	w.HandleWorkerReady(readyFor("workspace", "workspace", "bash"))
-	if _, ok := w.tools["workspace__bash"]; !ok {
-		t.Fatalf("infra workspace__bash should be a tool, got tools=%v", keysTools(w.tools))
+	if _, ok := w.capabilityByToolName("workspace__bash"); !ok {
+		t.Fatalf("infra workspace__bash should be callable, got discovered=%+v", w.discovered)
 	}
 
-	// A peer reason worker's ready must NOT become tools.
+	// A peer reason worker's ready must NOT become a callable capability.
 	w.HandleWorkerReady(readyFor("peer", "reason", "context.compress"))
-	if _, ok := w.tools["peer__context_compress"]; ok {
-		t.Fatalf("peer reason's context_compress must NOT be a callable tool, got tools=%v", keysTools(w.tools))
+	if _, ok := w.capabilityByToolName("peer__context_compress"); ok {
+		t.Fatalf("peer reason's context_compress must NOT be callable, got discovered=%+v", w.discovered)
 	}
-	if len(w.tools) != 1 {
-		t.Fatalf("expected exactly the infra tool, got %d tools: %v", len(w.tools), keysTools(w.tools))
+	if len(w.discovered) != 1 {
+		t.Fatalf("expected exactly the infra capability, got %d: %+v", len(w.discovered), w.discovered)
 	}
-}
-
-func keysTools[V any](m map[string]V) []string {
-	var ks []string
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
 }

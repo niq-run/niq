@@ -1,10 +1,10 @@
 // The default reason worker's extension toolkit: the generic tools
-// (send_message / list_workers) and the context meta ops (compress / rotate).
+// (send_message / request) and the context meta ops (compress / rotate).
 // These are deliberately outside pkg/reason — they are the default worker's
 // own choice of tools, not part of the shared reasoning mechanism. They are
 // implemented entirely through the mechanism's exported accessors
-// (ReplyCompleted / ReplyFailed / DiscoveredWorkers / CurrentTraceID /
-// Transcript / TryReason / Channel), so nothing here reaches into unexported
+// (ReplyCompleted / ReplyFailed / CurrentTraceID / Transcript / TryReason /
+// Channel), so nothing here reaches into unexported
 // state. The
 // context.compress / context.rotate handlers are this worker's own context
 // strategy: they edit the transcript directly and book their own completion.
@@ -26,7 +26,7 @@ import (
 
 // registerDefaultExtensions registers the toolkit the generic reason worker
 // adds on top of the base extensions (provider.switch / provider.list /
-// provider.current): send_message, list_workers, context.compress,
+// provider.current): send_message, request, context.compress,
 // context.rotate. A reason-family worker that wants a different toolkit simply
 // does not call this. compactDirective is the program-provided summarizer
 // override (empty for the built-in fallback); it is owned by this worker, not

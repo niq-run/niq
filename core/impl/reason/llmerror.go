@@ -20,9 +20,9 @@ import (
 	"log"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/reason/transcript"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
-	"github.com/niq-run/niq/core/impl/reason/transcript"
 )
 
 // decideLLMError classifies a failed LLM call and returns whether to retry it
@@ -118,15 +118,26 @@ func (w *BaseReasonWorker) scheduleRateLimitBackoff(traceID string, callErr erro
 // 429 itself was already recorded in the transcript by
 // scheduleRateLimitBackoff, so the reminder only needs to wake the round up.
 func (w *BaseReasonWorker) dispatchElapseReminder(traceID string, attempt int) {
+	// Resolve the reminder capability by its bare name instead of hardcoding
+	// the provider's worker id, so the timer worker can be renamed (or another
+	// worker can offer "elapse"). Absent a provider, the retry is simply not
+	// scheduled — logged, not fatal.
+	w.mu.Lock()
+	provider, ok := w.peerCapability(elapseTool)
+	w.mu.Unlock()
+	if !ok {
+		log.Printf("[reason %s] no peer offers the %q capability; rate-limit retry reminder not scheduled", w.ID(), elapseTool)
+		return
+	}
 	callID := fmt.Sprintf("niq_rl_%d_%d", time.Now().UnixNano(), attempt)
-	evt := event.New("elapse", w.ID(), map[string]any{
+	evt := event.New(elapseTool, w.ID(), map[string]any{
 		"duration_ms": rateLimitBackoffDuration.Milliseconds(),
 		"purpose": fmt.Sprintf("API rate limit (HTTP 429) hit; retrying after %s, attempt %d/%d",
 			rateLimitBackoffDuration, attempt, maxRateLimitRetries),
 	})
 	evt.RequestId = callID
 	evt.TraceID = traceID
-	if err := w.Channel.Send(context.Background(), evt, "timer"); err != nil {
+	if err := w.Channel.Send(context.Background(), evt, provider); err != nil {
 		log.Printf("[reason %s] failed to schedule rate-limit retry reminder: %v", w.ID(), err)
 	}
 }

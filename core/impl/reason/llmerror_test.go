@@ -14,6 +14,7 @@ import (
 func TestScheduleRateLimitBackoff(t *testing.T) {
 	ch := newTestChannel()
 	w := newTestWorker(nil, ch)
+	announceElapse(w, "timer")
 	cause := &llm.LLMError{Type: llm.ErrorRateLimit, Message: "429 too many requests"}
 
 	// The first maxRateLimitRetries hits schedule a reminder and pause the round.
@@ -127,6 +128,18 @@ func TestRateLimitRoundTrip(t *testing.T) {
 	prov := &rateLimitProvider{failures: 1}
 	w, ch, _ := startWorker(t, prov)
 
+	// The timer peer must be discovered before the 429, so the backoff can
+	// resolve the "elapse" capability by name (not a hardcoded worker id).
+	ch.in <- event.New(event.TypeWorkerReady, "timer", map[string]any{
+		"type":      "timer",
+		"worker_id": "timer",
+		"watch":     []map[string]any{{"event": "elapse", "desc": "reminder timer"}},
+	})
+	waitCond(t, testTimeout, func() bool {
+		_, ok := w.peerCapability(elapseTool)
+		return ok
+	}, "elapse peer discovered")
+
 	// First user input: the round hits a 429 and pauses quietly.
 	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "hello"})
 	waitCond(t, testTimeout, func() bool {
@@ -199,4 +212,14 @@ func transcriptHasText(msgs []llm.Message, sub string) bool {
 		}
 	}
 	return false
+}
+
+// announceElapse registers a peer offering the "elapse" capability, so the
+// rate-limit backoff has a provider to resolve by name.
+func announceElapse(w *BaseReasonWorker, id string) {
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, id, map[string]any{
+		"type":      "timer",
+		"worker_id": id,
+		"watch":     []map[string]any{{"event": "elapse", "desc": "reminder timer"}},
+	}))
 }

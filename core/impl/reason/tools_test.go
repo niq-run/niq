@@ -34,8 +34,8 @@ func TestEncodeToolNameExternal(t *testing.T) {
 	}
 }
 
-// TestHandleWorkerReadyAndGone verifies capabilities and published events are
-// learned from worker.ready and forgotten on worker.gone.
+// TestHandleWorkerReadyAndGone verifies capabilities are learned from
+// worker.ready and forgotten on worker.gone.
 func TestHandleWorkerReadyAndGone(t *testing.T) {
 	w := newTestWorker(nil, newTestChannel())
 
@@ -43,36 +43,19 @@ func TestHandleWorkerReadyAndGone(t *testing.T) {
 		"watch": []map[string]any{
 			{"event": "bash", "desc": "run a command", "parameters": map[string]any{"type": "object"}},
 		},
-		"publishes": []map[string]any{
-			{"type": "fs.changed", "description": "a file changed"},
-		},
 	})
 	w.HandleWorkerReady(ready)
 
 	// Tool is prefixed with the worker ID (encoded as provider__name).
-	if _, ok := w.tools["workspace__bash"]; !ok {
-		t.Fatalf("expected workspace__bash tool, got %+v", keys(w.tools))
-	}
-	if _, ok := w.publishMap["workspace"]; !ok {
-		t.Fatal("expected published events for workspace")
+	if _, ok := w.capabilityByToolName("workspace__bash"); !ok {
+		t.Fatalf("expected workspace__bash tool, got %+v", w.discovered)
 	}
 
 	gone := event.New(event.TypeWorkerGone, "host", map[string]any{"worker_id": "workspace"})
 	w.handleWorkerGone(gone)
-	if _, ok := w.tools["workspace__bash"]; ok {
+	if _, ok := w.capabilityByToolName("workspace__bash"); ok {
 		t.Fatal("tool should be removed after worker.gone")
 	}
-	if _, ok := w.publishMap["workspace"]; ok {
-		t.Fatal("publishes should be removed after worker.gone")
-	}
-}
-
-func keys(m map[string]worker.Tool) []string {
-	var ks []string
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
 }
 
 // TestCoreExtensionsRegistered / TestCoreExtensionsExposedToLLM /
@@ -163,10 +146,10 @@ func TestPeerToolDispatchable(t *testing.T) {
 	})
 	w.HandleWorkerReady(ready)
 
-	// The encoded name is in the dispatch table.
-	tool, ok := w.tools["cute-assistant__remember"]
-	if !ok || tool.Provider != "cute-assistant" {
-		t.Fatalf("dispatch table missing peer tool: %+v", tool)
+	// The peer tool is discoverable under its encoded name.
+	cap, ok := w.capabilityByToolName("cute-assistant__remember")
+	if !ok || cap.Source != "cute-assistant" {
+		t.Fatalf("expected the peer tool to be discoverable: %+v", cap)
 	}
 
 	// The LLM-facing name is exactly the dispatch key.

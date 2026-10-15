@@ -597,9 +597,9 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	// config and overwrites the first (leak accepted). Only record if a
 	// provider actually offers the timeout tool.
 	for _, tc := range busCalls {
-		if t, ok := w.timeoutToolFor(tc.ToolName); ok {
+		if provider, ok := w.timeoutProvider(tc.ToolName); ok {
 			w.activeTimeout = tc.ToolCallID
-			w.activeTimeoutProvider = t.Provider
+			w.activeTimeoutProvider = provider
 		}
 	}
 

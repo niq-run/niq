@@ -100,7 +100,7 @@ func NewWorker(cfg Config) *Worker {
 	})
 
 	// The default worker layers its own toolkit on top of the base
-	// extensions: send_message / list_workers / context.compress /
+	// extensions: send_message / request / context.compress /
 	// context.rotate. The context ops are this worker's own strategy — it
 	// responds to the context.compress convention event by editing its
 	// transcript directly (see compact.go), not by installing a compactor

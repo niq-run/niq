@@ -8,7 +8,7 @@
 //     provider.switch (worker.update) and provider.list / provider.current
 //     (worker.query).
 //
-// The generic tools (send_message / list_workers) and the context meta ops
+// The generic tools (send_message / request) and the context meta ops
 // (compress / rotate) are NOT here — they belong to the default reason worker
 // implementation (pkg/worker/reason).
 package reason
@@ -68,7 +68,7 @@ const (
 // registerBaseExtensions registers the provider management extensions every
 // reason worker has (provider.switch / provider.list / provider.current).
 // Reason-family workers extend or replace these via Register; the default
-// worker adds its own toolkit on top (send_message, list_workers,
+// worker adds its own toolkit on top (send_message, request,
 // context.compress/rotate) in pkg/worker/reason.
 func (w *BaseReasonWorker) registerBaseExtensions() {
 	obj := func(props map[string]any) map[string]any {

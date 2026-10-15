@@ -39,7 +39,6 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/itfs/program"
-	"github.com/niq-run/niq/core/itfs/worker"
 )
 
 // EventConverter pairs an event pattern with a conversion function that
@@ -48,12 +47,6 @@ import (
 type EventConverter struct {
 	Pattern   event.EventPattern
 	Converter func(evt event.Event) []llm.Message
-}
-
-// EventPublish describes an event type that a worker publishes on the bus.
-type EventPublish struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
 }
 
 const (
@@ -105,8 +98,8 @@ type Config struct {
 }
 
 // NewBaseReasonWorker assembles a BaseReasonWorker from a Config: applies
-// budget defaults, initializes the empty tool table / publish map / tool-call
-// tracker, and seeds the transcript with any handover brief.
+// budget defaults, initializes the empty tool-call tracker, and seeds the
+// transcript with any handover brief.
 func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	if cfg.Transcript == nil {
 		cfg.Transcript = transcript.NewAccumulateTranscript(transcript.WithMaxPayloadBytes(cfg.MaxPayloadBytes))
@@ -144,8 +137,6 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		providerName:    cfg.ProviderName,
 		providerModel:   cfg.ProviderModel,
 		transcript:      cfg.Transcript,
-		tools:           make(map[string]worker.Tool),
-		publishMap:      make(map[string][]EventPublish),
 		toolListBuilder: defaultToolListBuilder,
 		eventConverters: cfg.EventConverters,
 		programs:        cfg.Programs,
@@ -449,7 +440,7 @@ func (w *BaseReasonWorker) Messages() []llm.Message {
 
 // BaseReasonWorker is the reasoning mechanism shared by all reason-family
 // workers: it embeds baseworker.BaseWorker (id/subs/channel) and owns the working
-// notes, the LLM call, budget, tool table and the run flags of one reasoning
+// notes, the LLM call, budget and the run flags of one reasoning
 // round. It knows how to reason, not what to attend to.
 type BaseReasonWorker struct {
 	baseworker.BaseWorker
@@ -460,11 +451,9 @@ type BaseReasonWorker struct {
 	providerName    string // active provider name (status reporting)
 	providerModel   string // active provider model (status reporting)
 	transcript      transcript.Transcript
-	tools           map[string]worker.Tool // tools from the bus + built-ins; read by dispatch
 	discovered      []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
 	toolListBuilder ToolListBuilder        // LLM tool list policy (extension point)
 	programs        []program.Program
-	publishMap      map[string][]EventPublish // worker ID -> published events
 	requestTracker  *requesttracker.RequestTracker
 	// toolCallSeq mints globally-unique tool-call ids for calls whose model
 	// omitted one. It must be monotonic across rounds (not per-turn) because the

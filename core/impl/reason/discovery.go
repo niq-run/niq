@@ -1,15 +1,11 @@
 // Bus discovery: what this worker has learned about the other workers on the
-// bus, and the callable-tool index derived from that.
+// bus, and the callable capabilities derived from that.
 //
 // This is the INBOUND half of presence — it consumes worker.ready /
-// worker.gone and maintains the unified discovered universe (w.discovered,
-// w.publishMap) plus the dispatch table (w.tools) derived from
-// it. The OUTBOUND half — announcing this worker's own contract — lives in
-// announce.go. The extension registry — what this worker itself declares and
-// how it answers — lives in pkg/baseworker.
-//
-// The discovered universe is the single source of truth: the dispatch table is
-// rebuilt from it on every change, never maintained separately.
+// worker.gone and maintains the discovered universe (w.discovered): the single
+// source of truth for what this worker can call. The OUTBOUND half — announcing
+// this worker's own contract — lives in announce.go. The extension registry —
+// what this worker itself declares and how it answers — lives in pkg/baseworker.
 package reason
 
 import (
@@ -47,95 +43,11 @@ func (w *BaseReasonWorker) discoveredCapabilities() []DiscoveredCapability {
 	return w.discovered
 }
 
-// DiscoveredWorker is one worker in the directory served by list_workers: the
-// tools and published events this worker has learned about it from the bus.
-// It is NOT a snapshot of this worker's own state — that is the separate
-// Snapshot/Restore lifecycle.
-type DiscoveredWorker struct {
-	WorkerID  string         `json:"worker_id"`
-	Tools     []worker.Tool  `json:"tools,omitempty"`
-	Publishes []EventPublish `json:"publishes,omitempty"`
-}
-
-// DiscoveredWorkers aggregates the discovered tools and published events by
-// provider — the payload behind list_workers. It is a read-only view of the
-// bus-discovered state, not a worker strategy and not this worker's own state
-// Snapshot: the list_workers extension (pkg/worker/reason) calls it and sends
-// the result.
-func (w *BaseReasonWorker) DiscoveredWorkers() []DiscoveredWorker {
-	providers := make(map[string]*DiscoveredWorker)
-	for _, tool := range w.tools {
-		info, ok := providers[tool.Provider]
-		if !ok {
-			info = &DiscoveredWorker{WorkerID: tool.Provider, Publishes: w.publishMap[tool.Provider]}
-			providers[tool.Provider] = info
-		}
-		// Slim the listing: drop the full parameter schemas. The LLM already
-		// receives each peer tool's schema in its own tool defs (from the
-		// worker.ready announcements); list_workers only needs identity and
-		// description to pick a target. Full schemas made every call return
-		// 10+ KB per worker, permanently inflating the persisted transcript.
-		tool.Parameters = nil
-		info.Tools = append(info.Tools, tool)
-	}
-	for provider, events := range w.publishMap {
-		if _, ok := providers[provider]; !ok {
-			providers[provider] = &DiscoveredWorker{WorkerID: provider, Publishes: events}
-		}
-	}
-	out := make([]DiscoveredWorker, 0, len(providers))
-	for _, info := range providers {
-		out = append(out, *info)
-	}
-	return out
-}
-
-// WorkerInfo returns the full contract of one discovered worker: its tools
-// with COMPLETE parameter schemas and its published events. It backs the
-// get_worker_info tool — the detail view behind list_workers, which
-// deliberately carries only names and descriptions. Peer tool names match
-// list_workers (the encoded LLM-facing names); the worker's own capabilities
-// render from the self-directed discovery view under their event types.
-// ok=false when the worker is unknown (nothing announced or published).
-func (w *BaseReasonWorker) WorkerInfo(id string) (DiscoveredWorker, bool) {
-	var info DiscoveredWorker
-	info.WorkerID = id
-	if id == w.ID() {
-		// Own capabilities are not in the dispatch table (they dispatch
-		// through the registry); the self-directed ready already put them
-		// into the discovered universe.
-		for _, cap := range w.discovered {
-			if cap.Source != id {
-				continue
-			}
-			name := string(cap.Event)
-			info.Tools = append(info.Tools, worker.Tool{
-				Name: name, Description: cap.Description,
-				Parameters: cap.Parameters, Provider: id,
-			})
-		}
-	} else {
-		for _, t := range w.tools {
-			if t.Provider == id {
-				info.Tools = append(info.Tools, t)
-			}
-		}
-	}
-	if events, ok := w.publishMap[id]; ok {
-		info.Publishes = events
-	}
-	if len(info.Tools) == 0 && len(info.Publishes) == 0 {
-		return DiscoveredWorker{}, false
-	}
-	return info, true
-}
-
-// HandleWorkerReady learns a worker's capabilities and published events from
-// its worker.ready announcement, feeding the unified discovery universe
-// (discovered) and the tool table used for dispatch. Each ready event carries
-// that worker's complete contract (the worker excludes itself from its own
-// presence broadcast and sends its full contract to itself), so the source's
-// previous view is replaced wholesale — which is also what lets a
+// HandleWorkerReady learns a worker's capabilities from its worker.ready
+// announcement, feeding the discovered universe (w.discovered). Each ready
+// event carries that worker's complete contract (the worker excludes itself
+// from its own presence broadcast and sends its full contract to itself), so
+// the source's previous view is replaced wholesale — which is also what lets a
 // re-announcement update a worker's capabilities.
 func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 	workerID := evt.WorkerId
@@ -143,15 +55,11 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 		return
 	}
 
-	// A reason worker's ready lists events it RESPONDS to, not callable tools
-	// for peers. Another reason worker must not surface a peer's extensions as
-	// tools (e.g. oncall__context_compress / oncall__program_query): they are
-	// not capabilities purpose-built for callers the way workspace/bash or
-	// timer/timeout are. So we ignore peer-reason announcements entirely —
-	// infra workers (workspace/timer/program/host/history...) expose real
-	// tools and are kept, and this worker's own ready (its capabilities) is
-	// kept. Who exists as a reason peer is discovered via the host's
-	// list_workers directory, not by turning their events into tools.
+	// A reason's ready lists the events it RESPONDS to, not callable tools: this
+	// worker exposes its own capabilities to itself, but a peer reason's ready is
+	// not treated as callable capabilities — its extensions (context.compress,
+	// program_query, ...) are never surfaced as tools here. Infra workers
+	// (workspace/timer/program/directory...) expose real tools and are kept.
 	if workerID != w.ID() && evt.Payload["type"] == "reason" {
 		log.Printf("[reason %s] ignoring peer reason %s ready (not a callable tool)", w.ID(), workerID)
 		return
@@ -176,19 +84,6 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 			}
 		}
 	}
-
-	// Parse publishes.
-	if b, err := json.Marshal(evt.Payload["publishes"]); err == nil {
-		var eventsRaw []EventPublish
-		if err := json.Unmarshal(b, &eventsRaw); err == nil && len(eventsRaw) > 0 {
-			w.publishMap[workerID] = eventsRaw
-			log.Printf("[reason %s] received %d event(s) from %s", w.ID(), len(eventsRaw), workerID)
-		}
-	}
-
-	// The dispatch table is a derived index over the discovery universe; keep
-	// it in step with what was just learned/removed.
-	w.rebuildDispatchTable()
 }
 
 // discoveredFromWatch parses a worker.ready "watch" entry into a
@@ -219,8 +114,7 @@ func removeDiscoveredCapabilitys(caps []DiscoveredCapability, source string) []D
 	return out
 }
 
-// handleWorkerGone forgets a departed worker's capabilities, tools and
-// published events.
+// handleWorkerGone forgets a departed worker's capabilities.
 func (w *BaseReasonWorker) handleWorkerGone(evt event.Event) {
 	workerID, _ := evt.Payload["worker_id"].(string)
 	if workerID == "" {
@@ -228,50 +122,14 @@ func (w *BaseReasonWorker) handleWorkerGone(evt event.Event) {
 	}
 
 	w.discovered = removeDiscoveredCapabilitys(w.discovered, workerID)
-	delete(w.publishMap, workerID)
-	// The dispatch table is a derived index; drop the departed worker's tools
-	// the same way as everything else — by rebuilding from discovered.
-	w.rebuildDispatchTable()
-	log.Printf("[reason %s] removed tools and events from %s", w.ID(), workerID)
+	log.Printf("[reason %s] forgot capabilities from %s", w.ID(), workerID)
 }
 
-// rebuildDispatchTable derives the dispatch table (w.tools) from
-// the discovery universe, so the two stay in step and the discovery universe is
-// the single source of truth. Only peer-declared capabilities become
-// callable tools: own capabilities dispatch through the registry instead, so
-// they are intentionally not indexed here. Called whenever discovered changes
-// (HandleWorkerReady / handleWorkerGone).
-func (w *BaseReasonWorker) rebuildDispatchTable() {
-	for name := range w.tools {
-		delete(w.tools, name)
-	}
-	for _, cap := range w.discovered {
-		if cap.Source == w.ID() {
-			continue // own capabilities dispatch through the registry
-		}
-		id := string(cap.Event)
-		t := worker.Tool{Name: id, Description: cap.Description,
-			Parameters: cap.Parameters, Provider: cap.Source}
-		t.Name = encodeToolName(w, t)
-		w.tools[t.Name] = t
-	}
-}
-
-// allTools returns every tool in the dispatch table (all peer-declared
-// capabilities, under their encoded LLM-facing names).
-func (w *BaseReasonWorker) allTools() []worker.Tool {
-	tools := make([]worker.Tool, 0, len(w.tools))
-	for _, t := range w.tools {
-		tools = append(tools, t)
-	}
-	return tools
-}
-
-// encodeToolName maps a Tool to the name both the w.tools table and the LLM
-// use. A worker's own tools (provider empty or this worker) keep a bare name
-// (with inner '.' -> '_'); tools backed by another worker become provider__name, so
-// the worker/tool boundary is unambiguous. Invariant: worker IDs and tool
-// names must not contain "__" (double underscore); '__' is the separator.
+// encodeToolName maps a Tool to its LLM-facing name. A worker's own tools
+// (provider empty or this worker) keep a bare name (with inner '.' -> '_');
+// tools backed by another worker become provider__name, so the worker/tool
+// boundary is unambiguous. Invariant: worker IDs and tool names must not
+// contain "__" (double underscore); '__' is the separator.
 func encodeToolName(w *BaseReasonWorker, t worker.Tool) string {
 	p, n := t.Provider, t.Name
 	if p == "" || p == w.ID() {
@@ -280,31 +138,41 @@ func encodeToolName(w *BaseReasonWorker, t worker.Tool) string {
 	return p + "__" + strings.ReplaceAll(n, ".", "_")
 }
 
-// bareToolName reverses tool encoding to the bare name. For an external tool
-// (provider__name) it strips the prefix; a worker's own tools (no provider
-// prefix) return name unchanged.
-func bareToolName(t worker.Tool) string {
-	if t.Provider == "" {
-		return t.Name
-	}
-	return strings.TrimPrefix(t.Name, t.Provider+"__")
-}
-
-// timeoutTool is the bare-name contract for the tool built-in timeout:
-// if any worker provides a tool whose bare name is "timeout", the
-// reason worker treats it as this round's tool-call timeout. Provider-agnostic
-// — the timer worker need not be named "timer". If no worker provides it, the
-// timeout feature is simply disabled.
+// timeoutTool is the bare-name contract for the built-in timeout: if any peer
+// provides a capability whose bare name is "timeout", the reason worker treats
+// it as this round's tool-call timeout. Provider-agnostic — the timer worker
+// need not be named "timer". If no peer provides it, the feature is disabled.
 const timeoutTool = "timeout"
 
-// timeoutToolFor returns the tool backing a name if it is the timeout tool.
-func (w *BaseReasonWorker) timeoutToolFor(name string) (worker.Tool, bool) {
-	t, ok := w.tools[name]
-	if !ok {
-		return worker.Tool{}, false
+// timeoutProvider returns the peer worker providing the built-in timeout
+// capability, when name is that capability's LLM-facing tool name (e.g.
+// "timer__timeout"). Convention-based and provider-agnostic: any peer whose
+// capability has the bare event "timeout" qualifies, so the timer worker need
+// not be named "timer". Built on the generic capabilityByToolName lookup.
+func (w *BaseReasonWorker) timeoutProvider(name string) (string, bool) {
+	cap, ok := w.capabilityByToolName(name)
+	if !ok || cap.Source == w.ID() || string(cap.Event) != timeoutTool {
+		return "", false
 	}
-	if t.Name == name && bareToolName(t) == timeoutTool {
-		return t, true
+	return cap.Source, true
+}
+
+// elapseTool is the bare-name contract for a one-shot reminder capability: the
+// peer publishing a capability named "elapse" fires the rate-limit retry
+// reminder. Provider-agnostic like timeoutTool — the worker need not be named
+// "timer".
+const elapseTool = "elapse"
+
+// peerCapability returns the peer worker exposing the capability with the given
+// bare event name (the name it is addressed by on the bus), or false if no peer
+// offers it. Own capabilities never qualify. Callers must hold w.mu. It lets the
+// mechanism reach a peer's capability by its name rather than a hardcoded
+// worker id.
+func (w *BaseReasonWorker) peerCapability(bareEvent string) (string, bool) {
+	for _, cap := range w.discovered {
+		if cap.Source != w.ID() && string(cap.Event) == bareEvent {
+			return cap.Source, true
+		}
 	}
-	return worker.Tool{}, false
+	return "", false
 }
