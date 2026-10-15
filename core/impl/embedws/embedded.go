@@ -294,6 +294,21 @@ func (b *EmbeddedBackend) Read(ctx context.Context, path string, offset, limit i
 	return strings.Join(lines, "\n"), nil
 }
 
+// ReadBinary reads a file's raw bytes within the workspace, through the same
+// boundary check as Read. Used by tools that need the content verbatim rather
+// than as text (e.g. reading an image to return as a base64 image block).
+func (b *EmbeddedBackend) ReadBinary(ctx context.Context, path string) ([]byte, error) {
+	resolved, err := b.resolve(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	return data, nil
+}
+
 func (b *EmbeddedBackend) Write(ctx context.Context, path, content string) error {
 	resolved, err := b.resolve(path)
 	if err != nil {

@@ -20,6 +20,20 @@ func toolCall(callID, name string) llm.ContentBlock {
 	return llm.ContentBlock{Type: llm.ContentToolCall, ToolCallID: callID, ToolName: name}
 }
 
+// resultContent wraps a plain-text tool result as a single content block, the
+// shape a text-only ToolResultPatch carries.
+func resultContent(text string) []llm.ContentBlock {
+	return []llm.ContentBlock{{Type: llm.ContentText, Text: text}}
+}
+
+// digestHead builds the caller-supplied head messages a compaction passes to
+// Commit: a single user message carrying the digest under the [context digest]
+// marker (mirroring what the worker's compactor builds).
+func digestHead(text string) []llm.Message {
+	return []llm.Message{{Role: llm.RoleUser,
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "[context digest] " + text}}}}
+}
+
 // TestApplyLifecycle walks the full lifecycle through Apply and asserts the
 // transcript order and shapes: input, assistant output, placeholders,
 // in-place result replacement, park replacement, late result.
@@ -29,7 +43,7 @@ func TestApplyLifecycle(t *testing.T) {
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("hi")}})
 	b.Apply(AssistantOutputPatch{Message: assistantMsg("hello")})
 	b.Apply(ToolPlaceholdersPatch{Calls: []llm.ContentBlock{toolCall("c1", "bash"), toolCall("c2", "read")}})
-	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Text: "0"})
+	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Content: resultContent("0")})
 
 	got := b.Render()
 	if len(got) != 4 {
@@ -56,7 +70,7 @@ func TestApplyLifecycle(t *testing.T) {
 
 	// Late result for parked c2: appended as a user message, not a second
 	// tool_result for the same call_id.
-	b.Apply(LateResultPatch{CallID: "c2", Name: "read", Text: "late-out", Cause: "timeout"})
+	b.Apply(LateResultPatch{CallID: "c2", Name: "read", Content: resultContent("late-out"), Cause: "timeout"})
 	got = b.Render()
 	if len(got) != 5 {
 		t.Fatalf("got %d messages, want 5", len(got))
@@ -112,7 +126,7 @@ func TestStateRestoreRoundTrip(t *testing.T) {
 func TestToolResultUnknownCallIsSafe(t *testing.T) {
 	b := NewAccumulateTranscript()
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("hi")}})
-	b.Apply(ToolResultPatch{CallID: "ghost", Name: "x", Text: "y"})
+	b.Apply(ToolResultPatch{CallID: "ghost", Name: "x", Content: resultContent("y")})
 	if got := b.Render(); len(got) != 1 {
 		t.Fatalf("unknown tool result should be a no-op, got %d messages", len(got))
 	}
@@ -131,8 +145,8 @@ func TestCompactAppliesDigestAndKeepsTail(t *testing.T) {
 	// exactly the newest two (the budget, not a count, bounds the tail).
 	twoMsgTokens := estimateMessageTokens(userMsg("m0")) * 2
 
-	b.BeginEdit()
-	b.CommitEdit("summary of m0-m2", twoMsgTokens)
+	msgs := b.BeginEdit()
+	b.Commit(digestHead("summary of m0-m2"), TailTokensBudget(msgs, twoMsgTokens))
 
 	got := b.Render()
 	if len(got) != 3 {
@@ -145,9 +159,11 @@ func TestCompactAppliesDigestAndKeepsTail(t *testing.T) {
 		t.Fatalf("tail order disturbed: %q, %q", got[1].Content[0].Text, got[2].Content[0].Text)
 	}
 
-	// No-op when everything fits in the budget.
-	b.BeginEdit()
-	b.CommitEdit("again", estimateMessageTokens(userMsg("m0"))*10)
+	// No-op when everything fits in the budget: nothing folded, so no head is
+	// applied (nil) and the retained tail is the whole transcript.
+	msgs = b.BeginEdit()
+	tail := TailTokensBudget(msgs, estimateMessageTokens(userMsg("m0"))*10)
+	b.Commit(nil, tail)
 	if len(b.Render()) != 3 {
 		t.Fatal("compact within budget must be a no-op")
 	}
@@ -171,8 +187,8 @@ func TestCompactAlignsCutToPairing(t *testing.T) {
 
 	// A tiny budget keeps only the newest message and its pairing; the tail must
 	// not open with an orphan tool_result.
-	b.BeginEdit()
-	b.CommitEdit("digest", 1)
+	msgs := b.BeginEdit()
+	b.Commit(digestHead("digest"), TailTokensBudget(msgs, 1))
 
 	got := b.Render()
 	if got[0].Role != llm.RoleUser || !strings.Contains(got[0].Content[0].Text, "digest") {
@@ -206,8 +222,8 @@ func TestCompactBudgetKeepsToolPairingTogether(t *testing.T) {
 	// A tiny budget would naturally fit only the newest tool_result; the cut
 	// must snap back to keep its assistant tool_call so the pair survives.
 	tailBudget := estimateMessageTokens(userMsg("older")) - 1
-	b.BeginEdit()
-	b.CommitEdit("digest", tailBudget)
+	msgs := b.BeginEdit()
+	b.Commit(digestHead("digest"), TailTokensBudget(msgs, tailBudget))
 
 	got := b.Render()
 	if len(got) != 3 {
@@ -228,8 +244,8 @@ func TestCompactTurnsThePage(t *testing.T) {
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("a")}})
 	b.Apply(AssistantOutputPatch{Message: assistantMsg("b")})
 
-	b.BeginEdit()
-	b.CommitEdit("episode summary", 0)
+	msgs := b.BeginEdit()
+	b.Commit(digestHead("episode summary"), TailTokensBudget(msgs, 0))
 
 	got := b.Render()
 	if len(got) != 1 {
@@ -241,23 +257,23 @@ func TestCompactTurnsThePage(t *testing.T) {
 }
 
 // TestEditBuffersApply verifies the meta-edit semantics: Apply inputs during
-// BeginEdit..CommitEdit are buffered (not appended), and are merged after the
-// digest on commit, so they are neither lost nor torn by the edit's overwrite.
+// BeginEdit..Commit are buffered (not appended), and are merged after the
+// head on commit, so they are neither lost nor torn by the edit's overwrite.
 func TestEditBuffersApply(t *testing.T) {
 	b := NewAccumulateTranscript()
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("a")}})
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("b")}})
 
 	// Begin an edit; the snapshot is the pre-edit messages.
-	b.BeginEdit()
+	msgs := b.BeginEdit()
 
 	// While editing, an external input arrives: it must be buffered, not
 	// appended to the visible transcript.
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("during-edit")}})
 
-	// Commit: digest replaces all but the tail, then the buffered input is
-	// appended (after the digest + tail).
-	b.CommitEdit("summary of a..", 0)
+	// Commit: the head (digest) is prepended, the tail (none, budget 0) is
+	// empty, then the buffered input is appended after the head.
+	b.Commit(digestHead("summary of a.."), TailTokensBudget(msgs, 0))
 
 	got := b.Render()
 	if len(got) != 2 {
@@ -323,10 +339,10 @@ func TestSanitizeDanglingToolCalls(t *testing.T) {
 	}
 }
 
-// TestCommitEditStripsDanglingMetaToolCall verifies a compaction that keeps a
+// TestCommitStripsDanglingMetaToolCall verifies a compaction that keeps a
 // meta tool call (which never produces a result) in its tail yields a valid
 // transcript: the tool_calls block is stripped after the edit.
-func TestCommitEditStripsDanglingMetaToolCall(t *testing.T) {
+func TestCommitStripsDanglingMetaToolCall(t *testing.T) {
 	b := NewAccumulateTranscript()
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("hi")}})
 	b.Apply(AssistantOutputPatch{Message: llm.Message{
@@ -334,9 +350,9 @@ func TestCommitEditStripsDanglingMetaToolCall(t *testing.T) {
 		Content: []llm.ContentBlock{toolCall("m1", "context.compress")},
 	}})
 
-	b.BeginEdit()
-	b.CommitEdit("digest", 1)
-	msgs := b.Render()
+	msgs := b.BeginEdit()
+	b.Commit(digestHead("digest"), TailTokensBudget(msgs, 1))
+	msgs = b.Render()
 	if len(msgs) != 2 {
 		t.Fatalf("got %d messages, want 2 (digest + assistant)", len(msgs))
 	}
@@ -345,7 +361,7 @@ func TestCommitEditStripsDanglingMetaToolCall(t *testing.T) {
 		t.Fatalf("last message role = %q, want assistant", last.Role)
 	}
 	if len(last.Content) != 0 {
-		t.Fatalf("dangling meta tool_call survived CommitEdit: %+v", last.Content)
+		t.Fatalf("dangling meta tool_call survived Commit: %+v", last.Content)
 	}
 }
 
@@ -357,7 +373,7 @@ func TestCommitEditStripsDanglingMetaToolCall(t *testing.T) {
 func TestPayloadTruncationToolResult(t *testing.T) {
 	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
 	b.Apply(ToolPlaceholdersPatch{Calls: []llm.ContentBlock{toolCall("c1", "bash")}})
-	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Text: strings.Repeat("x", 1000)})
+	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Content: resultContent(strings.Repeat("x", 1000))})
 
 	got := b.Render()
 	if len(got) != 1 {
@@ -409,9 +425,18 @@ func TestPayloadTruncationInput(t *testing.T) {
 // result is capped as well.
 func TestPayloadTruncationLateResult(t *testing.T) {
 	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
-	b.Apply(LateResultPatch{CallID: "c1", Name: "bash", Text: strings.Repeat("z", 300), Cause: "timeout"})
+	b.Apply(LateResultPatch{CallID: "c1", Name: "bash", Content: resultContent(strings.Repeat("z", 300)), Cause: "timeout"})
 
-	text := b.Render()[0].Content[0].Text
+	msgs := b.Render()
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	// The late result is a user message: a leading label block then the outcome
+	// content, whose oversized text is what gets truncated.
+	if len(msgs[0].Content) != 2 {
+		t.Fatalf("content blocks = %d, want label + result: %+v", len(msgs[0].Content), msgs[0].Content)
+	}
+	text := msgs[0].Content[1].Text
 	if !strings.Contains(text, "[truncated, kept") || len(text) > 64 {
 		t.Fatalf("oversized late result not truncated: %q (%d bytes)", text, len(text))
 	}
@@ -436,7 +461,7 @@ func TestPayloadUnderLimitUntouched(t *testing.T) {
 	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
 	small := "ok"
 	b.Apply(ToolPlaceholdersPatch{Calls: []llm.ContentBlock{toolCall("c1", "bash")}})
-	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Text: small})
+	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Content: resultContent(small)})
 
 	got := b.Render()
 	if len(got) != 1 || got[0].Content[0].Text != small {
@@ -470,9 +495,9 @@ func TestPayloadTruncationDuringEdit(t *testing.T) {
 	b := NewAccumulateTranscript(WithMaxPayloadBytes(64))
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("a")}})
 
-	b.BeginEdit()
+	msgs := b.BeginEdit()
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg(strings.Repeat("q", 300))}})
-	b.CommitEdit("digest", 0)
+	b.Commit(digestHead("digest"), TailTokensBudget(msgs, 0))
 
 	got := b.Render()
 	if len(got) != 2 {
@@ -484,11 +509,11 @@ func TestPayloadTruncationDuringEdit(t *testing.T) {
 	}
 }
 
-// TestCommitRotateKeepsRounds verifies CommitRotate retains only the last
+// TestTailRoundsCleanKeepsRounds verifies TailRoundsClean retains only the last
 // keepRounds user/assistant rounds (a round starts at each user message), and
 // keeps the retained messages as-is — no same-role merging (consecutive-message
 // normalization is the provider layer's job).
-func TestCommitRotateKeepsRounds(t *testing.T) {
+func TestTailRoundsCleanKeepsRounds(t *testing.T) {
 	b := NewAccumulateTranscript()
 	for i := 0; i < 4; i++ {
 		b.Apply(InputPatch{Messages: []llm.Message{userMsg(fmt.Sprintf("u%d", i))}})
@@ -496,8 +521,8 @@ func TestCommitRotateKeepsRounds(t *testing.T) {
 	}
 
 	// keepRounds=2 keeps the last two user/assistant exchanges.
-	b.BeginEdit()
-	b.CommitRotate("digest", 2)
+	msgs := b.BeginEdit()
+	b.Commit(digestHead("digest"), TailRoundsClean(msgs, 2))
 
 	got := b.Render()
 	// digest + u2 + a2 + u3 + a3 (messages kept as-is, not merged).
@@ -514,11 +539,11 @@ func TestCommitRotateKeepsRounds(t *testing.T) {
 	}
 }
 
-// TestCommitRotateDiscardsToolMessages verifies tool_result messages and
+// TestTailRoundsCleanDiscardsToolMessages verifies tool_result messages and
 // assistant tool-call blocks are dropped from the rotated tail, leaving only
 // the conversational spine. Messages are kept as-is (consecutive same-role
 // normalization is left to the provider layer).
-func TestCommitRotateDiscardsToolMessages(t *testing.T) {
+func TestTailRoundsCleanDiscardsToolMessages(t *testing.T) {
 	b := NewAccumulateTranscript()
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("do it")}})
 	b.Apply(AssistantOutputPatch{Message: llm.Message{
@@ -528,11 +553,11 @@ func TestCommitRotateDiscardsToolMessages(t *testing.T) {
 			toolCall("c1", "bash"),
 		},
 	}})
-	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Text: "out"})
+	b.Apply(ToolResultPatch{CallID: "c1", Name: "bash", Content: resultContent("out")})
 	b.Apply(AssistantOutputPatch{Message: assistantMsg("done")})
 
-	b.BeginEdit()
-	b.CommitRotate("digest", 1)
+	msgs := b.BeginEdit()
+	b.Commit(digestHead("digest"), TailRoundsClean(msgs, 1))
 
 	got := b.Render()
 	// digest + user(do it) + assistant(thinking) + assistant(done); tool_result
@@ -557,15 +582,15 @@ func TestCommitRotateDiscardsToolMessages(t *testing.T) {
 	}
 }
 
-// TestCommitRotateZeroKeepsNothing verifies keepRounds <= 0 yields a fresh
-// episode: only the digest, no retained messages.
-func TestCommitRotateZeroKeepsNothing(t *testing.T) {
+// TestTailRoundsCleanZeroKeepsNothing verifies keepRounds <= 0 yields nothing
+// retained: with only the digest head, the episode is fresh.
+func TestTailRoundsCleanZeroKeepsNothing(t *testing.T) {
 	b := NewAccumulateTranscript()
 	b.Apply(InputPatch{Messages: []llm.Message{userMsg("a")}})
 	b.Apply(AssistantOutputPatch{Message: assistantMsg("b")})
 
-	b.BeginEdit()
-	b.CommitRotate("digest", 0)
+	msgs := b.BeginEdit()
+	b.Commit(digestHead("digest"), TailRoundsClean(msgs, 0))
 
 	got := b.Render()
 	if len(got) != 1 {

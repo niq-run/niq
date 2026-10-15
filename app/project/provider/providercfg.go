@@ -36,11 +36,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/app/niqhome"
 	"github.com/niq-run/niq/core/impl/provider/anthropic"
 	"github.com/niq-run/niq/core/impl/provider/openai"
 	"github.com/niq-run/niq/core/impl/provider/openairesponses"
+	"github.com/niq-run/niq/core/itfs/llm"
 )
 
 // Entry describes one named LLM provider.
@@ -76,6 +76,13 @@ type Entry struct {
 type ModelSpec struct {
 	Name          string `json:"name"`
 	ContextWindow int    `json:"context_window,omitempty"`
+	// InputTypes declares the model's accepted input modalities (e.g.
+	// ["text", "image"], or just ["text"] for a text-only model). It backs
+	// the reason worker's image-input gate: a model whose InputTypes exclude
+	// image gets its image content blocks downgraded to a textual hint before
+	// being sent. Empty means "unknown" — the reason worker then defaults to
+	// assuming the model accepts images.
+	InputTypes []string `json:"input_types,omitempty"`
 }
 
 // Models is the provider's model list. It accepts both a JSON array of strings

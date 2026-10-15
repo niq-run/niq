@@ -7,10 +7,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/worker"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	backend "github.com/niq-run/niq/core/impl/embedws"
+	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/itfs/worker"
 )
 
 // buildHandlers probes the backend's low-level interfaces and assembles
@@ -30,7 +30,7 @@ func (w *WorkspaceWorker) buildHandlers() {
 
 	// ── File tools ──
 	if fo, ok := w.backend.(backend.FileOperator); ok {
-		m["read"] = func(ctx context.Context, args map[string]any) (string, error) {
+		m["read"] = func(ctx context.Context, args map[string]any) (any, error) {
 			path, _ := args["path"].(string)
 			if path == "" {
 				return "", fmt.Errorf("path is required")
@@ -42,8 +42,24 @@ func (w *WorkspaceWorker) buildHandlers() {
 			return backend.FormatRead(path, content, args), nil
 		}
 
+		// readImg returns an image as a neutral `{content:[{type:image, mime,
+		// data}]}` payload the reason worker decodes into a ContentImage block, so
+		// the model actually sees the image. It resizes / re-encodes the bytes so
+		// oversized or non-JPEG files don't blow up the token budget.
+		m["readImg"] = func(ctx context.Context, args map[string]any) (any, error) {
+			path, _ := args["path"].(string)
+			if path == "" {
+				return nil, errors.New("path is required")
+			}
+			raw, err := fo.ReadBinary(ctx, path)
+			if err != nil {
+				return nil, err
+			}
+			return readImagePayload(raw)
+		}
+
 		if w.mode != ModeReadOnly {
-			m["write"] = func(ctx context.Context, args map[string]any) (string, error) {
+			m["write"] = func(ctx context.Context, args map[string]any) (any, error) {
 				path, _ := args["path"].(string)
 				content, _ := args["content"].(string)
 				if path == "" {
@@ -55,7 +71,7 @@ func (w *WorkspaceWorker) buildHandlers() {
 				return fmt.Sprintf("wrote %d bytes to %s", len(content), path), nil
 			}
 
-			m["edit"] = func(ctx context.Context, args map[string]any) (string, error) {
+			m["edit"] = func(ctx context.Context, args map[string]any) (any, error) {
 				path, _ := args["path"].(string)
 				if path == "" {
 					return "", fmt.Errorf("path is required")
@@ -85,7 +101,7 @@ func (w *WorkspaceWorker) buildHandlers() {
 
 	// ── Bash ──
 	if bo, ok := w.backend.(backend.BashOperator); ok && w.mode == ModeFull {
-		m["bash"] = func(ctx context.Context, args map[string]any) (string, error) {
+		m["bash"] = func(ctx context.Context, args map[string]any) (any, error) {
 			command, _ := args["command"].(string)
 			if command == "" {
 				return "", fmt.Errorf("command is required")
@@ -133,7 +149,7 @@ func (w *WorkspaceWorker) buildHandlers() {
 
 	// ── Search tools ──
 	if gop, ok := w.backend.(backend.GrepOperator); ok {
-		m["grep"] = func(ctx context.Context, args map[string]any) (string, error) {
+		m["grep"] = func(ctx context.Context, args map[string]any) (any, error) {
 			pattern, _ := args["pattern"].(string)
 			if pattern == "" {
 				return "", fmt.Errorf("pattern is required")
@@ -146,7 +162,7 @@ func (w *WorkspaceWorker) buildHandlers() {
 	}
 
 	if fop, ok := w.backend.(backend.FindOperator); ok {
-		m["find"] = func(ctx context.Context, args map[string]any) (string, error) {
+		m["find"] = func(ctx context.Context, args map[string]any) (any, error) {
 			pattern, _ := args["pattern"].(string)
 			if pattern == "" {
 				return "", fmt.Errorf("pattern is required")
@@ -157,7 +173,7 @@ func (w *WorkspaceWorker) buildHandlers() {
 	}
 
 	if dl, ok := w.backend.(backend.DirLister); ok {
-		m["ls"] = func(ctx context.Context, args map[string]any) (string, error) {
+		m["ls"] = func(ctx context.Context, args map[string]any) (any, error) {
 			dirPath, _ := args["path"].(string)
 			if dirPath == "" {
 				dirPath = "."
@@ -216,6 +232,12 @@ func (w *WorkspaceWorker) registerExtensions() {
 				"path":   map[string]any{"type": "string", "description": "Path to the file. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
 				"offset": map[string]any{"type": "integer", "description": "1-indexed line number to start reading from. Defaults to 1."},
 				"limit":  map[string]any{"type": "integer", "description": "Maximum number of lines to read. Defaults to 2000."},
+			}, "required": []any{"path"}},
+		},
+		"readImg": {
+			desc: "Read an image file within the workspace and return it to the model as a viewable image (not text). Supports png/jpeg/gif; the long edge is capped at 1568px and the image is re-encoded, so it is a normalized snapshot rather than a byte-exact copy. Use this to let the model see screenshots, UI mockups, diagrams, and charts.",
+			params: map[string]any{"type": "object", "properties": map[string]any{
+				"path": map[string]any{"type": "string", "description": "Path to the image. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
 			}, "required": []any{"path"}},
 		},
 		"write": {

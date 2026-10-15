@@ -19,8 +19,7 @@ import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
-import { attachmentBlock } from './components/talk-utils'
-import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerInfo } from './types'
+import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type InputContent, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerInfo } from './types'
 
 // How many history events the WebUI pages back per /api/events/before call
 // (both the initial watermark backfill and the load-more pagination).
@@ -136,14 +135,23 @@ function stampNow(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
-// composeInput appends the staged attachments to the message text as HIW
-// attachment envelope blocks (parsed worker-side and by the talk renderer), and
-// prepends a `<system-reminder>` carrying the current time so the receiver
-// knows when the message was sent.
-function composeInput(text: string, attachments: StagedAttachment[]): string {
+// composeInput builds the structured worker.input "content" array: the
+// reminder and message text as a leading text block, then each staged
+// attachment as its own image/file block. This replaces the legacy
+// <attachment> text envelope this UI used to send.
+function composeInput(text: string, attachments: StagedAttachment[]): InputContent[] {
+  const content: InputContent[] = []
   const reminder = `<system-reminder>${stampNow()}</system-reminder>`
-  const blocks = attachments.map(attachmentBlock)
-  return [reminder, text.trim(), ...blocks].filter(Boolean).join('\n\n')
+  const body = text.trim()
+  content.push({ type: 'text', text: [reminder, body].filter(Boolean).join('\n\n') })
+  for (const a of attachments) {
+    if (a.kind === 'image') {
+      content.push({ type: 'image', name: a.name, mime: a.mime, data: a.data, size: a.size })
+    } else {
+      content.push({ type: 'file', name: a.name, path: a.path, size: a.size })
+    }
+  }
+  return content
 }
 
 export default function App() {

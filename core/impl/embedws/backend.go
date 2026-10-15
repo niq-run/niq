@@ -26,6 +26,10 @@ func OnUpdate(ctx context.Context) func(string) {
 // FileOperator provides read, write, and edit operations.
 type FileOperator interface {
 	Read(ctx context.Context, path string, offset, limit int) (string, error)
+	// ReadBinary reads a file's raw bytes, for tools that need the content
+	// verbatim (e.g. reading an image to send as a base64 image block). It goes
+	// through the same boundary check as Read.
+	ReadBinary(ctx context.Context, path string) ([]byte, error)
 	Write(ctx context.Context, path, content string) error
 	Edit(ctx context.Context, path, oldStr, newStr string) error
 }

@@ -111,3 +111,34 @@ func TestModelsForConfiguredListSkipsAPI(t *testing.T) {
 		t.Fatalf("no configured models: details[1] = %+v, want api-model-b/1024", details[1])
 	}
 }
+
+// TestModelsForPropagatesInputTypes verifies per-model input_types from the
+// configured model list flow into ModelInfo.InputTypes, the signal the reason
+// worker's image-input gate reads.
+func TestModelsForPropagatesInputTypes(t *testing.T) {
+	s := &providerSources{}
+	entry := Entry{
+		Name:   "acme",
+		Type:   "openai-compatible",
+		APIKey: "sk-test",
+		Model:  "texty",
+		Models: Models{
+			{Name: "texty", InputTypes: []string{"text"}},
+			{Name: "visual", InputTypes: []string{"text", "image"}},
+			{Name: "unknown"}, // no input_types -> empty (unknown)
+		},
+	}
+	details := s.modelsFor(entry)
+	if len(details) != 3 {
+		t.Fatalf("details = %d, want 3: %+v", len(details), details)
+	}
+	if got := details[0].InputTypes; len(got) != 1 || got[0] != "text" {
+		t.Errorf("details[0].InputTypes = %v, want [text]", got)
+	}
+	if got := details[1].InputTypes; len(got) != 2 || got[0] != "text" || got[1] != "image" {
+		t.Errorf("details[1].InputTypes = %v, want [text image]", got)
+	}
+	if got := details[2].InputTypes; len(got) != 0 {
+		t.Errorf("details[2].InputTypes = %v, want empty (unknown)", got)
+	}
+}

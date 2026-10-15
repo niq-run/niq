@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/impl/reason/requesttracker"
 	"github.com/niq-run/niq/core/impl/reason/transcript"
+	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/itfs/llm"
 )
 
 // - worker.ready/gone: learn/forget a worker's tools & events
@@ -172,8 +172,8 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	if tr := w.requestTracker.HandleResponse(evt); tr != nil {
 		callID := evt.RequestId
 		if callID != "" {
-			text, isErr := resultOutcome(evt)
-			w.transcript.Apply(transcript.ToolResultPatch{CallID: callID, Name: tr.Name, Text: text, IsErr: isErr})
+			content, isErr := resultOutcome(evt)
+			w.transcript.Apply(transcript.ToolResultPatch{CallID: callID, Name: tr.Name, Content: content, IsErr: isErr})
 		}
 		// All tool calls resolved
 		if w.requestTracker.Resolved() {
@@ -187,9 +187,9 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	if parked := w.requestTracker.ResolveLate(evt); parked != nil {
 		callID := evt.RequestId
 		if callID != "" && parked.Name != "" {
-			if text, _ := resultOutcome(evt); text != "" {
+			if content, _ := resultOutcome(evt); len(content) > 0 {
 				w.transcript.Apply(transcript.LateResultPatch{
-					CallID: callID, Name: parked.Name, Text: text, Cause: string(parked.ParkCause),
+					CallID: callID, Name: parked.Name, Content: content, Cause: string(parked.ParkCause),
 				})
 			}
 		}
@@ -389,7 +389,7 @@ func (w *BaseReasonWorker) convertEvent(evt event.Event) []llm.Message {
 			return h.Converter(evt)
 		}
 	}
-	// worker.input understands the HIW attachment envelope (image base64 /
+	// worker.input understands the structured content payload (image base64 /
 	// uploaded file paths) before falling back to the plain-text default.
 	if evt.Type == event.TypeWorkerInput {
 		return ConvertInputEvent(evt)
@@ -430,41 +430,77 @@ func DefaultConverter(evt event.Event) []llm.Message {
 	}}
 }
 
-// resultOutcome extracts the human-readable outcome text and error flag from a
+// ConvertInputEvent turns a worker.input event into user messages. A payload
+// payload carrying a structured "content" array is decoded into content blocks via the
+// shared transcript.PayloadToLlmContent decoder; otherwise the event falls back
+// to the plain-text DefaultConverter shape.
+func ConvertInputEvent(evt event.Event) []llm.Message {
+	if blocks, ok := transcript.PayloadToLlmContent(evt.Payload); ok {
+		blocks = append(blocks, eventFooter(evt))
+		return []llm.Message{{Role: llm.RoleUser, Content: blocks}}
+	}
+	return DefaultConverter(evt)
+}
+
+// eventFooter is the metadata footer appended to a converted input message.
+func eventFooter(evt event.Event) llm.ContentBlock {
+	return llm.ContentBlock{Type: llm.ContentText,
+		Text: fmt.Sprintf("[Event: %s from %s]", evt.Type, evt.WorkerId)}
+}
+
+// resultOutcome extracts the outcome content blocks and error flag from a
 // tool result event. Used by both the normal-resolution and late-result paths.
 //
-// The bus does not constrain a reply's payload shape — external workers answer
-// in their own vocabulary — so the recognized summary fields ("result" /
-// "error" / "reason") are a preference, not a requirement: when none is
-// present, the FULL payload is serialized as the tool's result text instead of
-// being dropped. This mirrors DefaultConverter's philosophy for input events:
-// a recognized field reads cleanly, and anything else still reaches the LLM
-// losslessly.
-func resultOutcome(evt event.Event) (string, bool) {
-	var text string
+// A payload carrying a structured "content" array is decoded into content
+// blocks via the shared transcript.PayloadToLlmContent decoder, so tools can
+// return multi-modal results (e.g. an image as a ContentImage block), not just
+// text.
+//
+// When the payload has no content array, the bus does not constrain a reply's
+// payload shape — external workers answer in their own vocabulary — so the
+// recognized summary fields ("result" / "error" / "reason") are a preference,
+// not a requirement: when none is present, the FULL payload is serialized as
+// the tool's result text instead of being dropped. This mirrors
+// DefaultConverter's philosophy for input events: a recognized field reads
+// cleanly, and anything else still reaches the LLM losslessly.
+func resultOutcome(evt event.Event) ([]llm.ContentBlock, bool) {
 	isErr := false
+	switch evt.Type {
+	case event.TypeRequestFailed:
+		isErr = true
+	case event.TypeRequestRejected:
+		isErr = true
+	}
+
+	// Structured multi-modal result takes precedence.
+	if blocks, ok := transcript.PayloadToLlmContent(evt.Payload); ok {
+		return blocks, isErr
+	}
+
+	var text string
 	switch evt.Type {
 	case event.TypeRequestCompleted:
 		if r, ok := evt.Payload["result"]; ok {
 			text = fmt.Sprintf("%v", r)
 		}
 	case event.TypeRequestFailed:
-		isErr = true
 		if e, ok := evt.Payload["error"]; ok {
 			text = "Tool call failed: " + fmt.Sprintf("%v", e)
 		}
 	case event.TypeRequestRejected:
-		isErr = true
 		if r, ok := evt.Payload["reason"]; ok {
 			text = "Tool call rejected: " + fmt.Sprintf("%v", r)
 		}
 	default:
-		return "", false
+		return nil, false
 	}
 	if text == "" && len(evt.Payload) > 0 {
 		if b, err := json.Marshal(evt.Payload); err == nil {
 			text = string(b)
 		}
 	}
-	return text, isErr
+	if text == "" {
+		return nil, isErr
+	}
+	return []llm.ContentBlock{{Type: llm.ContentText, Text: text}}, isErr
 }

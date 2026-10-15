@@ -197,7 +197,7 @@ func (w *BaseReasonWorker) CurrentTraceID() string { return w.currentTraceID }
 // Transcript returns the worker's transcript for in-place editing. The context
 // strategy (e.g. the default worker's context.compress handler) rewrites it to
 // shrink the context; the caller already holds w.mu or edits inside a
-// BeginEdit..CommitEdit window.
+// BeginEdit..Commit window.
 func (w *BaseReasonWorker) Transcript() transcript.Transcript { return w.transcript }
 
 // TailTokens returns the token budget the default context strategy retains from

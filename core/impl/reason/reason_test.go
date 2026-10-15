@@ -534,7 +534,8 @@ func TestSoftBudgetReminderStaysAfterToolResult(t *testing.T) {
 
 	// Once the real tool result replaces the placeholder (in place), the order
 	// assistant→tool(result)→user still holds — the pairing is intact.
-	w.transcript.Apply(transcript.ToolResultPatch{CallID: "c1", Name: "bash", Text: "ok"})
+	w.transcript.Apply(transcript.ToolResultPatch{CallID: "c1", Name: "bash",
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}})
 	msgs = w.transcript.Render()
 	if len(msgs) != 3 {
 		t.Fatalf("after result, expected assistant→tool→user, got %d messages", len(msgs))

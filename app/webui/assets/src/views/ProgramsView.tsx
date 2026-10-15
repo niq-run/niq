@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { usePolling } from '../hooks/usePolling'
 import ViewHeader from '../components/ViewHeader'
 import ResizablePanel from '../components/ResizablePanel'
-import { getApiBase, fetchPrograms, fetchProgramDetail, updateProgram, deleteProgram } from '../services/api'
-import type { ProgramDetail, ProgramInfo } from '../types'
+import { makeMdComponents } from '../components/MarkdownComponents'
+import { getApiBase, fetchPrograms, fetchProgramDetail, fetchProgramContent, updateProgram, deleteProgram } from '../services/api'
+import type { ProgramContent, ProgramDetail, ProgramInfo } from '../types'
 
 const MOBILE_TOP_BAR_HEIGHT = 44
 
@@ -25,8 +28,9 @@ export default function ProgramsView({ project, isMobile }: ProgramsViewProps) {
   const { t } = useI18n()
   const [programs, setPrograms] = useState<ProgramInfo[]>([])
   const [selected, setSelected] = useState<ProgramInfo | null>(null)
-  const [drawerWidth, setDrawerWidth] = useState(() =>
-    Math.max(440, Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.42)))
+  // Drawer width: default a percentage of the container so it always fits and
+  // follows window resizes; dragging snaps it to a fixed pixel width.
+  const [drawerWidth, setDrawerWidth] = useState<number | string>('80%')
 
   // Poll the attached project for its programs, prefixed with its base URL so
   // it hits the project's own address (like /api/stream) rather than a
@@ -151,7 +155,7 @@ interface PanelProps {
 }
 
 function ProgramDetailPanel({ name, onClose, onDeleted, onSaved }: PanelProps) {
-  const { colors } = useTheme()
+  const { dark, colors } = useTheme()
   const { t } = useI18n()
   const [prog, setProg] = useState<ProgramDetail | null>(null)
   const [loadErr, setLoadErr] = useState('')
@@ -159,6 +163,8 @@ function ProgramDetailPanel({ name, onClose, onDeleted, onSaved }: PanelProps) {
   const [confirmDel, setConfirmDel] = useState(false)
   const [busy, setBusy] = useState('') // 'save' | 'delete'
   const [note, setNote] = useState('')
+  // Top-level tabs: basic-info (metadata + actions) vs content (all contents).
+  const [tab, setTab] = useState<'info' | 'content'>('content')
 
   // Draft edit fields, initialised from the loaded program when editing opens.
   const [draft, setDraft] = useState<{ contentType: string; description: string; tags: string; body: string }>({
@@ -264,126 +270,128 @@ function ProgramDetailPanel({ name, onClose, onDeleted, onSaved }: PanelProps) {
           <div style={{ color: colors.textDim, fontSize: fontSizes.md }}>{t('app.loading')}</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {/* Details card */}
-            <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
-              <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                {t('programs.section.details')}
-                {!locked && (
-                  <span
-                    onClick={editing ? cancelEdit : beginEdit}
-                    style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, textTransform: 'none', letterSpacing: 0, marginLeft: 10, userSelect: 'none' }}
-                  >
-                    {editing ? t('wd.close') : t('programs.edit')}
-                  </span>
-                )}
-              </div>
-              {editing ? (
-                <EditFields draft={draft} setDraft={setDraft} colors={colors} t={t} />
-              ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '5px 16px', alignItems: 'baseline' }}>
-                  <DetailRow label={t('programs.field.contentType')} value={contentTypeLabel(t, prog.content_type)} colors={colors} />
-                  <DetailRow label={t('programs.field.form')} value={formLabel(t, prog.form_type)} colors={colors} />
-                  <DetailRow label={t('programs.field.description')} value={prog.description || '\u2014'} colors={colors} />
-                  <DetailRow label={t('programs.field.tags')} value={(prog.tags || []).join(', ') || '\u2014'} colors={colors} />
-                  <DetailRow label={t('programs.locked')} value={prog.locked ? t('wd.yes') : t('wd.no')} colors={colors} />
-                  <DetailRow label={t('programs.field.body')} value={prog.body ? prog.body.length + ' chars' : '0 chars'} colors={colors} />
-                </div>
-              )}
-            </div>
+            {/* Top-level tabs: basic info (metadata + actions) vs content. */}
+            <TabBar
+              value={tab}
+              onSelect={(k) => setTab(k)}
+              tabs={[
+                ['info', t('programs.tab.info')],
+                ['content', t('programs.tab.content')],
+              ]}
+            />
 
-            {/* Entry body card: view or edit the entry content. */}
-            <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
-              <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                {t('programs.field.body')}
-              </div>
-              {editing ? (
-                <textarea
-                  value={draft.body}
-                  onChange={(e) => setDraft({ ...draft, body: e.target.value })}
-                  spellCheck={false}
-                  style={{ width: '100%', boxSizing: 'border-box', minHeight: 180, resize: 'vertical', fontFamily: 'monospace', fontSize: fontSizes.sm, ...inputStyle(colors) }}
-                />
-              ) : (
-                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', margin: 0, color: colors.textDim, fontSize: fontSizes.sm, fontFamily: 'inherit', lineHeight: 1.6 }}>
-                  {prog.body || '\u2014'}
-                </pre>
-              )}
-            </div>
-
-            {/* Sub-contents card — a collapsible tree of the program's files. */}
-            <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
-              <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                {t('programs.subContents')}
-              </div>
-              <ContentTree name={name} paths={prog.contents || []} colors={colors} emptyLabel={t('programs.noSubContents')} />
-            </div>
-
-            {/* Actions card */}
-            <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
-              <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                {t('wd.actions')}
-              </div>
-              {locked ? (
-                <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, lineHeight: 1.5 }}>{t('programs.lockedHint')}</div>
-              ) : (
-                <div>
-                  {editing && (
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
+            {tab === 'info' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
+                  <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    {t('programs.section.details')}
+                    {!locked && (
                       <span
-                        onClick={save}
-                        className="btn-hover"
-                        style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 12px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+                        onClick={editing ? cancelEdit : beginEdit}
+                        style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, textTransform: 'none', letterSpacing: 0, marginLeft: 10, userSelect: 'none' }}
                       >
-                        {busy === 'save' ? t('programs.saving') : t('programs.save')}
+                        {editing ? t('wd.close') : t('programs.edit')}
                       </span>
-                      <span
-                        onClick={cancelEdit}
-                        className="btn-hover"
-                        style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
-                      >
-                        {t('wd.close')}
-                      </span>
-                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('programs.saveHint')}</span>
-                    </div>
-                  )}
-
-                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
-                    {t('programs.delete.desc')}
+                    )}
                   </div>
-                  {confirmDel ? (
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{t('programs.delete.confirm', { name })}</span>
-                      <span
-                        onClick={doDelete}
-                        className="btn-hover"
-                        style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, border: '1px solid ' + colors.toolFailed, borderRadius: 4, padding: '3px 12px', color: colors.toolFailed, fontSize: fontSizes.sm, userSelect: 'none' }}
-                      >
-                        {busy === 'delete' ? t('programs.deleting') : t('programs.confirmDelete')}
-                      </span>
-                      <span
-                        onClick={() => setConfirmDel(false)}
-                        className="btn-hover"
-                        style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
-                      >
-                        {t('wd.cancel')}
-                      </span>
-                    </div>
+                  {editing ? (
+                    <EditFields draft={draft} setDraft={setDraft} colors={colors} t={t} />
                   ) : (
-                    <span
-                      onClick={() => { setConfirmDel(true); setNote('') }}
-                      className="btn-hover"
-                      style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.toolFailed, fontSize: fontSizes.md, userSelect: 'none' }}
-                    >
-                      {t('programs.delete')}
-                    </span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '5px 16px', alignItems: 'baseline' }}>
+                      <DetailRow label={t('programs.field.contentType')} value={contentTypeLabel(t, prog.content_type)} colors={colors} />
+                      <DetailRow label={t('programs.field.form')} value={formLabel(t, prog.form_type)} colors={colors} />
+                      <DetailRow label={t('programs.field.description')} value={prog.description || '\u2014'} colors={colors} />
+                      <DetailRow label={t('programs.field.tags')} value={(prog.tags || []).join(', ') || '\u2014'} colors={colors} />
+                      <DetailRow label={t('programs.locked')} value={prog.locked ? t('wd.yes') : t('wd.no')} colors={colors} />
+                    </div>
                   )}
                 </div>
-              )}
-              {note && (
-                <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 10, lineHeight: 1.5 }}>{note}</div>
-              )}
+
+                {/* Entry body editor: only while editing, since the content tab
+                    renders the saved body read-only. */}
+                {editing && (
+                  <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+                    <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      {t('programs.field.body')}
+                    </div>
+                    <textarea
+                      value={draft.body}
+                      onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+                      spellCheck={false}
+                      style={{ width: '100%', boxSizing: 'border-box', minHeight: 180, resize: 'vertical', fontFamily: 'monospace', fontSize: fontSizes.sm, ...inputStyle(colors) }}
+                    />
+                  </div>
+                )}
+
+                <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+                  <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    {t('wd.actions')}
+                  </div>
+                  {locked ? (
+                    <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, lineHeight: 1.5 }}>{t('programs.lockedHint')}</div>
+                  ) : (
+                    <div>
+                      {editing && (
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
+                          <span
+                            onClick={save}
+                            className="btn-hover"
+                            style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '3px 12px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+                          >
+                            {busy === 'save' ? t('programs.saving') : t('programs.save')}
+                          </span>
+                          <span
+                            onClick={cancelEdit}
+                            className="btn-hover"
+                            style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+                          >
+                            {t('wd.close')}
+                          </span>
+                          <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('programs.saveHint')}</span>
+                        </div>
+                      )}
+
+                      <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
+                        {t('programs.delete.desc')}
+                      </div>
+                      {confirmDel ? (
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{t('programs.delete.confirm', { name })}</span>
+                          <span
+                            onClick={doDelete}
+                            className="btn-hover"
+                            style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, border: '1px solid ' + colors.toolFailed, borderRadius: 4, padding: '3px 12px', color: colors.toolFailed, fontSize: fontSizes.sm, userSelect: 'none' }}
+                          >
+                            {busy === 'delete' ? t('programs.deleting') : t('programs.confirmDelete')}
+                          </span>
+                          <span
+                            onClick={() => setConfirmDel(false)}
+                            className="btn-hover"
+                            style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+                          >
+                            {t('wd.cancel')}
+                          </span>
+                        </div>
+                      ) : (
+                        <span
+                          onClick={() => { setConfirmDel(true); setNote('') }}
+                          className="btn-hover"
+                          style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 12px', color: colors.toolFailed, fontSize: fontSizes.md, userSelect: 'none' }}
+                        >
+                          {t('programs.delete')}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {note && (
+                    <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 10, lineHeight: 1.5 }}>{note}</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <ContentList name={name} paths={prog.contents || []} body={prog.body || ''} dark={dark} colors={colors} t={t} />
+            )}
             </div>
-          </div>
         )}
       </div>
     </div>
@@ -451,6 +459,34 @@ function DetailRow({ label, value, colors }: { label: string; value: string; col
   )
 }
 
+// TabBar is a small tab row with an accent underline on the active tab. tabs
+// is a [key, label][] list; value is the active key; onSelect fires with the
+// clicked key.
+function TabBar<T extends string>({ value, onSelect, tabs }: {
+  value: T
+  onSelect: (key: T) => void
+  tabs: [T, string][]
+}) {
+  const { colors } = useTheme()
+  return (
+    <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid ' + colors.border }}>
+      {tabs.map(([key, label]) => (
+        <span
+          key={key}
+          onClick={() => onSelect(key)}
+          style={{
+            cursor: 'pointer', padding: '4px 12px', fontSize: fontSizes.md, userSelect: 'none',
+            color: value === key ? colors.accent : colors.textDimmed,
+            borderBottom: value === key ? '2px solid ' + colors.accent : '2px solid transparent',
+          }}
+        >
+          {label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 // ── Sub-content tree ──
 
 // TreeNode is one entry in the program's content tree: either a directory
@@ -486,11 +522,16 @@ function buildTree(name: string, paths: string[]): TreeNode[] {
 }
 
 // ContentTree renders a program's sub-content paths as a collapsible tree.
-function ContentTree({ name, paths, colors, emptyLabel }: {
+// Directories toggle expansion; files (leaf nodes) are clickable and call
+// onSelect(path) so the caller can view a file's content. The currently
+// selected file is highlighted.
+function ContentTree({ name, paths, colors, emptyLabel, selected, onSelect }: {
   name: string
   paths: string[]
   colors: any
   emptyLabel: string
+  selected?: string | null
+  onSelect?: (path: string) => void
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const roots = useMemo(() => buildTree(name, paths), [name, paths])
@@ -506,15 +547,21 @@ function ContentTree({ name, paths, colors, emptyLabel }: {
 
   const renderNode = (node: TreeNode, key: string, depth: number): ReactNode => {
     const isDir = !!node.children && node.children.length > 0
+    const isFile = !isDir && !!node.path
     const expanded = !collapsed.has(key)
+    const isSelected = !isDir && !!node.path && node.path === selected
     const arrow = isDir ? (expanded ? '\u25BE' : '\u25B8') : null
+    const clickable = isDir || isFile
     return (
       <div key={key}>
         <div
-          onClick={isDir ? () => toggle(key) : undefined}
+          onClick={clickable ? () => (isDir ? toggle(key) : onSelect?.(node.path!)) : undefined}
+          title={isFile ? node.path : undefined}
           style={{
-            display: 'flex', alignItems: 'center', gap: 5, cursor: isDir ? 'pointer' : 'default', userSelect: 'none',
-            padding: '2px 0', paddingLeft: depth * 16,
+            display: 'flex', alignItems: 'center', gap: 5, cursor: clickable ? 'pointer' : 'default', userSelect: 'none',
+            padding: '2px 4px', paddingLeft: depth * 16 + 4, borderRadius: 3,
+            background: isSelected ? colors.bgLight : undefined,
+            color: isFile && isSelected ? colors.accent : undefined,
           }}
         >
           <span style={{ width: 10, flexShrink: 0, color: colors.textDimmed, fontSize: fontSizes.xs, textAlign: 'center' }}>{arrow}</span>
@@ -529,4 +576,141 @@ function ContentTree({ name, paths, colors, emptyLabel }: {
     return <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, lineHeight: 1.5 }}>{emptyLabel}</div>
   }
   return <div>{roots.map((r) => renderNode(r, name + '/' + r.name, 0))}</div>
+}
+
+// ContentList is the 内容 tab body: a left-aligned list of the program's
+// contents, with the main (entry) content first and the sub-content file tree
+// below it. Selecting an item renders it as markdown in the right-hand viewer.
+// Main content is already loaded (body); a sub-content file is fetched on
+// demand via the program worker's load tool. Tree width is draggable.
+function ContentList({ name, paths, body, dark, colors, t }: {
+  name: string
+  paths: string[]
+  body: string
+  dark: boolean
+  colors: any
+  t: (k: any) => string
+}) {
+  // Selection: 'main' is the main content; otherwise it's a sub-content path.
+  // Main content is selected by default when the list (re)loads.
+  const [selected, setSelected] = useState<'main' | string | null>('main')
+  const [content, setContent] = useState<ProgramContent | null>(null)
+  const [loadErr, setLoadErr] = useState('')
+  // List column: 'auto' adapts to its content (left-aligned) by default; a
+  // drag pins it to a fixed pixel width.
+  const [treeWidth, setTreeWidth] = useState<number | 'auto'>('auto')
+  const treeRef = useRef<HTMLDivElement>(null)
+
+  // Reset to the default view (main content) when the program (or its content
+  // listing) changes.
+  useEffect(() => {
+    setSelected('main'); setContent(null); setLoadErr('')
+  }, [name, paths])
+
+  const isMain = selected === 'main'
+
+  const viewMain = () => { setSelected('main'); setContent(null); setLoadErr('') }
+
+  const viewFile = useCallback(async (path: string) => {
+    setSelected(path); setLoadErr(''); setContent(null)
+    try {
+      setContent(await fetchProgramContent(name, path))
+    } catch (e) {
+      setLoadErr((e as Error)?.message || t('programs.subContents.loadError'))
+    }
+  }, [name, t])
+
+  // Horizontal drag on the gap handle to resize the list column, starting from
+  // its current rendered width. In auto mode it measures the laid-out width.
+  const startTreeDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = treeRef.current?.offsetWidth ?? 240
+    const onMove = (ev: MouseEvent) => {
+      const next = startW + (ev.clientX - startX)
+      setTreeWidth(Math.min(Math.max(next, 140), 640))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+    }
+    document.body.style.cursor = 'col-resize'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [])
+
+  const rightBody = isMain ? body : (content?.body ?? undefined)
+  const rightTitle = isMain ? t('programs.tab.main') : (typeof selected === 'string' ? selected : undefined)
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', minHeight: 320 }}>
+      {/* Left: the content list — main content first, then the sub-content tree. */}
+      <div
+        ref={treeRef}
+        style={{
+          ...(treeWidth === 'auto'
+            ? { flex: '0 1 auto', minWidth: 180, maxWidth: '50%' }
+            : { width: treeWidth, flex: '0 0 auto' }),
+          overflowY: 'auto', maxHeight: '60vh', textAlign: 'left',
+        }}
+      >
+        <div
+          onClick={viewMain}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', userSelect: 'none',
+            padding: '2px 4px', borderRadius: 3,
+            background: isMain ? colors.bgLight : undefined,
+            color: isMain ? colors.accent : colors.text,
+          }}
+        >
+          <span style={{ width: 10, flexShrink: 0 }} />
+          <span style={{ fontSize: fontSizes.sm }}>{t('programs.tab.main')}</span>
+        </div>
+        <ContentTree
+          name={name}
+          paths={paths}
+          colors={colors}
+          emptyLabel={t('programs.noSubContents')}
+          selected={isMain ? null : (typeof selected === 'string' ? selected : null)}
+          onSelect={viewFile}
+        />
+      </div>
+
+      {/* Drag handle for the list width. */}
+      <div
+        onMouseDown={startTreeDrag}
+        title={t('panel.resize.tooltip')}
+        style={{ width: 6, flexShrink: 0, cursor: 'col-resize', userSelect: 'none', position: 'relative' }}
+      >
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', width: 1, marginLeft: -0.5, background: colors.border }} />
+      </div>
+
+      {/* Right: the content viewer. */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {!selected ? (
+          <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', color: colors.textDimmed, fontSize: fontSizes.md, textAlign: 'center' }}>
+            {t('programs.subContents.pick')}
+          </div>
+        ) : loadErr && rightBody === undefined ? (
+          <div style={{ color: colors.toolFailed, fontSize: fontSizes.md, wordBreak: 'break-all' }}>{loadErr}</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', border: '1px solid ' + colors.border, borderRadius: 6, overflow: 'hidden', minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight }}>
+              <span style={{ color: colors.detailLabel, fontSize: fontSizes.sm, wordBreak: 'break-all', flex: 1, minWidth: 0 }}>{rightTitle}</span>
+            </div>
+            {loadErr ? (
+              <div style={{ padding: 12, color: colors.toolFailed, fontSize: fontSizes.md, wordBreak: 'break-all' }}>{loadErr}</div>
+            ) : rightBody !== undefined ? (
+              <div className="md-content" style={{ padding: 12, fontSize: fontSizes.md, lineHeight: 1.6, color: colors.text }}>
+                <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>
+                  {rightBody || ''}
+                </Markdown>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }

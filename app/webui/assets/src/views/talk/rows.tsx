@@ -12,8 +12,8 @@ import ThinkingBlock from '../../components/ThinkingBlock'
 import ResponseBlock from '../../components/ResponseBlock'
 import SystemReminderBlock from '../../components/SystemReminderBlock'
 import {
-  getInputText, isToolResult, toolContent, toolSummary,
-  formatTime, findReferencedInput, splitSystemReminder, parseAttachments,
+  isToolResult, toolContent, toolSummary,
+  formatTime, findReferencedInput, splitSystemReminder, inputContent,
 } from '../../components/talk-utils'
 import type { EventPayload } from '../../types'
 import WorkerBadge from './WorkerBadge'
@@ -45,7 +45,8 @@ function RowBadge({ ctx, workerId, showBadge, alignRight, extraPad = false }: {
 
 function InputRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alignRight: boolean; showBadge: boolean; ctx: RowCtx }) {
   const { colors, t } = ctx
-  const parsed = parseAttachments(getInputText(evt))
+  // The rendered message body comes from the structured "content" array.
+  const parsed = inputContent(evt)
   const { reminder, content } = splitSystemReminder(parsed.text)
   const rawMode = (evt.payload?.input_mode as string) || 'append'
   const modeKey = rawMode === 'interrupt' ? 'interrupt' : rawMode === 'schedule' ? 'schedule' : 'append'

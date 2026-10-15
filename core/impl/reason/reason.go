@@ -82,9 +82,16 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 
 	traceID = w.currentTraceID
 	tools := w.LLMToolDefs()
+	msgs := w.transcript.Render()
+	if !w.modelSupportsImages() {
+		// A text-only model cannot ingest image content blocks; downgrade them to
+		// a textual hint before handing the messages to the provider (the
+		// transcript itself is untouched — this is a send-time copy).
+		msgs = sanitizeImages(msgs)
+	}
 	c := &llm.Context{
 		SystemPrompt:    w.buildInstruction(),
-		Messages:        w.transcript.Render(),
+		Messages:        msgs,
 		Tools:           tools,
 		ReasoningEffort: w.reasoningEffort,
 	}
@@ -95,6 +102,88 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	w.mu.Unlock()
 
 	return traceID, req
+}
+
+// modelSupportsImages reports whether the currently selected provider/model is
+// expected to accept image content blocks. It is the runtime gate that decides
+// whether image blocks are sanitized before a round is sent.
+//
+// Known modalities come from the provider sources' per-model InputTypes (the
+// source of truth mirrors resolveContextWindow). When the selected model
+// reports no modalities (an empty or unknown list), it defaults to true: better
+// to send the image and let a capable model see it than to silently drop it,
+// and a provider error on a genuinely text-only model is caught by normal error
+// handling. Only an explicit modality list that excludes image turns the gate off.
+func (w *BaseReasonWorker) modelSupportsImages() bool {
+	if w.providerSources == nil {
+		return true
+	}
+	model := w.providerModel
+	for _, info := range w.providerSources.List() {
+		if info.Name != w.providerName {
+			continue
+		}
+		if model == "" {
+			model = info.Default
+		}
+		for _, m := range info.ModelDetails {
+			if m.ID != model {
+				continue
+			}
+			if len(m.InputTypes) == 0 {
+				return true // unknown -> assume image-capable
+			}
+			for _, in := range m.InputTypes {
+				if isImageInputType(in) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return true
+}
+
+// isImageInputType reports whether a modality token describes image input.
+func isImageInputType(t string) bool {
+	switch t {
+	case "image", "image_input", "image_url", "vision", "multimodal":
+		return true
+	}
+	return false
+}
+
+// sanitizeImages returns a copy of messages with every image content block
+// replaced by a textual hint, so a text-only model still learns what was
+// attempted without receiving bytes it cannot consume. Text / thinking / tool
+// blocks pass through unchanged. It never mutates the input slice.
+func sanitizeImages(msgs []llm.Message) []llm.Message {
+	out := make([]llm.Message, 0, len(msgs))
+	for _, m := range msgs {
+		needCopy := false
+		for _, b := range m.Content {
+			if b.Type == llm.ContentImage {
+				needCopy = true
+				break
+			}
+		}
+		if !needCopy {
+			out = append(out, m)
+			continue
+		}
+		newContent := make([]llm.ContentBlock, len(m.Content))
+		for i, b := range m.Content {
+			if b.Type == llm.ContentImage {
+				newContent[i] = llm.ContentBlock{Type: llm.ContentText,
+					Text: "[image omitted: the active model does not support image inputs]"}
+				continue
+			}
+			newContent[i] = b
+		}
+		m.Content = newContent
+		out = append(out, m)
+	}
+	return out
 }
 
 // openStream starts the LLM stream, retrying on transient errors. Error
@@ -535,8 +624,9 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 			w.transcript.Apply(transcript.ToolResultPatch{
 				CallID: tc.ToolCallID,
 				Name:   tc.ToolName,
-				Text:   "Unknown tool '" + tc.ToolName + "': tool not available - not dispatched.",
-				IsErr:  true,
+				Content: []llm.ContentBlock{{Type: llm.ContentText,
+					Text: "Unknown tool '" + tc.ToolName + "': tool not available - not dispatched."}},
+				IsErr: true,
 			})
 			continue
 		}
@@ -552,7 +642,8 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 				if err := json.Unmarshal([]byte(tc.ToolArguments), &reqArgs); err != nil {
 					w.transcript.Apply(transcript.ToolResultPatch{
 						CallID: tc.ToolCallID, Name: tc.ToolName,
-						Text: "request: bad arguments: " + err.Error(), IsErr: true,
+						Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "request: bad arguments: " + err.Error()}},
+						IsErr:   true,
 					})
 					continue
 				}
@@ -569,8 +660,9 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 				unavailable = append(unavailable, fmt.Sprintf("%s(%s/%s)", tc.ToolName, target, eventType))
 				w.transcript.Apply(transcript.ToolResultPatch{
 					CallID: tc.ToolCallID, Name: tc.ToolName,
-					Text:   fmt.Sprintf("unknown capability %s/%s - not dispatched.", target, eventType),
-					IsErr:  true,
+					Content: []llm.ContentBlock{{Type: llm.ContentText,
+						Text: fmt.Sprintf("unknown capability %s/%s - not dispatched.", target, eventType)}},
+					IsErr: true,
 				})
 				continue
 			}

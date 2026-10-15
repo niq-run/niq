@@ -266,8 +266,17 @@ func (w *Worker) Restore(state []byte) error {
 // mode controls input handling ("interrupt" | "schedule" | "append"). The
 // legacy "default" and the empty string are emitted without an input_mode
 // field, which the reason worker now treats as append (its default stance).
-func (w *Worker) SendInput(ctx context.Context, text string, target string, mode string) error {
-	payload := map[string]any{"text": text}
+//
+// The input payload carries its content as a "content" array of llm-like
+// blocks ({type: text|image|file}) — plain text is sent as {type:text} inside
+// that array, so there is no separate top-level text field. The bus treats it
+// as an ordinary payload object and only the reason input converter
+// interprets the shape.
+func (w *Worker) SendInput(ctx context.Context, content []map[string]any, target string, mode string) error {
+	payload := map[string]any{}
+	if len(content) > 0 {
+		payload["content"] = content
+	}
 	if mode != "" && mode != "default" {
 		payload["input_mode"] = mode
 	}

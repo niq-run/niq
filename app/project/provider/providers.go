@@ -9,9 +9,9 @@ import (
 	"log"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/reason"
 	llm "github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/itfs/worker"
-	"github.com/niq-run/niq/core/impl/reason"
 )
 
 // EnsureLLMConfigured gates project startup on an LLM provider being configured
@@ -173,6 +173,7 @@ func (s *providerSources) modelsFor(p Entry) []llm.ModelInfo {
 				Name:          ms.Name,
 				Provider:      p.Type,
 				ContextWindow: cw,
+				InputTypes:    ms.InputTypes,
 			})
 		}
 		return details

@@ -13,7 +13,14 @@ type Tool struct {
 }
 
 // ToolFunc is the runtime signature for executing a tool call.
-// It receives the call context and a map of arguments, and returns
-// a result string or an error. All tool handlers in niq conform
-// to this signature regardless of which worker provides them.
-type ToolFunc func(ctx context.Context, args map[string]any) (string, error)
+// It receives the call context and a map of arguments, and returns a result
+// or an error. All tool handlers in niq conform to this signature regardless
+// of which worker provides them.
+//
+// The result is a neutral, JSON-serializable value — typically a string, or a
+// map[string]any when the tool wants to return structured content (e.g. a
+// `{content:[{type, mime, data}, …]}` payload the reason worker decodes into
+// multimodal llm content). Workers never import the llm package or build
+// llm.ContentBlock directly; they only shape a payload the bus serializes and
+// the caller translates.
+type ToolFunc func(ctx context.Context, args map[string]any) (any, error)

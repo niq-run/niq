@@ -1,7 +1,9 @@
 package wsbackend
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -179,5 +181,37 @@ func TestBashCreatesMissingCwd(t *testing.T) {
 	}
 	if fi, err := os.Stat(missing); err != nil || !fi.IsDir() {
 		t.Fatalf("missing cwd was not created: %v", err)
+	}
+}
+
+func TestReadBinaryWithinMount(t *testing.T) {
+	mount := t.TempDir()
+	src := filepath.Join(mount, "pic.bin")
+	content := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01}
+	if err := os.WriteFile(src, content, 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	b := NewEmbeddedBackend([]string{mount})
+	got, err := b.ReadBinary(context.Background(), "pic.bin")
+	if err != nil {
+		t.Fatalf("ReadBinary: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("ReadBinary = %v, want %v", got, content)
+	}
+}
+
+func TestReadBinaryEscapesMount(t *testing.T) {
+	mount := t.TempDir()
+	b := NewEmbeddedBackend([]string{mount})
+
+	out, err := b.ReadBinary(context.Background(), filepath.Join(t.TempDir(), "outside.png"))
+	if err == nil {
+		t.Fatalf("ReadBinary outside the mount must error, got bytes len=%d", len(out))
+	}
+	var esc *EscapeError
+	if !errors.As(err, &esc) {
+		t.Fatalf("err = %T (%v), want *EscapeError", err, err)
 	}
 }
