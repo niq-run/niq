@@ -71,11 +71,12 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	w.activeTimeoutProvider = ""
 
 	// Park any pending tools from the previous reasoning before taking the
-	// snapshot, so the LLM sees the parked context. The cause is taken
-	// from immediateReasoningCause if set, otherwise falls back to Input.
+	// snapshot, so the LLM sees the parked context. The cause is taken from
+	// immediateReasoningCause if set; otherwise it is the NEUTRAL superseded
+	// cause — never Input, which would falsely tell the model the user typed.
 	cause := w.immediateReasoningCause
 	if cause == "" {
-		cause = requesttracker.PreemptCauseInput
+		cause = requesttracker.PreemptCauseSuperseded
 	}
 	w.immediateReasoningCause = ""
 	w.parkPending(cause)
@@ -670,6 +671,7 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 				Type: llm.ContentToolCall, ToolCallID: tc.ToolCallID, ToolName: tc.ToolName,
 			}})
 			w.invokeCapability(context.Background(), pcap.Event, pcap.Source, args, tc.ToolCallID, traceID)
+			dispatched++ // a request-routed call is dispatched too (never enters callsByTarget)
 			continue
 		}
 		argsMap := map[string]any{}
@@ -696,10 +698,13 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	// will ever arrive to schedule the next round — the worker would stall
 	// right after surfacing the "tool unavailable" error. Request a follow-up
 	// round here so the LLM can react (reach for a real tool or tell the user
-	// it cannot). When anything WAS dispatched, the peer's result resolves the
-	// tracker and sets needReason on its own; forcing one here would interrupt
-	// those in-flight tools.
+	// it cannot). When anything WAS dispatched — including a request-routed
+	// call — the peer's result resolves the tracker and sets needReason on its
+	// own; forcing one here would interrupt those in-flight tools. The forced
+	// round carries its own cause so a leftover wait it parks is framed
+	// neutrally, never as a user input.
 	if dispatched == 0 {
+		w.immediateReasoningCause = requesttracker.PreemptCauseNoDispatch
 		w.needReason = true
 	}
 	w.isReasoning = false

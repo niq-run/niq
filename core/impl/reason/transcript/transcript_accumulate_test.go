@@ -26,6 +26,25 @@ func resultContent(text string) []llm.ContentBlock {
 	return []llm.ContentBlock{{Type: llm.ContentText, Text: text}}
 }
 
+// TestParkReasonNeutralCauses verifies the reasoner-side park causes
+// (nodispatch / superseded) read neutrally: they must never attribute the stop
+// to a user input, or the model wrongly believes the user typed.
+func TestParkReasonNeutralCauses(t *testing.T) {
+	for _, c := range []string{"nodispatch", "superseded"} {
+		got := parkReason(c)
+		if strings.Contains(got, "new input") || strings.Contains(got, "user") {
+			t.Fatalf("parkReason(%q) = %q leaks input/user attribution", c, got)
+		}
+		if !strings.Contains(got, "superseded") {
+			t.Fatalf("parkReason(%q) = %q, want neutral superseded wording", c, got)
+		}
+	}
+	// The genuine input cause still says input, so the distinction is real.
+	if !strings.Contains(parkReason("input"), "new input") {
+		t.Fatalf("parkReason(\"input\") = %q, want the input wording", parkReason("input"))
+	}
+}
+
 // digestHead builds the caller-supplied head messages a compaction passes to
 // Commit: a single user message carrying the digest under the [context digest]
 // marker (mirroring what the worker's compactor builds).

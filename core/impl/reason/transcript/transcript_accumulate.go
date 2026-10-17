@@ -471,6 +471,9 @@ func (b *AccumulateTranscript) Restore(state []byte) error {
 
 // parkReason returns the explanatory text shown in the [pending] placeholder
 // when a call is parked, describing why the reasoner stopped waiting on it.
+// The wording is deliberate: only "input" (and "reminder") attributes the stop
+// to the user. "nodispatch" / "superseded" are neutral — the wait was dropped by
+// the reasoner's own round scheduling, not by anything the user did.
 func parkReason(cause string) string {
 	switch cause {
 	case "timeout":
@@ -483,6 +486,10 @@ func parkReason(cause string) string {
 		return "Tool call interrupted by reminder; reasoner proceeded without waiting"
 	case "restart":
 		return "Tool call did not survive the restart; reasoner is no longer waiting"
+	case "nodispatch":
+		return "Tool call superseded by a follow-up round; reasoner proceeded without waiting"
+	case "superseded":
+		return "Tool call superseded by the next round; reasoner proceeded without waiting"
 	default:
 		return "Tool call parked; reasoner proceeded"
 	}
@@ -536,6 +543,8 @@ func lateResultMessage(callID, name string, content []llm.ContentBlock, cause st
 		label = "Interrupted tool call"
 	case "restart":
 		label = "Tool call interrupted by restart"
+	case "nodispatch", "superseded":
+		label = "Superseded tool call"
 	}
 	msg := llm.Message{
 		Role: llm.RoleUser,

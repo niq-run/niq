@@ -117,6 +117,78 @@ func TestRequestToolForwards(t *testing.T) {
 	}
 }
 
+// TestRequestRouteDoesNotForceFollowupRound is a regression test for the bug
+// where a call forwarded through the request escape hatch left the round's
+// dispatched count at zero, so handleToolCalls forced a follow-up round that
+// parked the just-sent request as "interrupted by new input" — making the model
+// wrongly believe the user typed again. A request-routed call IS dispatched, so
+// no follow-up round may be forced.
+func TestRequestRouteDoesNotForceFollowupRound(t *testing.T) {
+	ch := newTestChannel()
+	// A blocking provider keeps any (wrongly) forced round alive so its
+	// reason.start is observable instead of racing past us.
+	prov := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(prov.release) })
+	w := newTestWorker(prov, ch)
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "r1", map[string]any{
+		"watch": []map[string]any{{"event": "request", "desc": "forward a call"}},
+	}))
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "workspace", map[string]any{
+		"watch": []map[string]any{{"event": "bash", "desc": "Run a command"}},
+	}))
+	args, _ := json.Marshal(map[string]any{
+		"target": "workspace", "event": "bash", "arguments": map[string]any{"cmd": "ls"},
+	})
+	calls := []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "req-1", ToolName: "request", ToolArguments: string(args)},
+	}
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), calls, "trace1")
+
+	// The request-routed call was dispatched, so no follow-up round may start
+	// before the peer's result. Give a wrongly-forced round a generous window to
+	// surface; it must not.
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if n := len(ch.eventsOf("reason.start")); n != 0 {
+			t.Fatalf("request-routed dispatch forced a follow-up round (%d reason.start broadcasts)", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestPrepareReasoningNeutralParkCause verifies prepareReasoning's fallback: a
+// round started with no recorded cause (i.e. not a user input) parks a leftover
+// pending tool with the neutral "superseded" wording, never the input wording.
+func TestPrepareReasoningNeutralParkCause(t *testing.T) {
+	w := newTestWorker(nil, nil)
+	w.mu.Lock()
+	w.currentTraceID = "trace1"
+	call := llm.ContentBlock{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"}
+	w.requestTracker.Add("workspace", []llm.ContentBlock{call})
+	// The placeholder must exist for parking to rewrite it in place.
+	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: []llm.ContentBlock{call}})
+	w.mu.Unlock()
+
+	w.prepareReasoning()
+
+	var parked string
+	for _, m := range w.transcript.Render() {
+		if m.ToolCallID == "c1" && len(m.Content) > 0 {
+			parked = m.Content[0].Text
+		}
+	}
+	if parked == "" {
+		t.Fatal("expected the parked placeholder for c1")
+	}
+	if strings.Contains(parked, "new input") {
+		t.Fatalf("leftover wait parked with input wording: %q", parked)
+	}
+	if !strings.Contains(parked, "superseded") {
+		t.Fatalf("parked text = %q, want the neutral superseded wording", parked)
+	}
+}
+
 // TestRequestToolUnknownTargetFails verifies request to an unknown worker/event
 // resolves as an error in place and is not dispatched.
 func TestRequestToolUnknownTargetFails(t *testing.T) {
