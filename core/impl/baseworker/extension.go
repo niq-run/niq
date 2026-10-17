@@ -37,8 +37,8 @@ type Extension struct {
 	// event type is allowed; invoking the extension means sending this event.
 	Event event.EventType
 	// SelfOnly marks an extension that only the declaring worker itself serves
-	// (e.g. send_message, list_workers — operations on that worker's own view
-	// of the bus). Such extensions are left out of the peer-facing
+	// (e.g. message, request — operations on that worker's own view of the
+	// bus). Such extensions are left out of the peer-facing
 	// worker.ready, so peers never see them as callable tools; the worker
 	// discovers them from its own registry instead.
 	SelfOnly bool
@@ -121,22 +121,15 @@ func (w *BaseWorker) Extensions() []Extension {
 	return out
 }
 
-// watchEntry renders one extension into the worker.ready "watch" wire entry.
-// The event type identifies the capability; parameters (when declared) are the
-// argument schema. The wire field is literally "watch" — see announce.go in
-// pkg/reason for the naming note.
-func (w *BaseWorker) watchEntry(ext Extension) map[string]any {
-	entry := map[string]any{"event": string(ext.Event), "desc": ext.Description}
-	if len(ext.Parameters) > 0 {
-		entry["parameters"] = ext.Parameters
-	}
-	return entry
-}
-
-// WatchEntries renders the registry into the worker.ready "watch" wire format.
+// WatchEntries renders the registry into the worker.ready "watch" wire format:
+// one entry per extension, {"event", "desc", "parameters" (when declared)}. The
+// event type identifies the capability; parameters are its argument schema. The
+// wire field is literally "watch" — see capability.go in pkg/reason for the
+// naming note.
+//
 // includeSelfOnly controls whether SelfOnly extensions are rendered: a
-// peer-facing broadcast leaves them out (they are not callable by peers),
-// while a worker's own view includes them.
+// peer-facing broadcast leaves them out (they are not callable by peers), while
+// a worker's own view includes them.
 func (w *BaseWorker) WatchEntries(includeSelfOnly bool) []map[string]any {
 	caps := w.Extensions()
 	out := make([]map[string]any, 0, len(caps))
@@ -144,7 +137,11 @@ func (w *BaseWorker) WatchEntries(includeSelfOnly bool) []map[string]any {
 		if e.SelfOnly && !includeSelfOnly {
 			continue
 		}
-		out = append(out, w.watchEntry(e))
+		entry := map[string]any{"event": string(e.Event), "desc": e.Description}
+		if len(e.Parameters) > 0 {
+			entry["parameters"] = e.Parameters
+		}
+		out = append(out, entry)
 	}
 	return out
 }

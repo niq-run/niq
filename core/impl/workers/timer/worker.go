@@ -15,9 +15,9 @@ import (
 )
 
 // Worker is the TimerWorker — a bus-connected timer service.
-// Schedule calls return immediately; the actual timer fires a
-// timer.timeout / timer.reminder trigger event later. Pending timers are
-// persisted via Snapshot/Restore so they survive a restart.
+// Schedule calls return immediately; the actual timer fires later — a
+// tool-call timeout as timer.timeout, a reminder as a worker.input. Pending
+// timers are persisted via Snapshot/Restore so they survive a restart.
 type Worker struct {
 	baseworker.BaseWorker
 	timers    map[string]*Entry
@@ -92,7 +92,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeElapse,
-		Description: "Set a reminder timer. After the specified duration, you will receive a timer.reminder event. Unlike the timeout tool, this timer is never automatically cancelled — it always fires. Use this for general-purpose timing and reminders.",
+		Description: "Set a reminder timer. After the specified duration you are woken with a worker.input carrying the purpose. Unlike the timeout tool, this timer is never automatically cancelled — it always fires. Use this for general-purpose timing and reminders.",
 		Parameters: obj(map[string]any{
 			"duration_ms": map[string]any{
 				"type":        "integer",
@@ -112,7 +112,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeAt,
-		Description: "Set a reminder timer at a specific point in time instead of after a relative delay. When the wall-clock reaches the given time, you will receive a timer.reminder event carrying the purpose. Use this to schedule reminders/timers at an absolute time (e.g. 17:00 this evening), which survive a worker restart.",
+		Description: "Set a reminder timer at a specific point in time instead of after a relative delay. When the wall-clock reaches the given time, you are woken with a worker.input carrying the purpose. Use this to schedule reminders/timers at an absolute time (e.g. 17:00 this evening), which survive a worker restart.",
 		Parameters: obj(map[string]any{
 			"fire_at": map[string]any{
 				"type":        "string",
@@ -134,7 +134,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeInterval,
-		Description: "Set a repeating reminder. From the (optional) first fire time, or after interval_ms, the caller receives a timer.reminder event every interval_ms until the timer is cancelled. Use this for recurring reminders, unlike the one-shot elapse/at timers.",
+		Description: "Set a repeating reminder. From the (optional) first fire time, or after interval_ms, the caller is woken with a worker.input every interval_ms until the timer is cancelled. Use this for recurring reminders, unlike the one-shot elapse/at timers.",
 		Parameters: obj(map[string]any{
 			"interval_ms": map[string]any{
 				"type":        "integer",
@@ -182,10 +182,10 @@ func (w *Worker) registerExtensions() {
 }
 
 // timerPublishes are the events the timer declares it emits, shown to peers
-// via list_workers.
+// via list_workers. A reminder is not listed: it is delivered as a directed
+// worker.input to the caller, not a timer-domain event.
 var timerPublishes = []map[string]any{
-	{"type": "timer.timeout", "description": "A timeout timer has fired"},
-	{"type": "timer.reminder", "description": "An elapse/at reminder timer has fired"},
+	{"type": "timer.timeout", "description": "A tool-call timeout timer has fired"},
 }
 
 // Start subscribes to the bus and begins watching for timer requests.
@@ -370,7 +370,7 @@ func (w *Worker) handleTickAfter(callID, toolName, callerID string, args map[str
 }
 
 // handleInterval schedules a recurring reminder. After an optional first fire
-// time (fire_at / unix_ms) or after interval_ms, a timer.reminder fires every
+// time (fire_at / unix_ms) or after interval_ms, a reminder is delivered every
 // interval_ms until cancelled.
 func (w *Worker) handleInterval(callID, toolName, callerID string, args map[string]any, traceID string) {
 	intervalMS := baseworker.ArgInt(args, "interval_ms", 0)

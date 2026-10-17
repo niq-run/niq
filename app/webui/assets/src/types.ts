@@ -80,7 +80,6 @@ export function isTalkPartnerType(type: string): boolean {
 export const RESPONSE_ONLY_TYPES = [
   'worker.input',
   'worker.abort',
-  'timer.reminder',
   'timer.timeout',
   'reason.response',
   'approval.request',

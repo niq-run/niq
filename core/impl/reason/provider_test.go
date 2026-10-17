@@ -217,9 +217,9 @@ func TestSetActiveProviderSwitches(t *testing.T) {
 	w.mu.Unlock()
 }
 
-// TestUpdateRequestedSetProviderEvent drives the worker.update
-// op=provider through the real handler and asserts the switch applies and a
-// worker.updated completion is broadcast with the explicit model.
+// TestUpdateRequestedSetProviderEvent drives provider.switch through the real
+// handler and asserts the switch applies and a request.completed reply is
+// returned with the explicit model.
 func TestUpdateRequestedSetProviderEvent(t *testing.T) {
 	ch := newTestChannel()
 	w, _, pb := newSwitchableWorker(ch)

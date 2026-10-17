@@ -46,11 +46,10 @@ import (
 type PreemptCause string
 
 const (
-	PreemptCauseInput    PreemptCause = "input"    // a new user input preempted the wait
-	PreemptCauseTimeout  PreemptCause = "timeout"  // the batch timeout fired
-	PreemptCauseAbort    PreemptCause = "abort"    // an abort signal ended the call
-	PreemptCauseReminder PreemptCause = "reminder" // an elapse reminder timer fired
-	PreemptCauseRestart  PreemptCause = "restart"  // the worker restarted; the wait did not survive it
+	PreemptCauseInput   PreemptCause = "input"   // a new user input preempted the wait
+	PreemptCauseTimeout PreemptCause = "timeout" // the batch timeout fired
+	PreemptCauseAbort   PreemptCause = "abort"   // an abort signal ended the call
+	PreemptCauseRestart PreemptCause = "restart" // the worker restarted; the wait did not survive it
 )
 
 // RequestStatus tracks the lifecycle stage of an issued request while it is

@@ -50,10 +50,8 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 		}
 	case evt.Type == event.TypeWorkerAbort:
 		w.handleAbort(evt)
-	case evt.Type == "timer.timeout":
+	case evt.Type == TypeTimerTimeout:
 		w.handleTimeout(evt)
-	case evt.Type == "timer.reminder":
-		w.handleReminder(evt)
 	case evt.Type == event.TypeWorkerReady:
 		w.HandleWorkerReady(evt)
 	case evt.Type == event.TypeWorkerGone:
@@ -64,36 +62,12 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 		w.handleInput(evt)
 	default:
 		// Extension channel for any other event type: own tool events
-		// (send_message, context.compress, provider.*) and worker.update /
-		// worker.query all route here to the registered extension by event
-		// type (and discriminator, if the extension uses one). An unregistered
-		// event is dropped.
+		// (send_message, context.compress, provider.*) route here to the
+		// registered extension by event type. An unregistered event is dropped.
 		if !w.DispatchExtension(evt) {
 			log.Printf("[reason %s] no extension for event %s", w.ID(), evt.Type)
 		}
 	}
-}
-
-// TypeContextCompress is the convention every reason worker honors: under
-// window pressure the mechanism emits this event, and the worker responds by
-// shrinking its own transcript. The mechanism fires the event; it never
-// performs or books the edit itself — that is the worker's strategy, reached
-// by handling this event. Rotate and any other context op are the worker's own
-// extras (pkg/worker/reason), not emitted by the mechanism. This is a
-// reason-worker-specific event type, so it lives here rather than in
-// core/event.
-const TypeContextCompress event.EventType = "context.compress"
-
-// emitContextCompress sends the context.compress convention event to this
-// worker through the bus for audit — the single path every compress trigger
-// converges on. The mechanism only ever auto-emits this one convention event;
-// the concrete worker implements the shrink strategy and does its own
-// bookkeeping. Lock need not be held specially; the event is queued to self
-// and handled asynchronously by process.
-func (w *BaseReasonWorker) emitContextCompress(ctx context.Context) {
-	evt := event.New(TypeContextCompress, w.ID(), nil)
-	evt.TraceID = w.currentTraceID
-	_ = w.Channel.Send(ctx, evt, w.ID())
 }
 
 // handleAbort cancels the current LLM call, parks all pending tools (so late
@@ -135,7 +109,7 @@ func (w *BaseReasonWorker) handleAbort(_ event.Event) {
 // Records a system message and schedules a fresh reasoning round.
 // Stale timers (cancelled or prior batch) are silently discarded.
 func (w *BaseReasonWorker) handleTimeout(evt event.Event) {
-	timerID, _ := evt.Payload["timer_id"].(string)
+	timerID, _ := evt.Payload[timerIDField].(string)
 
 	// Only the current round's timer is meaningful; an orphaned timer from a
 	// prior round (whose call_id no longer matches) is silently discarded.
@@ -147,16 +121,6 @@ func (w *BaseReasonWorker) handleTimeout(evt event.Event) {
 		}
 		w.appendInput([]llm.Message{msg}, requesttracker.PreemptCauseTimeout)
 	}
-}
-
-// handleReminder processes a timer.reminder event (from elapse). It wakes the
-// LLM — the event payload carries the purpose so the LLM knows what to do. A
-// reminder is a gentle wake-up: it schedules fresh reasoning without cancelling
-// any in-flight reasoning call.
-func (w *BaseReasonWorker) handleReminder(evt event.Event) {
-	w.captureTraceID(evt)
-	msgs := w.convertEvent(evt)
-	w.appendInput(msgs, requesttracker.PreemptCauseReminder)
 }
 
 // handleToolResult processes a request.completed/failed/rejected event.
@@ -215,8 +179,9 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	}
 }
 
-// handleInput processes an input event. The input_mode field in the payload
-// picks one of the three levels (see package comment):
+// handleInput processes an input event (worker.input — from a human UI, a peer
+// reason worker, or a reminder timer). The input_mode field picks one of the
+// three levels (see package comment):
 //
 //	"schedule"  — level 1: append the message and schedule a round, but only
 //	             when the system is idle (no in-flight reasoning, no pending
@@ -364,7 +329,7 @@ func (w *BaseReasonWorker) cancelTimeout() {
 	}
 	timerID := w.activeTimeout
 	evt := event.New(event.TypeRequestCancel, w.ID(), map[string]any{
-		"timer_id": timerID,
+		timerIDField: timerID,
 	})
 	evt.RequestId = timerID + "-cancel"
 	_ = w.Channel.Send(context.Background(), evt, w.activeTimeoutProvider)

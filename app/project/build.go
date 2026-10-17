@@ -117,7 +117,7 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	model, _ := p["model"].(string)
 
 	// SubscribeAllow: only broadcast delivery needs listing. Directed events
-	// (tool calls, their request.* replies, timer.timeout/reminder, management
+	// (tool calls, their request.* replies, timer.timeout, management
 	// requests) reach the worker regardless; broadcast traffic to a reason
 	// worker is just the worker presence lifecycle and worker.input (hiw
 	// broadcasts when untargeted). Template subscriptions override this
@@ -386,7 +386,7 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("timer.timeout"),
-			event.NewPublishPattern("timer.reminder"),
+			event.NewPublishPattern("worker.input"),
 			event.NewPublishPattern("worker.ready"),
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))

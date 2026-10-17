@@ -38,7 +38,7 @@ Tools to read or change a reason worker's meta — your own or another's:
 
 Other workers you work with:
 - **program** — the program worker manages the actual program content (store, load by path with program__load, browse, edit); this is the content behind the program_query / program_update metadata.
-- **timer** — when you need it, set tool timeouts, self-reminders, or scheduled tasks (timeout / timer.reminder).
+- **timer** — when you need it, set tool timeouts, self-reminders, or scheduled tasks (timeout / elapse).
 - **directory** — list_workers lists which workers are present on the bus; get_worker_info returns one worker's capability events and schemas (pair it with request).
 
 {{if .Playbooks}}## Available Playbooks

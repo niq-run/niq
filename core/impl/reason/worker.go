@@ -69,8 +69,8 @@ type Config struct {
 	Provider        llm.LLMProvider
 	ProviderSources ProviderSources
 	// ProviderName / ProviderModel record the initially active provider for
-	// status reporting (worker.status op=providers carries the current choice).
-	// Empty when unknown.
+	// status reporting (provider.current carries the current choice). Empty
+	// when unknown.
 	ProviderName    string
 	ProviderModel   string
 	ReasoningEffort *string
@@ -173,9 +173,9 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 //
 // These expose the mechanism's operations to reason-family workers so their
 // extension handlers can be implemented outside pkg/reason without reaching
-// into unexported state. The default worker's toolkit (send_message,
-// list_workers, context.compress/rotate) lives in pkg/worker/reason and is
-// built on exactly these.
+// into unexported state. The default worker's toolkit (send_message, request,
+// context.compress) lives in pkg/worker/reason and is built on exactly
+// these.
 
 // LLMProvider returns the currently active LLM provider. A worker's context
 // strategy reads it lazily each call (e.g. for summarization) so it follows
@@ -212,10 +212,6 @@ func (w *BaseReasonWorker) TryReason(ctx context.Context) {
 	w.tryReason(ctx)
 }
 
-// HandleWorkerReady applies a peer (or self) worker.ready announcement,
-// replacing that worker's whole contract. Exported for embedding workers and
-// tests.
-
 // Start begins the event watch. It returns an error if the worker is already
 // started. Provided by the base so embedding reason-family workers inherit
 // the lifecycle without reimplementing it.
@@ -236,19 +232,11 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 	// callback off the event loop; no goroutine when nothing is installed.
 	w.StartDurableLoop(runCtx)
 
-	// Announce ourselves (BroadcastReady) and ask the current fleet who is
-	// online (discover). Choosing to keep the original startup broadcast: a
-	// worker that starts must disclose both ways — its own ready reaches
-	// whoever is already up, and its discover makes those workers reply
-	// DIRECTLY (see process.go), so it learns those that predate it. Dropping
-	// the startup discover would make early-started workers permanently
-	// invisible to the newcomer (and asymmetric).
+	// Disclose both directions on startup: BroadcastReady reaches whoever is
+	// already up, BroadcastDiscover makes those workers reply DIRECTLY (see
+	// process.go), so this worker also learns those that predate it.
 	w.BroadcastReady()
-	disc := event.New(event.TypeWorkerDiscover, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-	})
-	disc.Transient = true // presence: live-only, not durable history
-	_ = w.Channel.Broadcast(context.Background(), disc)
+	w.BroadcastDiscover()
 
 	w.started = true
 	return nil
@@ -310,7 +298,7 @@ func (w *BaseReasonWorker) Stop() error {
 // The transcript and the request tracker are carried as raw blobs because their
 // shape belongs to the transcript / the tracker, not to us. Provider is the
 // provider/model the worker is currently using, so a worker switched at runtime
-// (worker.update provider.switch) resumes on that choice instead of silently
+// (provider.switch) resumes on that choice instead of silently
 // falling back to the configured default — without it, a switch would be lost
 // on every restart.
 type reasonState struct {

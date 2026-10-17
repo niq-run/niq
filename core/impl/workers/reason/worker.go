@@ -15,8 +15,8 @@ type Config struct {
 	Provider        llm.LLMProvider
 	ProviderSources reasonBase.ProviderSources
 	// ProviderName / ProviderModel record the initially active provider for
-	// status reporting (worker.status op=providers carries the current choice).
-	// Empty when unknown.
+	// status reporting (provider.current carries the current choice). Empty
+	// when unknown.
 	ProviderName    string
 	ProviderModel   string
 	Programs        []program.Program

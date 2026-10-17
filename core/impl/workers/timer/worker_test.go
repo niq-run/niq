@@ -90,26 +90,22 @@ func scheduleElapse(ch *stubChannel, w *Worker, callID string, ms int) {
 	}))
 }
 
-// TestElapseFiresReminder verifies a relative timer publishes timer.reminder
-// with the expected payload once it fires.
+// TestElapseFiresReminder verifies a relative timer delivers the reminder as a
+// worker.input carrying the purpose once it fires.
 func TestElapseFiresReminder(t *testing.T) {
 	ch := &stubChannel{}
 	w := New(Config{ID: "timer", Bus: ch})
 	scheduleElapse(ch, w, "e1", 30)
 
-	waitSent(t, ch, 2) // request.completed reply + timer.reminder
-	last := firedEvent(t, ch, "timer.reminder")
-	if last.Payload["timer_id"] != "e1" || last.Payload["caller_id"] != "reason-1" {
-		t.Fatalf("payload = %+v, want e1/reason-1 correlation", last.Payload)
-	}
-	res := resultMap(t, last)
-	if res["tick_type"] != "reminder" || res["purpose"] != "ping" {
-		t.Fatalf("result = %+v, want reminder/ping", res)
+	waitSent(t, ch, 2) // request.completed reply + worker.input
+	evt := firedEvent(t, ch, "worker.input")
+	if evt.Payload["text"] != "ping" {
+		t.Fatalf("payload = %+v, want text=ping", evt.Payload)
 	}
 }
 
 // TestAbsoluteTimerAt verifies the "at" tool schedules a reminder from an
-// RFC3339 fire_at and reports it via a timer.reminder event.
+// RFC3339 fire_at and delivers it as a worker.input.
 func TestAbsoluteTimerAt(t *testing.T) {
 	ch := &stubChannel{}
 	w := New(Config{ID: "timer", Bus: ch})
@@ -122,13 +118,9 @@ func TestAbsoluteTimerAt(t *testing.T) {
 	}
 
 	waitSent(t, ch, 2)
-	evt := firedEvent(t, ch, "timer.reminder")
-	if evt.Payload["timer_id"] != "a1" {
-		t.Fatalf("payload = %+v, want a1", evt.Payload)
-	}
-	res := resultMap(t, evt)
-	if res["tick_type"] != "reminder" || res["purpose"] != "standup" {
-		t.Fatalf("result = %+v, want reminder/standup", res)
+	evt := firedEvent(t, ch, "worker.input")
+	if evt.Payload["text"] != "standup" {
+		t.Fatalf("payload = %+v, want text=standup", evt.Payload)
 	}
 }
 
@@ -145,9 +137,9 @@ func TestAbsoluteUnixMS(t *testing.T) {
 	}
 
 	waitSent(t, ch, 2)
-	evt := firedEvent(t, ch, "timer.reminder")
-	if evt.Payload["timer_id"] != "a2" {
-		t.Fatalf("payload = %+v, want a2", evt.Payload)
+	evt := firedEvent(t, ch, "worker.input")
+	if evt.Payload["text"] != "beat" {
+		t.Fatalf("payload = %+v, want text=beat", evt.Payload)
 	}
 }
 
@@ -201,14 +193,11 @@ func TestSnapshotRestoreRoundtrip(t *testing.T) {
 	}
 	fresh.mu.Unlock()
 
-	// The restored timers each fire a timer.reminder (no replies on restore).
+	// Both restored timers deliver a worker.input (no replies on restore).
 	waitSent(t, ch2, 2)
 	for _, evt := range ch2.snapshot() {
-		if string(evt.Type) != "timer.reminder" {
-			t.Fatalf("evt type = %s, want timer.reminder", evt.Type)
-		}
-		if evt.Payload["timer_id"] != "e1" && evt.Payload["timer_id"] != "e2" {
-			t.Fatalf("unexpected timer_id %v", evt.Payload["timer_id"])
+		if evt.Type != event.TypeWorkerInput || evt.Payload["text"] != "ping" {
+			t.Fatalf("evt = %+v, want a worker.input with text=ping", evt)
 		}
 	}
 }
@@ -339,8 +328,8 @@ func countType(ch *stubChannel, typ string) int {
 	return n
 }
 
-// TestIntervalRepeats verifies an interval timer fires multiple timer.reminder
-// events on its cadence and is still scheduled (recurring) afterwards.
+// TestIntervalRepeats verifies an interval timer delivers multiple worker.input
+// reminders on its cadence and is still scheduled (recurring) afterwards.
 func TestIntervalRepeats(t *testing.T) {
 	ch := &stubChannel{}
 	w := New(Config{ID: "timer", Bus: ch})
@@ -353,12 +342,12 @@ func TestIntervalRepeats(t *testing.T) {
 	// Wait for at least 3 reminder fires (plus the request.completed reply).
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if countType(ch, "timer.reminder") >= 3 {
+		if countType(ch, "worker.input") >= 3 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if n := countType(ch, "timer.reminder"); n < 3 {
+	if n := countType(ch, "worker.input"); n < 3 {
 		t.Fatalf("interval fired %d reminders, want >= 3", n)
 	}
 
@@ -373,14 +362,13 @@ func TestIntervalRepeats(t *testing.T) {
 		t.Fatal("interval timer lost its recurring flag")
 	}
 
-	// The fired reminders carry the interval result.
+	// The fired reminders carry the purpose.
 	for _, evt := range ch.snapshot() {
-		if string(evt.Type) != "timer.reminder" {
+		if evt.Type != event.TypeWorkerInput {
 			continue
 		}
-		res := resultMap(t, evt)
-		if res["tick_type"] != "interval" || res["interval_ms"] != float64(40) {
-			t.Fatalf("interval result = %+v", res)
+		if evt.Payload["text"] != "heartbeat" {
+			t.Fatalf("reminder text = %q, want heartbeat", evt.Payload["text"])
 		}
 	}
 }
@@ -447,12 +435,12 @@ func TestIntervalPersists(t *testing.T) {
 	// It keeps firing after restore.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if countType(ch2, "timer.reminder") >= 2 {
+		if countType(ch2, "worker.input") >= 2 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if n := countType(ch2, "timer.reminder"); n < 2 {
+	if n := countType(ch2, "worker.input"); n < 2 {
 		t.Fatalf("restored interval fired %d reminders, want >= 2", n)
 	}
 }

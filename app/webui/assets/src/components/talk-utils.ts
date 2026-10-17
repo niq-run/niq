@@ -120,7 +120,6 @@ export function isToolInvocation(type: string): boolean {
   switch (type) {
     case 'worker.input':
     case 'worker.abort':
-    case 'timer.reminder':
     case 'timer.timeout':
     case 'request.cancel':
     case 'reason.interrupted':

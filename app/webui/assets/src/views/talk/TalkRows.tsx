@@ -11,7 +11,7 @@ import type { EventPayload } from '../../types'
 import WorkerBadge from './WorkerBadge'
 import type { RowCtx } from './RowCtx'
 import {
-  InputRow, AbortRow, TimerReminderRow, TimeoutRow,
+  InputRow, AbortRow, TimeoutRow,
   CancelRow, InterruptedRow, ThinkingRow, ResponseRow, ApprovalRow, ToolRow,
 } from './rows'
 
@@ -160,9 +160,6 @@ export default function TalkRows({ relevantEvents, allEvents, responseOnly, talk
         break
       case 'worker.abort':
         nodes.push(<AbortRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
-        break
-      case 'timer.reminder':
-        nodes.push(<TimerReminderRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
         break
       case 'timer.timeout':
         nodes.push(<TimeoutRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)

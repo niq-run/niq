@@ -163,11 +163,11 @@ func TestRateLimitRoundTrip(t *testing.T) {
 		t.Fatal("429 must be recorded in the transcript at detection time")
 	}
 
-	// Simulate the timer worker firing the reminder. It is handled like any
-	// other reminder: injected into the transcript, then a retry round starts.
-	ch.in <- event.New("timer.reminder", "timer", map[string]any{
-		"caller_id": w.ID(),
-		"result":    fmt.Sprintf(`{"tick_type":"reminder","purpose":"API rate limit (HTTP 429) hit; retrying after 1m, attempt 1/%d","duration_ms":60000}`, maxRateLimitRetries),
+	// Simulate the timer worker delivering the reminder as a worker.input. It is
+	// handled like any other input: injected into the transcript, then a retry
+	// round starts.
+	ch.in <- event.New(event.TypeWorkerInput, "timer", map[string]any{
+		"text": fmt.Sprintf("API rate limit (HTTP 429) hit; retrying after 1m, attempt 1/%d", maxRateLimitRetries),
 	})
 
 	// The retry succeeds and the round completes.

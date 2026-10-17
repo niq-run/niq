@@ -18,20 +18,28 @@ import (
 func TestCoreExtensionsRegistered(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 
-	if cap, ok := w.ExtensionByToolName("message"); !ok || cap.Event != event.EventType("message") {
-		t.Fatalf("message not registered under its own event type: %+v ok=%v", cap, ok)
+	// Own extensions reach the LLM through discovery (the self-directed
+	// worker.ready), so the registry is the source of truth to assert against.
+	registered := func(evt event.EventType) bool {
+		for _, e := range w.Extensions() {
+			if e.Event == evt {
+				return true
+			}
+		}
+		return false
 	}
-	if cap, ok := w.ExtensionByToolName("context_compress"); !ok || cap.Event != reasonBase.TypeContextCompress {
-		t.Fatalf("context_compress not registered as context.compress extension: %+v ok=%v", cap, ok)
+
+	if !registered(event.EventType("message")) {
+		t.Fatal("message not registered under its own event type")
+	}
+	if !registered(reasonBase.TypeContextCompress) {
+		t.Fatal("context.compress not registered as a self-editing meta extension")
 	}
 	// list_workers / get_worker_info are NOT the reason worker's tools anymore
 	// — the fleet directory lives on the HOST worker, so a reason worker does
 	// not surface peer-reason capabilities as callable tools.
-	if _, ok := w.ExtensionByToolName("list_workers"); ok {
-		t.Fatal("list_workers must not be registered on the reason worker (host owns the directory)")
-	}
-	if _, ok := w.ExtensionByToolName("get_worker_info"); ok {
-		t.Fatal("get_worker_info must not be registered on the reason worker (host owns the directory)")
+	if registered("list_workers") || registered("get_worker_info") {
+		t.Fatal("list_workers / get_worker_info must not be registered on the reason worker (host owns the directory)")
 	}
 }
 
@@ -74,7 +82,7 @@ func TestCoreExtensionsExposedToLLM(t *testing.T) {
 	// The self-directed ready carries the full contract (SelfOnly included).
 	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
-		"watch":     w.ExtensionEntries(),
+		"watch":     w.WatchEntries(true),
 	}))
 
 	defs := w.LLMToolDefs()
@@ -216,7 +224,7 @@ func TestMetaRotateEchoesToolCallID(t *testing.T) {
 	// channel's Send only records; it does not loop back into the watch loop).
 	ch.in <- event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
-		"watch":     w.ExtensionEntries(),
+		"watch":     w.WatchEntries(true),
 	})
 	ch.in <- event.New(event.TypeWorkerInput, "webui-hiw", map[string]any{"text": "rotate please"})
 

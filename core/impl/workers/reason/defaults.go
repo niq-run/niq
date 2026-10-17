@@ -76,7 +76,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 
 	w.Register(baseworker.Extension{
 		// The event type comes from the mechanism, so the emitter
-		// (emitContextCompress) and this handler cannot drift apart.
+		// (invokeContextCompress) and this handler cannot drift apart.
 		Event:       reasonBase.TypeContextCompress,
 		Description: "Compact your own context history: older messages are replaced by a summary, the most recent messages are kept.",
 		Parameters: obj(map[string]any{
@@ -91,16 +91,16 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	// context strategy settles; the handler + TypeContextRotate stay for later
 	// re-enable). Re-register to expose the tool again.
 	/*
-	w.Register(baseworker.Extension{
-		Event:       TypeContextRotate,
-		Description: "Rotate your context: summarize the current transcript as a carried digest and start a fresh context.",
-		Parameters: obj(map[string]any{
-			"carry": map[string]any{"type": "string",
-				"description": "Optional instruction for what to carry into the digest."},
-		}),
-	}, func(evt event.Event) {
-		handleContextOp(w, evt, compactDirective)
-	})
+		w.Register(baseworker.Extension{
+			Event:       TypeContextRotate,
+			Description: "Rotate your context: summarize the current transcript as a carried digest and start a fresh context.",
+			Parameters: obj(map[string]any{
+				"carry": map[string]any{"type": "string",
+					"description": "Optional instruction for what to carry into the digest."},
+			}),
+		}, func(evt event.Event) {
+			handleContextOp(w, evt, compactDirective)
+		})
 	*/
 
 	// Program management: query or mutate this worker's instruction/playbook

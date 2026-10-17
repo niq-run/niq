@@ -5,11 +5,11 @@
 //   - the sources model (ProviderSources / ProviderInfo) and the selection
 //     logic (setActiveProvider / resolveContextWindow), and
 //   - the extensions that make providers controllable over the bus:
-//     provider.switch (worker.update) and provider.list / provider.current
-//     (worker.query).
+//     provider.switch / provider.list / provider.current (each its own event
+//     type).
 //
-// The generic tools (send_message / request) and the context meta ops
-// (compress / rotate) are NOT here — they belong to the default reason worker
+// The generic tools (send_message / request) and the context meta op
+// (compress) are NOT here — they belong to the default reason worker
 // implementation (pkg/worker/reason).
 package reason
 
@@ -19,18 +19,18 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/itfs/event"
 	llm "github.com/niq-run/niq/core/itfs/llm"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // ProviderInfo describes one selectable provider a reason worker can switch to
 // at runtime: its name, the default model, and the full model list. Models is
 // the list of model IDs (for display); ModelDetails carries the same models
 // with metadata such as ContextWindow when known.
-// The json tags are the wire format: these travel in the worker.status
-// snapshot (worker.query provider.list) and are read by the WebUI, so they use
-// the same snake_case naming as llm.ModelInfo rather than Go field names.
+// The json tags are the wire format: these travel in the provider.list snapshot
+// and are read by the WebUI, so they use the same snake_case naming as
+// llm.ModelInfo rather than Go field names.
 type ProviderInfo struct {
 	Name         string          `json:"name"`
 	Default      string          `json:"default"`
@@ -40,8 +40,8 @@ type ProviderInfo struct {
 
 // ProviderSources is the runtime selection point for a reason worker's LLM
 // provider. A worker can be given many providers (instead of a single baked-in
-// one) and switch the active provider/model later via worker.update
-// without depending on any concrete provider or config package.
+// one) and switch the active provider/model later via provider.switch without
+// depending on any concrete provider or config package.
 type ProviderSources interface {
 	// Default returns the initially active provider. It may be nil when no
 	// provider is configured.
@@ -57,7 +57,7 @@ type ProviderSources interface {
 }
 
 // The provider management extensions use their own event types rather than
-// multiplexing inside worker.update/worker.query — these are reason-worker
+// multiplexing into a single shared update event — these are reason-worker
 // specific, so they live here, not in core/event.
 const (
 	TypeProviderSwitch  event.EventType = "provider.switch"
@@ -69,7 +69,7 @@ const (
 // reason worker has (provider.switch / provider.list / provider.current).
 // Reason-family workers extend or replace these via Register; the default
 // worker adds its own toolkit on top (send_message, request,
-// context.compress/rotate) in pkg/worker/reason.
+// context.compress) in pkg/worker/reason.
 func (w *BaseReasonWorker) registerBaseExtensions() {
 	obj := func(props map[string]any) map[string]any {
 		return map[string]any{"type": "object", "properties": props}
@@ -227,7 +227,7 @@ func (w *BaseReasonWorker) handleStatusQuery(evt event.Event) {
 
 // availableProviders returns the configured LLM providers and their models
 // (nil when no ProviderSources — a single fixed provider). Served via the
-// worker.query provider.* snapshots.
+// provider.list / provider.current snapshots.
 func (w *BaseReasonWorker) availableProviders() []ProviderInfo {
 	if w.providerSources != nil {
 		return w.providerSources.List()
