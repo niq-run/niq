@@ -578,6 +578,47 @@ function ContentTree({ name, paths, colors, emptyLabel, selected, onSelect }: {
   return <div>{roots.map((r) => renderNode(r, name + '/' + r.name, 0))}</div>
 }
 
+// FadeSwitch cross-fades its content when switchKey changes: the current content
+// fades out, then the new content fades in. Content that updates within the same
+// key (e.g. a file finishing its load) renders live without re-animating.
+function FadeSwitch({ switchKey, ms = 140, style, children }: {
+  switchKey: string
+  ms?: number
+  style?: React.CSSProperties
+  children: ReactNode
+}) {
+  const [shownKey, setShownKey] = useState(switchKey)
+  const [visible, setVisible] = useState(true)
+  // The freshest children (this render) and the snapshot committed to shownKey.
+  const currentRef = useRef<ReactNode>(children)
+  const committedRef = useRef<ReactNode>(children)
+  currentRef.current = children
+
+  // Key changed: fade the old content out, then swap and fade the new one in.
+  useEffect(() => {
+    if (shownKey === switchKey) return
+    setVisible(false)
+    const timer = window.setTimeout(() => {
+      committedRef.current = currentRef.current
+      setShownKey(switchKey)
+      setVisible(true)
+    }, ms)
+    return () => window.clearTimeout(timer)
+  }, [switchKey, shownKey, ms])
+
+  // While settled on a key, keep the committed snapshot in step so a later
+  // fade-out shows the real last content rather than a stale frame.
+  useEffect(() => {
+    if (shownKey === switchKey) committedRef.current = children
+  }, [children, shownKey, switchKey])
+
+  return (
+    <div style={{ ...style, opacity: visible ? 1 : 0, transition: `opacity ${ms}ms ease` }}>
+      {shownKey === switchKey ? children : committedRef.current}
+    </div>
+  )
+}
+
 // ContentList is the 内容 tab body: a left-aligned list of the program's
 // contents, with the main (entry) content first and the sub-content file tree
 // below it. Selecting an item renders it as markdown in the right-hand viewer.
@@ -686,8 +727,13 @@ function ContentList({ name, paths, body, dark, colors, t }: {
         <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', width: 1, marginLeft: -0.5, background: colors.border }} />
       </div>
 
-      {/* Right: the content viewer. */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* Right: the content viewer. The content cross-fades when the selection
+          (or the program) changes. */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <FadeSwitch
+          switchKey={name + '\u0000' + (selected ?? '')}
+          style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column' }}
+        >
         {!selected ? (
           <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', color: colors.textDimmed, fontSize: fontSizes.md, textAlign: 'center' }}>
             {t('programs.subContents.pick')}
@@ -710,6 +756,7 @@ function ContentList({ name, paths, body, dark, colors, t }: {
             ) : null}
           </div>
         )}
+        </FadeSwitch>
       </div>
     </div>
   )
