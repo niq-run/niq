@@ -331,6 +331,17 @@ export async function updateWorkerMeta(id: string, tags: string[], description: 
   })
   if (!res.ok) throw new Error((await res.text()).trim() || 'update metadata failed: ' + res.status)
 }
+// updateWorkerParams replaces a worker's construction params in its project.json
+// declaration. Params are build-time input: the change applies on the next
+// restart, not live.
+export async function updateWorkerParams(id: string, params: Record<string, unknown>): Promise<void> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/params`), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params }),
+  })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'update params failed: ' + res.status)
+}
 // updateWorkerAllow edits a worker's allow lists on the bus registry. Either
 // list may be omitted to keep its current value. SubscribeAllow patterns may
 // carry the optional source restriction ({type, source_id}).

@@ -64,6 +64,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [mcpExpose, setMcpExpose] = useState('agentic')
   const [mcpFixed, setMcpFixed] = useState(false)
   const [mcpServersText, setMcpServersText] = useState('')
+  const [mcpAllowedTools, setMcpAllowedTools] = useState('')
   const [tokenTtl, setTokenTtl] = useState('')
   const [niwConfig, setNiwConfig] = useState('')
   const [niwRecipient, setNiwRecipient] = useState('')
@@ -169,7 +170,13 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
             setNote(t('workers.create.mcpJsonErr')); return null
           }
         }
-        body.params = { expose: mcpExpose, fixed: mcpFixed, servers }
+        const allowedTools = mcpAllowedTools.split(',').map(x => x.trim()).filter(Boolean)
+        body.params = {
+          expose: mcpExpose,
+          fixed: mcpFixed,
+          servers,
+          ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
+        }
       }
     } else if (isExternal) {
       body.command = command.trim().split(/\s+/)
@@ -461,6 +468,18 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
               />
               <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
                 {'Each entry: name, url, optional protocol / headers. Header values may reference ${ENV_VAR}.'}
+              </div>
+            </div>
+            <div style={field}>
+              <label style={label}>Allowed tools (optional)</label>
+              <input
+                style={input}
+                value={mcpAllowedTools}
+                onChange={e => setMcpAllowedTools(e.target.value)}
+                placeholder="comma-separated tool names; empty = all"
+              />
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                {'If set, only these tools (by name) are listed and callable.'}
               </div>
             </div>
           </>

@@ -392,7 +392,7 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
-		return timer.New(timer.Config{ID: id, Bus: ch,
+		return timer.New(timer.Config{ID: id, Bus: ch, Params: p,
 			// A scheduled/cancelled timer must survive a restart, so the worker
 			// signals it and the assembly layer checkpoints it — the same
 			// arrangement as the reason worker's provider switch.
@@ -431,11 +431,13 @@ func buildMCPSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 		subAllowFromParams(cfg.Params, []string{"worker.discover", "worker.ready", "worker.gone"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return mcp.New(mcp.WorkerConfig{
-			ID:      id,
-			Bus:     ch,
-			Expose:  mcf.Expose,
-			Fixed:   mcf.Fixed,
-			Servers: mcf.Servers,
+			ID:           id,
+			Bus:          ch,
+			Expose:       mcf.Expose,
+			Fixed:        mcf.Fixed,
+			Servers:      mcf.Servers,
+			AllowedTools: mcf.AllowedTools,
+			Params:       cfg.Params,
 			// A runtime server add/remove must outlive this process, so the
 			// worker signals it and the assembly layer checkpoints it — the
 			// same arrangement as the timer/workspace runtime changes.
@@ -856,6 +858,7 @@ func buildHistorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 			Store:            ctx.EventStore,
 			MaxListEvents:    pInt(p, "max_list_events"),
 			MaxListItemBytes: pInt(p, "max_list_item_bytes"),
+			Params:           p,
 		})
 	}
 	cfg.ID = id
@@ -900,7 +903,7 @@ func buildDirectorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 		},
 		subAllowFromParams(p, []string{"worker.discover", "worker.ready", "worker.gone"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
-		return directory.New(directory.Config{ID: id, Bus: ch})
+		return directory.New(directory.Config{ID: id, Bus: ch, Params: p})
 	}
 	cfg.ID = id
 	cfg.Type = "directory"
