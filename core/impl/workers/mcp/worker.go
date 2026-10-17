@@ -22,6 +22,7 @@ const (
 	EvtServerUpdate event.EventType = "mcp.server.update"
 	EvtToolList     event.EventType = "mcp.tool.list"
 	EvtToolCall     event.EventType = "mcp.tool.call"
+	EvtExpose       event.EventType = "mcp.expose"
 )
 
 // WorkerConfig is the worker's construction config.
@@ -29,34 +30,41 @@ type WorkerConfig struct {
 	ID      string
 	Bus     corebus.WorkerSideChannel
 	Expose  string
-	Servers []ServerConfig // static baseline (params.mcp.servers)
-	Store   ServerStore    // persistence for the dynamic set; may be nil
+	Fixed   bool           // config-only: no runtime server mutation or mode switch; no snapshot
+	Servers []ServerConfig // static baseline (params.servers)
+
+	// OnDurableChange, when set, is called after the server set changes and
+	// must survive a restart, so the assembly layer can checkpoint this worker.
+	// Baseworker machinery (coalesced, delivered off the event loop); nil
+	// leaves signalling off.
+	OnDurableChange func()
 }
 
 // Worker is the built-in "mcp" worker: agentic discovery + proxy of remote MCP.
 type Worker struct {
 	baseworker.BaseWorker
-	cfg     WorkerConfig
-	store   ServerStore
-	mu      sync.Mutex
-	clients map[string]*serverClient
-	tools   map[string][]toolInfo // per-server cached tool list
-	started bool
-	cancel  context.CancelFunc
+	cfg        WorkerConfig
+	mu         sync.Mutex
+	clients    map[string]*serverClient
+	tools      map[string][]toolInfo        // per-server cached tool list
+	toolEvents map[string][]event.EventType // ready mode: tool events bound per server
+	started    bool
+	cancel     context.CancelFunc
 }
 
-// New creates the mcp worker. The effective server set is the persisted store
-// (authoritative once written) else the static baseline; the baseline is
-// seeded to the store on first start so dynamic adds layer on top.
+// New creates the mcp worker. The static baseline (params.servers) seeds
+// the client set; runtime add/remove mutate it. Persistence is the host's job
+// through Snapshot/Restore — the worker only signals a durable change.
 func New(cfg WorkerConfig) *Worker {
 	w := &Worker{
 		BaseWorker: baseworker.NewBaseWorker(idOrDefault(cfg.ID, "mcp"), cfg.Bus),
 		cfg:        cfg,
-		store:      cfg.Store,
 		clients:    make(map[string]*serverClient),
 		tools:      make(map[string][]toolInfo),
+		toolEvents: make(map[string][]event.EventType),
 	}
-	w.loadEffectiveServers()
+	w.SetOnDurableChange(cfg.OnDurableChange)
+	w.seedStaticServers()
 	w.registerExtensions()
 	return w
 }
@@ -68,19 +76,11 @@ func idOrDefault(id, def string) string {
 	return id
 }
 
-// loadEffectiveServers resolves the authoritative set (store else baseline)
-// and constructs the per-server clients.
-func (w *Worker) loadEffectiveServers() {
-	servers := w.cfg.Servers
-	if w.store != nil {
-		if stored, err := w.store.Load(); err == nil && len(stored) > 0 {
-			servers = stored
-		} else if len(servers) > 0 {
-			// First run: seed the store so later runtime adds layer on it.
-			_ = w.store.Save(servers)
-		}
-	}
-	for _, s := range servers {
+// seedStaticServers installs the configured baseline as the initial client set.
+// Runtime changes are signalled with NotifyDurableChange and persisted by the
+// host through Snapshot, so there is no separate store to keep in sync.
+func (w *Worker) seedStaticServers() {
+	for _, s := range w.cfg.Servers {
 		w.clients[s.Name] = newServerClient(s)
 	}
 }
@@ -95,6 +95,12 @@ func (w *Worker) registerExtensions() {
 	}
 	_ = str
 
+	w.Register(baseworker.Extension{
+		Event: event.TypeWorkerReadme,
+		Description: "Read this worker's usage guide: what it proxies, the event list, and how to discover " +
+			"and call remote tools. Read it first, then drive the concrete events.",
+		Parameters: obj(map[string]any{}),
+	}, w.handleReadme)
 	w.Register(baseworker.Extension{
 		Event: EvtServerList,
 		Description: "List configured MCP servers (name, url, tool count, status). " +
@@ -117,50 +123,77 @@ func (w *Worker) registerExtensions() {
 			"arguments": map[string]any{"type": "object"},
 		}),
 	}, w.handleToolCall)
-	w.Register(baseworker.Extension{
-		Event:       EvtServerAdd,
-		Description: "Add an MCP server at runtime (persisted). Provide name, url, and optional headers/protocol.",
-		Parameters: obj(map[string]any{
-			"name":     map[string]any{"type": "string"},
-			"url":      map[string]any{"type": "string"},
-			"headers":  map[string]any{"type": "object"},
-			"protocol": map[string]any{"type": "string"},
-		}),
-	}, w.handleServerAdd)
-	w.Register(baseworker.Extension{
-		Event:       EvtServerRemove,
-		Description: "Remove an MCP server at runtime (persisted). Provide name.",
-		Parameters: obj(map[string]any{
-			"name": map[string]any{"type": "string"},
-		}),
-	}, w.handleServerRemove)
-	w.Register(baseworker.Extension{
-		Event:       EvtServerUpdate,
-		Description: "Update an MCP server's url/headers/protocol at runtime (persisted). Provide name and the fields to change.",
-		Parameters: obj(map[string]any{
-			"name":     map[string]any{"type": "string"},
-			"url":      map[string]any{"type": "string"},
-			"headers":  map[string]any{"type": "object"},
-			"protocol": map[string]any{"type": "string"},
-		}),
-	}, w.handleServerUpdate)
+	// Runtime mutation and mode switching are opt-out: a fixed worker is a
+	// config-only tool provider (connect at start, expose tools, done).
+	if !w.cfg.Fixed {
+		w.Register(baseworker.Extension{
+			Event:       EvtServerAdd,
+			Description: "Add an MCP server at runtime (persisted). Provide name, url, and optional headers/protocol.",
+			Parameters: obj(map[string]any{
+				"name":     map[string]any{"type": "string"},
+				"url":      map[string]any{"type": "string"},
+				"headers":  map[string]any{"type": "object"},
+				"protocol": map[string]any{"type": "string"},
+			}),
+		}, w.handleServerAdd)
+		w.Register(baseworker.Extension{
+			Event:       EvtServerRemove,
+			Description: "Remove an MCP server at runtime (persisted). Provide name.",
+			Parameters: obj(map[string]any{
+				"name": map[string]any{"type": "string"},
+			}),
+		}, w.handleServerRemove)
+		w.Register(baseworker.Extension{
+			Event:       EvtServerUpdate,
+			Description: "Update an MCP server's url/headers/protocol at runtime (persisted). Provide name and the fields to change.",
+			Parameters: obj(map[string]any{
+				"name":     map[string]any{"type": "string"},
+				"url":      map[string]any{"type": "string"},
+				"headers":  map[string]any{"type": "object"},
+				"protocol": map[string]any{"type": "string"},
+			}),
+		}, w.handleServerUpdate)
+		w.Register(baseworker.Extension{
+			Event: EvtExpose,
+			Description: "Get or set the exposure mode. agentic exposes a fixed discovery surface " +
+				"(server.list / tool.list / tool.call); ready additionally flattens every remote tool " +
+				"into its own capability. Omit mode to read the current mode.",
+			Parameters: obj(map[string]any{
+				"mode": map[string]any{"type": "string", "enum": []any{ExposeAgentic, ExposeReady}},
+			}),
+		}, w.handleExpose)
+	}
 }
 
 // ── ManagedWorker lifecycle ──
 
 func (w *Worker) Start(ctx context.Context) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.started {
+		w.mu.Unlock()
 		return fmt.Errorf("mcp: already started")
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
+	w.started = true
+	expose := w.cfg.Expose
+	w.mu.Unlock()
+
+	// Deliver checkpoint signals off the event loop (a no-op goroutine when the
+	// assembly layer installed no callback).
+	w.StartDurableLoop(runCtx)
 
 	busCh, _ := w.Channel.Receive(runCtx)
 	go w.watch(runCtx, busCh)
+	// Announce outside the lock: the ready contract renders the in-memory tool
+	// surface (ready mode), which reads under this same lock.
 	w.AnnounceReady("mcp", nil)
-	w.started = true
+
+	// Ready mode exposes one capability per remote tool; the lists are fetched
+	// off the start path and announced once known.
+	if expose == ExposeReady {
+		go w.primeReadyTools(runCtx)
+	}
 	return nil
 }
 
@@ -181,22 +214,29 @@ func (w *Worker) Stop() error {
 }
 
 // snapshotState is the persisted form carried by workerhost snapshot/restore.
+// Expose rides along because the mode can change between runs: the restored
+// state must carry the surface the servers were last exposed with.
 type snapshotState struct {
 	Servers []ServerConfig `json:"servers"`
+	Expose  string         `json:"expose,omitempty"`
 }
 
 func (w *Worker) Snapshot() ([]byte, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	servers := w.sortedServers()
-	if len(servers) == 0 {
+	if w.cfg.Fixed {
+		// Config-authoritative: servers and expose both come from params, so
+		// there is no runtime state to carry across a restart.
 		return nil, nil
 	}
-	return json.Marshal(snapshotState{Servers: servers})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	// Always marshal, even when empty: an explicit empty set must be
+	// distinguishable from "no snapshot", so removing every server survives a
+	// restart instead of falling back to the static baseline.
+	return json.Marshal(snapshotState{Servers: w.sortedServers(), Expose: w.cfg.Expose})
 }
 
 func (w *Worker) Restore(state []byte) error {
-	if len(state) == 0 {
+	if w.cfg.Fixed || len(state) == 0 {
 		return nil
 	}
 	var s snapshotState
@@ -204,14 +244,28 @@ func (w *Worker) Restore(state []byte) error {
 		return fmt.Errorf("mcp: restore: %w", err)
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	for _, c := range w.clients {
 		c.Close()
 	}
+	// The persisted mode is authoritative over the constructor's config, so a
+	// switched mode survives the restart. Unknown/absent values keep the config.
+	if validExpose(s.Expose) {
+		w.cfg.Expose = s.Expose
+	}
+	// Withdraw the tools bound by the instance being replaced.
+	var stale []event.EventType
+	for _, evts := range w.toolEvents {
+		stale = append(stale, evts...)
+	}
 	w.clients = make(map[string]*serverClient, len(s.Servers))
 	w.tools = make(map[string][]toolInfo)
+	w.toolEvents = make(map[string][]event.EventType)
 	for _, sc := range s.Servers {
 		w.clients[sc.Name] = newServerClient(sc)
+	}
+	w.mu.Unlock()
+	if len(stale) > 0 {
+		w.Unregister(stale...)
 	}
 	return nil
 }
@@ -271,6 +325,98 @@ func (w *Worker) handleServerList(evt event.Event) {
 	w.reply(tc, string(b), "")
 }
 
+// mcpReadme is the agent-facing usage guide returned by worker.readme: the
+// worker's "skill card". Read once, then drive the concrete events.
+const mcpReadme = `# mcp — remote MCP proxy
+
+This worker connects to remote MCP servers (Streamable HTTP) and proxies their
+tools onto the bus, so you can reach external MCP tool providers.
+
+## Workflow
+
+1. mcp.server.list — list the configured servers (name, url, protocol, status,
+   tool count).
+2. mcp.tool.list { "server": "<name>" } — list one server's tools: name,
+   description and JSON-schema parameters.
+3. mcp.tool.call { "server": "<name>", "tool": "<tool>", "arguments": { ... } }
+   — invoke a tool. The result arrives in the request.completed payload (text,
+   usually JSON for structured results).
+
+## Exposure modes
+
+- agentic (default): only the discovery/management events are offered; discover
+  tools on demand with the workflow above.
+- ready: every remote tool is ALSO exposed as its own capability named
+  mcp.<server>.<tool>, discovered like any other worker tool. If you see those
+  flat names, call them directly with the tool's argument object (no
+  server/tool wrapper).
+
+## Runtime management (dynamic mode only)
+
+- mcp.server.add { name, url, headers?, protocol? } — add and persist a server
+  (connect + list).
+- mcp.server.remove { name } — remove it, disconnect, withdraw its tools.
+- mcp.server.update { name, url?, headers?, protocol? } — change it, reconnect,
+  re-list.
+- mcp.expose { mode? } — read (no mode) or switch ("agentic" | "ready").
+
+Adding a server is privileged: it connects to an arbitrary URL and turns that
+server's tools into callable capabilities.
+
+## Notes
+
+- Header values may reference ${ENV_VAR}; the project resolves them from its env.
+- A call that fails on a dropped session reconnects on the next call.`
+
+func (w *Worker) handleReadme(evt event.Event) {
+	tc := baseworker.ParseToolCall(evt)
+	if tc.CallID == "" {
+		return
+	}
+	w.reply(tc, w.readmeText(), "")
+}
+
+// readmeText is the guide plus a short snapshot of the current state, so an
+// agent can see the mode and the available servers without an extra call.
+func (w *Worker) readmeText() string {
+	w.mu.Lock()
+	expose := w.cfg.Expose
+	fixed := w.cfg.Fixed
+	type srvInfo struct {
+		name  string
+		tools int
+	}
+	servers := make([]srvInfo, 0, len(w.clients))
+	for _, name := range sortedKeys(w.clients) {
+		servers = append(servers, srvInfo{name: name, tools: len(w.tools[name])})
+	}
+	w.mu.Unlock()
+
+	mode := "dynamic"
+	if fixed {
+		mode = "fixed"
+	}
+	var b strings.Builder
+	b.WriteString(mcpReadme)
+	b.WriteString("\n\n## Current\n\n")
+	fmt.Fprintf(&b, "- mode: %s\n", mode)
+	fmt.Fprintf(&b, "- exposure: %s\n", expose)
+	if fixed {
+		b.WriteString("- management: disabled (fixed mode)\n")
+	} else {
+		b.WriteString("- management: mcp.server.add / mcp.server.remove / mcp.server.update / mcp.expose\n")
+	}
+	if len(servers) == 0 {
+		b.WriteString("- servers: (none configured)\n")
+	} else {
+		b.WriteString("- servers:\n")
+		for _, s := range servers {
+			fmt.Fprintf(&b, "  - %s — %d tool(s)\n", s.name, s.tools)
+		}
+	}
+	return b.String()
+}
+
 func (w *Worker) handleToolList(evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
@@ -282,6 +428,7 @@ func (w *Worker) handleToolList(evt event.Event) {
 		w.reply(tc, "", err.Error())
 		return
 	}
+	w.announceIfReady()
 	list := make([]map[string]any, 0, len(info))
 	for _, t := range info {
 		list = append(list, map[string]any{"name": t.Name, "description": t.Description, "schema": t.Schema})
@@ -309,7 +456,7 @@ func (w *Worker) handleToolCall(evt event.Event) {
 		w.reply(tc, "", fmt.Sprintf("unknown server %q", server))
 		return
 	}
-	// Reconnect once on transient session failure.
+	// A failed call drops the session, so the next call reconnects.
 	result, err := cl.CallTool(context.Background(), tool, args)
 	if err != nil {
 		w.reply(tc, "", err.Error())
@@ -341,8 +488,8 @@ func (w *Worker) handleServerAdd(evt event.Event) {
 	w.clients[sc.Name] = cl
 	w.mu.Unlock()
 
-	// Prime tools + (in ready mode) register per-tool extensions. On failure,
-	// roll back (the server may be offline) and surface the error.
+	// Prime the tool cache (and, in ready mode, the dynamic watch contract). On
+	// failure, roll back (the server may be offline) and surface the error.
 	if _, err := w.toolsFor(context.Background(), sc.Name); err != nil {
 		w.mu.Lock()
 		delete(w.clients, sc.Name)
@@ -351,7 +498,8 @@ func (w *Worker) handleServerAdd(evt event.Event) {
 		w.reply(tc, "", err.Error())
 		return
 	}
-	w.persist()
+	w.announceIfReady()
+	w.NotifyDurableChange()
 	w.reply(tc, fmt.Sprintf("added server %s (%d tools)", sc.Name, w.toolsForCached(sc.Name)), "")
 }
 
@@ -366,14 +514,15 @@ func (w *Worker) handleServerRemove(evt event.Event) {
 	if ok {
 		cl.Close()
 		delete(w.clients, name)
-		delete(w.tools, name)
+		w.setTools(name, nil)
 	}
 	w.mu.Unlock()
 	if !ok {
 		w.reply(tc, "", fmt.Sprintf("unknown server %q", name))
 		return
 	}
-	w.persist()
+	w.NotifyDurableChange()
+	w.announceIfReady()
 	w.reply(tc, fmt.Sprintf("removed server %s", name), "")
 }
 
@@ -404,10 +553,83 @@ func (w *Worker) handleServerUpdate(evt event.Event) {
 	cl.Close()
 	next := newServerClient(sc)
 	w.clients[name] = next
+	w.setTools(name, nil) // stale until re-listed against the new endpoint
 	w.mu.Unlock()
 
-	w.persist()
+	w.NotifyDurableChange()
+	// Re-list against the new endpoint off the reply path, then re-announce;
+	// best-effort — an unreachable server simply has no tools until it recovers.
+	go func() {
+		if _, err := w.toolsFor(context.Background(), name); err != nil {
+			log.Printf("[mcp %s] refresh tools for %s: %v", w.ID(), name, err)
+		}
+		w.announceIfReady()
+	}()
 	w.reply(tc, fmt.Sprintf("updated server %s", name), "")
+}
+
+func (w *Worker) handleExpose(evt event.Event) {
+	tc := baseworker.ParseToolCall(evt)
+	if tc.CallID == "" {
+		return
+	}
+	mode := argString(tc.Args, "mode")
+	if mode == "" {
+		w.mu.Lock()
+		cur := w.cfg.Expose
+		w.mu.Unlock()
+		w.reply(tc, fmt.Sprintf("expose mode: %s", cur), "")
+		return
+	}
+	if !validExpose(mode) {
+		w.reply(tc, "", fmt.Sprintf("unknown expose mode %q (want %s or %s)", mode, ExposeAgentic, ExposeReady))
+		return
+	}
+	w.applyExpose(mode)
+	w.reply(tc, fmt.Sprintf("expose mode set to %s", mode), "")
+}
+
+// applyExpose switches the exposed capability surface and makes the change
+// durable. Withdrawing ready-mode tools happens under the lock; registering
+// them again requires re-listing, so it is primed off the event path.
+func (w *Worker) applyExpose(mode string) {
+	w.mu.Lock()
+	changed := w.cfg.Expose != mode
+	w.cfg.Expose = mode
+	if changed && mode == ExposeAgentic {
+		w.withdrawToolsLocked()
+	}
+	started := w.started
+	w.mu.Unlock()
+	if !changed {
+		return
+	}
+
+	w.NotifyDurableChange()
+	w.announce()
+	if mode == ExposeReady && started {
+		go w.primeReadyTools(context.Background())
+	}
+}
+
+// withdrawToolsLocked unregisters every ready-mode tool extension, leaving the
+// cached tool lists in place for a later re-registration. Caller holds w.mu.
+func (w *Worker) withdrawToolsLocked() {
+	for server := range w.toolEvents {
+		w.unregisterToolEvents(server)
+	}
+}
+
+// announce re-broadcasts the current contract, when started. Unlike
+// announceIfReady it does not gate on the mode, so switching to agentic can
+// make peers drop the withdrawn tools.
+func (w *Worker) announce() {
+	w.mu.Lock()
+	started := w.started
+	w.mu.Unlock()
+	if started {
+		w.AnnounceReady("mcp", nil)
+	}
 }
 
 // ── helpers ──
@@ -425,11 +647,14 @@ func (w *Worker) toolsFor(ctx context.Context, server string) ([]toolInfo, error
 		return nil, err
 	}
 	w.mu.Lock()
-	w.tools[server] = info
-	w.mu.Unlock()
-	if w.cfg.Expose == ExposeReady && w.started {
-		w.registerServerTools(server, info)
+	// The server may have been removed while we were listing; never resurrect
+	// tools for a server that is no longer present.
+	if _, ok := w.clients[server]; !ok {
+		w.mu.Unlock()
+		return nil, fmt.Errorf("server %q removed", server)
 	}
+	w.setTools(server, info)
+	w.mu.Unlock()
 	return info, nil
 }
 
@@ -439,18 +664,91 @@ func (w *Worker) toolsForCached(server string) int {
 	return len(w.tools[server])
 }
 
-// registerServerTools registers one peer-callable extension per remote tool
-// (ready mode): mcp.<server>.<tool> → that tool, so reason discovers them flat.
-func (w *Worker) registerServerTools(server string, tools []toolInfo) {
-	for _, t := range tools {
-		evtType := event.EventType("mcp." + sanitizeEvent(server) + "." + sanitizeEvent(t.Name))
+// setTools caches a server's tool list and, in ready mode, binds one extension
+// per tool (mcp.<server>.<tool>), replacing whatever was bound before. A server
+// with no tools has its extensions withdrawn. Caller holds w.mu.
+func (w *Worker) setTools(server string, info []toolInfo) {
+	w.unregisterToolEvents(server)
+	if len(info) == 0 {
+		delete(w.tools, server)
+		return
+	}
+	w.tools[server] = info
+	if w.cfg.Expose != ExposeReady {
+		return
+	}
+	events := make([]event.EventType, 0, len(info))
+	for _, t := range info {
+		evt := toolEventName(server, t.Name)
+		if reservedEvent(evt) {
+			log.Printf("[mcp %s] tool %s/%s not exposed: event %s is reserved", w.ID(), server, t.Name, evt)
+			continue
+		}
 		serverName, toolName := server, t.Name
 		w.Register(baseworker.Extension{
-			Event:       evtType,
+			Event:       evt,
 			Description: firstNonEmpty(t.Description, t.Name),
 			Parameters:  mapToStringSchema(t.Schema),
 		}, func(e event.Event) { w.handleDirectCall(e, serverName, toolName) })
+		events = append(events, evt)
 	}
+	w.toolEvents[server] = events
+}
+
+// unregisterToolEvents withdraws the tool extensions bound to one server.
+// Caller holds w.mu.
+func (w *Worker) unregisterToolEvents(server string) {
+	if evts := w.toolEvents[server]; len(evts) > 0 {
+		w.Unregister(evts...)
+	}
+	delete(w.toolEvents, server)
+}
+
+// reservedEvent reports whether an event type belongs to the fixed management
+// group. Register replaces by event type, so a remote tool must never be
+// allowed to overwrite one.
+func reservedEvent(evt event.EventType) bool {
+	switch evt {
+	case EvtServerList, EvtServerAdd, EvtServerRemove, EvtServerUpdate, EvtToolList, EvtToolCall, EvtExpose, event.TypeWorkerReadme:
+		return true
+	}
+	return false
+}
+
+// toolEventName is the ready-mode event type for one remote tool.
+func toolEventName(server, tool string) event.EventType {
+	return event.EventType("mcp." + sanitizeEvent(server) + "." + sanitizeEvent(tool))
+}
+
+// announceIfReady re-broadcasts the ready contract after the in-memory tool
+// surface changed. Only ready mode's contract is data-driven; agentic mode
+// advertises a fixed set, so there is nothing to update.
+func (w *Worker) announceIfReady() {
+	w.mu.Lock()
+	expose := w.cfg.Expose
+	started := w.started
+	w.mu.Unlock()
+	if expose == ExposeReady && started {
+		w.AnnounceReady("mcp", nil)
+	}
+}
+
+// primeReadyTools fetches every server's tool list so the ready contract
+// carries the per-tool surface, then announces. Runs off the start path because
+// listing is a network call.
+func (w *Worker) primeReadyTools(ctx context.Context) {
+	w.mu.Lock()
+	names := sortedKeys(w.clients)
+	w.mu.Unlock()
+	for _, name := range names {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, err := w.toolsFor(ctx, name); err != nil {
+			log.Printf("[mcp %s] prime %s: %v", w.ID(), name, err)
+		}
+	}
+	w.announceIfReady()
 }
 
 func (w *Worker) handleDirectCall(evt event.Event, server, tool string) {
@@ -475,18 +773,6 @@ func (w *Worker) handleDirectCall(evt event.Event, server, tool string) {
 		return
 	}
 	w.reply(tc, result, "")
-}
-
-func (w *Worker) persist() {
-	if w.store == nil {
-		return
-	}
-	w.mu.Lock()
-	servers := w.sortedServers()
-	w.mu.Unlock()
-	if err := w.store.Save(servers); err != nil {
-		log.Printf("[mcp %s] persist servers: %v", w.ID(), err)
-	}
 }
 
 func (w *Worker) sortedServers() []ServerConfig {

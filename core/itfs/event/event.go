@@ -24,6 +24,11 @@ const (
 	TypeWorkerDiscover EventType = "worker.discover"
 	TypeWorkerInput    EventType = "worker.input"
 	TypeWorkerAbort    EventType = "worker.abort"
+	// TypeWorkerReadme asks a worker to describe itself — an agent-facing usage
+	// guide (what it does, its events, how to call them). Directed to the
+	// worker; the reply is the usual request.completed. It is the generic
+	// "skill card" every worker may serve.
+	TypeWorkerReadme EventType = "worker.readme"
 
 	// The request-response pairing convention: any invocation of a capability
 	// is answered with one of these, echoing the Event.RequestId of the
