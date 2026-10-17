@@ -3,6 +3,7 @@ package directory
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 
@@ -61,6 +62,17 @@ func recall(w *DirectoryWorker, typ event.EventType, workerID string, payload ma
 // TestDirectoryCollectsFromBus verifies the roster is built from worker.ready
 // on the BUS — including third-party/external workers the host never created
 // and peer reason workers — not from anything directory spawned.
+// TestReadmeText verifies worker.readme's guide names the worker's tools.
+func TestReadmeText(t *testing.T) {
+	w := New(Config{ID: "dir", Bus: &stubChannel{}})
+	text := w.readmeText()
+	for _, want := range []string{"list_workers", "get_worker_info", "roster"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("readme missing %q", want)
+		}
+	}
+}
+
 func TestDirectoryCollectsFromBus(t *testing.T) {
 	ch := &stubChannel{}
 	w := New(Config{ID: "directory", Bus: ch})

@@ -20,9 +20,10 @@ interface CreateWorkerDialogProps {
 }
 
 // Managed worker types offered by the form. host/hiw are infrastructure the
-// assembly owns — creating them from the UI is not a thing. niw is a bridge
-// worker that dials another niq's bus.
-const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program', 'history', 'directory', 'niw', 'mcp'] as const
+// assembly owns — creating them from the UI is not a thing. timer, directory
+// and history are built-in singletons (one per project), so a second one is
+// never wanted. niw is a bridge worker that dials another niq's bus.
+const MANAGED_TYPES = ['reason', 'workspace', 'program', 'niw', 'mcp'] as const
 
 // parseNiwConfig turns the far-side bus's copyable worker config (KEY=value
 // lines, as rendered by that bus for a created remote worker) into a map.
@@ -61,6 +62,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [publish, setPublish] = useState('')
   // MCP (managed worker): expose mode + the remote servers as a JSON list.
   const [mcpExpose, setMcpExpose] = useState('agentic')
+  const [mcpFixed, setMcpFixed] = useState(false)
   const [mcpServersText, setMcpServersText] = useState('')
   const [tokenTtl, setTokenTtl] = useState('')
   const [niwConfig, setNiwConfig] = useState('')
@@ -167,7 +169,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
             setNote(t('workers.create.mcpJsonErr')); return null
           }
         }
-        body.params = { mcp: { expose: mcpExpose, servers } }
+        body.params = { expose: mcpExpose, fixed: mcpFixed, servers }
       }
     } else if (isExternal) {
       body.command = command.trim().split(/\s+/)
@@ -286,16 +288,17 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           transform: 'translate(-50%, -50%)',
           width: 'min(460px, calc(100vw - 32px))',
           maxHeight: '80vh',
-          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
           background: colors.bgLight,
           border: '1px solid ' + colors.border,
           borderRadius: 6,
           boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
           zIndex: 91,
-          padding: '14px 16px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px 10px' }}>
           <span style={{ color: colors.text, fontSize: fontSizes.md }}>{onBuild ? t('templates.addWorker.title') : t('workers.create.title')}</span>
           <span
             onClick={onClose}
@@ -306,6 +309,8 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           </span>
         </div>
 
+        {/* Scrollable body, between the pinned header and action row. */}
+        <div style={{ overflowY: 'auto', flex: 1, minHeight: 0, padding: '0 16px 14px' }}>
         {/* Mode + form: once a remote worker is created, only its copyable
             connect configuration remains — the used-up form is hidden. */}
         {!result && (<>
@@ -427,6 +432,16 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         {isManaged && effType === 'mcp' && (
           <>
             <div style={field}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input type="checkbox" checked={mcpFixed} onChange={e => setMcpFixed(e.target.checked)} />
+                <span style={{ fontSize: fontSizes.sm, color: colors.text }}>Fixed tool provider</span>
+              </label>
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                {'Config-only: connect at start and expose tools of the configured servers. Disables runtime ' +
+                  'server add/remove/update and expose switching; the config is authoritative across restarts.'}
+              </div>
+            </div>
+            <div style={field}>
               <label style={label}>Expose</label>
               <select style={input} value={mcpExpose} onChange={e => setMcpExpose(e.target.value)}>
                 <option value="agentic">agentic (list/call on demand)</option>
@@ -536,7 +551,10 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
             )}
           </div>
         )}
+        </div>
 
+        {/* Pinned action row. */}
+        <div style={{ flexShrink: 0, padding: '10px 16px', borderTop: '1px solid ' + colors.border }}>
 	{result ? (
 	  /* Remote worker created: just a close to dismiss the config card. */
 	  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -566,6 +584,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
 	    </span>
 	  </div>
 	)}
+        </div>
       </div>
     </>
   )

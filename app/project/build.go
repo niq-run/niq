@@ -428,14 +428,21 @@ func buildMCPSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 			event.NewPublishPattern("worker.ready"),
 		},
 		subAllowFromParams(cfg.Params, []string{"worker.discover", "worker.ready", "worker.gone"}))
-	stateDir := filepath.Join(ctx.StateDir, sanitizeID(id))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return mcp.New(mcp.WorkerConfig{
 			ID:      id,
 			Bus:     ch,
 			Expose:  mcf.Expose,
+			Fixed:   mcf.Fixed,
 			Servers: mcf.Servers,
-			Store:   mcp.NewFileServerStore(filepath.Join(stateDir, "servers.json")),
+			// A runtime server add/remove must outlive this process, so the
+			// worker signals it and the assembly layer checkpoints it — the
+			// same arrangement as the timer/workspace runtime changes.
+			OnDurableChange: func() {
+				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+					log.Printf("[project] checkpoint %s: %v", id, err)
+				}
+			},
 		})
 	}
 	cfg.ID = id

@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/store"
-	"github.com/niq-run/niq/core/impl/eventbus"
 )
 
 // stubChannel satisfies corebus.WorkerSideChannel for handler tests. history
@@ -80,6 +81,17 @@ func listResult(t *testing.T, ch *stubChannel) map[string]any {
 		t.Fatalf("history.list result not an object: %v", err)
 	}
 	return out
+}
+
+// TestReadmeText verifies worker.readme's guide names the worker's tools.
+func TestReadmeText(t *testing.T) {
+	w := New(Config{ID: "history", Bus: &stubChannel{}})
+	text := w.readmeText()
+	for _, want := range []string{"history.list", "history.get", "events/page"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("readme missing %q", want)
+		}
+	}
 }
 
 func TestHistoryListFiltersAndTruncates(t *testing.T) {
