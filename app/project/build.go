@@ -614,20 +614,37 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	// PublishAllow: replies and presence. SubscribeAllow: worker.discover, so
 	// the program worker re-announces its tools to joiners. Program
 	// query/update arrive directed.
+	// PublishAllow includes "*": the script-program executor relays script-
+	// initiated calls under THIS worker's identity, and those carry the target's
+	// own event type (bash, ...) — inherently dynamic, so it cannot be
+	// enumerated. The executor is the single controlled exit; a target
+	// allow-list belongs there, not in the ACL.
 	connect := specConnect(ctx, id, "program",
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
+			event.NewPublishPattern("*"),
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))
+	// script_executor_args overrides the executor command prefix (default: the
+	// Bun sandbox). E.g. ["node"] on a host without bun (UNSANDBOXED — tests /
+	// trusted hosts only).
+	var execArgs []string
+	if raw, ok := p["script_executor_args"].([]any); ok {
+		for _, v := range raw {
+			if s, ok := v.(string); ok {
+				execArgs = append(execArgs, s)
+			}
+		}
+	}
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return programworker.New(programworker.Config{
 			ID:      id,
 			Bus:     ch,
 			Backend: pgbackend.New(abs),
-			// The local script-program execution backend (Bun sandbox).
-			// Swappable for a local sandbox / remote gateway later.
-			Executor: bunexec.New(bunexec.Options{}),
+			// The local script-program execution backend. Swappable for a local
+			// sandbox / remote gateway later.
+			Executor: bunexec.New(bunexec.Options{Args: execArgs}),
 		})
 	}
 	cfg.ID = id
