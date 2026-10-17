@@ -202,6 +202,12 @@ func (w *DirectoryWorker) registerExtensions() {
 	}
 
 	w.Register(baseworker.Extension{
+		Event:       event.TypeWorkerReadme,
+		Description: "Read this worker's usage guide: the fleet roster, its two tools, and how to use them.",
+		Parameters:  obj(map[string]any{}),
+	}, w.handleReadme)
+
+	w.Register(baseworker.Extension{
 		Event:       TypeListWorkers,
 		Description: "List every worker on the bus as a slim roster: worker_id, type, and the short event-type list it publishes. It deliberately omits tool schemas (those are large) — call get_worker_info for one worker's full tool detail. This is the fleet directory: the one place to see who exists, including peer reason workers and third-party workers that connected directly. Peer reason workers are NOT callable tools (their ready lists events they respond to, not capabilities to invoke) but are reachable as message targets.",
 		Parameters:  obj(map[string]any{}),
@@ -221,6 +227,47 @@ func (w *DirectoryWorker) registerExtensions() {
 		tc := baseworker.ParseToolCall(evt)
 		w.handleGetWorkerInfo(evt, tc)
 	})
+}
+
+// directoryReadme is the agent-facing usage guide returned by worker.readme.
+const directoryReadme = `# directory — fleet roster
+
+This worker is a read-only observer of the bus. It learns every worker from its
+worker.ready and forgets it on worker.gone; it has no lifecycle authority.
+
+## Tools
+
+- list_workers {} — the roster, one line per worker: worker_id, type, and the
+  event types it publishes. Tool schemas are omitted (they are large).
+- get_worker_info { "worker": "<id>" } — one worker's full contract: type, its
+  tools with complete parameter schemas, and its published events.
+
+## How to use
+
+1. list_workers — see who exists.
+2. get_worker_info { worker } — inspect a worker before calling or messaging it.
+
+## Notes
+
+- Peer reason workers appear in the roster but are NOT callable tools: their
+  ready lists the events they respond to, not capabilities to invoke. They are
+  reachable as message targets.
+- The roster is rebuilt from the bus at start; it is never persisted.`
+
+func (w *DirectoryWorker) handleReadme(evt event.Event) {
+	tc := baseworker.ParseToolCall(evt)
+	if tc.CallID == "" {
+		return
+	}
+	w.ReplyCompleted(tc.CallerID, tc.CallID, w.readmeText(), tc.TraceID)
+}
+
+// readmeText is the guide plus the number of workers currently in the roster.
+func (w *DirectoryWorker) readmeText() string {
+	w.dirMu.Lock()
+	n := len(w.workers)
+	w.dirMu.Unlock()
+	return fmt.Sprintf("%s\n\n## Current\n\n- workers known: %d\n", directoryReadme, n)
 }
 
 // handleListWorkers serves the roster: every worker learned from its ready, as

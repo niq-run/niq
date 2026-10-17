@@ -162,6 +162,12 @@ func (w *Worker) registerTools() {
 	}
 
 	w.Register(baseworker.Extension{
+		Event:       event.TypeWorkerReadme,
+		Description: "Read this worker's usage guide: what history answers, its two tools, and how to query them.",
+		Parameters:  obj(map[string]any{}),
+	}, w.handleReadme)
+
+	w.Register(baseworker.Extension{
 		Event:       TypeHistoryList,
 		Description: "Recall PAST events from the event bus store (your own or another worker's) across time and restarts. USE this only to recover/verify historical facts NOT already in your current context — e.g. after a restart you lost your working memory, or you need a tool result you sent/ran turns ago. Each call the store returns any number of events, so always narrow with worker + types + limit (default 50) and keep the page small; the bus also appends continuously, so don't page through a whole history you only cursor-checked once. DON'T use it for present state (use list_workers/get_worker_info), for anything your current context already answers, or to satisfy idle curiosity — it costs tokens and a large listing wastes them. Events come back with payloads truncated to a per-item cap; for one event's full content, drill in with history.get.",
 		Parameters: obj(map[string]any{
@@ -208,6 +214,44 @@ func (w *Worker) registerTools() {
 		tc := baseworker.ParseToolCall(evt)
 		w.handleGet(tc)
 	})
+}
+
+// historyReadme is the agent-facing usage guide returned by worker.readme.
+const historyReadme = `# history — past events from the event store
+
+This worker reads the persisted event bus: what already happened, across
+restarts. Use it to recover facts your current context no longer holds — not to
+inspect present state (for that, use the directory worker).
+
+## Tools
+
+- history.list { worker?, role?, since?, type?/types?, trace_id?, request_id?,
+  before?, limit?, desc?, max_bytes?, truncate? } — a compact, per-item
+  truncated page of past events (default limit 50). Narrow aggressively with
+  worker + types + limit.
+- history.get { "id": "<event id>" | "request_id": "<id>" } — the full,
+  untruncated event, or a whole request→response pair. Drill in only after
+  history.list showed you the id.
+
+## Notes
+
+- Listed payloads are truncated per item; payload_truncated marks a stub — use
+  history.get for the real content.
+- The store is append-only and live. Don't page through a whole history you only
+  cursor-checked once.`
+
+func (w *Worker) handleReadme(evt event.Event) {
+	tc := baseworker.ParseToolCall(evt)
+	if tc.CallID == "" {
+		return
+	}
+	w.ReplyCompleted(tc.CallerID, tc.CallID, w.readmeText(), tc.TraceID)
+}
+
+// readmeText is the guide plus the worker's list defaults.
+func (w *Worker) readmeText() string {
+	return fmt.Sprintf("%s\n\n## Current\n\n- list default: %d events/page, %d bytes/item\n",
+		historyReadme, w.maxListEvents, w.maxListItemBytes)
 }
 
 // ── history.list ──

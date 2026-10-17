@@ -71,6 +71,12 @@ func (w *Worker) registerExtensions() {
 	}
 
 	w.Register(baseworker.Extension{
+		Event:       event.TypeWorkerReadme,
+		Description: "Read this worker's usage guide: the timer tools, and how reminders and timeouts behave.",
+		Parameters:  obj(map[string]any{}),
+	}, w.handleReadme)
+
+	w.Register(baseworker.Extension{
 		Event:       TypeTimeout,
 		Description: "Set a timeout for your pending tool calls. When the timer fires, unresponsive tool calls will be automatically cancelled so you can proceed. If all tool calls complete before the timeout, the timer is cancelled automatically. Call this after issuing tool calls that may take a while.",
 		Parameters: obj(map[string]any{
@@ -179,6 +185,49 @@ func (w *Worker) registerExtensions() {
 		tc := baseworker.ParseToolCall(evt)
 		w.handleCancel(tc.CallID, string(TypeCancelTimer), tc.CallerID, tc.Args, tc.TraceID)
 	})
+}
+
+// timerReadme is the agent-facing usage guide returned by worker.readme.
+const timerReadme = `# timer — timers and reminders
+
+Schedule one-shot or recurring timers. A timeout is delivered as timer.timeout
+and is meant to bound pending tool calls; every other kind is a reminder,
+delivered as a directed worker.input and never auto-cancelled.
+
+## Tools
+
+- timeout { duration_ms, purpose? } — bound pending tool calls. Fires
+  timer.timeout; cancel it once the calls complete.
+- elapse { duration_ms, purpose? } — one-shot reminder after a delay; wakes the
+  caller with worker.input.
+- at { fire_at | unix_ms, purpose? } — one-shot reminder at an absolute time;
+  survives a restart.
+- interval { interval_ms, fire_at? | unix_ms?, purpose? } — recurring reminder
+  every interval_ms until cancelled.
+- list {} — pending timers: id, tick_type, caller, purpose, fire time.
+- cancel { timer_id } — cancel a pending timer.
+
+## Notes
+
+- Scheduling replies immediately with { "status": "scheduled" }; the actual fire
+  comes later.
+- Pending timers are persisted, so they survive a restart.
+- timeout fires timer.timeout; reminders fire worker.input.`
+
+func (w *Worker) handleReadme(evt event.Event) {
+	tc := baseworker.ParseToolCall(evt)
+	if tc.CallID == "" {
+		return
+	}
+	w.ReplyCompleted(tc.CallerID, tc.CallID, w.readmeText(), tc.TraceID)
+}
+
+// readmeText is the guide plus the number of pending timers.
+func (w *Worker) readmeText() string {
+	w.mu.Lock()
+	n := len(w.timers)
+	w.mu.Unlock()
+	return fmt.Sprintf("%s\n\n## Current\n\n- pending timers: %d\n", timerReadme, n)
 }
 
 // timerPublishes are the events the timer declares it emits, shown to peers
