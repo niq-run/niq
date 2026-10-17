@@ -78,7 +78,6 @@ func TestCallToolAwaitsReply(t *testing.T) {
 // round-trip sustains a real tool call.
 type replaySession struct {
 	call   program.ToolCaller
-	src    string
 	result string
 }
 
@@ -96,10 +95,15 @@ func (s *replaySession) Result(ctx context.Context) (string, error) {
 }
 func (s *replaySession) Cancel() {}
 
-type replayExecutor struct{ session *replaySession }
+type replayExecutor struct {
+	session *replaySession
+	gotSrc  chan string // optional: receives the script source (test observation)
+}
 
 func (e *replayExecutor) Start(_ context.Context, src string, args map[string]any, call program.ToolCaller) (program.ScriptSession, error) {
-	e.session.src = src
+	if e.gotSrc != nil {
+		e.gotSrc <- src
+	}
 	e.session.call = call
 	return e.session, nil
 }
@@ -114,7 +118,8 @@ func TestHandleRunRelaysAndReplies(t *testing.T) {
 
 	ch := &stubChannel{}
 	sess := &replaySession{result: "DONE"}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: &replayExecutor{session: sess}})
+	gotSrc := make(chan string, 1)
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: &replayExecutor{session: sess, gotSrc: gotSrc}})
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "caller", CallID: "c1", Name: "run",
@@ -122,7 +127,14 @@ func TestHandleRunRelaysAndReplies(t *testing.T) {
 	})
 
 	// Executor received the script source.
-	waitUntil(t, 2*time.Second, func() bool { return sess.src != "" }, "script source passed to executor")
+	select {
+	case s := <-gotSrc:
+		if s == "" {
+			t.Fatal("executor got empty script source")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("executor not started")
+	}
 
 	// The session's tool call goes out as a bash request.
 	var callID string
