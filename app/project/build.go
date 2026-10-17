@@ -14,6 +14,7 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
+	bunexec "github.com/niq-run/niq/core/impl/scriptexec/bun"
 	"github.com/niq-run/niq/core/impl/workerhost"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/impl/workers/history"
@@ -617,6 +618,9 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 			ID:      id,
 			Bus:     ch,
 			Backend: pgbackend.New(abs),
+			// The local script-program execution backend (Bun sandbox).
+			// Swappable for a local sandbox / remote gateway later.
+			Executor: bunexec.New(bunexec.Options{}),
 		})
 	}
 	cfg.ID = id
