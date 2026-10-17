@@ -68,6 +68,11 @@ func (w *Worker) registerExtensions() {
 		w.handleLoad(ctx, tc)
 	})
 
+	// program.run (PTC) is TEMPORARILY NOT EXPOSED: the tool is fully
+	// implemented (handleRun + executor) but the relay is ACL-blocked until the
+	// program worker's PublishAllow is widened for script-initiated request
+	// events. Re-register this block to expose it again.
+	/*
 	w.Register(baseworker.Extension{
 		Event:       TypeRun,
 		Description: "Run a FormType:script program in the sandbox: loads the script content, executes it via the configured executor, and returns its final result. The script may call other tools via the SDK; those become normal request events.",
@@ -84,6 +89,7 @@ func (w *Worker) registerExtensions() {
 		tc := baseworker.ParseToolCall(evt)
 		w.handleRun(ctx, tc)
 	})
+	*/
 
 	w.Register(baseworker.Extension{
 		Event:       TypeEdit,
