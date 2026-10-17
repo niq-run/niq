@@ -3,6 +3,7 @@ package timer
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -92,6 +93,17 @@ func scheduleElapse(ch *stubChannel, w *Worker, callID string, ms int) {
 
 // TestElapseFiresReminder verifies a relative timer delivers the reminder as a
 // worker.input carrying the purpose once it fires.
+// TestReadmeText verifies worker.readme's guide names the worker's tools.
+func TestReadmeText(t *testing.T) {
+	w := New(Config{ID: "timer", Bus: &stubChannel{}})
+	text := w.readmeText()
+	for _, want := range []string{"timeout", "elapse", "at", "interval", "cancel", "pending timers"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("readme missing %q", want)
+		}
+	}
+}
+
 func TestElapseFiresReminder(t *testing.T) {
 	ch := &stubChannel{}
 	w := New(Config{ID: "timer", Bus: ch})
