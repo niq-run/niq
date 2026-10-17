@@ -87,6 +87,20 @@ func (w *BaseWorker) Register(ext Extension, h ExtensionHandler) {
 	w.extensions.regs[extensionKey(ext)] = registeredExtension{ext: ext, handler: h}
 }
 
+// Unregister removes the extensions bound to the given event types. Removing an
+// event that was never registered is a no-op. Safe at any time, like Register;
+// it is how a worker withdraws capabilities it registered dynamically.
+func (w *BaseWorker) Unregister(events ...event.EventType) {
+	if w.extensions == nil {
+		return
+	}
+	w.extensions.mu.Lock()
+	defer w.extensions.mu.Unlock()
+	for _, evt := range events {
+		delete(w.extensions.regs, extensionKey(Extension{Event: evt}))
+	}
+}
+
 // DispatchExtension routes an event to the registered extension matching its
 // event type. Returns whether a handler ran. The handler is looked up under the
 // registry lock but invoked outside it, so a handler may register further
