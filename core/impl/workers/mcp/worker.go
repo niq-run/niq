@@ -32,6 +32,14 @@ type WorkerConfig struct {
 	Expose  string
 	Fixed   bool           // config-only: no runtime server mutation or mode switch; no snapshot
 	Servers []ServerConfig // static baseline (params.servers)
+	// AllowedTools, when non-empty, restricts the exposed tools to these names
+	// (see Config.AllowedTools).
+	AllowedTools []string
+
+	// Params is the declaration's raw construction params, kept only so the
+	// readme can be customized per declaration (params.readme / readme_append and
+	// {{key}} placeholders resolved by baseworker).
+	Params map[string]any
 
 	// OnDurableChange, when set, is called after the server set changes and
 	// must survive a restart, so the assembly layer can checkpoint this worker.
@@ -95,12 +103,10 @@ func (w *Worker) registerExtensions() {
 	}
 	_ = str
 
-	w.Register(baseworker.Extension{
-		Event: event.TypeWorkerReadme,
-		Description: "Read this worker's usage guide: what it proxies, the event list, and how to discover " +
+	w.RegisterReadme(
+		"Read this worker's usage guide: what it proxies, the event list, and how to discover "+
 			"and call remote tools. Read it first, then drive the concrete events.",
-		Parameters: obj(map[string]any{}),
-	}, w.handleReadme)
+		w.readmeText, w.cfg.Params)
 	w.Register(baseworker.Extension{
 		Event: EvtServerList,
 		Description: "List configured MCP servers (name, url, tool count, status). " +
@@ -366,15 +372,9 @@ server's tools into callable capabilities.
 ## Notes
 
 - Header values may reference ${ENV_VAR}; the project resolves them from its env.
-- A call that fails on a dropped session reconnects on the next call.`
-
-func (w *Worker) handleReadme(evt event.Event) {
-	tc := baseworker.ParseToolCall(evt)
-	if tc.CallID == "" {
-		return
-	}
-	w.reply(tc, w.readmeText(), "")
-}
+- A call that fails on a dropped session reconnects on the next call.
+- The tool surface may be narrowed by the worker's config (an allowed_tools
+  allowlist); tools absent from mcp.tool.list are not callable.`
 
 // readmeText is the guide plus a short snapshot of the current state, so an
 // agent can see the mode and the available servers without an extra call.
@@ -382,6 +382,7 @@ func (w *Worker) readmeText() string {
 	w.mu.Lock()
 	expose := w.cfg.Expose
 	fixed := w.cfg.Fixed
+	allowed := append([]string(nil), w.cfg.AllowedTools...)
 	type srvInfo struct {
 		name  string
 		tools int
@@ -401,6 +402,11 @@ func (w *Worker) readmeText() string {
 	b.WriteString("\n\n## Current\n\n")
 	fmt.Fprintf(&b, "- mode: %s\n", mode)
 	fmt.Fprintf(&b, "- exposure: %s\n", expose)
+	if len(allowed) > 0 {
+		fmt.Fprintf(&b, "- allowed tools: %s\n", strings.Join(allowed, ", "))
+	} else {
+		b.WriteString("- allowed tools: all\n")
+	}
 	if fixed {
 		b.WriteString("- management: disabled (fixed mode)\n")
 	} else {
@@ -444,6 +450,10 @@ func (w *Worker) handleToolCall(evt event.Event) {
 	}
 	server := argString(tc.Args, "server")
 	tool := argString(tc.Args, "tool")
+	if !w.toolAllowed(tool) {
+		w.reply(tc, "", fmt.Sprintf("tool %q is not allowed by config", tool))
+		return
+	}
 	args, _ := tc.Args["arguments"].(map[string]any)
 	if args == nil {
 		args = map[string]any{}
@@ -646,6 +656,7 @@ func (w *Worker) toolsFor(ctx context.Context, server string) ([]toolInfo, error
 	if err != nil {
 		return nil, err
 	}
+	info = w.filterAllowed(info)
 	w.mu.Lock()
 	// The server may have been removed while we were listing; never resurrect
 	// tools for a server that is no longer present.
@@ -662,6 +673,39 @@ func (w *Worker) toolsForCached(server string) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return len(w.tools[server])
+}
+
+// filterAllowed drops tools not in the configured allowlist (all pass when it
+// is unset). Applied to the freshly listed tools so the cache — and thus the
+// ready surface and mcp.tool.list — only ever holds allowed tools.
+func (w *Worker) filterAllowed(info []toolInfo) []toolInfo {
+	if len(w.cfg.AllowedTools) == 0 {
+		return info
+	}
+	allow := make(map[string]bool, len(w.cfg.AllowedTools))
+	for _, n := range w.cfg.AllowedTools {
+		allow[n] = true
+	}
+	out := make([]toolInfo, 0, len(info))
+	for _, t := range info {
+		if allow[t.Name] {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// toolAllowed reports whether a tool name is callable under the allowlist.
+func (w *Worker) toolAllowed(name string) bool {
+	if len(w.cfg.AllowedTools) == 0 {
+		return true
+	}
+	for _, n := range w.cfg.AllowedTools {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // setTools caches a server's tool list and, in ready mode, binds one extension

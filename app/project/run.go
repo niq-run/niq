@@ -346,6 +346,9 @@ func runAssembly(opts assemblyOptions) error {
 						s.SetArchivedStore(projectArchiver{id: opts.ContextInfo.Project})
 						s.SetWorkerMeta(workerMetaFromDecl(opts.Workers))
 						s.SetWorkerMetaUpdater(webuiMetaUpdater{projectID: opts.ContextInfo.Project})
+						s.SetWorkerParamsProvider(webuiParamsProvider{projectID: opts.ContextInfo.Project})
+						s.SetWorkerParamsUpdater(webuiParamsUpdater{projectID: opts.ContextInfo.Project})
+						s.SetManagedRestarter(webuiManagedRestarter{svc: workerSvc, projectID: opts.ContextInfo.Project})
 					}
 					if supervisor != nil {
 						s.SetUnmanagedController(&webuiUnmanagedAdapter{
@@ -434,26 +437,53 @@ func freeProjectPorts(addrs ...string) {
 	time.Sleep(300 * time.Millisecond)
 }
 
-// killPortHolders kills every process bound to a TCP port, via lsof.
+// killPortHolders kills every process LISTENING on a TCP port, via lsof.
 func killPortHolders(port string) {
-	out, err := exec.Command("lsof", "-ti", "tcp:"+port).Output()
+	_ = signalPortHolders(port, os.Kill)
+}
+
+// signalPortHolders sends sig to every process LISTENING on the TCP port (via
+// lsof) and returns how many were signalled. Only listeners are matched: a
+// plain `-i tcp:<port>` would also match any client connected to that port (e.g.
+// the control plane proxying a project), and we must never signal those. pid 1
+// is never touched.
+func signalPortHolders(port string, sig os.Signal) int {
+	out, err := exec.Command("lsof", "-ti", "tcp:"+port, "-sTCP:LISTEN").Output()
 	if err != nil {
-		return
+		return 0
 	}
+	n := 0
 	for _, line := range strings.Split(string(out), "\n") {
 		pidStr := strings.TrimSpace(line)
 		if pidStr == "" {
 			continue
 		}
 		pid, err := strconv.Atoi(pidStr)
-		if err != nil || pid <= 1 { // never kill init/pid 1
+		if err != nil || pid <= 1 { // never signal init/pid 1
 			continue
 		}
-		if p, err := os.FindProcess(pid); err == nil {
-			log.Printf("[project] killing pid %d holding port %s", pid, port)
-			_ = p.Kill()
+		p, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		log.Printf("[project] signalling pid %d holding port %s", pid, port)
+		if p.Signal(sig) == nil {
+			n++
 		}
 	}
+	return n
+}
+
+// InterruptPortHolders sends SIGINT to every process listening on port — how a
+// project started manually from the CLI (outside the control plane) is stopped
+// gracefully: 'niq project run' snapshots on SIGINT, exactly like a
+// control-plane stop. Returns the number of processes signalled (0 = nothing
+// was listening, i.e. not running).
+func InterruptPortHolders(port int) int {
+	if port <= 0 {
+		return 0
+	}
+	return signalPortHolders(strconv.Itoa(port), os.Interrupt)
 }
 
 // bindServer binds a listener at reqAddr via start; if a specific (non-":0")

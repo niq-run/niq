@@ -22,7 +22,7 @@ remote session, and the result comes back as `request.completed` /
 | `mcp.server.remove` | Remove a server, disconnect, withdraw its tools, persist (`{ name }`). |
 | `mcp.server.update` | Change a server's url/headers/protocol, drop the old session, re-list (async), persist (`{ name, ... }`). |
 | `mcp.expose` | Read (`{}`) or switch (`{ mode }`) the exposure mode. |
-| `worker.readme` | Return this worker's usage guide plus a snapshot of the current mode and servers (the agent-facing "skill card"). |
+| `worker.readme` | Return this worker's usage guide plus a snapshot of the current mode, allowed tools and servers (the agent-facing "skill card"). |
 
 `mcp.server.add/remove/update` and `mcp.expose` are **only registered in dynamic
 mode** (see below); `worker.readme`, `mcp.server.list`, `mcp.tool.list` and
@@ -70,6 +70,7 @@ Config lives in the worker's `params` map (flat, like the other workers):
   "params": {
     "fixed": false,          // optional; true = config-only fixed tool provider
     "expose": "agentic",     // agentic (default) | ready
+    "allowed_tools": ["search", "create_issue"],  // optional; only these tool names are exposed/callable
     "servers": [
       {
         "name": "github",
@@ -84,8 +85,16 @@ Config lives in the worker's `params` map (flat, like the other workers):
 
 - `servers[].headers` values may reference `${VAR}`; they are resolved against
   the process environment (project env is injected into the niq process).
-- The legacy nested `params.mcp = { expose, fixed, servers }` form is still
-  accepted; flat keys win on a conflict.
+- `allowed_tools`, when set, restricts the exposed tool surface to those tool
+  names (from `tools/list`): others are dropped from `mcp.tool.list` and the
+  ready contract, and `mcp.tool.call` rejects them. Unset or empty = all tools.
+- `readme` / `readme_append` (generic worker params) override or extend the
+  `worker.readme` guide for this declaration, with `{{key}}` resolved from the
+  params (e.g. `"readme": "You provide {{tool_name}} for this project"`). This
+  is how a configured instance states its concrete duty instead of the generic
+  type guide.
+- The legacy nested `params.mcp = { expose, fixed, servers, allowed_tools }`
+  form is still accepted; flat keys win on a conflict.
 - `protocol` is carried through and shown by `mcp.server.list`, but the client
   always speaks **Streamable HTTP** today.
 

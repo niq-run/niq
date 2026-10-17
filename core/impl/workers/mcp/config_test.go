@@ -77,6 +77,23 @@ func TestParseConfigLegacyNested(t *testing.T) {
 	}
 }
 
+func TestParseConfigAllowedTools(t *testing.T) {
+	cfg, err := ParseConfig(map[string]any{"allowed_tools": []any{"a", "b"}})
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	if len(cfg.AllowedTools) != 2 || cfg.AllowedTools[0] != "a" || cfg.AllowedTools[1] != "b" {
+		t.Fatalf("allowed_tools = %v, want [a b]", cfg.AllowedTools)
+	}
+	def, err := ParseConfig(map[string]any{})
+	if err != nil {
+		t.Fatalf("ParseConfig default: %v", err)
+	}
+	if def.AllowedTools != nil {
+		t.Fatalf("default allowed_tools = %v, want nil", def.AllowedTools)
+	}
+}
+
 func TestParseConfigValidation(t *testing.T) {
 	if _, err := ParseConfig(map[string]any{
 		"servers": []any{map[string]any{"name": "no-url"}},

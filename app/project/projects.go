@@ -163,6 +163,33 @@ func UpdateWorkerMeta(projectID, id string, tags []string, desc string) error {
 	return SaveProject(p)
 }
 
+// UpdateWorkerParams replaces a declared worker's construction params in
+// project.json. Params are build-time input: the running instance keeps its
+// current definition until it is restarted, so a bad edit stays inert (and
+// revertible) instead of taking a live worker down. The worker must already be
+// declared.
+func UpdateWorkerParams(projectID, id string, params map[string]any) error {
+	p, err := LoadProject(projectID)
+	if err != nil {
+		return err
+	}
+	idx := -1
+	for i, w := range p.Workers {
+		if w.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("worker %s not found", id)
+	}
+	if len(params) == 0 {
+		params = nil // an empty object means "no params", not an empty map
+	}
+	p.Workers[idx].Params = params
+	return SaveProject(p)
+}
+
 // RemoveWorkerDecl removes a worker's declaration from a project's project.json
 // (persisted immediately). It only edits the declaration; it does not stop a
 // running process or touch the bus registry / state dirs.
