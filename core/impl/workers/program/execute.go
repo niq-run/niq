@@ -5,10 +5,17 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/itfs/event"
 )
+
+// defaultRunTimeout bounds one script-program session; a runaway (or unfaithful
+// LLM) script is killed rather than running forever. Overridable per call via
+// the timeout_seconds argument.
+const defaultRunTimeout = 120 * time.Second
 
 // callResult is the outcome of a forwarded tool call: either the
 // request.completed text or the request.failed / rejected reason.
@@ -111,8 +118,13 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 		args = map[string]any{}
 	}
 
+	timeout := defaultRunTimeout
+	if v, ok := tc.Args["timeout_seconds"].(float64); ok && v > 0 {
+		timeout = time.Duration(v) * time.Second
+	}
+
 	go func() {
-		runCtx, cancel := context.WithCancel(context.Background())
+		runCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
 		src, err := w.backend.Read(ctx, name)
@@ -126,12 +138,19 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("start: %v", err), tc.TraceID)
 			return
 		}
-		// Drain the log stream so the sandbox never blocks on it; a future
-		// pass surfaces these to the webui / caller.
-		go func() { for range sess.Logs() {} }()
+		// Forward the script's sdk.log lines to this worker's log so a run is
+		// observable (a future pass streams them to the webui / caller too).
+		go func() {
+			for line := range sess.Logs() {
+				log.Printf("[program %s] script: %s", w.ID(), line)
+			}
+		}()
 
+		// Result returns when the script finishes or the session ctx is done
+		// (timeout / cancel); the executor tears the sandbox down either way.
 		result, err := sess.Result(runCtx)
 		if err != nil {
+			sess.Cancel()
 			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("run: %v", err), tc.TraceID)
 			return
 		}

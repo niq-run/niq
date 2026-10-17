@@ -6,7 +6,8 @@ import { getWorkerTypeColor } from '../components/talk-utils'
 import SendEventForm from '../components/SendEventForm'
 import SelectDropdown from '../components/SelectDropdown'
 import DetailRow from '../components/DetailRow'
-import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, updateWorkerAllow, updateWorkerMeta } from '../services/api'
+import CollapsibleCode from '../components/CollapsibleCode'
+import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, updateWorkerAllow, updateWorkerMeta, updateWorkerParams } from '../services/api'
 
 interface WorkerDetailProps {
   worker: WorkerInfo
@@ -42,6 +43,10 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
   const [tab, setTab] = useState<'info' | 'actions' | 'events' | 'perms'>('info')
   const [draftTags, setDraftTags] = useState('')
   const [draftDesc, setDraftDesc] = useState('')
+  const [draftParams, setDraftParams] = useState('')
+  // Set after a params save: params are build-time input, so the edit only
+  // takes effect when the worker is restarted.
+  const [paramsSaved, setParamsSaved] = useState('')
   const [editingSub, setEditingSub] = useState(false)
   const [subNote, setSubNote] = useState('')
   const [editingPub, setEditingPub] = useState(false)
@@ -65,16 +70,33 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
     }
   }
 
-  // Save edits to a worker's display metadata (tags / description). These are
-  // WebUI-management fields persisted to the declaration; the running worker
-  // ignores them, so no live operation follows. onRefresh reloads the worker
-  // list so the UI reflects the change immediately.
+  // Save edits to a worker's declaration: display metadata (tags / description),
+  // which the running worker ignores, and construction params, which apply on
+  // the next restart. onRefresh reloads the worker list so the UI reflects the
+  // change immediately.
   const saveMeta = async () => {
     setMetaNote('')
     const tags = draftTags.split(',').map(x => x.trim()).filter(Boolean)
+    let params: Record<string, unknown> = {}
+    if (draftParams.trim() !== '') {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(draftParams)
+      } catch {
+        setMetaNote(t('wd.meta.params.invalid'))
+        return
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        setMetaNote(t('wd.meta.params.invalid'))
+        return
+      }
+      params = parsed as Record<string, unknown>
+    }
     try {
       await updateWorkerMeta(worker.id, tags, draftDesc.trim())
+      await updateWorkerParams(worker.id, params)
       setEditingMeta(false)
+      setParamsSaved(t('wd.params.saved'))
       onRefresh?.()
     } catch (e) {
       setMetaNote((e as Error)?.message || 'save failed')
@@ -89,6 +111,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
       else if (op === 'stop') await stopWorker(worker.id)
       else await restartWorker(worker.id)
       setUmNote({ start: t('wd.starting'), stop: t('wd.stopping'), restart: t('wd.restarting') }[op])
+      onRefresh?.()
     } catch (e) {
       setUmNote((e as Error)?.message || op + ' failed')
     } finally {
@@ -201,10 +224,10 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
           <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base, display: tab === 'info' ? undefined : 'none' }}>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
               <span style={{ color: colors.detailLabel, fontSize: fontSizes.sm, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('wd.meta.label')}</span>
-              {/* Edit toggles an inline editor for tags / description. Opening
-                  it hydrates the drafts from the current values. */}
+              {/* Edit toggles an inline editor for tags / description / params.
+                  Opening it hydrates the drafts from the current values. */}
               <span
-                onClick={() => { if (!editingMeta) { setDraftTags((worker.tags || []).join(', ')); setDraftDesc(worker.description || ''); setMetaNote('') } setEditingMeta(v => !v) }}
+                onClick={() => { if (!editingMeta) { setDraftTags((worker.tags || []).join(', ')); setDraftDesc(worker.description || ''); setDraftParams(JSON.stringify(worker.params ?? {}, null, 2)); setMetaNote(''); setParamsSaved('') } setEditingMeta(v => !v) }}
                 className="btn-hover"
                 style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, marginLeft: 'auto', userSelect: 'none' }}
               >
@@ -212,7 +235,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
               </span>
             </div>
             {editingMeta ? (
-              <div style={{ maxWidth: 340 }}>
+              <div style={{ maxWidth: 520 }}>
                 <div style={{ marginBottom: 8 }}>
                   <label style={{ display: 'block', fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 3 }}>{t('wd.meta.tags')}</label>
                   <input
@@ -230,6 +253,17 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                     onChange={e => setDraftDesc(e.target.value)}
                     style={{ width: '100%', boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', color: colors.text, fontSize: fontSizes.sm, outline: 'none' }}
                   />
+                </div>
+                <div style={{ marginBottom: 8 }}>
+                  <label style={{ display: 'block', fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 3 }}>{t('wd.meta.params')}</label>
+                  <textarea
+                    value={draftParams}
+                    onChange={e => setDraftParams(e.target.value)}
+                    spellCheck={false}
+                    rows={10}
+                    style={{ width: '100%', boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '6px 8px', color: colors.text, fontSize: fontSizes.xs, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', lineHeight: 1.5, outline: 'none', resize: 'vertical' }}
+                  />
+                  <div style={{ fontSize: fontSizes.xs, color: colors.detailLabel, marginTop: 3, lineHeight: 1.4 }}>{t('wd.meta.params.hint')}</div>
                 </div>
                 {metaNote && <div style={{ fontSize: fontSizes.sm, color: colors.toolFailed, marginBottom: 8, lineHeight: 1.4 }}>{metaNote}</div>}
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -251,6 +285,17 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                 <DetailRow label={t('wd.lifecycle')} value={lifecycle} colors={colors} />
                 <DetailRow label={t('wd.managed')} value={worker.managed ? t('wd.yes') : t('wd.no')} colors={colors} />
                 <DetailRow label={t('wd.credential')} value={worker.credential || '\u2014'} colors={colors} />
+                {worker.params && Object.keys(worker.params).length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                      {t('wd.params')}
+                    </div>
+                    <CollapsibleCode code={JSON.stringify(worker.params, null, 2)} language="json" />
+                  </div>
+                )}
+                {paramsSaved && (
+                  <div style={{ fontSize: fontSizes.sm, color: colors.accent, marginTop: 8, lineHeight: 1.5 }}>{paramsSaved}</div>
+                )}
               </div>
             )}
           </div>
@@ -323,13 +368,29 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                       ? t('wd.resume.desc')
                       : t('wd.suspend.desc')}
                   </div>
-                  <span
-                    onClick={handleAction}
-                    className="btn-hover"
-                    style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
-                  >
-                    {suspended ? t('wd.resume') : t('wd.suspend')}
-                  </span>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span
+                      onClick={handleAction}
+                      className="btn-hover"
+                      style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                    >
+                      {suspended ? t('wd.resume') : t('wd.suspend')}
+                    </span>
+                    {/* Restart rebuilds from the declaration, which is how an
+                        edited params map reaches the running worker. */}
+                    <span
+                      onClick={() => unmanagedAction('restart')}
+                      title={t('wd.managedRestart.desc')}
+                      className="btn-hover"
+                      style={{ cursor: umBusy ? 'default' : 'pointer', opacity: umBusy ? 0.6 : 1, display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 12px', color: colors.textDim, fontSize: fontSizes.md, userSelect: 'none' }}
+                    >
+                      {umBusy === 'restart' ? t('wd.restarting') : t('wd.restart')}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: fontSizes.xs, color: colors.detailLabel, marginTop: 6, lineHeight: 1.4 }}>{t('wd.managedRestart.desc')}</div>
+                  {umNote && (
+                    <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{umNote}</div>
+                  )}
                 </div>
                 <div>
                   <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>

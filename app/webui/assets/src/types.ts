@@ -56,6 +56,8 @@ export interface WorkerInfo {
   // is a short purpose note shown as a dimmed second line.
   tags?: string[]
   description?: string
+  // Declared construction params (project.json `params`), shown in the Info tab.
+  params?: Record<string, unknown>
 }
 
 // The set of worker types that can be a talk conversation partner: ones that

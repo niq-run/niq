@@ -167,17 +167,34 @@ func (c *Control) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Requ
 	c.launchProject(w, id)
 }
 
-// handleStopProject terminates a running project's process and forgets it.
+// handleStopProject terminates a running project. A project this control plane
+// launched is signalled directly. One started manually from the CLI (outside
+// the control plane, so untracked) is stopped by finding whoever listens on its
+// persisted WebUI port and interrupting them — the same port-holder idea as the
+// project's own startup port reclaim.
 func (c *Control) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
+
 	c.mu.Lock()
-	proc, ok := c.procs[id]
-	if ok && proc != nil {
+	proc, tracked := c.procs[id]
+	if tracked && proc != nil {
 		_ = proc.Signal(os.Interrupt) // graceful: the project snapshots on shutdown
 		delete(c.procs, id)
 	}
 	c.mu.Unlock()
-	if !ok {
+	if tracked && proc != nil {
+		w.WriteHeader(stdhttp.StatusAccepted)
+		return
+	}
+
+	// Not tracked here: it may have been started outside the control plane, in
+	// which case stopping it means interrupting its WebUI-port holder.
+	p, err := project.LoadProject(id)
+	if err != nil {
+		stdhttp.Error(w, "project not found", 404)
+		return
+	}
+	if project.InterruptPortHolders(p.Ports.WebUI) == 0 {
 		stdhttp.Error(w, "project not running", 404)
 		return
 	}

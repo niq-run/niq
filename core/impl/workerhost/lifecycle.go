@@ -370,6 +370,22 @@ func (s *WorkerService) DestroyWorker(id string) error {
 	return fmt.Errorf("workerhost: worker %s not found", id)
 }
 
+// RestartWorker replaces a worker with a fresh instance built from cfg.
+//
+// A restart is deliberately a rebuild, not a resume: it exists to apply a
+// changed definition (e.g. an edited params map), so the persisted snapshot is
+// dropped rather than restored over the new config. The id does not have to be
+// live — an unknown id is simply created, which lets callers use one path for
+// "restart" and "start from declaration".
+func (s *WorkerService) RestartWorker(ctx context.Context, cfg worker.WorkerConfig) error {
+	if s.HasWorker(cfg.ID) {
+		if err := s.DestroyWorker(cfg.ID); err != nil {
+			return err
+		}
+	}
+	return s.CreateWorker(ctx, cfg)
+}
+
 // ShutdownSnapshot snapshots every running worker and persists it, so a clean
 // shutdown leaves the latest state on disk. Called on process shutdown.
 func (s *WorkerService) ShutdownSnapshot() {

@@ -39,6 +39,11 @@ type Config struct {
 	// start and expose fixed tools" mode.
 	Fixed   bool
 	Servers []ServerConfig
+	// AllowedTools, when non-empty, restricts the exposed tool surface to this
+	// set of tool names (from tools/list). Tools outside it are filtered from the
+	// cached list — so they disappear from mcp.tool.list and, in ready mode, from
+	// the announced capabilities — and mcp.tool.call rejects them.
+	AllowedTools []string
 }
 
 // ParseConfig extracts the mcp worker config from worker Params. The config is
@@ -60,7 +65,7 @@ func ParseConfig(params map[string]any) (Config, error) {
 		for k, v := range nested {
 			m[k] = v
 		}
-		for _, k := range []string{"expose", "fixed", "servers"} {
+		for _, k := range []string{"expose", "fixed", "servers", "allowed_tools"} {
 			if v, ok := params[k]; ok {
 				m[k] = v
 			}
@@ -72,6 +77,7 @@ func ParseConfig(params map[string]any) (Config, error) {
 	if f, ok := m["fixed"].(bool); ok {
 		cfg.Fixed = f
 	}
+	cfg.AllowedTools = stringList(m["allowed_tools"])
 	if !validExpose(cfg.Expose) {
 		return Config{}, fmt.Errorf("mcp: unknown expose %q (want %q or %q)", cfg.Expose, ExposeAgentic, ExposeReady)
 	}
@@ -110,6 +116,24 @@ func valueString(v any) string {
 		return s
 	}
 	return ""
+}
+
+// stringList coerces a params value into a non-empty string slice. It accepts
+// both []string (built in Go) and []any (decoded from JSON).
+func stringList(v any) []string {
+	switch l := v.(type) {
+	case []string:
+		return l
+	case []any:
+		out := make([]string, 0, len(l))
+		for _, x := range l {
+			if s, ok := x.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // resolveEnv expands ${VAR} references in a value using the process env.

@@ -78,7 +78,6 @@ func TestCallToolAwaitsReply(t *testing.T) {
 // round-trip sustains a real tool call.
 type replaySession struct {
 	call   program.ToolCaller
-	src    string
 	result string
 }
 
@@ -96,10 +95,55 @@ func (s *replaySession) Result(ctx context.Context) (string, error) {
 }
 func (s *replaySession) Cancel() {}
 
-type replayExecutor struct{ session *replaySession }
+type replayExecutor struct {
+	session *replaySession
+	gotSrc  chan string // optional: receives the script source (test observation)
+}
+
+// blockingSession blocks in Result until its context is done, to exercise the
+// per-run timeout (the worker must cancel and reply failed, not hang).
+type blockingSession struct{}
+
+func (blockingSession) Logs() <-chan string { c := make(chan string); close(c); return c }
+func (blockingSession) Result(ctx context.Context) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+func (blockingSession) Cancel() {}
+
+type blockingExecutor struct{}
+
+func (blockingExecutor) Start(context.Context, string, map[string]any, program.ToolCaller) (program.ScriptSession, error) {
+	return blockingSession{}, nil
+}
+
+// TestHandleRunTimesOut verifies a session that never returns is killed by the
+// per-run timeout and the worker replies failed instead of hanging.
+func TestHandleRunTimesOut(t *testing.T) {
+	root := t.TempDir()
+	writeProgram(t, root, "hang", "hang", "demo", "// never returns")
+	ch := &stubChannel{}
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: blockingExecutor{}})
+
+	go w.handleRun(context.Background(), baseworker.ToolCall{
+		CallerID: "caller", CallID: "c9", Name: "run",
+		Args: map[string]any{"name": "hang", "timeout_seconds": 0.05}, TraceID: "t",
+	})
+
+	waitUntil(t, 3*time.Second, func() bool {
+		for _, e := range ch.snapshot() {
+			if e.Type == event.TypeRequestFailed && e.RequestId == "c9" {
+				return true
+			}
+		}
+		return false
+	}, "timeout reply")
+}
 
 func (e *replayExecutor) Start(_ context.Context, src string, args map[string]any, call program.ToolCaller) (program.ScriptSession, error) {
-	e.session.src = src
+	if e.gotSrc != nil {
+		e.gotSrc <- src
+	}
 	e.session.call = call
 	return e.session, nil
 }
@@ -114,7 +158,8 @@ func TestHandleRunRelaysAndReplies(t *testing.T) {
 
 	ch := &stubChannel{}
 	sess := &replaySession{result: "DONE"}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: &replayExecutor{session: sess}})
+	gotSrc := make(chan string, 1)
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: &replayExecutor{session: sess, gotSrc: gotSrc}})
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "caller", CallID: "c1", Name: "run",
@@ -122,7 +167,14 @@ func TestHandleRunRelaysAndReplies(t *testing.T) {
 	})
 
 	// Executor received the script source.
-	waitUntil(t, 2*time.Second, func() bool { return sess.src != "" }, "script source passed to executor")
+	select {
+	case s := <-gotSrc:
+		if s == "" {
+			t.Fatal("executor got empty script source")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("executor not started")
+	}
 
 	// The session's tool call goes out as a bash request.
 	var callID string

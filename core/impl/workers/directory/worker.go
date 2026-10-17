@@ -27,6 +27,9 @@ import (
 type Config struct {
 	ID  string
 	Bus corebus.WorkerSideChannel
+	// Params is the declaration's raw construction params, read only for the
+	// readme customization (params.readme / readme_append and {{key}} placeholders).
+	Params map[string]any
 }
 
 // workerRecord is one worker's contract learned from its worker.ready: the
@@ -41,6 +44,7 @@ type workerRecord struct {
 // builds by collecting worker.ready / worker.gone on the bus.
 type DirectoryWorker struct {
 	baseworker.BaseWorker
+	params  map[string]any // declaration params, for the readme customization
 	started bool
 	cancel  context.CancelFunc
 	mu      sync.Mutex
@@ -63,6 +67,7 @@ func New(cfg Config) *DirectoryWorker {
 	}
 	w := &DirectoryWorker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
+		params:     cfg.Params,
 		workers:    make(map[string]workerRecord),
 	}
 	w.registerExtensions()
@@ -201,11 +206,9 @@ func (w *DirectoryWorker) registerExtensions() {
 		return map[string]any{"type": "object", "properties": props}
 	}
 
-	w.Register(baseworker.Extension{
-		Event:       event.TypeWorkerReadme,
-		Description: "Read this worker's usage guide: the fleet roster, its two tools, and how to use them.",
-		Parameters:  obj(map[string]any{}),
-	}, w.handleReadme)
+	w.RegisterReadme(
+		"Read this worker's usage guide: the fleet roster, its two tools, and how to use them.",
+		w.readmeText, w.params)
 
 	w.Register(baseworker.Extension{
 		Event:       TypeListWorkers,
@@ -253,14 +256,6 @@ worker.ready and forgets it on worker.gone; it has no lifecycle authority.
   ready lists the events they respond to, not capabilities to invoke. They are
   reachable as message targets.
 - The roster is rebuilt from the bus at start; it is never persisted.`
-
-func (w *DirectoryWorker) handleReadme(evt event.Event) {
-	tc := baseworker.ParseToolCall(evt)
-	if tc.CallID == "" {
-		return
-	}
-	w.ReplyCompleted(tc.CallerID, tc.CallID, w.readmeText(), tc.TraceID)
-}
 
 // readmeText is the guide plus the number of workers currently in the roster.
 func (w *DirectoryWorker) readmeText() string {
