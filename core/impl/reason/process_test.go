@@ -1,13 +1,14 @@
 package reason
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/reason/requesttracker"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
-	"github.com/niq-run/niq/core/impl/reason/requesttracker"
 )
 
 // Tests for process.go's event-to-input translation: DefaultConverter,
@@ -47,8 +48,8 @@ func TestDefaultConverterNoText(t *testing.T) {
 	}
 }
 
-// TestResultOutcome verifies resultOutcome extracts text and the error flag
-// from each tool-result event type.
+// TestResultOutcome verifies resultOutcome extracts content blocks and the
+// error flag from each tool-result event type.
 func TestResultOutcome(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -65,11 +66,92 @@ func TestResultOutcome(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			evt := event.New(c.evtType, "workspace", c.payload)
-			text, isErr := resultOutcome(evt)
-			if text != c.want || isErr != c.isError {
-				t.Fatalf("resultOutcome = (%q, %v), want (%q, %v)", text, isErr, c.want, c.isError)
+			content, isErr := resultOutcome(evt)
+			if isErr != c.isError {
+				t.Fatalf("resultOutcome error flag = %v, want %v", isErr, c.isError)
+			}
+			want := c.want
+			if want == "" {
+				if len(content) != 0 {
+					t.Fatalf("resultOutcome = %+v, want no blocks", content)
+				}
+				return
+			}
+			if len(content) != 1 || content[0].Type != llm.ContentText || content[0].Text != want {
+				t.Fatalf("resultOutcome = %+v, want one text block %q", content, want)
 			}
 		})
+	}
+}
+
+// TestResultOutcomeStructured verifies a tool result carrying a structured
+// content array (e.g. an image) is decoded into content blocks.
+func TestResultOutcomeStructured(t *testing.T) {
+	b64 := base64.StdEncoding.EncodeToString([]byte("fakejpeg"))
+	evt := event.New(event.TypeRequestCompleted, "workspace", map[string]any{
+		"content": []any{
+			map[string]any{"type": "text", "text": "screenshot"},
+			map[string]any{"type": "image", "mime": "image/jpeg", "data": b64},
+		},
+	})
+	content, isErr := resultOutcome(evt)
+	if isErr {
+		t.Fatal("completed result reported error")
+	}
+	if len(content) != 2 {
+		t.Fatalf("blocks = %d, want 2: %+v", len(content), content)
+	}
+	if content[0].Type != llm.ContentText || content[0].Text != "screenshot" {
+		t.Errorf("block0 = %+v", content[0])
+	}
+	if content[1].Type != llm.ContentImage || content[1].Data != b64 {
+		t.Errorf("block1 = %+v", content[1])
+	}
+}
+
+// TestConvertInputEventStructuredContent verifies a worker.input carrying a
+// structured "content" array is decoded via the shared decoder and the event
+// footer is appended.
+func TestConvertInputEventStructuredContent(t *testing.T) {
+	b64 := base64.StdEncoding.EncodeToString([]byte("fakejpeg"))
+	evt := event.New(event.TypeWorkerInput, "webui-hiw", map[string]any{
+		"content": []any{
+			map[string]any{"type": "text", "text": "图如下"},
+			map[string]any{"type": "image", "name": "a.jpg", "mime": "image/jpeg", "data": b64},
+			map[string]any{"type": "file", "name": "r.pdf", "path": "/tmp/uploads/r.pdf", "size": float64(42)},
+		},
+	})
+
+	msgs := ConvertInputEvent(evt)
+	if len(msgs) != 1 || msgs[0].Role != "user" {
+		t.Fatalf("msgs = %+v", msgs)
+	}
+	content := msgs[0].Content
+	if len(content) != 4 {
+		t.Fatalf("content blocks = %d, want 4: %+v", len(content), content)
+	}
+	if content[0].Type != "text" || content[0].Text != "图如下" {
+		t.Errorf("block0 = %+v", content[0])
+	}
+	if content[1].Type != "image" || content[1].MIMEType != "image/jpeg" || content[1].Data != b64 {
+		t.Errorf("block1 = %+v", content[1])
+	}
+	if content[2].Type != "text" || !strings.Contains(content[2].Text, "/tmp/uploads/r.pdf") || !strings.Contains(content[2].Text, "42") {
+		t.Errorf("block2 = %+v", content[2])
+	}
+	if content[3].Type != "text" || !strings.Contains(content[3].Text, "[Event: worker.input from webui-hiw]") {
+		t.Errorf("block3 = %+v", content[3])
+	}
+}
+
+// TestConvertInputEventPlainFallsBackToDefault verifies a plain-text input
+// with no content array falls back to the DefaultConverter shape.
+func TestConvertInputEventPlainFallsBackToDefault(t *testing.T) {
+	evt := event.New(event.TypeWorkerInput, "webui-hiw", map[string]any{"text": "hello"})
+	want := DefaultConverter(evt)
+	got := ConvertInputEvent(evt)
+	if len(got) != 1 || got[0].Content[0].Text != want[0].Content[0].Text {
+		t.Errorf("plain input diverged from DefaultConverter:\n got %q\nwant %q", got[0].Content[0].Text, want[0].Content[0].Text)
 	}
 }
 
@@ -148,7 +230,7 @@ func TestLateToolResult(t *testing.T) {
 	if last.Role != llm.RoleUser {
 		t.Fatalf("late result should be a user message, got role %q", last.Role)
 	}
-	if len(last.Content) == 0 || !strings.Contains(last.Content[0].Text, "late-out") {
+	if len(last.Content) < 2 || !strings.Contains(last.Content[1].Text, "late-out") {
 		t.Fatalf("late message should carry the outcome, got %+v", last.Content)
 	}
 }

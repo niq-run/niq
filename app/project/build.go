@@ -19,6 +19,7 @@ import (
 	"github.com/niq-run/niq/core/impl/workers/history"
 	"github.com/niq-run/niq/core/impl/workers/hiw"
 	"github.com/niq-run/niq/core/impl/workers/host"
+	"github.com/niq-run/niq/core/impl/workers/mcp"
 	"github.com/niq-run/niq/core/impl/workers/niw"
 	programworker "github.com/niq-run/niq/core/impl/workers/program"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
@@ -42,6 +43,9 @@ type BuildContext struct {
 	EventLog     *eventbusapi.EventLog
 	EventStore   store.EventStore
 	ProgramsRoot string
+	// StateDir is the per-project workers state directory (`<proj>/workers`);
+	// built-in workers persist their own state here (one dir per id).
+	StateDir string
 }
 
 // RegisterBuilders registers a Builder for every known worker type onto service.
@@ -72,6 +76,9 @@ func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
 	})
 	svc.RegisterBuilder("directory", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		return buildDirectorySpec(ctx, cfg)
+	})
+	svc.RegisterBuilder("mcp", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+		return buildMCPSpec(ctx, cfg)
 	})
 }
 
@@ -110,7 +117,7 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	model, _ := p["model"].(string)
 
 	// SubscribeAllow: only broadcast delivery needs listing. Directed events
-	// (tool calls, their request.* replies, timer.timeout/reminder, management
+	// (tool calls, their request.* replies, timer.timeout, management
 	// requests) reach the worker regardless; broadcast traffic to a reason
 	// worker is just the worker presence lifecycle and worker.input (hiw
 	// broadcasts when untargeted). Template subscriptions override this
@@ -379,7 +386,7 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("timer.timeout"),
-			event.NewPublishPattern("timer.reminder"),
+			event.NewPublishPattern("worker.input"),
 			event.NewPublishPattern("worker.ready"),
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))
@@ -397,6 +404,42 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 	}
 	cfg.ID = id
 	cfg.Type = "timer"
+	return worker.SpawnSpec{
+		Config:  cfg,
+		Connect: connect,
+		Build:   build,
+	}, nil
+}
+
+// ── mcp ──
+
+func buildMCPSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	id := cfg.ID
+	if id == "" {
+		id = "mcp"
+	}
+	mcf, err := mcp.ParseConfig(cfg.Params)
+	if err != nil {
+		return worker.SpawnSpec{}, err
+	}
+	connect := specConnect(ctx, id, "mcp",
+		[]event.PublishPattern{
+			event.NewPublishPattern("request.*"),
+			event.NewPublishPattern("worker.ready"),
+		},
+		subAllowFromParams(cfg.Params, []string{"worker.discover", "worker.ready", "worker.gone"}))
+	stateDir := filepath.Join(ctx.StateDir, sanitizeID(id))
+	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		return mcp.New(mcp.WorkerConfig{
+			ID:      id,
+			Bus:     ch,
+			Expose:  mcf.Expose,
+			Servers: mcf.Servers,
+			Store:   mcp.NewFileServerStore(filepath.Join(stateDir, "servers.json")),
+		})
+	}
+	cfg.ID = id
+	cfg.Type = "mcp"
 	return worker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,

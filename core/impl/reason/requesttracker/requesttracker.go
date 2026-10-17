@@ -40,17 +40,22 @@ import (
 //   - why a reasoning round was interrupted (abort / input preemption) or a
 //     new one triggered (reminder / timeout).
 //
-// The four values mirror the four preemption sources; pkg/reason's handlers
-// produce them, and the tracker carries them on parked requests so late
-// results can be framed.
+// Handlers in pkg/reason produce them, and the tracker carries them on parked
+// requests so late results can be framed.
 type PreemptCause string
 
 const (
-	PreemptCauseInput    PreemptCause = "input"    // a new user input preempted the wait
-	PreemptCauseTimeout  PreemptCause = "timeout"  // the batch timeout fired
-	PreemptCauseAbort    PreemptCause = "abort"    // an abort signal ended the call
-	PreemptCauseReminder PreemptCause = "reminder" // an elapse reminder timer fired
-	PreemptCauseRestart  PreemptCause = "restart"  // the worker restarted; the wait did not survive it
+	PreemptCauseInput      PreemptCause = "input"      // a new user input preempted the wait
+	PreemptCauseTimeout    PreemptCause = "timeout"    // the batch timeout fired
+	PreemptCauseAbort      PreemptCause = "abort"      // an abort signal ended the call
+	PreemptCauseRestart    PreemptCause = "restart"    // the worker restarted; the wait did not survive it
+	PreemptCauseReminder   PreemptCause = "reminder"   // a reminder preempted the wait
+	PreemptCauseNoDispatch PreemptCause = "nodispatch" // the round dispatched nothing; a follow-up round was scheduled
+	// PreemptCauseSuperseded is the neutral fallback: a new reasoning round
+	// started for a reason other than a user input (a scheduled follow-up, a
+	// concurrent wake, ...) and parked a leftover wait. It must NOT be confused
+	// with PreemptCauseInput — the model would wrongly think the user typed.
+	PreemptCauseSuperseded PreemptCause = "superseded"
 )
 
 // RequestStatus tracks the lifecycle stage of an issued request while it is

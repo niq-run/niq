@@ -22,7 +22,7 @@ interface CreateWorkerDialogProps {
 // Managed worker types offered by the form. host/hiw are infrastructure the
 // assembly owns — creating them from the UI is not a thing. niw is a bridge
 // worker that dials another niq's bus.
-const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program', 'history', 'directory', 'niw'] as const
+const MANAGED_TYPES = ['reason', 'workspace', 'timer', 'program', 'history', 'directory', 'niw', 'mcp'] as const
 
 // parseNiwConfig turns the far-side bus's copyable worker config (KEY=value
 // lines, as rendered by that bus for a created remote worker) into a map.
@@ -59,6 +59,9 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [envText, setEnvText] = useState('')
   const [subscriptions, setSubscriptions] = useState('')
   const [publish, setPublish] = useState('')
+  // MCP (managed worker): expose mode + the remote servers as a JSON list.
+  const [mcpExpose, setMcpExpose] = useState('agentic')
+  const [mcpServersText, setMcpServersText] = useState('')
   const [tokenTtl, setTokenTtl] = useState('')
   const [niwConfig, setNiwConfig] = useState('')
   const [niwRecipient, setNiwRecipient] = useState('')
@@ -145,6 +148,26 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         // WorkerConfig takes a mounts array (first entry = primary mount).
         // More mounts can be added at runtime via the workspace's mount.add.
         body.mounts = [rootDir.trim()]
+      }
+      if (effType === 'mcp') {
+        // MCP worker: params.mcp carries the expose mode + remote servers.
+        // headers may reference env as ${VAR}; plaintext is accepted for now.
+        let servers: unknown[] = []
+        if (mcpServersText.trim()) {
+          try {
+            const parsed = JSON.parse(mcpServersText)
+            if (!Array.isArray(parsed)) { setNote(t('workers.create.mcpJsonErr')); return null }
+            for (const s of parsed) {
+              if (!s || typeof s !== 'object' || !(s as any).name || !(s as any).url) {
+                setNote(t('workers.create.mcpJsonErr')); return null
+              }
+            }
+            servers = parsed
+          } catch {
+            setNote(t('workers.create.mcpJsonErr')); return null
+          }
+        }
+        body.params = { mcp: { expose: mcpExpose, servers } }
       }
     } else if (isExternal) {
       body.command = command.trim().split(/\s+/)
@@ -397,6 +420,33 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
             <div style={field}>
               <label style={label}>{t('workers.create.niwRecipient')}</label>
               <input style={input} value={niwRecipient} onChange={e => setNiwRecipient(e.target.value)} placeholder="reason.local" />
+            </div>
+          </>
+        )}
+
+        {isManaged && effType === 'mcp' && (
+          <>
+            <div style={field}>
+              <label style={label}>Expose</label>
+              <select style={input} value={mcpExpose} onChange={e => setMcpExpose(e.target.value)}>
+                <option value="agentic">agentic (list/call on demand)</option>
+                <option value="ready">ready (flat tool exposure)</option>
+              </select>
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                agentic: mcp.server.list / mcp.tool.list / mcp.tool.call · ready: each remote tool as its own tool
+              </div>
+            </div>
+            <div style={field}>
+              <label style={label}>MCP servers (JSON array)</label>
+              <textarea
+                style={{ ...input, resize: 'vertical', minHeight: 96, fontFamily: 'monospace' }}
+                value={mcpServersText}
+                onChange={e => setMcpServersText(e.target.value)}
+                placeholder={'[{"name":"github","url":"https://api.githubcopilot.com/mcp","protocol":"streamable-http","headers":{"Authorization":"Bearer ${GITHUB_TOKEN}"}}]'}
+              />
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                {'Each entry: name, url, optional protocol / headers. Header values may reference ${ENV_VAR}.'}
+              </div>
             </div>
           </>
         )}

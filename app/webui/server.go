@@ -302,6 +302,7 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// worker's bus tools (search/load/upsert/write/delete).
 	mux.HandleFunc("GET /api/programs", s.handleListPrograms)
 	mux.HandleFunc("GET /api/programs/{name}", s.handleGetProgram)
+	mux.HandleFunc("GET /api/programs/{name}/content", s.handleGetProgramContent)
 	mux.HandleFunc("PUT /api/programs/{name}", s.handleUpdateProgram)
 	mux.HandleFunc("DELETE /api/programs/{name}", s.handleDeleteProgram)
 
@@ -627,6 +628,42 @@ func (s *Server) handleGetProgram(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
+// ProgramContent is one sub-content file's body, reshaped from the program
+// worker's load answer for the sub-content viewer.
+type ProgramContent struct {
+	Name string `json:"name"`
+	Body string `json:"body"`
+}
+
+// handleGetProgramContent returns one sub-content file's content by asking the
+// program worker's load tool for the given path — the same read the detail
+// endpoint uses for the entry body. path (a full abstract address like
+// "tasks/brief.md") arrives as a query param so it may contain slashes. The
+// worker owns the path's validity; a missing/unknown file surfaces as an error.
+func (s *Server) handleGetProgramContent(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	if !s.programWorkerOnline() {
+		http.Error(w, "program worker offline", http.StatusServiceUnavailable)
+		return
+	}
+	reply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeLoad}, map[string]any{"path": path})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	if msg := requestFailedErr(reply); msg != "" {
+		http.Error(w, msg, programErrStatus(msg))
+		return
+	}
+	body, _ := reply.Payload["result"].(string)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ProgramContent{Name: path, Body: body})
+}
+
 // handleUpdateProgram replaces a program's metadata and entry body via the
 // program worker's upsert (metadata) + write (entry body) tools. Locked
 // programs are refused by the worker.
@@ -792,8 +829,13 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 	// proxy disconnect the server never saw). Alive duration + the connect time
 	// let us match it to a browser-side "interrupted" console error.
 	started := time.Now()
+	var sentEvents, sentPings int
+	closedReason := "unknown"
 	defer func() {
-		log.Printf("[webui] SSE closed path=%s alive=%s", r.URL.Path, time.Since(started).Round(time.Second))
+		log.Printf(
+			"[webui] SSE closed path=%s alive=%s reason=%s events=%d pings=%d",
+			r.URL.Path, time.Since(started).Round(time.Second), closedReason, sentEvents, sentPings,
+		)
 	}()
 
 	// The stream now carries only events newer than `watermark`; history is
@@ -828,13 +870,33 @@ func (s *Server) serveSSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case evt, ok := <-ch:
 			if !ok {
+				// The event stream closed. A canceled request context means the
+				// client (or a proxy in front of it) went away; otherwise the
+				// event log itself ended (bus / project shutdown) and every
+				// browser on this stream reconnects at the same moment.
+				if r.Context().Err() != nil {
+					closedReason = "client_disconnected"
+				} else {
+					closedReason = "eventlog_ended"
+				}
 				return
 			}
+			sentEvents++
 			data, _ := json.Marshal(evt)
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			// A broken pipe surfaces as an error on the next write (http.Flusher
+			// has no error itself); that is how a client / proxy disconnect that
+			// the server never noticed shows up.
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+				closedReason = "write_failed"
+				return
+			}
 			flusher.Flush()
 		case <-heartbeat.C:
-			fmt.Fprint(w, ": ping\n\n")
+			sentPings++
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				closedReason = "write_failed"
+				return
+			}
 			flusher.Flush()
 		}
 	}
@@ -854,15 +916,15 @@ const inputMaxBytes = 32 << 20
 func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, inputMaxBytes)
 	var body struct {
-		Text      string `json:"text"`
-		Target    string `json:"target,omitempty"`
-		InputMode string `json:"input_mode,omitempty"`
+		Content   []map[string]any `json:"content"`
+		Target    string           `json:"target,omitempty"`
+		InputMode string           `json:"input_mode,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.hiw.SendInput(r.Context(), body.Text, body.Target, body.InputMode); err != nil {
+	if err := s.hiw.SendInput(r.Context(), body.Content, body.Target, body.InputMode); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1687,11 +1749,13 @@ func (s *Server) handleWorkerEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.hiw.SendEvent(r.Context(), event.EventType(body.Type), id, body.Payload); err != nil {
+	reqID, err := s.hiw.SendEvent(r.Context(), event.EventType(body.Type), id, body.Payload)
+	if err != nil {
 		http.Error(w, "send event: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"request_id": reqID})
 }
 
 // handleApprovals serves GET /api/approvals: the approval entries the HIW

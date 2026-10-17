@@ -1,10 +1,10 @@
 // The default reason worker's extension toolkit: the generic tools
-// (send_message / list_workers) and the context meta ops (compress / rotate).
+// (send_message / request) and the context meta ops (compress / rotate).
 // These are deliberately outside pkg/reason — they are the default worker's
 // own choice of tools, not part of the shared reasoning mechanism. They are
 // implemented entirely through the mechanism's exported accessors
-// (ReplyCompleted / ReplyFailed / DiscoveredWorkers / CurrentTraceID /
-// Transcript / TryReason / Channel), so nothing here reaches into unexported
+// (ReplyCompleted / ReplyFailed / CurrentTraceID / Transcript / TryReason /
+// Channel), so nothing here reaches into unexported
 // state. The
 // context.compress / context.rotate handlers are this worker's own context
 // strategy: they edit the transcript directly and book their own completion.
@@ -26,7 +26,7 @@ import (
 
 // registerDefaultExtensions registers the toolkit the generic reason worker
 // adds on top of the base extensions (provider.switch / provider.list /
-// provider.current): send_message, list_workers, context.compress,
+// provider.current): send_message, request, context.compress,
 // context.rotate. A reason-family worker that wants a different toolkit simply
 // does not call this. compactDirective is the program-provided summarizer
 // override (empty for the built-in fallback); it is owned by this worker, not
@@ -37,7 +37,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	}
 
 	w.Register(baseworker.Extension{
-		Event: TypeSendMessage,
+		Event: reasonBase.TypeMessage,
 		// SelfOnly: a worker's own addressed-messaging tool is not something
 		// peers should be able to call, so it is announced only to itself.
 		SelfOnly:    true,
@@ -52,8 +52,31 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	})
 
 	w.Register(baseworker.Extension{
+		Event: reasonBase.TypeRequest,
+		// SelfOnly: this is the worker's own directed-call escape hatch — peers
+		// call it here only indirectly (a peer reason invokes its own request).
+		// The actual forwarding is done in handleToolCalls (pkg/reason): the
+		// peer capability event goes out under THIS call's id, so no second
+		// placeholder is needed. This handler is defensive only (normally never
+		// reached).
+		SelfOnly:    true,
+		Description: "Invoke a capability on another worker without it being a listed tool: provide target (worker id), event (the capability event type, as shown by get_worker_info), and arguments. The call awaits the worker's request.completed and returns its result.",
+		Parameters: obj(map[string]any{
+			"target":    map[string]any{"type": "string", "description": "Target worker ID"},
+			"event":     map[string]any{"type": "string", "description": "Capability event type on the target worker"},
+			"arguments": map[string]any{"type": "object", "description": "Capability arguments"},
+		}),
+	}, func(evt event.Event) {
+		// Defensive: handleToolCalls pre-expands request into a real peer call,
+		// so this should not be dispatched. If it somehow is, fail loudly rather
+		// than leaving the call unresolved.
+		tc := baseworker.ParseToolCall(evt)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "request must be dispatched via the forward path", tc.TraceID)
+	})
+
+	w.Register(baseworker.Extension{
 		// The event type comes from the mechanism, so the emitter
-		// (emitContextCompress) and this handler cannot drift apart.
+		// (invokeContextCompress) and this handler cannot drift apart.
 		Event:       reasonBase.TypeContextCompress,
 		Description: "Compact your own context history: older messages are replaced by a summary, the most recent messages are kept.",
 		Parameters: obj(map[string]any{
@@ -64,16 +87,21 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		handleContextOp(w, evt, compactDirective)
 	})
 
-	w.Register(baseworker.Extension{
-		Event:       TypeContextRotate,
-		Description: "Rotate your context: summarize the current transcript as a carried digest and start a fresh context.",
-		Parameters: obj(map[string]any{
-			"carry": map[string]any{"type": "string",
-				"description": "Optional instruction for what to carry into the digest."},
-		}),
-	}, func(evt event.Event) {
-		handleContextOp(w, evt, compactDirective)
-	})
+	// context.rotate is TEMPORARILY DISABLED (backing off its design while the
+	// context strategy settles; the handler + TypeContextRotate stay for later
+	// re-enable). Re-register to expose the tool again.
+	/*
+		w.Register(baseworker.Extension{
+			Event:       TypeContextRotate,
+			Description: "Rotate your context: summarize the current transcript as a carried digest and start a fresh context.",
+			Parameters: obj(map[string]any{
+				"carry": map[string]any{"type": "string",
+					"description": "Optional instruction for what to carry into the digest."},
+			}),
+		}, func(evt event.Event) {
+			handleContextOp(w, evt, compactDirective)
+		})
+	*/
 
 	// Program management: query or mutate this worker's instruction/playbook
 	// list. Deliberately NOT SelfOnly — the list is meant to be edited by other
@@ -124,9 +152,16 @@ const TypeContextRotate event.EventType = "context.rotate"
 // deliberately live on the HOST worker, not here: a reason worker must not
 // treat peer reasons' ready events as callable tools, and the fleet roster is
 // the host's directory service.
+// TypeMessage / TypeRequest are the default worker's generated self tools:
+// message (fire-and-forget worker.input) and request (forward a peer capability
+// call and await its request.completed via the normal tracker).
 const (
-	TypeSendMessage event.EventType = "send_message"
+	TypeMessage event.EventType = reasonBase.TypeMessage
+	TypeRequest event.EventType = reasonBase.TypeRequest
 )
+
+// TypeProgramUpdate / TypeProgramAdd / TypeProgramRemove are the program
+// management tools (see the consts below the registerDefaultExtensions block).
 
 // TypeProgramQuery / TypeProgramUpdate are the program-management extensions:
 // read this worker's instruction/playbook list, or add/remove one entry. They

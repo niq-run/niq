@@ -80,7 +80,6 @@ export function isTalkPartnerType(type: string): boolean {
 export const RESPONSE_ONLY_TYPES = [
   'worker.input',
   'worker.abort',
-  'timer.reminder',
   'timer.timeout',
   'reason.response',
   'approval.request',
@@ -154,12 +153,21 @@ export interface ApprovalListResult {
 
 export type ViewMode = 'talk' | 'events' | 'approvals' | 'workers' | 'programs'
 
-// StagedAttachment is one attachment composed in the talk input, appended to
-// the input text as an <attachment> block on send. Images ride inline as
-// base64; files are uploaded first and referenced by path.
+// StagedAttachment is one attachment composed in the talk input. Images ride
+// inline as base64; files are uploaded first and referenced by path. On send
+// these become blocks of the structured worker.input "content" array.
 export type StagedAttachment =
   | { id: string; kind: 'image'; name: string; mime: string; data: string; size: number }
   | { id: string; kind: 'file'; name: string; path: string; size: number }
+
+// InputContent is one block of the structured worker.input "content" array —
+// the llm-like shape HIW sends instead of the legacy <attachment> text
+// envelope. Text, image (base64) and file (path on disk) are the kinds the
+// reason input converter understands.
+export type InputContent =
+  | { type: 'text'; text: string }
+  | { type: 'image'; name?: string; mime?: string; data: string; size?: number }
+  | { type: 'file'; name?: string; path: string; size?: number }
 
 // ViewSettings are the talk/events view preference toggles, persisted to
 // localStorage across sessions.
@@ -211,6 +219,13 @@ export interface ProgramDetail {
   locked?: boolean
   body: string
   contents?: string[]
+}
+
+// ProgramContent is one sub-content file's body, as served by
+// GET /api/programs/{name}/content?path=….
+export interface ProgramContent {
+  name: string
+  body: string
 }
 
 // ProjectStartResult is what {id}/start returns so the UI can redirect. The UI

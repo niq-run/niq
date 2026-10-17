@@ -34,11 +34,9 @@ Division between the loop and dispatch:
 | File | Responsibility |
 |---|---|
 | `worker.go` | `BaseReasonWorker` — the generic reasoning body (embeds `baseworker.BaseWorker`) + `Config` + `NewBaseReasonWorker` + lifecycle (`Start`/`Stop`/`Snapshot`/`Restore`/`Messages`) + the event loop (`watch`) + the `tryReason` decision gate + the exported accessors the concrete worker builds on (`Transcript`, `TryReason`, `LLMToolDefs`, ...) |
-| `reason.go` | the reasoning round: prepareReasoning / consumeStream / finishReasoning + lifecycle broadcasts (reason.start/end/response/thinking) + tool dispatch handleToolCalls + `handleContextBudget` (context-window pressure) + tool-call id synthesis |
-| `process.go` | event dispatch `process` + handlers (abort/timeout/reminder/tool-result/input) + `emitContextCompress` and the `ContextCompressOpEvent` convention it fires |
-| `discovery.go` | **inbound** presence: `worker.ready`/`worker.gone` handling, the `DiscoveredCapability` universe, `DiscoveredWorkers` (payload behind `list_workers`), the dispatch table derived from it, tool-name encoding |
-| `announce.go` | **outbound** presence: `broadcastReady` (two-batch: peers then self) + rendering the `worker.ready` contract entries (`extensionEntries` / `extensionEntry`) |
-| `tools.go` | the LLM-facing tool surface: `ToolListBuilder` policy (what the model sees, own + peer tool naming) + `extensionToolName` / `extensionByToolName` (own extension ⇄ LLM tool name bridge) + `sendToolRequests` (putting the model's calls on the bus) |
+| `reason.go` | the reasoning round: prepareReasoning / consumeStream / finishReasoning + the worker's own event-type constants (lifecycle `reason.*` broadcasts + the generated self tools `message` / `request`) + tool dispatch handleToolCalls + `handleContextBudget` (context-window pressure) + tool-call id synthesis |
+| `process.go` | event dispatch `process` + handlers (abort/timeout/tool-result/input) + the event→transcript-input conversion (`DefaultConverter` / `ConvertInputEvent` / `resultOutcome`) |
+| `capability.go` | **capability**, both directions plus its applications. Inbound `worker.ready` / `worker.gone` handling + the `DiscoveredCapability` universe; outbound `BroadcastReady` (two-batch: peers then self) / `BroadcastDiscover` (via `WatchEntries`); resolution over the universe — `toolNameOfCapability` / `capabilityByToolName` / `capabilityBySourceEvent` / `findProvider` / `isRequestCap`; the convention capabilities the mechanism itself invokes — the `invokeCapability` primitive with `invokeContextCompress` (self) / `invokeElapseReminder` (peer) and their names; and applying the universe to the LLM — `ToolListBuilder` / `LLMToolDefs` (what the model sees) |
 | `provider.go` | provider management, exposed through the extension mechanism: `ProviderSources` / `ProviderInfo` + `registerBaseExtensions` (provider.switch/list/current) + `setActiveProvider` / `resolveContextWindow` |
 | `llmerror.go` | LLM error policy: context overflow → compression request, rate limit → backoff reminder, 4xx → fail, else retry |
 | `systemprompt.go` | renders the system prompt from programs |
@@ -53,9 +51,10 @@ Self-contained sub-domains extracted as subpackages:
 Note on vocabulary: a tool call has two names. On the **LLM side** the
 transcript holds tool calls (`ToolPlaceholdersPatch`, `ToolResultPatch`, ...).
 On the **bus side** this worker sends an invocation event under the
-capability's own event type, tracked by `RequestTracker`. Discovery is
-likewise split by direction: `discovery.go` learns others' contracts,
-`announce.go` declares this worker's own.
+capability's own event type, tracked by `RequestTracker`. Capability handling
+lives in one place: `capability.go` holds both directions — learning others'
+contracts and declaring this worker's own — the resolution over them, and the
+two ways the universe is applied (the LLM tool list and bus invocations).
 
 The shared base every built-in worker embeds — `BaseWorker` (identity,
 subscriptions, tool-request replies, arg helpers) plus the generic `Extension`
@@ -65,14 +64,14 @@ registry (`Register` / `DispatchExtension` / `Extensions`) — lives in
 
 Vocabulary split by perspective: **`Extension`** (core/impl/baseworker) is the
 declaration side — how a worker extends itself, "what it responds to and how".
-**`DiscoveredCapability`** (this package, discovery.go) is the observation
+**`DiscoveredCapability`** (this package, capability.go) is the observation
 side — what other workers offer on the bus, as learned from worker.ready.
 The same fact, two names: extension is the mechanism, capability is the
 interface. The wire format bridges them and is unchanged.
 
-The generic tools (`send_message`, `list_workers`) and the context meta ops
-(`context.compress`, `context.rotate`) are **not** here — they are the default
-reason worker's own toolkit (`core/impl/workers/reason`). The mechanism only declares
+The generic tools (`send_message`, `request`) and the context meta op
+(`context.compress`) are **not** here — they are the default reason worker's own
+toolkit (`core/impl/workers/reason`). The mechanism only declares
 the `context.compress` convention and fires it under window pressure; shrinking
 the transcript is the worker's strategy.
 
@@ -113,19 +112,17 @@ Other events are dispatched by `process`:
 | worker.discover | reply worker.ready | no |
 | worker.abort | park + recall + record | no |
 | timer.timeout | park leftover tools (cause=timeout) + schedule | yes |
-| timer.reminder | treat as input (schedule level) | yes |
 | worker.ready/gone | learn/forget the worker's tools | no |
 | request.completed/failed/rejected | resolve or park-late + update transcript | when resolved |
-| capability event (e.g. send_message, context.compress, provider.*) | dispatch to the registered extension (SelfOnly calls arrive addressed to self) | no |
-| context.compress / provider.* (meta events) | run the registered meta extension asynchronously | when done |
-| worker.input | handle per the three input_mode levels | depends on level |
+| capability event (send_message, context.compress, provider.*, ...) | dispatch to the registered extension by event type (own SelfOnly events arrive addressed to self); an async meta op schedules a round when done | no (meta op: when done) |
+| worker.input | handle per the three input_mode levels (a reminder timer's fire is delivered here too) | depends on level |
 
 ### Tools, extensions and the request-response convention
 
 A reason worker serves tools through the extension registry (core/impl/baseworker):
 each registered extension declares the event it responds to and the handler
 that serves it. The LLM-facing tool list is the builder's view over the
-discovered capability universe (core/impl/reason/discovery.go) — own and peer tools
+discovered capability universe (core/impl/reason/capability.go) — own and peer tools
 alike, named `provider__name` for peers. Each capability is invoked under its
 own event type (the old `tool.request` dispatch event is retired); invoking
 any capability is answered with the one request-response convention:
@@ -134,7 +131,7 @@ echoing the request's `RequestId` (empty id = notification, no reply).
 
 A meta extension (context.compress, provider.switch, ...) is a direct edit of
 this worker's own state — it is registered with its **own event type**, not
-multiplexed inside `worker.update`. When the LLM calls one, `handleToolCalls`
+multiplexed into a single shared update event. When the LLM calls one, `handleToolCalls`
 reroutes it into that event type sent to self (e.g. `context.compress`), on
 the same auditable bus path as every other invocation. The completion echoes
 the request's id via the same `request.*` convention. The system-side
@@ -155,7 +152,7 @@ the transcript (transcript.go); the worker translates its lifecycle into sealed
 `RequestTracker` (core/impl/reason/requesttracker) records only requests still being awaited:
 - **Pending** — active, the reasoner is still waiting.
 - **Parked** — no longer awaited, kept in case a late result arrives
-  (`ParkCause` distinguishes input/timeout/abort/reminder/restart).
+  (`ParkCause` distinguishes input/timeout/abort/restart).
 
 Persistence: the tracker rides along in every snapshot (`Snapshot` captures the
 transcript and the tracker together — a `[pending]` placeholder is never
@@ -179,19 +176,20 @@ After each streamed round the worker records usage from `Usage` (latest
 Input+Output snapshot, never accumulated) and compares it against
 `ContextWindow`:
 
-All three triggers funnel into one auditable path: each issues a `worker.update`
-meta request to itself (a meta operation on this worker's own state), so
-compaction is always reachable through the same bus event — never a bespoke
-side channel.
+All three triggers funnel into one auditable path: each emits the
+`context.compress` convention event to this worker (a meta operation on its own
+state, registered under its own event type — never multiplexed into a single
+shared update event), so compaction is always reachable through the same bus
+event — never a bespoke side channel.
 
 - ≥ soft line (0.85) → the system injects a reminder; the LLM decides and calls
-  `context.compress`, which is rerouted to a `worker.update{op:compress}`.
-- ≥ hard line (0.97) → the system triggers compaction itself
-  (`worker.update{op:compress}`), without waiting for the LLM.
+  `context.compress`.
+- ≥ hard line (0.97) → the system emits `context.compress` itself, without
+  waiting for the LLM.
 - opening the stream hits `ErrorContextLength` → the round ends (a non-retriable
-  error: retrying cannot shrink an over-length context); a
-  `worker.update{op:compress}` request is issued, compaction completes
-  asynchronously, and the next round starts on the shrunk context.
+  error: retrying cannot shrink an over-length context); `context.compress` is
+  emitted, compaction completes asynchronously, and the next round starts on the
+  shrunk context.
 
 Compaction = snapshot via `BeginEdit` → summarize the projected transcript →
 `CommitEdit(digest, tailTokens)`. The summarizer prompt is overridable via
@@ -204,18 +202,15 @@ call and its results are never split. Because the transcript is
 self-synchronized, compaction runs on its own goroutine: the summary is
 computed without holding any lock, and inputs arriving meanwhile are buffered
 and merged on commit, so the event loop never blocks.
-`context.rotate` turns the page differently: it keeps only the most recent
-`rotate_rounds` user/assistant rounds and discards tool messages (the fresh
-episode reads as a few clean exchanges after the digest instead of tool
-traffic).
 
 ### Tool-call timeout
 
-reason recognizes the timeout tool by a bare-name contract: if any worker
-provides a tool whose bare name is `set_tool_timeout`, reason treats it as
-this round's tool-call timeout (provider-agnostic — the timer worker need not
-be named "timer"). If no such tool exists the feature is disabled. It records
-`activeTimeoutProvider` at set time and cancels that provider on completion.
+reason recognizes the timeout tool by a bare-name contract: if any peer provides
+a capability whose bare name is `timeout`, reason treats it as this round's
+tool-call timeout (provider-agnostic — the timer worker need not be named
+"timer"). If no such capability exists the feature is disabled. The provider is
+resolved from the discovered universe, recorded as `activeTimeoutProvider` at
+set time, and cancelled on completion (or acted on when the timeout fires).
 
 ### Abort recall
 

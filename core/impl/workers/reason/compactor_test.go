@@ -360,7 +360,7 @@ func TestMetaCompressRecordsToolPair(t *testing.T) {
 	// then the input that triggers the reasoning round.
 	ch.in <- event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
-		"watch":     w.ExtensionEntries(),
+		"watch":     w.WatchEntries(true),
 	})
 	ch.in <- event.New(event.TypeWorkerInput, "webui-hiw", map[string]any{"text": "compact please", "input_mode": "default"})
 

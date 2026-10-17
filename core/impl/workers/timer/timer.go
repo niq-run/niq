@@ -36,12 +36,11 @@ func (s timerSpec) delay() time.Duration {
 	return 0
 }
 
-func (s timerSpec) eventType() event.EventType {
-	// Interval timers are reminders: they gently wake the caller on a cadence.
-	if s.TickType == "reminder" || s.TickType == "interval" {
-		return event.EventType("timer.reminder")
-	}
-	return event.EventType("timer.timeout")
+// reminder reports whether this timer is a reminder — a gentle wake-up the
+// caller receives as an input — rather than a tool-call timeout, a preemptive
+// signal the caller handles specially.
+func (s timerSpec) reminder() bool {
+	return s.TickType == "reminder" || s.TickType == "interval"
 }
 
 // intervalOrNil renders the interval as a JSON number when recurring, or nil so
@@ -66,30 +65,18 @@ func (e *Entry) Stop() bool {
 	return e.t.Stop()
 }
 
-// schedule arms a timer to publish the appropriate timer.timeout /
-// timer.reminder event when it fires. onFire, if non-nil, is invoked on the
-// timer's goroutine after the event is sent so the caller can drop the entry
-// from its index and signal persistence.
+// schedule arms a timer to fire the appropriate event when it elapses (see
+// fireEvent). onFire, if non-nil, is invoked on the timer's goroutine after
+// the event is sent so the caller can drop the entry from its index and signal
+// persistence.
 func schedule(
 	workerID string,
 	bus corebus.WorkerSideChannel,
 	spec timerSpec,
 	onFire func(timerSpec),
 ) *Entry {
-	result, _ := json.Marshal(map[string]any{
-		"tick_type":   spec.TickType,
-		"purpose":     spec.Purpose,
-		"duration_ms": spec.DurationMs,
-		"fire_at":     spec.FireAt.Format(time.RFC3339),
-		"interval_ms": intervalOrNil(spec.IntervalMs),
-	})
-
 	t := time.AfterFunc(spec.delay(), func() {
-		evt := event.New(spec.eventType(), workerID, map[string]any{
-			"timer_id":  spec.ID,
-			"caller_id": spec.CallerID,
-			"result":    string(result),
-		})
+		evt := fireEvent(workerID, spec)
 		evt.TraceID = spec.TraceID
 		_ = bus.Send(context.Background(), evt, spec.CallerID)
 		if onFire != nil {
@@ -98,4 +85,32 @@ func schedule(
 	})
 
 	return &Entry{t: t, spec: spec}
+}
+
+// fireEvent builds the event a firing timer delivers to its caller. A reminder
+// is a gentle wake-up, delivered as a worker.input (the caller's generic input)
+// carrying the purpose as text; a tool-call timeout is a preemptive signal,
+// delivered as timer.timeout with the timer id and the structured result.
+func fireEvent(workerID string, spec timerSpec) event.Event {
+	if spec.reminder() {
+		text := spec.Purpose
+		if text == "" {
+			text = "[reminder]"
+		}
+		return event.New(event.TypeWorkerInput, workerID, map[string]any{
+			"text": text,
+		})
+	}
+	result, _ := json.Marshal(map[string]any{
+		"tick_type":   spec.TickType,
+		"purpose":     spec.Purpose,
+		"duration_ms": spec.DurationMs,
+		"fire_at":     spec.FireAt.Format(time.RFC3339),
+		"interval_ms": intervalOrNil(spec.IntervalMs),
+	})
+	return event.New(event.EventType("timer.timeout"), workerID, map[string]any{
+		"timer_id":  spec.ID,
+		"caller_id": spec.CallerID,
+		"result":    string(result),
+	})
 }

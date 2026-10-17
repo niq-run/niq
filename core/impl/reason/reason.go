@@ -5,6 +5,7 @@ package reason
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -70,20 +71,28 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	w.activeTimeoutProvider = ""
 
 	// Park any pending tools from the previous reasoning before taking the
-	// snapshot, so the LLM sees the parked context. The cause is taken
-	// from immediateReasoningCause if set, otherwise falls back to Input.
+	// snapshot, so the LLM sees the parked context. The cause is taken from
+	// immediateReasoningCause if set; otherwise it is the NEUTRAL superseded
+	// cause — never Input, which would falsely tell the model the user typed.
 	cause := w.immediateReasoningCause
 	if cause == "" {
-		cause = requesttracker.PreemptCauseInput
+		cause = requesttracker.PreemptCauseSuperseded
 	}
 	w.immediateReasoningCause = ""
 	w.parkPending(cause)
 
 	traceID = w.currentTraceID
 	tools := w.LLMToolDefs()
+	msgs := w.transcript.Render()
+	if !w.modelSupportsImages() {
+		// A text-only model cannot ingest image content blocks; downgrade them to
+		// a textual hint before handing the messages to the provider (the
+		// transcript itself is untouched — this is a send-time copy).
+		msgs = sanitizeImages(msgs)
+	}
 	c := &llm.Context{
 		SystemPrompt:    w.buildInstruction(),
-		Messages:        w.transcript.Render(),
+		Messages:        msgs,
 		Tools:           tools,
 		ReasoningEffort: w.reasoningEffort,
 	}
@@ -94,6 +103,88 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	w.mu.Unlock()
 
 	return traceID, req
+}
+
+// modelSupportsImages reports whether the currently selected provider/model is
+// expected to accept image content blocks. It is the runtime gate that decides
+// whether image blocks are sanitized before a round is sent.
+//
+// Known modalities come from the provider sources' per-model InputTypes (the
+// source of truth mirrors resolveContextWindow). When the selected model
+// reports no modalities (an empty or unknown list), it defaults to true: better
+// to send the image and let a capable model see it than to silently drop it,
+// and a provider error on a genuinely text-only model is caught by normal error
+// handling. Only an explicit modality list that excludes image turns the gate off.
+func (w *BaseReasonWorker) modelSupportsImages() bool {
+	if w.providerSources == nil {
+		return true
+	}
+	model := w.providerModel
+	for _, info := range w.providerSources.List() {
+		if info.Name != w.providerName {
+			continue
+		}
+		if model == "" {
+			model = info.Default
+		}
+		for _, m := range info.ModelDetails {
+			if m.ID != model {
+				continue
+			}
+			if len(m.InputTypes) == 0 {
+				return true // unknown -> assume image-capable
+			}
+			for _, in := range m.InputTypes {
+				if isImageInputType(in) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return true
+}
+
+// isImageInputType reports whether a modality token describes image input.
+func isImageInputType(t string) bool {
+	switch t {
+	case "image", "image_input", "image_url", "vision", "multimodal":
+		return true
+	}
+	return false
+}
+
+// sanitizeImages returns a copy of messages with every image content block
+// replaced by a textual hint, so a text-only model still learns what was
+// attempted without receiving bytes it cannot consume. Text / thinking / tool
+// blocks pass through unchanged. It never mutates the input slice.
+func sanitizeImages(msgs []llm.Message) []llm.Message {
+	out := make([]llm.Message, 0, len(msgs))
+	for _, m := range msgs {
+		needCopy := false
+		for _, b := range m.Content {
+			if b.Type == llm.ContentImage {
+				needCopy = true
+				break
+			}
+		}
+		if !needCopy {
+			out = append(out, m)
+			continue
+		}
+		newContent := make([]llm.ContentBlock, len(m.Content))
+		for i, b := range m.Content {
+			if b.Type == llm.ContentImage {
+				newContent[i] = llm.ContentBlock{Type: llm.ContentText,
+					Text: "[image omitted: the active model does not support image inputs]"}
+				continue
+			}
+			newContent[i] = b
+		}
+		m.Content = newContent
+		out = append(out, m)
+	}
+	return out
 }
 
 // openStream starts the LLM stream, retrying on transient errors. Error
@@ -276,7 +367,7 @@ func (w *BaseReasonWorker) handleStreamStartError(ctx context.Context, reasonCtx
 
 	if errors.Is(err, errRateLimitBackoff) {
 		// A retry reminder is already scheduled; end the round quietly. The
-		// timer.reminder triggers the next attempt — no tryReason here.
+		// reminder (a worker.input) triggers the next attempt — no tryReason here.
 		w.broadcastReasonEnd(traceID, StopReasonRateLimited)
 		w.isReasoning = false
 		w.mu.Unlock()
@@ -310,7 +401,7 @@ func (w *BaseReasonWorker) finishInterrupted(ctx context.Context, traceID string
 	}
 	preserved := out.partialThinking + out.partialText
 	log.Printf("[reason %s] reasoning interrupted (cause=%s, preserved=%d chars)", w.ID(), cause, len(preserved))
-	evt := event.New("reason.interrupted", w.ID(), map[string]any{
+	evt := event.New(TypeReasonInterrupted, w.ID(), map[string]any{
 		"reason":          string(cause),
 		"preserved_chars": len(preserved),
 		"preserved_text":  preserved,
@@ -455,7 +546,7 @@ func (w *BaseReasonWorker) handleContextBudget(ctx context.Context, msg llm.Mess
 		log.Printf("[reason %s] context hard budget %.0f%% (%d/%d tokens) - requesting compress",
 			w.ID(), ratio*100, w.lastUsageTokens, w.contextWindow)
 		w.budgetReminded = false
-		w.emitContextCompress(ctx)
+		w.invokeContextCompress(ctx)
 	case ratio >= w.budgetSoft && !w.budgetReminded:
 		// Guided exit: one reminder per crossing; the LLM decides. It is applied
 		// as the LAST transcript write of the round: finishReasoning inserts the
@@ -501,31 +592,20 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	// worker for own capabilities) like any other. The tool-call id rides along
 	// as RequestId so the handler's request.* echo pairs with it.
 
-	// Record the current round's single timeout timer, if any. At most one
-	// is meaningful - the first timer to fire parks all pending tools; a
-	// second timeout in the same round is treated as a misplaced
-	// config and overwrites the first (leak accepted). Only record if a
-	// provider actually offers the timeout tool.
-	for _, tc := range busCalls {
-		if t, ok := w.timeoutToolFor(tc.ToolName); ok {
-			w.activeTimeout = tc.ToolCallID
-			w.activeTimeoutProvider = t.Provider
-		}
-	}
-
 	// NOTE: tool placeholders are inserted in finishReasoning BEFORE the budget
 	// check (so the inline soft-budget reminder never interleaves the assistant
 	// tool_call with its result). handleToolCalls only dispatches; it does not
 	// (re)apply placeholders here.
 
-	// Group tool calls by owning worker, then publish each call as its own
-	// event type to that worker. The owning worker is the discovered cap's
-	// Source — this worker for own tools (loop back to self), the declaring
-	// peer otherwise. Unknown tools (not discovered, e.g. hallucinated by the
-	// LLM) are failed immediately instead of broadcast — broadcasting
-	// confuses other workers that subscribe to those events.
-	callsByTarget := make(map[string][]llm.ContentBlock)
+	// Resolve each call to its owning capability and dispatch it under that
+	// capability's own event type to its owner — the cap's Source (this worker
+	// for own tools, so they loop back to self; the declaring peer otherwise).
+	// Each call is registered with the tracker before it is sent, so its result
+	// always pairs back. Unknown tools (not discovered, e.g. hallucinated by the
+	// LLM) are failed immediately instead of broadcast — broadcasting confuses
+	// other workers that subscribe to those events.
 	var unavailable []string
+	dispatched := 0
 	for _, tc := range busCalls {
 		cap, ok := w.capabilityByToolName(tc.ToolName)
 		if !ok {
@@ -534,22 +614,79 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 			w.transcript.Apply(transcript.ToolResultPatch{
 				CallID: tc.ToolCallID,
 				Name:   tc.ToolName,
-				Text:   "Unknown tool '" + tc.ToolName + "': tool not available - not dispatched.",
-				IsErr:  true,
+				Content: []llm.ContentBlock{{Type: llm.ContentText,
+					Text: "Unknown tool '" + tc.ToolName + "': tool not available - not dispatched."}},
+				IsErr: true,
 			})
 			continue
 		}
-		callsByTarget[cap.Source] = append(callsByTarget[cap.Source], tc)
-	}
-	for target, calls := range callsByTarget {
-		w.requestTracker.Add(target, calls)
-		w.sendToolRequests(target, w.ID(), calls, traceID)
+		// Record the round's timeout timer if this call is the timeout
+		// capability (bare event "timeout", provider-agnostic). At most one is
+		// meaningful: the first timer to fire parks all pending tools; a second
+		// one in the same round overwrites the first (leak accepted).
+		if cap.Source != w.ID() && string(cap.Event) == timeoutTool {
+			w.activeTimeout = tc.ToolCallID
+			w.activeTimeoutProvider = cap.Source
+		}
+		// The worker's own "request" escape hatch: the model named a peer
+		// capability (target + event + arguments) instead of the tool being in
+		// the API list. Reuse the request call's own id as the forwarded
+		// invocation's RequestId, so the peer's request.completed resolves the
+		// model's request placeholder through the normal tracker — no extra tool
+		// is ever added to the list (stable LLMToolDefs → cache-friendly).
+		if w.isRequestCap(cap) {
+			reqArgs := map[string]any{}
+			if tc.ToolArguments != "" {
+				if err := json.Unmarshal([]byte(tc.ToolArguments), &reqArgs); err != nil {
+					w.transcript.Apply(transcript.ToolResultPatch{
+						CallID: tc.ToolCallID, Name: tc.ToolName,
+						Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "request: bad arguments: " + err.Error()}},
+						IsErr:   true,
+					})
+					continue
+				}
+			}
+			target, _ := reqArgs["target"].(string)
+			eventType, _ := reqArgs["event"].(string)
+			args, _ := reqArgs["arguments"].(map[string]any)
+			if args == nil {
+				args = map[string]any{}
+			}
+			pcap, ok2 := w.capabilityBySourceEvent(target, eventType)
+			if !ok2 {
+				log.Printf("[reason %s] request: unknown capability %s/%s", w.ID(), target, eventType)
+				unavailable = append(unavailable, fmt.Sprintf("%s(%s/%s)", tc.ToolName, target, eventType))
+				w.transcript.Apply(transcript.ToolResultPatch{
+					CallID: tc.ToolCallID, Name: tc.ToolName,
+					Content: []llm.ContentBlock{{Type: llm.ContentText,
+						Text: fmt.Sprintf("unknown capability %s/%s - not dispatched.", target, eventType)}},
+					IsErr: true,
+				})
+				continue
+			}
+			// Track the request call under its own id so the peer's reply pairs
+			// with the model's request placeholder; the id is ALSO the RequestId
+			// we send to the peer, so no second placeholder is needed.
+			w.requestTracker.Add(pcap.Source, []llm.ContentBlock{{
+				Type: llm.ContentToolCall, ToolCallID: tc.ToolCallID, ToolName: tc.ToolName,
+			}})
+			w.invokeCapability(context.Background(), pcap.Event, pcap.Source, args, tc.ToolCallID, traceID)
+			dispatched++ // a request-routed call is dispatched too (never enters callsByTarget)
+			continue
+		}
+		argsMap := map[string]any{}
+		if tc.ToolArguments != "" {
+			_ = json.Unmarshal([]byte(tc.ToolArguments), &argsMap)
+		}
+		w.requestTracker.Add(cap.Source, []llm.ContentBlock{tc})
+		w.invokeCapability(context.Background(), cap.Event, cap.Source, argsMap, tc.ToolCallID, traceID)
+		dispatched++
 	}
 	if len(unavailable) > 0 {
 		// Surface the fact that some tool calls could not be dispatched, so
 		// the user sees it in the stream instead of a silent stall.
 		log.Printf("[reason %s] unavailable tool call(s): %s", w.ID(), strings.Join(unavailable, ", "))
-		evt := event.New("reason.response", w.ID(), map[string]any{
+		evt := event.New(TypeReasonResponse, w.ID(), map[string]any{
 			"content":     []any{fmt.Sprintf("tool call unavailable: %s", strings.Join(unavailable, ", "))},
 			"stop_reason": "tool_unavailable",
 		})
@@ -561,10 +698,13 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 	// will ever arrive to schedule the next round — the worker would stall
 	// right after surfacing the "tool unavailable" error. Request a follow-up
 	// round here so the LLM can react (reach for a real tool or tell the user
-	// it cannot). When anything WAS dispatched, the peer's result resolves the
-	// tracker and sets needReason on its own; forcing one here would interrupt
-	// those in-flight tools.
-	if len(callsByTarget) == 0 {
+	// it cannot). When anything WAS dispatched — including a request-routed
+	// call — the peer's result resolves the tracker and sets needReason on its
+	// own; forcing one here would interrupt those in-flight tools. The forced
+	// round carries its own cause so a leftover wait it parks is framed
+	// neutrally, never as a user input.
+	if dispatched == 0 {
+		w.immediateReasoningCause = requesttracker.PreemptCauseNoDispatch
 		w.needReason = true
 	}
 	w.isReasoning = false
@@ -591,7 +731,7 @@ func (w *BaseReasonWorker) broadcastResponse(msg llm.Message, traceID string) {
 	if u := usageMeta(msg, w.contextWindow); u != nil {
 		payload["meta"] = map[string]any{"usage": u}
 	}
-	evt := event.New("reason.response", w.ID(), payload)
+	evt := event.New(TypeReasonResponse, w.ID(), payload)
 	evt.TraceID = traceID
 	_ = w.Channel.Broadcast(context.Background(), evt)
 	log.Printf("[reason %s] published reason.response, text_count=%d", w.ID(), len(texts))
@@ -624,8 +764,29 @@ func usageMeta(msg llm.Message, contextWindow int) map[string]any {
 	return meta
 }
 
+// This worker's own event types — its lifecycle and streaming broadcasts, plus
+// the "generated" self tools it answers to:
+//
+//	message — fire-and-forget worker.input to a peer (no result, no tracker);
+//	request — forward a peer capability call and await its request.completed
+//	          via the normal tracker (the peer's reply resolves this call's id).
+//
+// (The timer/convention contract lives in capability.go.)
+const (
+	TypeReasonStart         event.EventType = "reason.start"
+	TypeReasonEnd           event.EventType = "reason.end"
+	TypeReasonResponse      event.EventType = "reason.response"
+	TypeReasonThinking      event.EventType = "reason.thinking"
+	TypeReasonThinkingDelta event.EventType = "reason.thinking_delta"
+	TypeReasonTextDelta     event.EventType = "reason.text_delta"
+	TypeReasonInterrupted   event.EventType = "reason.interrupted"
+
+	TypeMessage event.EventType = "message"
+	TypeRequest event.EventType = "request"
+)
+
 func (w *BaseReasonWorker) broadcastReasonStart(traceID string) {
-	evt := event.New("reason.start", w.ID(), map[string]any{
+	evt := event.New(TypeReasonStart, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 	})
 	evt.TraceID = traceID
@@ -644,7 +805,7 @@ const (
 )
 
 func (w *BaseReasonWorker) broadcastReasonEnd(traceID string, stopReason StopReason) {
-	evt := event.New("reason.end", w.ID(), map[string]any{
+	evt := event.New(TypeReasonEnd, w.ID(), map[string]any{
 		"worker_id":   w.ID(),
 		"stop_reason": string(stopReason),
 	})
@@ -658,7 +819,7 @@ func (w *BaseReasonWorker) broadcastThinking(blocks []llm.ContentBlock, traceID 
 	for _, b := range blocks {
 		texts = append(texts, b.Text)
 	}
-	evt := event.New("reason.thinking", w.ID(), map[string]any{
+	evt := event.New(TypeReasonThinking, w.ID(), map[string]any{
 		"content": texts,
 	})
 	evt.TraceID = traceID
@@ -666,7 +827,7 @@ func (w *BaseReasonWorker) broadcastThinking(blocks []llm.ContentBlock, traceID 
 }
 
 func (w *BaseReasonWorker) broadcastThinkingDelta(text, traceID string) {
-	evt := event.New("reason.thinking_delta", w.ID(), map[string]any{
+	evt := event.New(TypeReasonThinkingDelta, w.ID(), map[string]any{
 		"delta": text,
 	})
 	evt.TraceID = traceID
@@ -675,7 +836,7 @@ func (w *BaseReasonWorker) broadcastThinkingDelta(text, traceID string) {
 }
 
 func (w *BaseReasonWorker) broadcastTextDelta(text, traceID string) {
-	evt := event.New("reason.text_delta", w.ID(), map[string]any{
+	evt := event.New(TypeReasonTextDelta, w.ID(), map[string]any{
 		"delta": text,
 	})
 	evt.TraceID = traceID
@@ -687,7 +848,7 @@ func (w *BaseReasonWorker) broadcastTextDelta(text, traceID string) {
 // round. Expects w.mu to be held; unlocks it and calls tryReason before returning.
 func (w *BaseReasonWorker) broadcastErrorAndEnd(ctx context.Context, traceID string, err error) {
 	log.Printf("[reason %s] LLM error: %v", w.ID(), err)
-	errEvt := event.New("reason.response", w.ID(), map[string]any{
+	errEvt := event.New(TypeReasonResponse, w.ID(), map[string]any{
 		"content":     []any{fmt.Sprintf("Error: %v", err)},
 		"stop_reason": "error",
 	})

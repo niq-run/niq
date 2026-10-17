@@ -8,7 +8,7 @@
 //
 // The policy dispatcher is decideLLMError, called from openStream's retry
 // loop. Both recovery actions are event-driven through the bus
-// (worker.update for compression, an elapse→timer.reminder for
+// (context.compress for compression, an elapse→worker.input for
 // rate limits) so they stay auditable and never block the reason goroutine
 // with a synchronous sleep.
 package reason
@@ -20,9 +20,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/impl/reason/transcript"
+	"github.com/niq-run/niq/core/itfs/llm"
 )
 
 // decideLLMError classifies a failed LLM call and returns whether to retry it
@@ -43,7 +42,7 @@ func (w *BaseReasonWorker) decideLLMError(reasonCtx context.Context, traceID str
 		// path), and return a non-retriable error so this round ends; the
 		// worker responds by shrinking its transcript and scheduling the next
 		// round itself.
-		w.emitContextCompress(reasonCtx)
+		w.invokeContextCompress(reasonCtx)
 		return false, callErr
 	case llm.ErrorRateLimit:
 		// Decide here, at 429 detection time, whether more retries remain: if
@@ -109,26 +108,13 @@ func (w *BaseReasonWorker) scheduleRateLimitBackoff(traceID string, callErr erro
 
 	log.Printf("[reason %s] rate limited (%d/%d), retrying in %s",
 		w.ID(), attempt, maxRateLimitRetries, rateLimitBackoffDuration)
-	w.dispatchElapseReminder(traceID, attempt)
-	return errRateLimitBackoff
-}
-
-// dispatchElapseReminder asks the timer worker to fire a reminder after the
-// backoff duration, routed through the bus so the retry is auditable. The
-// 429 itself was already recorded in the transcript by
-// scheduleRateLimitBackoff, so the reminder only needs to wake the round up.
-func (w *BaseReasonWorker) dispatchElapseReminder(traceID string, attempt int) {
+	// Ask the reminder capability (elapse) to wake the round after the backoff;
+	// the 429 itself is already in the transcript.
 	callID := fmt.Sprintf("niq_rl_%d_%d", time.Now().UnixNano(), attempt)
-	evt := event.New("elapse", w.ID(), map[string]any{
-		"duration_ms": rateLimitBackoffDuration.Milliseconds(),
-		"purpose": fmt.Sprintf("API rate limit (HTTP 429) hit; retrying after %s, attempt %d/%d",
-			rateLimitBackoffDuration, attempt, maxRateLimitRetries),
-	})
-	evt.RequestId = callID
-	evt.TraceID = traceID
-	if err := w.Channel.Send(context.Background(), evt, "timer"); err != nil {
-		log.Printf("[reason %s] failed to schedule rate-limit retry reminder: %v", w.ID(), err)
-	}
+	w.invokeElapseReminder(rateLimitBackoffDuration.Milliseconds(),
+		fmt.Sprintf("API rate limit (HTTP 429) hit; retrying after %s, attempt %d/%d",
+			rateLimitBackoffDuration, attempt, maxRateLimitRetries), callID, traceID)
+	return errRateLimitBackoff
 }
 
 // resetRateLimitBackoff clears the rate-limit retry state after a successful

@@ -2,6 +2,7 @@ package reason
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -70,6 +71,153 @@ func TestHandleToolCallsDispatches(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected a bash event to workspace with RequestId c1")
+	}
+}
+
+// TestRequestToolForwards verifies the self "request" tool forwards a model-led
+// (target, event, arguments) call as the peer capability event, reusing the
+// request call's own id as the RequestId so the peer reply resolves it. The
+// peer capability never enters the tool list.
+func TestRequestToolForwards(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+	// Announce this worker's own "request" tool and a peer workspace's "bash".
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "r1", map[string]any{
+		"watch": []map[string]any{{"event": "request", "desc": "forward a call"}},
+	}))
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "workspace", map[string]any{
+		"watch": []map[string]any{{"event": "bash", "desc": "Run a command"}},
+	}))
+
+	args, _ := json.Marshal(map[string]any{
+		"target": "workspace", "event": "bash", "arguments": map[string]any{"cmd": "ls"},
+	})
+	calls := []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "req-1", ToolName: "request", ToolArguments: string(args)},
+	}
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), calls, "trace1")
+
+	// Forwarded as a bash event to workspace with RequestId == the request id.
+	found := false
+	for _, e := range ch.eventsOf("bash") {
+		if e.RequestId == "req-1" {
+			found = true
+			if e.Payload["cmd"] != "ls" {
+				t.Fatalf("forwarded payload = %v, want cmd=ls", e.Payload)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected request to forward a bash event to workspace with RequestId req-1")
+	}
+	// No "request" dispatch to self (the forward path takes over).
+	if n := len(ch.eventsOf("request")); n != 0 {
+		t.Fatalf("expected no self dispatch of request, got %d", n)
+	}
+}
+
+// TestRequestRouteDoesNotForceFollowupRound is a regression test for the bug
+// where a call forwarded through the request escape hatch left the round's
+// dispatched count at zero, so handleToolCalls forced a follow-up round that
+// parked the just-sent request as "interrupted by new input" — making the model
+// wrongly believe the user typed again. A request-routed call IS dispatched, so
+// no follow-up round may be forced.
+func TestRequestRouteDoesNotForceFollowupRound(t *testing.T) {
+	ch := newTestChannel()
+	// A blocking provider keeps any (wrongly) forced round alive so its
+	// reason.start is observable instead of racing past us.
+	prov := &blockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(prov.release) })
+	w := newTestWorker(prov, ch)
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "r1", map[string]any{
+		"watch": []map[string]any{{"event": "request", "desc": "forward a call"}},
+	}))
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "workspace", map[string]any{
+		"watch": []map[string]any{{"event": "bash", "desc": "Run a command"}},
+	}))
+	args, _ := json.Marshal(map[string]any{
+		"target": "workspace", "event": "bash", "arguments": map[string]any{"cmd": "ls"},
+	})
+	calls := []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "req-1", ToolName: "request", ToolArguments: string(args)},
+	}
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), calls, "trace1")
+
+	// The request-routed call was dispatched, so no follow-up round may start
+	// before the peer's result. Give a wrongly-forced round a generous window to
+	// surface; it must not.
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if n := len(ch.eventsOf("reason.start")); n != 0 {
+			t.Fatalf("request-routed dispatch forced a follow-up round (%d reason.start broadcasts)", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestPrepareReasoningNeutralParkCause verifies prepareReasoning's fallback: a
+// round started with no recorded cause (i.e. not a user input) parks a leftover
+// pending tool with the neutral "superseded" wording, never the input wording.
+func TestPrepareReasoningNeutralParkCause(t *testing.T) {
+	w := newTestWorker(nil, nil)
+	w.mu.Lock()
+	w.currentTraceID = "trace1"
+	call := llm.ContentBlock{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "bash"}
+	w.requestTracker.Add("workspace", []llm.ContentBlock{call})
+	// The placeholder must exist for parking to rewrite it in place.
+	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: []llm.ContentBlock{call}})
+	w.mu.Unlock()
+
+	w.prepareReasoning()
+
+	var parked string
+	for _, m := range w.transcript.Render() {
+		if m.ToolCallID == "c1" && len(m.Content) > 0 {
+			parked = m.Content[0].Text
+		}
+	}
+	if parked == "" {
+		t.Fatal("expected the parked placeholder for c1")
+	}
+	if strings.Contains(parked, "new input") {
+		t.Fatalf("leftover wait parked with input wording: %q", parked)
+	}
+	if !strings.Contains(parked, "superseded") {
+		t.Fatalf("parked text = %q, want the neutral superseded wording", parked)
+	}
+}
+
+// TestRequestToolUnknownTargetFails verifies request to an unknown worker/event
+// resolves as an error in place and is not dispatched.
+func TestRequestToolUnknownTargetFails(t *testing.T) {
+	ch := newTestChannel()
+	prov := &staticProvider{msg: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
+	w := newTestWorker(prov, ch)
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "r1", map[string]any{
+		"watch": []map[string]any{{"event": "request"}},
+	}))
+
+	args, _ := json.Marshal(map[string]any{"target": "workspace", "event": "bash"})
+	calls := []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "request", ToolArguments: string(args)},
+	}
+	w.mu.Lock()
+	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: calls})
+	w.handleToolCalls(context.Background(), calls, "trace1")
+
+	if n := len(ch.eventsOf("bash")); n != 0 {
+		t.Fatalf("expected no dispatch for unknown target/event, got %d", n)
+	}
+	foundErr := false
+	for _, m := range w.transcript.Render() {
+		if m.ToolCallID == "c1" && m.IsError {
+			foundErr = true
+		}
+	}
+	if !foundErr {
+		t.Fatal("transcript should carry an error result for the unknown request target")
 	}
 }
 
@@ -458,7 +606,8 @@ func TestSoftBudgetReminderStaysAfterToolResult(t *testing.T) {
 
 	// Once the real tool result replaces the placeholder (in place), the order
 	// assistant→tool(result)→user still holds — the pairing is intact.
-	w.transcript.Apply(transcript.ToolResultPatch{CallID: "c1", Name: "bash", Text: "ok"})
+	w.transcript.Apply(transcript.ToolResultPatch{CallID: "c1", Name: "bash",
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}})
 	msgs = w.transcript.Render()
 	if len(msgs) != 3 {
 		t.Fatalf("after result, expected assistant→tool→user, got %d messages", len(msgs))
@@ -472,8 +621,9 @@ func TestSoftBudgetReminderStaysAfterToolResult(t *testing.T) {
 }
 
 // TestHardBudgetEmitsMetaRequest verifies crossing the hard threshold routes
-// a compression request through a worker.update meta request to itself (single audit
-// path), not a direct mechanism edit — the worker shrinks its own transcript.
+// a compression request through the context.compress convention event to itself
+// (single audit path), not a direct mechanism edit — the worker shrinks its own
+// transcript.
 func TestHardBudgetEmitsMetaRequest(t *testing.T) {
 	prov := &summarizeProvider{summarized: "hard-budget",
 		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
@@ -552,5 +702,129 @@ func TestEnsureToolCallIDsUniqueAcrossRounds(t *testing.T) {
 				t.Fatalf("id %q repeated across rounds %d and %d", ids[i], i, j)
 			}
 		}
+	}
+}
+
+// m with a single content block.
+func msgImage(role llm.Role, text string) llm.Message {
+	return llm.Message{Role: role, Content: imageBlock()}
+}
+
+func imageBlock() []llm.ContentBlock {
+	return []llm.ContentBlock{{Type: llm.ContentImage, Data: "aGVsbG8=", MIMEType: "image/png"}}
+}
+
+func TestSanitizeImagesReplacesImageWithHint(t *testing.T) {
+	in := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{
+			{Type: llm.ContentText, Text: "看图"},
+			{Type: llm.ContentImage, Data: "aGVsbG8=", MIMEType: "image/png"},
+		}},
+		msgImage(llm.RoleToolResult, ""),
+		{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}},
+	}
+	out := sanitizeImages(in)
+	if len(out) != 3 {
+		t.Fatalf("out len = %d, want 3", len(out))
+	}
+	// User message: image becomes a hint, text kept.
+	user := out[0]
+	if user.Content[0].Type != llm.ContentText || user.Content[0].Text != "看图" {
+		t.Errorf("user[0] = %+v", user.Content[0])
+	}
+	if user.Content[1].Type != llm.ContentText || user.Content[1].Text != "[image omitted: the active model does not support image inputs]" {
+		t.Errorf("user[1] = %+v", user.Content[1])
+	}
+	// Tool-result message: image replaced.
+	if tr := out[1]; tr.Content[0].Type != llm.ContentText {
+		t.Errorf("tool-result[0] = %+v", tr.Content[0])
+	}
+	// Assistant text untouched.
+	if as := out[2]; as.Content[0].Type != llm.ContentText || as.Content[0].Text != "ok" {
+		t.Errorf("assistant = %+v", as.Content[0])
+	}
+	// The input slice must be left untouched.
+	if in[0].Content[1].Type != llm.ContentImage {
+		t.Error("sanitizeImages mutated its input")
+	}
+}
+
+func TestSanitizeImagesPassesThroughNoImage(t *testing.T) {
+	out := sanitizeImages([]llm.Message{
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "hi"}}},
+	})
+	if len(out) != 1 || out[0].Content[0].Type != llm.ContentText || len(out[0].Content) != 1 {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
+func TestIsImageInputType(t *testing.T) {
+	for _, ok := range []string{"image", "image_input", "image_url", "vision", "multimodal"} {
+		if !isImageInputType(ok) {
+			t.Errorf("isImageInputType(%q) = false, want true", ok)
+		}
+	}
+	for _, no := range []string{"text", "audio", "video"} {
+		if isImageInputType(no) {
+			t.Errorf("isImageInputType(%q) = true, want false", no)
+		}
+	}
+}
+
+func TestModelSupportsImages(t *testing.T) {
+	cases := []struct {
+		name   string
+		infos  []ProviderInfo
+		model  string
+		expect bool
+	}{
+		{
+			name: "unknown modalities assume supports",
+			infos: []ProviderInfo{{Name: "a", Default: "m1", Models: []string{"m1"},
+				ModelDetails: []llm.ModelInfo{{ID: "m1", Name: "m1"}}}},
+			model:  "m1",
+			expect: true,
+		},
+		{
+			name: "explicit image modality supports",
+			infos: []ProviderInfo{{Name: "a", Default: "m1", Models: []string{"m1"},
+				ModelDetails: []llm.ModelInfo{{ID: "m1", Name: "m1", InputTypes: []string{"text", "image"}}}}},
+			model:  "m1",
+			expect: true,
+		},
+		{
+			name: "explicit text-only does not support",
+			infos: []ProviderInfo{{Name: "a", Default: "m1", Models: []string{"m1"},
+				ModelDetails: []llm.ModelInfo{{ID: "m1", Name: "m1", InputTypes: []string{"text"}}}}},
+			model:  "m1",
+			expect: false,
+		},
+		{
+			name:   "no provider sources supports",
+			infos:  nil,
+			model:  "",
+			expect: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Declare the sources as the interface type so the "no provider
+			// sources" case is a genuine nil interface, not a typed-nil pointer
+			// (which the worker's != nil checks would treat as present).
+			var sources ProviderSources
+			if tc.infos != nil {
+				sources = &fakeSources{infos: tc.infos, provs: map[string]llm.LLMProvider{}}
+			}
+			w := NewBaseReasonWorker(Config{ID: "r1", ProviderSources: sources, Bus: newTestChannel()})
+			if w.providerName == "" {
+				w.providerName = "a"
+			}
+			if tc.model != "" {
+				w.providerModel = tc.model
+			}
+			if got := w.modelSupportsImages(); got != tc.expect {
+				t.Errorf("modelSupportsImages() = %v, want %v", got, tc.expect)
+			}
+		})
 	}
 }

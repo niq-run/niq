@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/impl/reason/requesttracker"
 	"github.com/niq-run/niq/core/impl/reason/transcript"
+	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/itfs/llm"
 )
 
 // - worker.ready/gone: learn/forget a worker's tools & events
@@ -50,10 +50,8 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 		}
 	case evt.Type == event.TypeWorkerAbort:
 		w.handleAbort(evt)
-	case evt.Type == "timer.timeout":
+	case evt.Type == TypeTimerTimeout:
 		w.handleTimeout(evt)
-	case evt.Type == "timer.reminder":
-		w.handleReminder(evt)
 	case evt.Type == event.TypeWorkerReady:
 		w.HandleWorkerReady(evt)
 	case evt.Type == event.TypeWorkerGone:
@@ -64,36 +62,12 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 		w.handleInput(evt)
 	default:
 		// Extension channel for any other event type: own tool events
-		// (send_message, context.compress, provider.*) and worker.update /
-		// worker.query all route here to the registered extension by event
-		// type (and discriminator, if the extension uses one). An unregistered
-		// event is dropped.
+		// (send_message, context.compress, provider.*) route here to the
+		// registered extension by event type. An unregistered event is dropped.
 		if !w.DispatchExtension(evt) {
 			log.Printf("[reason %s] no extension for event %s", w.ID(), evt.Type)
 		}
 	}
-}
-
-// TypeContextCompress is the convention every reason worker honors: under
-// window pressure the mechanism emits this event, and the worker responds by
-// shrinking its own transcript. The mechanism fires the event; it never
-// performs or books the edit itself — that is the worker's strategy, reached
-// by handling this event. Rotate and any other context op are the worker's own
-// extras (pkg/worker/reason), not emitted by the mechanism. This is a
-// reason-worker-specific event type, so it lives here rather than in
-// core/event.
-const TypeContextCompress event.EventType = "context.compress"
-
-// emitContextCompress sends the context.compress convention event to this
-// worker through the bus for audit — the single path every compress trigger
-// converges on. The mechanism only ever auto-emits this one convention event;
-// the concrete worker implements the shrink strategy and does its own
-// bookkeeping. Lock need not be held specially; the event is queued to self
-// and handled asynchronously by process.
-func (w *BaseReasonWorker) emitContextCompress(ctx context.Context) {
-	evt := event.New(TypeContextCompress, w.ID(), nil)
-	evt.TraceID = w.currentTraceID
-	_ = w.Channel.Send(ctx, evt, w.ID())
 }
 
 // handleAbort cancels the current LLM call, parks all pending tools (so late
@@ -135,7 +109,7 @@ func (w *BaseReasonWorker) handleAbort(_ event.Event) {
 // Records a system message and schedules a fresh reasoning round.
 // Stale timers (cancelled or prior batch) are silently discarded.
 func (w *BaseReasonWorker) handleTimeout(evt event.Event) {
-	timerID, _ := evt.Payload["timer_id"].(string)
+	timerID, _ := evt.Payload[timerIDField].(string)
 
 	// Only the current round's timer is meaningful; an orphaned timer from a
 	// prior round (whose call_id no longer matches) is silently discarded.
@@ -147,16 +121,6 @@ func (w *BaseReasonWorker) handleTimeout(evt event.Event) {
 		}
 		w.appendInput([]llm.Message{msg}, requesttracker.PreemptCauseTimeout)
 	}
-}
-
-// handleReminder processes a timer.reminder event (from elapse). It wakes the
-// LLM — the event payload carries the purpose so the LLM knows what to do. A
-// reminder is a gentle wake-up: it schedules fresh reasoning without cancelling
-// any in-flight reasoning call.
-func (w *BaseReasonWorker) handleReminder(evt event.Event) {
-	w.captureTraceID(evt)
-	msgs := w.convertEvent(evt)
-	w.appendInput(msgs, requesttracker.PreemptCauseReminder)
 }
 
 // handleToolResult processes a request.completed/failed/rejected event.
@@ -172,8 +136,8 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	if tr := w.requestTracker.HandleResponse(evt); tr != nil {
 		callID := evt.RequestId
 		if callID != "" {
-			text, isErr := resultOutcome(evt)
-			w.transcript.Apply(transcript.ToolResultPatch{CallID: callID, Name: tr.Name, Text: text, IsErr: isErr})
+			content, isErr := resultOutcome(evt)
+			w.transcript.Apply(transcript.ToolResultPatch{CallID: callID, Name: tr.Name, Content: content, IsErr: isErr})
 		}
 		// All tool calls resolved
 		if w.requestTracker.Resolved() {
@@ -187,9 +151,9 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	if parked := w.requestTracker.ResolveLate(evt); parked != nil {
 		callID := evt.RequestId
 		if callID != "" && parked.Name != "" {
-			if text, _ := resultOutcome(evt); text != "" {
+			if content, _ := resultOutcome(evt); len(content) > 0 {
 				w.transcript.Apply(transcript.LateResultPatch{
-					CallID: callID, Name: parked.Name, Text: text, Cause: string(parked.ParkCause),
+					CallID: callID, Name: parked.Name, Content: content, Cause: string(parked.ParkCause),
 				})
 			}
 		}
@@ -215,8 +179,9 @@ func (w *BaseReasonWorker) handleToolResult(evt event.Event) {
 	}
 }
 
-// handleInput processes an input event. The input_mode field in the payload
-// picks one of the three levels (see package comment):
+// handleInput processes an input event (worker.input — from a human UI, a peer
+// reason worker, or a reminder timer). The input_mode field picks one of the
+// three levels (see package comment):
 //
 //	"schedule"  — level 1: append the message and schedule a round, but only
 //	             when the system is idle (no in-flight reasoning, no pending
@@ -364,7 +329,7 @@ func (w *BaseReasonWorker) cancelTimeout() {
 	}
 	timerID := w.activeTimeout
 	evt := event.New(event.TypeRequestCancel, w.ID(), map[string]any{
-		"timer_id": timerID,
+		timerIDField: timerID,
 	})
 	evt.RequestId = timerID + "-cancel"
 	_ = w.Channel.Send(context.Background(), evt, w.activeTimeoutProvider)
@@ -389,7 +354,7 @@ func (w *BaseReasonWorker) convertEvent(evt event.Event) []llm.Message {
 			return h.Converter(evt)
 		}
 	}
-	// worker.input understands the HIW attachment envelope (image base64 /
+	// worker.input understands the structured content payload (image base64 /
 	// uploaded file paths) before falling back to the plain-text default.
 	if evt.Type == event.TypeWorkerInput {
 		return ConvertInputEvent(evt)
@@ -430,41 +395,77 @@ func DefaultConverter(evt event.Event) []llm.Message {
 	}}
 }
 
-// resultOutcome extracts the human-readable outcome text and error flag from a
+// ConvertInputEvent turns a worker.input event into user messages. A payload
+// payload carrying a structured "content" array is decoded into content blocks via the
+// shared transcript.PayloadToLlmContent decoder; otherwise the event falls back
+// to the plain-text DefaultConverter shape.
+func ConvertInputEvent(evt event.Event) []llm.Message {
+	if blocks, ok := transcript.PayloadToLlmContent(evt.Payload); ok {
+		blocks = append(blocks, eventFooter(evt))
+		return []llm.Message{{Role: llm.RoleUser, Content: blocks}}
+	}
+	return DefaultConverter(evt)
+}
+
+// eventFooter is the metadata footer appended to a converted input message.
+func eventFooter(evt event.Event) llm.ContentBlock {
+	return llm.ContentBlock{Type: llm.ContentText,
+		Text: fmt.Sprintf("[Event: %s from %s]", evt.Type, evt.WorkerId)}
+}
+
+// resultOutcome extracts the outcome content blocks and error flag from a
 // tool result event. Used by both the normal-resolution and late-result paths.
 //
-// The bus does not constrain a reply's payload shape — external workers answer
-// in their own vocabulary — so the recognized summary fields ("result" /
-// "error" / "reason") are a preference, not a requirement: when none is
-// present, the FULL payload is serialized as the tool's result text instead of
-// being dropped. This mirrors DefaultConverter's philosophy for input events:
-// a recognized field reads cleanly, and anything else still reaches the LLM
-// losslessly.
-func resultOutcome(evt event.Event) (string, bool) {
-	var text string
+// A payload carrying a structured "content" array is decoded into content
+// blocks via the shared transcript.PayloadToLlmContent decoder, so tools can
+// return multi-modal results (e.g. an image as a ContentImage block), not just
+// text.
+//
+// When the payload has no content array, the bus does not constrain a reply's
+// payload shape — external workers answer in their own vocabulary — so the
+// recognized summary fields ("result" / "error" / "reason") are a preference,
+// not a requirement: when none is present, the FULL payload is serialized as
+// the tool's result text instead of being dropped. This mirrors
+// DefaultConverter's philosophy for input events: a recognized field reads
+// cleanly, and anything else still reaches the LLM losslessly.
+func resultOutcome(evt event.Event) ([]llm.ContentBlock, bool) {
 	isErr := false
+	switch evt.Type {
+	case event.TypeRequestFailed:
+		isErr = true
+	case event.TypeRequestRejected:
+		isErr = true
+	}
+
+	// Structured multi-modal result takes precedence.
+	if blocks, ok := transcript.PayloadToLlmContent(evt.Payload); ok {
+		return blocks, isErr
+	}
+
+	var text string
 	switch evt.Type {
 	case event.TypeRequestCompleted:
 		if r, ok := evt.Payload["result"]; ok {
 			text = fmt.Sprintf("%v", r)
 		}
 	case event.TypeRequestFailed:
-		isErr = true
 		if e, ok := evt.Payload["error"]; ok {
 			text = "Tool call failed: " + fmt.Sprintf("%v", e)
 		}
 	case event.TypeRequestRejected:
-		isErr = true
 		if r, ok := evt.Payload["reason"]; ok {
 			text = "Tool call rejected: " + fmt.Sprintf("%v", r)
 		}
 	default:
-		return "", false
+		return nil, false
 	}
 	if text == "" && len(evt.Payload) > 0 {
 		if b, err := json.Marshal(evt.Payload); err == nil {
 			text = string(b)
 		}
 	}
-	return text, isErr
+	if text == "" {
+		return nil, isErr
+	}
+	return []llm.ContentBlock{{Type: llm.ContentText, Text: text}}, isErr
 }

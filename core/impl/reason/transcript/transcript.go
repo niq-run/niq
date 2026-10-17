@@ -12,10 +12,10 @@ import "github.com/niq-run/niq/core/itfs/llm"
 // transcript and renders it into LLM messages per reasoning round.
 //
 // It is concurrency-safe by itself: an edit that must rewrite the transcript
-// over a long, off-transcript computation (an LLM summary) can BeginEdit
-// (snapshot), compute freely without holding any lock, then CommitEdit to
-// apply. While an edit is in progress, Apply calls are buffered and merged on
-// commit, so they are neither lost nor torn by the edit's overwrite.
+// over a long, off-transcript computation can BeginEdit (snapshot), compute
+// freely without holding any lock, then Commit to apply. While an edit is in
+// progress, Apply calls are buffered and merged on commit, so they are neither
+// lost nor torn by the edit's overwrite.
 //
 // Design invariants:
 //   - Each method acquires and releases its lock internally; methods never
@@ -29,12 +29,12 @@ import "github.com/niq-run/niq/core/itfs/llm"
 //   - Render is an identity projection of the state: the system prompt comes
 //     from the worker's programs (not here); the transcript renders only
 //     messages, verbatim. Prefix stability (prompt cache) holds because
-//     messages only append, and digest changes happen only via CommitEdit.
+//     messages only append, and rewrites happen only via Commit.
 //
 // The interface is evolving: a single implementation (Accumulate) for now.
 type Transcript interface {
 	// Apply folds one lifecycle fact into the transcript. If an edit is in
-	// progress (BeginEdit..CommitEdit), the input is buffered and merged on
+	// progress (BeginEdit..Commit), the input is buffered and merged on
 	// commit, not lost.
 	Apply(input TranscriptPatch)
 
@@ -48,25 +48,17 @@ type Transcript interface {
 	// lock; Apply calls during this window are buffered.
 	BeginEdit() []llm.Message
 
-	// CommitEdit ends an edit: applies the computed digest, retaining only the
-	// most recent messages that fit within the tailTokens token budget
-	// (pairing-preserved: a tool call and its results are never split), and
-	// merges any Apply inputs buffered during the edit. It returns true if the
-	// transcript was actually rewritten (a digest head was applied and older
-	// messages folded away); false means it was a no-op — the whole transcript
-	// already fits within the budget, so nothing changed and no digest head was
-	// added. tailTokens <= 0 keeps nothing (fresh episode). No-op if no edit is
-	// in progress (returns false).
-	CommitEdit(digest string, tailTokens int) bool
-
-	// CommitRotate ends an edit: applies the computed digest and retains only
-	// the most recent keepRounds user/assistant rounds, discarding tool
-	// messages (tool_result role messages and assistant tool-call blocks). A
-	// round is one user input plus the assistant's response to it. It returns
-	// true if the transcript was actually rewritten; false if nothing changed
-	// (keepRounds <= 0 or no messages to fold). No-op if no edit is in
-	// progress (returns false).
-	CommitRotate(digest string, keepRounds int) bool
+	// Commit ends an edit: rewrites the transcript to the caller-supplied head
+	// messages followed by the caller-selected retained tail, then merges any
+	// Apply inputs buffered during the edit and strips dangling tool calls.
+	// head is the caller's new leading content (e.g. a digest message it built);
+	// tail is the retained recent history it chose (see TailTokensBudget /
+	// TailRoundsClean for the pairing-safe selectors). How to trim, whether to
+	// fold, and what head to prepend are the caller's policy — this only
+	// assembles head + tail and finalizes the editing state. It returns true if
+	// an edit was in progress (the rewrite was applied); false if no edit was in
+	// progress (no-op).
+	Commit(head []llm.Message, tail []llm.Message) bool
 
 	// AbortEdit cancels an edit without applying: clears the editing state
 	// and drops nothing (buffered Apply inputs are kept in the main transcript;
@@ -113,12 +105,14 @@ type ToolPlaceholdersPatch struct {
 	Calls []llm.ContentBlock
 }
 
-// ToolResultPatch replaces the placeholder for a resolved tool call.
+// ToolResultPatch replaces the placeholder for a resolved tool call. Content
+// carries the outcome's llm content blocks (which may be multi-modal, e.g. an
+// image), plus the error flag.
 type ToolResultPatch struct {
-	CallID string
-	Name   string
-	Text   string
-	IsErr  bool
+	CallID  string
+	Name    string
+	Content []llm.ContentBlock
+	IsErr   bool
 }
 
 // ToolParkedPatch replaces the placeholder for a parked (no longer awaited) call.
@@ -130,12 +124,13 @@ type ToolParkedPatch struct {
 
 // LateResultPatch appends a contextualized user message for a late-arriving
 // result on a parked call (a second tool_result for the same call_id would
-// violate the pairing invariant).
+// violate the pairing invariant). Content carries the outcome's llm content
+// blocks (which may be multi-modal).
 type LateResultPatch struct {
-	CallID string
-	Name   string
-	Text   string
-	Cause  string
+	CallID  string
+	Name    string
+	Content []llm.ContentBlock
+	Cause   string
 }
 
 func (InputPatch) isTranscriptPatch()            {}

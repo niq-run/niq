@@ -17,7 +17,7 @@ func exportTemplate() *TemplateConfig {
 			Instruction: "do the thing",
 			Provider:    "volcan-ark", APIKey: "sk-secret", BaseURL: "https://api.example.com",
 			Model:         "deepseek-v4-flash",
-			Subscriptions: []SubscriptionSpec{{Type: "timer.reminder", Source: "timer"}},
+			Subscriptions: []SubscriptionSpec{{Type: "worker.input", Source: "timer"}},
 			Publish:       []PublishSpec{{Type: "reason.response"}},
 			Mounts:        []string{"/tmp/demo"},
 			Approver:      "webui-hiw",

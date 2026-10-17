@@ -11,6 +11,7 @@ package baseworker
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 
@@ -101,15 +102,30 @@ func ParseToolCall(evt event.Event) ToolCall {
 
 // ReplyCompleted answers a request caller with a request.completed result,
 // echoing the request's id and propagating the trace ID.
-func (w *BaseWorker) ReplyCompleted(callerID, callID, result, traceID string) {
-	evt := event.New(event.TypeRequestCompleted, w.ID(), map[string]any{
-		"result": result,
-	})
-	evt.RequestId = callID
-	evt.TraceID = traceID
-	log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s result_len=%d",
-		w.ID(), callerID, callID, len(result))
-	_ = w.Channel.Send(context.Background(), evt, callerID)
+//
+// result is a neutral, JSON-serializable value. A string becomes the traditional
+// {"result": …} payload; a map[string]any is used as the payload directly so a
+// tool can return a structured multi-modal payload (e.g. the `{content:[…]}`
+// shape the reason worker decodes into llm content blocks); any other value is
+// serialized into a "result" string for lossless forwarding.
+func (w *BaseWorker) ReplyCompleted(callerID, callID string, result any, traceID string) {
+	payload := map[string]any{"result": result}
+	if m, ok := result.(map[string]any); ok {
+		payload = m
+	} else if _, ok := result.(string); !ok {
+		payload = map[string]any{"result": fmt.Sprintf("%v", result)}
+	}
+	ev := event.New(event.TypeRequestCompleted, w.ID(), payload)
+	ev.RequestId = callID
+	ev.TraceID = traceID
+	if s, ok := result.(string); ok {
+		log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s result_len=%d",
+			w.ID(), callerID, callID, len(s))
+	} else {
+		log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s result_type=%T",
+			w.ID(), callerID, callID, result)
+	}
+	_ = w.Channel.Send(context.Background(), ev, callerID)
 }
 
 // ReplyFailed answers a request caller with a request.failed error message,

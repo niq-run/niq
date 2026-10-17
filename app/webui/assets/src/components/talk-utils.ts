@@ -21,6 +21,52 @@ export function splitSystemReminder(
   return { reminder: m[1].trim(), content }
 }
 
+// inputContent extracts a worker.input event's message body (text) and its
+// attachments for rendering. A payload carrying a structured "content" array
+// yields the joined text blocks plus the image/file blocks as attachments; a
+// plain-text event (payload.text, no content array) yields that text with no
+// attachments.
+//
+// Returns the joined plain text and the ordered attachment list; media blocks
+// (image base64, file paths) are not text and are returned as attachments.
+// The legacy <attachment> text envelope is no longer produced or parsed.
+//
+// Each block maps:
+//	text  -> appended to text
+//	image -> attachment {kind:'image', mime, data, name}
+//	file  -> attachment {kind:'file', name, path, size}
+//	other -> appended to text if it carries text
+//
+export function inputContent(evt: EventPayload): { text: string; attachments: ParsedAttachment[] } {
+  const content = evt.payload?.content
+  if (!Array.isArray(content)) {
+    // Plain-text event: no structured content, no attachments.
+    return { text: getInputText(evt), attachments: [] }
+  }
+  let text = ''
+  const attachments: ParsedAttachment[] = []
+  for (const c of content) {
+    const blk = c as { type?: string; text?: string; name?: string; mime?: string; data?: string; path?: string; size?: number }
+    switch (blk?.type) {
+      case 'text':
+        if (blk.text) text += (text ? '\n' : '') + blk.text
+        break
+      case 'image':
+        if (blk.data) attachments.push({ kind: 'image', mime: blk.mime || 'image/png', data: blk.data.replace(/\s+/g, ''), name: blk.name })
+        break
+      case 'file':
+        if (blk.path) attachments.push({ kind: 'file', name: blk.name || blk.path, path: blk.path, size: Number(blk.size) || 0 })
+        break
+      default:
+        // Unknown block type: fall through to text if it carried any.
+        if (blk?.text) text += (text ? '\n' : '') + blk.text
+    }
+  }
+  return { text, attachments }
+}
+
+// getContentText returns the text content of an event, for events that carry a
+// content array that is not the input envelope (e.g. reason responses).
 export function getContentText(evt: EventPayload): string {
   if (evt.type === 'reason.thinking' || evt.type === 'reason.response') {
     const content = evt.payload?.content
@@ -33,10 +79,10 @@ export function getInputText(evt: EventPayload): string {
   return (evt.payload?.text as string) || ''
 }
 
-// ── HIW attachment envelope ──
+// ── Renderable input content ──
 
-// ParsedAttachment is one <attachment> block found in an input text: an
-// image carried inline as base64, or a file reference by path.
+// ParsedAttachment is one media block of a structured input's "content" array:
+// an image carried inline as base64, or a file referenced by path on disk.
 export interface ParsedAttachment {
   kind: 'image' | 'file'
   mime?: string
@@ -44,43 +90,6 @@ export interface ParsedAttachment {
   name?: string
   path?: string // file
   size?: number
-}
-
-const ATTACH_RE = /<attachment\b([^>]*?)(\/>|>([\s\S]*?)<\/attachment>)/g
-const ATTR_RE = /([a-zA-Z_][\w-]*)="([^"]*)"/g
-
-// parseAttachments splits an input text into the remaining plain text (blocks
-// removed, trimmed) and the ordered attachment list. Malformed blocks stay in
-// the text — same fail-open rule as the worker-side parser.
-export function parseAttachments(text: string): { text: string; attachments: ParsedAttachment[] } {
-  const attachments: ParsedAttachment[] = []
-  const kept: string[] = []
-  let pos = 0
-  for (const m of text.matchAll(ATTACH_RE)) {
-    const start = m.index ?? 0
-    kept.push(text.slice(pos, start))
-    pos = start + m[0].length
-    const attrs: Record<string, string> = {}
-    for (const a of m[1].matchAll(ATTR_RE)) attrs[a[1].toLowerCase()] = a[2]
-    if (attrs.type === 'image' && m[3] && m[3].trim()) {
-      attachments.push({ kind: 'image', mime: attrs.mime || 'image/png', data: m[3].replace(/\s+/g, ''), name: attrs.name })
-    } else if (attrs.type === 'file' && attrs.path) {
-      attachments.push({ kind: 'file', name: attrs.name || attrs.path, path: attrs.path, size: Number(attrs.size) || 0 })
-    } else {
-      kept.push(m[0]) // malformed: keep the raw block
-    }
-  }
-  kept.push(text.slice(pos))
-  return { text: kept.join('').trim(), attachments }
-}
-
-// Compose an attachment envelope block (the mirror of the parsers above); the
-// composer in App appends these to the input text.
-export function attachmentBlock(a: ParsedAttachment): string {
-  if (a.kind === 'image') {
-    return `<attachment type="image" mime="${a.mime}" name="${a.name}">\n${a.data}\n</attachment>`
-  }
-  return `<attachment type="file" name="${a.name}" path="${a.path}" size="${a.size}"/>`
 }
 
 // ── Type checks ──
@@ -111,7 +120,6 @@ export function isToolInvocation(type: string): boolean {
   switch (type) {
     case 'worker.input':
     case 'worker.abort':
-    case 'timer.reminder':
     case 'timer.timeout':
     case 'request.cancel':
     case 'reason.interrupted':
@@ -333,19 +341,28 @@ export function getUsageParts(evt: EventPayload, t: (key: any, vars?: Record<str
 // ── Find referenced input event by trace_id ──
 
 /**
- * Given a response event, finds the worker.input event that shares the same
- * trace_id, if any. Returns the input text, worker_id and event id, or null.
+ * Given a response event, finds the worker.input event it is answering and
+ * return its text, worker id and event id, or null.
+ *
+ * A linked/broadcast exchange shares ONE trace_id across many worker.input
+ * events, so we can't just pick the first match (that would quote the oldest
+ * message in the trace). Instead walk the timeline in order and keep the LAST
+ * worker.input at-or-before this response — i.e. the specific message directly
+ * before it. The array is chronologically sorted, so stopping when we reach the
+ * response's own row guarantees we only look at inputs that precede it (and
+ * stays correct even when timestamps tie).
  */
 export function findReferencedInput(events: EventPayload[], responseEvt: EventPayload): { text: string; workerId: string; evtId: string } | null {
   if (!responseEvt.trace_id) return null
+  let ref: { text: string; workerId: string; evtId: string } | null = null
   for (const evt of events) {
-    if (evt.type === 'worker.input' && evt.trace_id === responseEvt.trace_id) {
-      // Quote the message text only — attachment blocks render as chips.
-      const text = parseAttachments(getInputText(evt)).text
-      if (text) return { text, workerId: evt.worker_id, evtId: evt.id }
-    }
+    if (evt.id === responseEvt.id) break // passed this response's timeline position
+    if (evt.type !== 'worker.input' || evt.trace_id !== responseEvt.trace_id) continue
+    // Quote the message text only — media blocks (images/files) render as chips.
+    const text = inputContent(evt).text
+    if (text) ref = { text, workerId: evt.worker_id, evtId: evt.id }
   }
-  return null
+  return ref
 }
 
 // ── Time formatting ──

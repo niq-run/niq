@@ -5,37 +5,78 @@ import (
 	"testing"
 
 	"github.com/niq-run/niq/core/itfs/event"
-	llm "github.com/niq-run/niq/core/itfs/llm"
-	"github.com/niq-run/niq/core/itfs/worker"
+	"github.com/niq-run/niq/core/itfs/llm"
 )
 
-// TestEncodeToolNameBuiltin verifies a tool whose provider is this worker (or
-// empty) keeps a bare name, with inner dots turned to underscores, so it is a
-// valid LLM tool identifier.
-func TestEncodeToolNameBuiltin(t *testing.T) {
-	w := newTestWorker(nil, newTestChannel())
-	if got := encodeToolName(w, worker.Tool{Name: "context.compress", Provider: w.ID()}); got != "context_compress" {
-		t.Fatalf("builtin encode = %q, want context_compress", got)
+// ready helper: build a worker.ready announcement for a worker of the given
+// type, carrying one watch capability.
+func readyFor(workerID, typ, capEvt string) event.Event {
+	return event.New(event.TypeWorkerReady, workerID, map[string]any{
+		"worker_id": workerID,
+		"type":      typ,
+		"watch": []map[string]any{{
+			"event": condStr(capEvt != "", capEvt, "noop.cap"),
+			"desc":  "some capability",
+		}},
+	})
+}
+
+func condStr(ok bool, a, b string) string {
+	if ok {
+		return a
 	}
-	if got := encodeToolName(w, worker.Tool{Name: "send_message", Provider: ""}); got != "send_message" {
-		t.Fatalf("bare encode = %q, want send_message", got)
+	return b
+}
+
+// TestPeerReasonReadyIsNotATool verifies the core directory split: a reason
+// worker's ready describes events it RESPONDS to, not callable tools for peers
+// — so another reason worker must NOT surface a peer reason's extensions as
+// tools. Infrastructure workers (here "workspace") still surface as tools.
+func TestPeerReasonReadyIsNotATool(t *testing.T) {
+	w, _ := newTestWorker2()
+
+	// An infra worker's ready becomes a callable capability (workspace__bash).
+	w.HandleWorkerReady(readyFor("workspace", "workspace", "bash"))
+	if _, ok := w.capabilityByToolName("workspace__bash"); !ok {
+		t.Fatalf("infra workspace__bash should be callable, got discovered=%+v", w.discovered)
+	}
+
+	// A peer reason worker's ready must NOT become a callable capability.
+	w.HandleWorkerReady(readyFor("peer", "reason", "context.compress"))
+	if _, ok := w.capabilityByToolName("peer__context_compress"); ok {
+		t.Fatalf("peer reason's context_compress must NOT be callable, got discovered=%+v", w.discovered)
+	}
+	if len(w.discovered) != 1 {
+		t.Fatalf("expected exactly the infra capability, got %d: %+v", len(w.discovered), w.discovered)
 	}
 }
 
-// TestEncodeToolNameExternal verifies a tool backed by another worker becomes
-// provider__name, so the worker/tool boundary is unambiguous.
-func TestEncodeToolNameExternal(t *testing.T) {
+// TestToolNameOfCapabilityOwn verifies an own capability keeps a bare name with
+// inner dots turned to underscores, so it is a valid LLM tool identifier.
+func TestToolNameOfCapabilityOwn(t *testing.T) {
 	w := newTestWorker(nil, newTestChannel())
-	if got := encodeToolName(w, worker.Tool{Name: "bash", Provider: "workspace"}); got != "workspace__bash" {
-		t.Fatalf("external encode = %q, want workspace__bash", got)
+	if got := toolNameOfCapability(w, DiscoveredCapability{Source: w.ID(), Event: "context.compress"}); got != "context_compress" {
+		t.Fatalf("own dotted = %q, want context_compress", got)
 	}
-	if got := encodeToolName(w, worker.Tool{Name: "timeout", Provider: "timer"}); got != "timer__timeout" {
-		t.Fatalf("timer encode = %q, want timer__timeout", got)
+	if got := toolNameOfCapability(w, DiscoveredCapability{Source: w.ID(), Event: "send_message"}); got != "send_message" {
+		t.Fatalf("own bare = %q, want send_message", got)
 	}
 }
 
-// TestHandleWorkerReadyAndGone verifies capabilities and published events are
-// learned from worker.ready and forgotten on worker.gone.
+// TestToolNameOfCapabilityPeer verifies a capability backed by another worker
+// becomes provider__name, so the worker/tool boundary is unambiguous.
+func TestToolNameOfCapabilityPeer(t *testing.T) {
+	w := newTestWorker(nil, newTestChannel())
+	if got := toolNameOfCapability(w, DiscoveredCapability{Source: "workspace", Event: "bash"}); got != "workspace__bash" {
+		t.Fatalf("peer = %q, want workspace__bash", got)
+	}
+	if got := toolNameOfCapability(w, DiscoveredCapability{Source: "timer", Event: "timeout"}); got != "timer__timeout" {
+		t.Fatalf("peer = %q, want timer__timeout", got)
+	}
+}
+
+// TestHandleWorkerReadyAndGone verifies capabilities are learned from
+// worker.ready and forgotten on worker.gone.
 func TestHandleWorkerReadyAndGone(t *testing.T) {
 	w := newTestWorker(nil, newTestChannel())
 
@@ -43,43 +84,26 @@ func TestHandleWorkerReadyAndGone(t *testing.T) {
 		"watch": []map[string]any{
 			{"event": "bash", "desc": "run a command", "parameters": map[string]any{"type": "object"}},
 		},
-		"publishes": []map[string]any{
-			{"type": "fs.changed", "description": "a file changed"},
-		},
 	})
 	w.HandleWorkerReady(ready)
 
 	// Tool is prefixed with the worker ID (encoded as provider__name).
-	if _, ok := w.tools["workspace__bash"]; !ok {
-		t.Fatalf("expected workspace__bash tool, got %+v", keys(w.tools))
-	}
-	if _, ok := w.publishMap["workspace"]; !ok {
-		t.Fatal("expected published events for workspace")
+	if _, ok := w.capabilityByToolName("workspace__bash"); !ok {
+		t.Fatalf("expected workspace__bash tool, got %+v", w.discovered)
 	}
 
 	gone := event.New(event.TypeWorkerGone, "host", map[string]any{"worker_id": "workspace"})
 	w.handleWorkerGone(gone)
-	if _, ok := w.tools["workspace__bash"]; ok {
+	if _, ok := w.capabilityByToolName("workspace__bash"); ok {
 		t.Fatal("tool should be removed after worker.gone")
 	}
-	if _, ok := w.publishMap["workspace"]; ok {
-		t.Fatal("publishes should be removed after worker.gone")
-	}
-}
-
-func keys(m map[string]worker.Tool) []string {
-	var ks []string
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
 }
 
 // TestCoreExtensionsRegistered / TestCoreExtensionsExposedToLLM /
 // TestBroadcastReadyExcludesSelfOnly moved to pkg/worker/reason: the
-// send_message / list_workers / context.compress / context.rotate toolkit (and
-// its SelfOnly announcement behavior) lives in the default worker now, not in
-// the shared reason mechanism.
+// send_message / request / context.compress toolkit (and its SelfOnly
+// announcement behavior) lives in the default worker now, not in the shared
+// reason mechanism.
 
 // TestProviderToolsExposedToLLM verifies the worker's own provider.* domain is
 // LLM-callable: the self-directed ready contract feeds discovery, and the tool
@@ -89,7 +113,7 @@ func TestProviderToolsExposedToLLM(t *testing.T) {
 	w := newTestWorker(nil, nil)
 	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"type":  "reason",
-		"watch": w.ExtensionEntries(),
+		"watch": w.WatchEntries(true),
 	}))
 
 	names := map[string]bool{}
@@ -163,10 +187,10 @@ func TestPeerToolDispatchable(t *testing.T) {
 	})
 	w.HandleWorkerReady(ready)
 
-	// The encoded name is in the dispatch table.
-	tool, ok := w.tools["cute-assistant__remember"]
-	if !ok || tool.Provider != "cute-assistant" {
-		t.Fatalf("dispatch table missing peer tool: %+v", tool)
+	// The peer tool is discoverable under its encoded name.
+	cap, ok := w.capabilityByToolName("cute-assistant__remember")
+	if !ok || cap.Source != "cute-assistant" {
+		t.Fatalf("expected the peer tool to be discoverable: %+v", cap)
 	}
 
 	// The LLM-facing name is exactly the dispatch key.

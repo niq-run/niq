@@ -4,6 +4,8 @@ import { useI18n } from '../i18n'
 import { type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
 import SendEventForm from '../components/SendEventForm'
+import SelectDropdown from '../components/SelectDropdown'
+import DetailRow from '../components/DetailRow'
 import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, updateWorkerAllow, updateWorkerMeta } from '../services/api'
 
 interface WorkerDetailProps {
@@ -37,6 +39,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
   // Display metadata (tags / description) inline editing.
   const [editingMeta, setEditingMeta] = useState(false)
   const [metaNote, setMetaNote] = useState('')
+  const [tab, setTab] = useState<'info' | 'actions' | 'events' | 'perms'>('info')
   const [draftTags, setDraftTags] = useState('')
   const [draftDesc, setDraftDesc] = useState('')
   const [editingSub, setEditingSub] = useState(false)
@@ -172,8 +175,30 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
       {/* Scrollable content: a column of independent cards, each a bg block
           with a gap of bare page background between them (no separators). */}
       <div style={{ padding: 14 }}>
+        {/* Top tabs: Info / Actions / Events / Permissions. Each tab shows only
+            its own card(s); the rest are hidden via display. */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+          {([['info', t('wd.tab.info')], ['events', t('wd.sendEvent')], ['perms', t('wd.permissions')]] as const).map(([k, label]) => (
+            <span
+              key={k}
+              onClick={() => setTab(k)}
+              className="btn-hover"
+              style={{
+                cursor: 'pointer',
+                padding: '4px 14px',
+                borderRadius: 6,
+                userSelect: 'none',
+                fontSize: fontSizes.sm,
+                background: tab === k ? colors.accent : 'transparent',
+                color: tab === k ? colors.bg : colors.textDim,
+              }}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base, display: tab === 'info' ? undefined : 'none' }}>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
               <span style={{ color: colors.detailLabel, fontSize: fontSizes.sm, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('wd.meta.label')}</span>
               {/* Edit toggles an inline editor for tags / description. Opening
@@ -213,7 +238,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                 </div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '5px 16px', alignItems: 'baseline' }}>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
                 <DetailRow label={t('wd.id')} value={worker.id} colors={colors} />
                 <DetailRow label={t('wd.type')} value={worker.type || '(none)'} colors={colors} />
                 {(worker.tags && worker.tags.length > 0) && (
@@ -230,7 +255,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
             )}
           </div>
 
-          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: tab === 'perms' ? undefined : 'none' }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.publishAllow')}
               <span
@@ -268,7 +293,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
           </div>
 
           {/* Action area — its own card. */}
-          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+          <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: tab === 'info' ? undefined : 'none' }}>
             <div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               {t('wd.actions')}
             </div>
@@ -346,7 +371,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                     : t('wd.unmanaged.start.desc')}
                 </div>
                 {worker.unmanaged_state === 'running' ? (
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <span
                       onClick={() => unmanagedAction('stop')}
                       className="btn-hover"
@@ -381,9 +406,6 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 
 					{/* Danger: permanently remove this worker. — within the actions card */}
 					<div style={{ marginTop: 18 }}>
-						<div style={{ color: colors.detailLabel, fontSize: fontSizes.sm, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-							{t('wd.delete')}
-						</div>
 				                {confirmDel ? (
 				                  <>
 				                    <div style={{ color: colors.textDim, fontSize: fontSizes.sm, marginBottom: 8 }}>{t('wd.delete.confirm', { id: worker.id })}</div>
@@ -421,7 +443,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 
 					{/* Send the worker an event from its announced watch contract —
 						 drive its behaviour/state from the UI. */}
-					<div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+					<div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: tab === 'events' ? undefined : 'none' }}>
 						<div style={{ color: colors.detailLabel, fontSize: fontSizes.base, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
 							{t('wd.sendEvent')}
 						</div>
@@ -431,12 +453,12 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 					{/* Model / Provider — only reason workers carry ProviderSources.
 							 Keyed by worker id so switching workers cannot leak one worker's
 								 provider state into another. */}
-					{worker.type === 'reason' && <ProviderSection key={worker.id} workerId={worker.id} />}
+					{worker.type === 'reason' && tab === 'events' && <ProviderSection key={worker.id} workerId={worker.id} />}
 
 					{/* Mounts — the workspace counterpart: the worker's mounted
 							 directories are its read/write boundary; list, mount and
 								 unmount them here. */}
-					{worker.type === 'workspace' && <MountsSection key={worker.id} workerId={worker.id} />}
+					{worker.type === 'workspace' && tab === 'events' && <MountsSection key={worker.id} workerId={worker.id} />}
         </div>
       </div>
     </div>
@@ -497,17 +519,6 @@ function ProviderSection({ workerId }: { workerId: string }) {
     load(ac.signal)
     return () => ac.abort()
   }, [expanded, load])
-
-  const selectStyle: React.CSSProperties = {
-    width: '100%',
-    maxWidth: 260,
-    padding: '6px 8px',
-    fontSize: fontSizes.md,
-    background: colors.bgLight,
-    color: colors.text,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-  }
 
   const active = providers.find((p) => p.name === selProvider)
   const models = active?.models ?? []
@@ -578,24 +589,28 @@ function ProviderSection({ workerId }: { workerId: string }) {
             <>
               <div style={{ marginBottom: 10 }}>
                 <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginBottom: 4 }}>{t('wd.provider')}</div>
-                <select value={selProvider} onChange={(e) => pickProvider(e.target.value)} style={selectStyle}>
-                  {providers.map((p) => (
-                    <option key={p.name} value={p.name} style={{ background: colors.bgLight, color: colors.text }}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+                <div style={{ maxWidth: 260 }}>
+                  <SelectDropdown
+                    value={selProvider}
+                    options={providers.map((p) => p.name)}
+                    placeholder={t('wd.provider')}
+                    onChange={pickProvider}
+                    allowClear={false}
+                  />
+                </div>
               </div>
 
               <div style={{ marginBottom: 10 }}>
                 <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm, marginBottom: 4 }}>{t('wd.model')}</div>
-                <select value={selModel} onChange={(e) => { setSelModel(e.target.value); setDoneNote('') }} style={selectStyle}>
-                  {(models.includes(selModel) ? models : [selModel, ...models]).filter(Boolean).map((m) => (
-                    <option key={m} value={m} style={{ background: colors.bgLight, color: colors.text }}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                <div style={{ maxWidth: 260 }}>
+                  <SelectDropdown
+                    value={selModel}
+                    options={(models.includes(selModel) ? models : [selModel, ...models]).filter(Boolean)}
+                    placeholder={t('wd.model')}
+                    onChange={(v) => { setSelModel(v); setDoneNote('') }}
+                    allowClear={false}
+                  />
+                </div>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -1063,11 +1078,4 @@ function PublishAllowEditor({ worker, allWorkers = [], readOnly = false, onDone 
   )
 }
 
-function DetailRow({ label, value, colors }: { label: string; value: string; colors: import('../theme').Palette }) {
-  return (
-    <>
-      <span style={{ color: colors.detailLabel, fontSize: fontSizes.base }}>{label}</span>
-      <span style={{ color: colors.textDimmed, fontSize: fontSizes.base, wordBreak: 'break-all' }}>{value}</span>
-    </>
-  )
-}
+

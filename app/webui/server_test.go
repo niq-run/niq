@@ -205,6 +205,30 @@ func TestParseProgramSearch(t *testing.T) {
 	}
 }
 
+// TestHandleGetProgramContentOffline verifies GET /api/programs/{name}/content
+// degrades to a service-unavailable error when the program worker is not on the
+// bus, mirroring the other program endpoints.
+func TestHandleGetProgramContentOffline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := New(nil, nil, nil, nil, nil, ":0", false)
+	addr, err := s.Bind()
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	resp, err := http.Get("http://" + addr + "/api/programs/myprog/content?path=myprog%2Frules.md")
+	if err != nil {
+		t.Fatalf("GET program content: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d (program worker offline)", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+}
+
 func TestBasicAuthNonLoopback(t *testing.T) {
 	s := New(nil, nil, nil, nil, nil, ":0", false)
 	s.SetBasicAuth("alice", "s3cret")

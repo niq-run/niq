@@ -19,8 +19,7 @@ import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
-import { attachmentBlock } from './components/talk-utils'
-import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerInfo } from './types'
+import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type InputContent, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerInfo } from './types'
 
 // How many history events the WebUI pages back per /api/events/before call
 // (both the initial watermark backfill and the load-more pagination).
@@ -136,14 +135,23 @@ function stampNow(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
-// composeInput appends the staged attachments to the message text as HIW
-// attachment envelope blocks (parsed worker-side and by the talk renderer), and
-// prepends a `<system-reminder>` carrying the current time so the receiver
-// knows when the message was sent.
-function composeInput(text: string, attachments: StagedAttachment[]): string {
+// composeInput builds the structured worker.input "content" array: the
+// reminder and message text as a leading text block, then each staged
+// attachment as its own image/file block. This replaces the legacy
+// <attachment> text envelope this UI used to send.
+function composeInput(text: string, attachments: StagedAttachment[]): InputContent[] {
+  const content: InputContent[] = []
   const reminder = `<system-reminder>${stampNow()}</system-reminder>`
-  const blocks = attachments.map(attachmentBlock)
-  return [reminder, text.trim(), ...blocks].filter(Boolean).join('\n\n')
+  const body = text.trim()
+  content.push({ type: 'text', text: [reminder, body].filter(Boolean).join('\n\n') })
+  for (const a of attachments) {
+    if (a.kind === 'image') {
+      content.push({ type: 'image', name: a.name, mime: a.mime, data: a.data, size: a.size })
+    } else {
+      content.push({ type: 'file', name: a.name, path: a.path, size: a.size })
+    }
+  }
+  return content
 }
 
 export default function App() {
@@ -185,6 +193,13 @@ export default function App() {
   // Diagnostic: the most recent send (timestamp + text) so, if the live stream
   // drops right after a send, we can tell whether the re-fetch brought it back.
   const lastSendRef = useRef<{ t: number; text: string } | null>(null)
+  // SSE connection diagnostics: when the current stream opened, how long it had
+  // been up when it errored, cumulative reconnect count, and last received
+  // event time — enough to tell an intentional server close (readyState CLOSED)
+  // apart from a network / proxy drop (CONNECTING) and see the drop cadence.
+  const sseOpenAtRef = useRef(0)
+  const sseReconnectsRef = useRef(0)
+  const sseLastEvtAtRef = useRef(0)
   const [mentionKey, setMentionKey] = useState(0)
   const [filterWorkers, setFilterWorkers] = useState<Set<string>>(new Set())
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
@@ -556,6 +571,8 @@ export default function App() {
     es.onopen = () => {
       setStreamDropped(false)
       hadOpen = true
+      sseOpenAtRef.current = Date.now()
+      sseReconnectsRef.current += 1
       // Treat every (re)open as a clean new stream: reset the per-connection
       // bookkeeping so a reconnected timeline can't be polluted by the old
       // connection's already-seen ids / deliveries. The watermark re-pull that
@@ -565,7 +582,10 @@ export default function App() {
       seenRef.current = new Set()
       deliveriesRef.current = {}
       const ls = lastSendRef.current
-      console.debug(`[stream-diag] SSE opened ${url}` + (ls ? ` (${Math.round((Date.now() - ls.t) / 1000)}s since last send)` : ''))
+      console.debug(
+        `[stream-diag] SSE opened ${url} reconnect#${sseReconnectsRef.current}` +
+          (ls ? ` (${Math.round((Date.now() - ls.t) / 1000)}s since last send)` : ''),
+      )
     }
     // A dropped / erroring stream (server closed the connection, a reconnect
     // failed, or a network blip) surfaces a banner telling the user to grab the
@@ -577,16 +597,38 @@ export default function App() {
       if (streamKeyRef.current === myKey) {
         setStreamDropped(true)
         // window.__niqStreamDropped = true // (reserved)
+        const now = Date.now()
         const ls = lastSendRef.current
-        console.warn(`[stream-diag] SSE ERROR at ${new Date().toISOString()}` +
-          (ls ? ` — ${Math.round((Date.now() - ls.t) / 1000)}s since last send ("${ls.text}")` : ' — no recent send'))
+        // readyState discriminates the failure mode: CLOSED (2) after a server-
+        // initiated close (the handler returned), CONNECTING (0) on a network /
+        // proxy drop where the browser is about to retry. Up-time + time since
+        // the last live event / send + reconnect count expose the drop cadence.
+        const rsName =
+          es.readyState === 1 ? 'OPEN' : es.readyState === 2 ? 'CLOSED' : 'CONNECTING'
+        const up = sseOpenAtRef.current
+          ? `${Math.round((now - sseOpenAtRef.current) / 1000)}s up`
+          : '0s up'
+        const sinceEvt = sseLastEvtAtRef.current
+          ? `${Math.round((now - sseLastEvtAtRef.current) / 1000)}s since last event`
+          : 'no event yet'
+        const sinceSend = ls
+          ? `${Math.round((now - ls.t) / 1000)}s since last send ("${ls.text}")`
+          : 'no recent send'
+        console.warn(
+          `[stream-diag] SSE ERROR at ${new Date().toISOString()} readyState=${rsName}(${es.readyState}) ${up}, ${sinceEvt}, ${sinceSend}, reconnect#${sseReconnectsRef.current}`,
+        )
       }
     }
+    // Keep a per-connection "last live event" timestamp so the error handler can
+    // report whether a drop happened mid-activity (events flowing right up to
+    // the disconnect) or after a quiet span.
+    const recordLiveEvent = () => { sseLastEvtAtRef.current = Date.now() }
     // The server advertises the subscription watermark as a control event before
     // any data; we use it to kick off backwards pagination for history.
     const onWatermark = (e: MessageEvent) => { watermarkRef.current = e.data as string; loadInitialHistory(e.data as string) }
     es.addEventListener('watermark', onWatermark)
     es.onmessage = (msg) => {
+      recordLiveEvent()
       const evt = JSON.parse(msg.data) as EventPayload
       if (evt.type === 'event.delivered') {
         const eventId = evt.payload?.event_id as string | undefined

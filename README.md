@@ -96,9 +96,9 @@ The `reason` worker talks to an LLM provider. Provider settings (endpoint, model
 ```
 core/itfs/ interfaces & types (contracts, not implementations)
 core/impl/ implementations (workers, bus, transports, providers, hosts)
-app/       control plane, project runtime, WebUI
-cmd/       CLI entry point
-npm/       npm distribution (launcher shim + package template)
+app/       the niq product: control plane, project runtime, WebUI
+app/publish/cmd  CLI entry point (package main)
+app/publish/npm  npm distribution (launcher shim + package template)
 ext/       external worker implementations (HTTP)
 ```
 

@@ -1,8 +1,7 @@
 // AccumulateTranscript: the default transcript implementation. A flat
-// transcript of llm.Messages; digest messages may appear among them after a
-// CommitEdit. Concurrency-safe on its own: each method locks internally, and
-// edits (BeginEdit..CommitEdit) run their computation without holding the lock
-// while buffering concurrent external inputs.
+// transcript of llm.Messages. Concurrency-safe on its own: each method locks
+// internally, and edits (BeginEdit..Commit) run their computation without
+// holding the lock while buffering concurrent external inputs.
 package transcript
 
 import (
@@ -60,22 +59,9 @@ func estimateMessageTokens(m llm.Message) int {
 	return n
 }
 
-// digestMessage wraps a compacted transcript summary as the head message of
-// the new projection. User role: it must read as system-provided context to
-// the model without violating any pairing invariant. The [context digest]
-// prefix marks the message so update-mode summarization can detect a carried
-// digest.
-func digestMessage(digest string) llm.Message {
-	return llm.Message{
-		Role: llm.RoleUser,
-		Content: []llm.ContentBlock{{Type: llm.ContentText,
-			Text: "[context digest] " + digest}},
-	}
-}
-
 // AccumulateTranscript holds the working transcript messages. It is
 // concurrency-safe on its own: every method locks internally, and edits
-// (BeginEdit..CommitEdit) run their computation without holding the lock while
+// (BeginEdit..Commit) run their computation without holding the lock while
 // buffering concurrent Apply calls.
 type AccumulateTranscript struct {
 	mu sync.Mutex
@@ -112,8 +98,8 @@ func NewAccumulateTranscript(opts ...AccumulateOption) *AccumulateTranscript {
 }
 
 // Apply folds one lifecycle fact into the transcript. If an edit is in
-// progress, the input is buffered (merged on CommitEdit), so it is neither
-// lost nor torn by the edit's overwrite.
+// progress, the input is buffered (merged on Commit), so it is neither lost
+// nor torn by the edit's overwrite.
 func (b *AccumulateTranscript) Apply(input TranscriptPatch) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -133,9 +119,9 @@ func (b *AccumulateTranscript) applyLocked(input TranscriptPatch) {
 				b.pendingInput = append(b.pendingInput, b.limitMessageText(m))
 			}
 		case LateResultPatch:
-			if in.Text != "" {
+			if len(in.Content) > 0 {
 				b.pendingInput = append(b.pendingInput,
-					b.limitMessageText(lateResultMessage(in.CallID, in.Name, in.Text, in.Cause)))
+					b.limitMessageText(lateResultMessage(in.CallID, in.Name, in.Content, in.Cause)))
 			}
 		}
 		return
@@ -157,14 +143,15 @@ func (b *AccumulateTranscript) applyLocked(input TranscriptPatch) {
 		}
 	case ToolResultPatch:
 		b.messages = replacePlaceholder(b.messages, in.CallID,
-			b.limitMessageText(toolResultMessage(in.CallID, in.Name, in.Text, in.IsErr)))
+			b.limitMessageText(toolResultMessage(in.CallID, in.Name, in.Content, in.IsErr)))
 	case ToolParkedPatch:
 		b.messages = replacePlaceholder(b.messages, in.CallID,
-			b.limitMessageText(toolResultMessage(in.CallID, in.Name, parkReason(in.Cause), false)))
+			b.limitMessageText(toolResultMessage(in.CallID, in.Name,
+				[]llm.ContentBlock{{Type: llm.ContentText, Text: parkReason(in.Cause)}}, false)))
 	case LateResultPatch:
-		if in.Text != "" {
+		if len(in.Content) > 0 {
 			b.messages = append(b.messages,
-				b.limitMessageText(lateResultMessage(in.CallID, in.Name, in.Text, in.Cause)))
+				b.limitMessageText(lateResultMessage(in.CallID, in.Name, in.Content, in.Cause)))
 		}
 	default:
 		// Unknown variants are ignored: the sealed algebra grows at the
@@ -262,12 +249,14 @@ func (b *AccumulateTranscript) BeginEdit() []llm.Message {
 	return b.messages
 }
 
-// CommitEdit applies an edit: it rewrites the transcript to a digest head,
-// retaining only the most recent messages that fit within the tailTokens token
-// budget (pairing-preserving), then merges the Apply inputs buffered during
-// the edit. No-op when the whole transcript already fits within the budget
-// (no digest is applied); tailTokens <= 0 keeps nothing (fresh episode).
-func (b *AccumulateTranscript) CommitEdit(digest string, tailTokens int) bool {
+// Commit applies an edit: it rewrites the transcript to the caller-supplied
+// head messages followed by the caller-selected retained tail, then merges the
+// Apply inputs buffered during the edit and strips dangling tool calls. How the
+// tail is chosen (TailTokensBudget by token budget, TailRoundsClean by round
+// count) and what head to prepend (a digest the caller built) are the caller's
+// policy, not this method's. It returns true if an edit was in progress (the
+// rewrite was applied); false if no edit is in progress.
+func (b *AccumulateTranscript) Commit(head []llm.Message, tail []llm.Message) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.editing {
@@ -275,58 +264,27 @@ func (b *AccumulateTranscript) CommitEdit(digest string, tailTokens int) bool {
 	}
 	b.editing = false
 
-	cut := tailTokensCut(b.messages, tailTokens)
-	rewrote := cut > 0
-	if rewrote {
-		b.messages = append([]llm.Message{digestMessage(digest)}, b.messages[cut:]...)
-	}
+	msgs := make([]llm.Message, 0, len(head)+len(tail)+len(b.pendingInput))
+	msgs = append(msgs, head...)
+	msgs = append(msgs, tail...)
 	if len(b.pendingInput) > 0 {
-		b.messages = append(b.messages, b.pendingInput...)
+		msgs = append(msgs, b.pendingInput...)
 		b.pendingInput = nil
 	}
-	sanitizeDanglingToolCalls(b.messages)
-	return rewrote
+	sanitizeDanglingToolCalls(msgs)
+	b.messages = msgs
+	return true
 }
 
-// CommitRotate applies an edit that turns the page to a clean conversation: it
-// retains only the most recent keepRounds user/assistant rounds (a round is one
-// user input plus the assistant's response to it) and discards tool messages.
-// tool_result role messages are dropped and tool-call blocks are stripped from
-// assistant messages, so the fresh episode reads as a digest head followed by
-// a few exchanges rather than a pile of tool traffic. Consistent-message
-// normalization (merging consecutive same-role messages) is left to the
-// provider layer, which knows its API contract; the transcript keeps the
-// retained messages as-is. keepRounds <= 0 keeps nothing (fresh episode). No-op
-// if no edit is in progress.
-func (b *AccumulateTranscript) CommitRotate(digest string, keepRounds int) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if !b.editing {
-		return false
-	}
-	b.editing = false
-
-	tail := lastRoundsClean(b.messages, keepRounds)
-	rewrote := true
-	if len(b.messages) == 0 {
-		rewrote = false
-	}
-	b.messages = append([]llm.Message{digestMessage(digest)}, tail...)
-	if len(b.pendingInput) > 0 {
-		b.messages = append(b.messages, b.pendingInput...)
-		b.pendingInput = nil
-	}
-	sanitizeDanglingToolCalls(b.messages)
-	return rewrote
-}
-
-// lastRoundsClean returns the most recent keepRounds user/assistant rounds of
+// TailRoundsClean returns the most recent keepRounds user/assistant rounds of
 // msgs as clean messages: tool_result role messages are dropped and assistant
 // tool-call blocks are stripped, so only the conversational spine (user inputs
 // and assistant responses) survives. Messages are kept as-is (no same-role
 // merging); consecutive-message normalization is the provider layer's
-// responsibility. keepRounds <= 0 (or no user messages) yields nothing.
-func lastRoundsClean(msgs []llm.Message, keepRounds int) []llm.Message {
+// responsibility. keepRounds <= 0 (or no user messages) yields nothing. It is a
+// caller-visible tail selector a client passes to Commit for a rotate-style
+// edit.
+func TailRoundsClean(msgs []llm.Message, keepRounds int) []llm.Message {
 	if keepRounds <= 0 {
 		return nil
 	}
@@ -479,6 +437,17 @@ func tailTokensCut(msgs []llm.Message, tailTokens int) int {
 	return cut
 }
 
+// TailTokensBudget returns the most recent messages of msgs that fit within a
+// tailTokens token budget within which a tool call and its results are never
+// split — the retained tail a caller passes to Commit for a budget-capped edit.
+// It returns msgs[tailTokensCut(msgs, tailTokens):], i.e. the pairing-safe
+// suffix to keep; the older messages dropped are msgs[:cut]. tailTokens <= 0
+// keeps nothing (fresh episode).
+func TailTokensBudget(msgs []llm.Message, tailTokens int) []llm.Message {
+	cut := tailTokensCut(msgs, tailTokens)
+	return msgs[cut:]
+}
+
 // accumulateState is the serializable projection cache. The field set must
 // only grow (older blobs stay readable).
 type accumulateState struct {
@@ -502,6 +471,9 @@ func (b *AccumulateTranscript) Restore(state []byte) error {
 
 // parkReason returns the explanatory text shown in the [pending] placeholder
 // when a call is parked, describing why the reasoner stopped waiting on it.
+// The wording is deliberate: only "input" (and "reminder") attributes the stop
+// to the user. "nodispatch" / "superseded" are neutral — the wait was dropped by
+// the reasoner's own round scheduling, not by anything the user did.
 func parkReason(cause string) string {
 	switch cause {
 	case "timeout":
@@ -514,20 +486,29 @@ func parkReason(cause string) string {
 		return "Tool call interrupted by reminder; reasoner proceeded without waiting"
 	case "restart":
 		return "Tool call did not survive the restart; reasoner is no longer waiting"
+	case "nodispatch":
+		return "Tool call superseded by a follow-up round; reasoner proceeded without waiting"
+	case "superseded":
+		return "Tool call superseded by the next round; reasoner proceeded without waiting"
 	default:
 		return "Tool call parked; reasoner proceeded"
 	}
 }
 
 // toolResultMessage builds a tool_result message for a tool call with the
-// given outcome text and error flag.
-func toolResultMessage(callID, name, text string, isError bool) llm.Message {
+// given outcome content blocks and error flag. Content may be multi-modal; an
+// empty content list is represented as a plain empty-text block so the
+// tool_result always has a body.
+func toolResultMessage(callID, name string, content []llm.ContentBlock, isError bool) llm.Message {
+	if len(content) == 0 {
+		content = []llm.ContentBlock{{Type: llm.ContentText, Text: ""}}
+	}
 	return llm.Message{
 		Role:       llm.RoleToolResult,
 		ToolCallID: callID,
 		ToolName:   name,
 		IsError:    isError,
-		Content:    []llm.ContentBlock{{Type: llm.ContentText, Text: text}},
+		Content:    content,
 	}
 }
 
@@ -544,7 +525,12 @@ func placeholderMessage(call llm.ContentBlock) llm.Message {
 // lateResultMessage appends a plain user message for a late-arriving tool
 // result on a parked call. Adding a RoleToolResult message would create a
 // duplicate [tool] entry for the same call_id, which LLM APIs reject.
-func lateResultMessage(callID, name, text, cause string) llm.Message {
+// A leading text block labels the late result; the outcome's content blocks
+// (which may be multi-modal) follow.
+func lateResultMessage(callID, name string, content []llm.ContentBlock, cause string) llm.Message {
+	if len(content) == 0 {
+		content = []llm.ContentBlock{{Type: llm.ContentText, Text: ""}}
+	}
 	label := "Late result for tool call"
 	switch cause {
 	case "timeout":
@@ -557,12 +543,16 @@ func lateResultMessage(callID, name, text, cause string) llm.Message {
 		label = "Interrupted tool call"
 	case "restart":
 		label = "Tool call interrupted by restart"
+	case "nodispatch", "superseded":
+		label = "Superseded tool call"
 	}
-	return llm.Message{
+	msg := llm.Message{
 		Role: llm.RoleUser,
 		Content: []llm.ContentBlock{{Type: llm.ContentText,
-			Text: fmt.Sprintf("[%s %s (%s) returned late]: %s", label, callID, name, text)}},
+			Text: fmt.Sprintf("[%s %s (%s) returned late]:", label, callID, name)}},
 	}
+	msg.Content = append(msg.Content, content...)
+	return msg
 }
 
 // replacePlaceholder replaces the tool_result placeholder for callID, if any.

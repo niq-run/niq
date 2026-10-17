@@ -1,0 +1,40 @@
+{
+  "name": "@niq.run/worker-sdk",
+  "version": "0.4.0",
+  "description": "TypeScript SDK for authoring niq Workers that connect to a niq bus over HTTP (SSE + POST).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/niq-run/niq.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "release": "git diff --quiet && git diff --cached --quiet || { echo \"Error: git working tree not clean\" >&2; exit 1; } && npm run test && npm run typecheck && npm run build && npm version --no-git-tag-version && npm publish"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  },
+  "license": "MIT"
+}

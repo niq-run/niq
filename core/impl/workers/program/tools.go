@@ -19,6 +19,7 @@ const (
 	TypeEdit   event.EventType = "edit"
 	TypeUpsert event.EventType = "upsert"
 	TypeDelete event.EventType = "delete"
+	TypeRun    event.EventType = "run"
 )
 
 // registerExtensions declares the program tools: each is an extension served
@@ -65,6 +66,22 @@ func (w *Worker) registerExtensions() {
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
 		w.handleLoad(ctx, tc)
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeRun,
+		Description: "Run a FormType:script program in the sandbox: loads the script content, executes it via the configured executor, and returns its final result. The script may call other tools via the SDK; those become normal request events.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Script program name (the entry content is the script source)."},
+				"args": map[string]any{"type": "object", "description": "Optional invocation arguments exposed to the script (sdk.args)."},
+			},
+			"required": []any{"name"},
+		},
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		w.handleRun(ctx, tc)
 	})
 
 	w.Register(baseworker.Extension{

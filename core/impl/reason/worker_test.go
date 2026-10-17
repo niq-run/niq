@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/reason/transcript"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
-	"github.com/niq-run/niq/core/impl/reason/transcript"
 )
 
 // TestInputDefaultTriggersReasoning verifies a default-mode input produces a
@@ -110,7 +110,7 @@ func TestSnapshotRestoreParksPendingRequests(t *testing.T) {
 	if last.Role != llm.RoleUser {
 		t.Fatalf("late result should be a user message, got role %q", last.Role)
 	}
-	if !strings.Contains(last.Content[0].Text, "late-out") {
+	if !strings.Contains(last.Content[1].Text, "late-out") {
 		t.Fatalf("late message should carry the outcome, got %+v", last.Content)
 	}
 }

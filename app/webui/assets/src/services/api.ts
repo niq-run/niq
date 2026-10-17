@@ -5,6 +5,8 @@ import type {
   CreateWorkerResult,
   EventPayload,
   EventPattern,
+  InputContent,
+  ProgramContent,
   ProgramDetail,
   ProjectInfo,
   ProjectStartResult,
@@ -233,11 +235,11 @@ export async function restartProject(id: string): Promise<ProjectStartResult> {
   return res.json()
 }
 
-export async function sendInput(text: string, target: string, inputMode: string): Promise<void> {
+export async function sendInput(content: InputContent[], target: string, inputMode: string): Promise<void> {
   await fetch(p('/api/input'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, target, input_mode: inputMode }),
+    body: JSON.stringify({ content, target, input_mode: inputMode }),
   })
 }
 
@@ -350,13 +352,16 @@ export async function sendWorkerEvent(
   id: string,
   type: string,
   payload: Record<string, unknown>,
-): Promise<void> {
+): Promise<string> {
   const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/event`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, payload }),
   })
   if (!res.ok) throw new Error((await res.text()).trim() || 'send event failed: ' + res.status)
+  // The server returns the request id so the UI can correlate + show the reply.
+  const data = await res.json().catch(() => null)
+  return data?.request_id ?? ''
 }
 
 // fetchWorkerProviders asks a reason worker for its selectable providers and
@@ -451,6 +456,14 @@ export async function fetchPrograms(): Promise<ProgramInfo[]> {
 export async function fetchProgramDetail(name: string): Promise<ProgramDetail> {
   const res = await fetch(p(`/api/programs/${encodeURIComponent(name)}`))
   if (!res.ok) throw new Error((await res.text()).trim() || 'fetch program failed: ' + res.status)
+  return res.json()
+}
+
+// fetchProgramContent returns one sub-content file's body via the program
+// worker's load tool, given the file's full abstract path.
+export async function fetchProgramContent(name: string, path: string): Promise<ProgramContent> {
+  const res = await fetch(p(`/api/programs/${encodeURIComponent(name)}/content?path=${encodeURIComponent(path)}`))
+  if (!res.ok) throw new Error((await res.text()).trim() || 'fetch content failed: ' + res.status)
   return res.json()
 }
 

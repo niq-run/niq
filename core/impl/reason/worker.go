@@ -39,7 +39,6 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/itfs/program"
-	"github.com/niq-run/niq/core/itfs/worker"
 )
 
 // EventConverter pairs an event pattern with a conversion function that
@@ -48,12 +47,6 @@ import (
 type EventConverter struct {
 	Pattern   event.EventPattern
 	Converter func(evt event.Event) []llm.Message
-}
-
-// EventPublish describes an event type that a worker publishes on the bus.
-type EventPublish struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
 }
 
 const (
@@ -76,8 +69,8 @@ type Config struct {
 	Provider        llm.LLMProvider
 	ProviderSources ProviderSources
 	// ProviderName / ProviderModel record the initially active provider for
-	// status reporting (worker.status op=providers carries the current choice).
-	// Empty when unknown.
+	// status reporting (provider.current carries the current choice). Empty
+	// when unknown.
 	ProviderName    string
 	ProviderModel   string
 	ReasoningEffort *string
@@ -105,8 +98,8 @@ type Config struct {
 }
 
 // NewBaseReasonWorker assembles a BaseReasonWorker from a Config: applies
-// budget defaults, initializes the empty tool table / publish map / tool-call
-// tracker, and seeds the transcript with any handover brief.
+// budget defaults, initializes the empty tool-call tracker, and seeds the
+// transcript with any handover brief.
 func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	if cfg.Transcript == nil {
 		cfg.Transcript = transcript.NewAccumulateTranscript(transcript.WithMaxPayloadBytes(cfg.MaxPayloadBytes))
@@ -144,8 +137,6 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		providerName:    cfg.ProviderName,
 		providerModel:   cfg.ProviderModel,
 		transcript:      cfg.Transcript,
-		tools:           make(map[string]worker.Tool),
-		publishMap:      make(map[string][]EventPublish),
 		toolListBuilder: defaultToolListBuilder,
 		eventConverters: cfg.EventConverters,
 		programs:        cfg.Programs,
@@ -182,9 +173,9 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 //
 // These expose the mechanism's operations to reason-family workers so their
 // extension handlers can be implemented outside pkg/reason without reaching
-// into unexported state. The default worker's toolkit (send_message,
-// list_workers, context.compress/rotate) lives in pkg/worker/reason and is
-// built on exactly these.
+// into unexported state. The default worker's toolkit (send_message, request,
+// context.compress) lives in pkg/worker/reason and is built on exactly
+// these.
 
 // LLMProvider returns the currently active LLM provider. A worker's context
 // strategy reads it lazily each call (e.g. for summarization) so it follows
@@ -197,7 +188,7 @@ func (w *BaseReasonWorker) CurrentTraceID() string { return w.currentTraceID }
 // Transcript returns the worker's transcript for in-place editing. The context
 // strategy (e.g. the default worker's context.compress handler) rewrites it to
 // shrink the context; the caller already holds w.mu or edits inside a
-// BeginEdit..CommitEdit window.
+// BeginEdit..Commit window.
 func (w *BaseReasonWorker) Transcript() transcript.Transcript { return w.transcript }
 
 // TailTokens returns the token budget the default context strategy retains from
@@ -221,10 +212,6 @@ func (w *BaseReasonWorker) TryReason(ctx context.Context) {
 	w.tryReason(ctx)
 }
 
-// HandleWorkerReady applies a peer (or self) worker.ready announcement,
-// replacing that worker's whole contract. Exported for embedding workers and
-// tests.
-
 // Start begins the event watch. It returns an error if the worker is already
 // started. Provided by the base so embedding reason-family workers inherit
 // the lifecycle without reimplementing it.
@@ -245,19 +232,11 @@ func (w *BaseReasonWorker) Start(ctx context.Context) error {
 	// callback off the event loop; no goroutine when nothing is installed.
 	w.StartDurableLoop(runCtx)
 
-	// Announce ourselves (BroadcastReady) and ask the current fleet who is
-	// online (discover). Choosing to keep the original startup broadcast: a
-	// worker that starts must disclose both ways — its own ready reaches
-	// whoever is already up, and its discover makes those workers reply
-	// DIRECTLY (see process.go), so it learns those that predate it. Dropping
-	// the startup discover would make early-started workers permanently
-	// invisible to the newcomer (and asymmetric).
+	// Disclose both directions on startup: BroadcastReady reaches whoever is
+	// already up, BroadcastDiscover makes those workers reply DIRECTLY (see
+	// process.go), so this worker also learns those that predate it.
 	w.BroadcastReady()
-	disc := event.New(event.TypeWorkerDiscover, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-	})
-	disc.Transient = true // presence: live-only, not durable history
-	_ = w.Channel.Broadcast(context.Background(), disc)
+	w.BroadcastDiscover()
 
 	w.started = true
 	return nil
@@ -319,7 +298,7 @@ func (w *BaseReasonWorker) Stop() error {
 // The transcript and the request tracker are carried as raw blobs because their
 // shape belongs to the transcript / the tracker, not to us. Provider is the
 // provider/model the worker is currently using, so a worker switched at runtime
-// (worker.update provider.switch) resumes on that choice instead of silently
+// (provider.switch) resumes on that choice instead of silently
 // falling back to the configured default — without it, a switch would be lost
 // on every restart.
 type reasonState struct {
@@ -449,7 +428,7 @@ func (w *BaseReasonWorker) Messages() []llm.Message {
 
 // BaseReasonWorker is the reasoning mechanism shared by all reason-family
 // workers: it embeds baseworker.BaseWorker (id/subs/channel) and owns the working
-// notes, the LLM call, budget, tool table and the run flags of one reasoning
+// notes, the LLM call, budget and the run flags of one reasoning
 // round. It knows how to reason, not what to attend to.
 type BaseReasonWorker struct {
 	baseworker.BaseWorker
@@ -460,11 +439,9 @@ type BaseReasonWorker struct {
 	providerName    string // active provider name (status reporting)
 	providerModel   string // active provider model (status reporting)
 	transcript      transcript.Transcript
-	tools           map[string]worker.Tool // tools from the bus + built-ins; read by dispatch
 	discovered      []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
 	toolListBuilder ToolListBuilder        // LLM tool list policy (extension point)
 	programs        []program.Program
-	publishMap      map[string][]EventPublish // worker ID -> published events
 	requestTracker  *requesttracker.RequestTracker
 	// toolCallSeq mints globally-unique tool-call ids for calls whose model
 	// omitted one. It must be monotonic across rounds (not per-turn) because the

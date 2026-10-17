@@ -14,6 +14,7 @@ import (
 func TestScheduleRateLimitBackoff(t *testing.T) {
 	ch := newTestChannel()
 	w := newTestWorker(nil, ch)
+	announceElapse(w, "timer")
 	cause := &llm.LLMError{Type: llm.ErrorRateLimit, Message: "429 too many requests"}
 
 	// The first maxRateLimitRetries hits schedule a reminder and pause the round.
@@ -127,6 +128,18 @@ func TestRateLimitRoundTrip(t *testing.T) {
 	prov := &rateLimitProvider{failures: 1}
 	w, ch, _ := startWorker(t, prov)
 
+	// The timer peer must be discovered before the 429, so the backoff can
+	// resolve the "elapse" capability by name (not a hardcoded worker id).
+	ch.in <- event.New(event.TypeWorkerReady, "timer", map[string]any{
+		"type":      "timer",
+		"worker_id": "timer",
+		"watch":     []map[string]any{{"event": "elapse", "desc": "reminder timer"}},
+	})
+	waitCond(t, testTimeout, func() bool {
+		_, ok := w.findProvider(elapseTool)
+		return ok
+	}, "elapse peer discovered")
+
 	// First user input: the round hits a 429 and pauses quietly.
 	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "hello"})
 	waitCond(t, testTimeout, func() bool {
@@ -150,11 +163,11 @@ func TestRateLimitRoundTrip(t *testing.T) {
 		t.Fatal("429 must be recorded in the transcript at detection time")
 	}
 
-	// Simulate the timer worker firing the reminder. It is handled like any
-	// other reminder: injected into the transcript, then a retry round starts.
-	ch.in <- event.New("timer.reminder", "timer", map[string]any{
-		"caller_id": w.ID(),
-		"result":    fmt.Sprintf(`{"tick_type":"reminder","purpose":"API rate limit (HTTP 429) hit; retrying after 1m, attempt 1/%d","duration_ms":60000}`, maxRateLimitRetries),
+	// Simulate the timer worker delivering the reminder as a worker.input. It is
+	// handled like any other input: injected into the transcript, then a retry
+	// round starts.
+	ch.in <- event.New(event.TypeWorkerInput, "timer", map[string]any{
+		"text": fmt.Sprintf("API rate limit (HTTP 429) hit; retrying after 1m, attempt 1/%d", maxRateLimitRetries),
 	})
 
 	// The retry succeeds and the round completes.
@@ -199,4 +212,14 @@ func transcriptHasText(msgs []llm.Message, sub string) bool {
 		}
 	}
 	return false
+}
+
+// announceElapse registers a peer offering the "elapse" capability, so the
+// rate-limit backoff has a provider to resolve by name.
+func announceElapse(w *BaseReasonWorker, id string) {
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, id, map[string]any{
+		"type":      "timer",
+		"worker_id": id,
+		"watch":     []map[string]any{{"event": "elapse", "desc": "reminder timer"}},
+	}))
 }

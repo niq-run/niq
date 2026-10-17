@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: niq
-    main: ./cmd/niq
+    main: ./app/publish/cmd
     binary: niq
     env:
       - CGO_ENABLED=0

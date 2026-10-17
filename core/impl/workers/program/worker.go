@@ -27,6 +27,10 @@ type Config struct {
 	ID      string
 	Bus     corebus.WorkerSideChannel
 	Backend program.Backend
+	// Executor runs FormType:script programs (the execution backend). Optional:
+	// when nil, program.run replies "executor not configured" so a worker that
+	// only stores/loads programs works without one.
+	Executor program.ScriptProgramExecutor
 }
 
 // Worker is a bus-facing worker that manages Program lifecycle.
@@ -40,12 +44,16 @@ type Config struct {
 // lets the backend resolve them.
 type Worker struct {
 	baseworker.BaseWorker
-	backend program.Backend
+	backend  program.Backend
+	executor program.ScriptProgramExecutor
 
 	started bool
 	cancel  context.CancelFunc
 
 	mu sync.Mutex // guards started / cancel
+
+	callMu  sync.Mutex                    // guards pending
+	pending map[string]chan callResult    // script tool-call slots, keyed by request id
 }
 
 // New creates a Program Worker.
@@ -57,6 +65,7 @@ func New(cfg Config) *Worker {
 	w := &Worker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		backend:    cfg.Backend,
+		executor:   cfg.Executor,
 	}
 	w.registerExtensions()
 	return w
@@ -199,6 +208,13 @@ func (w *Worker) process(ctx context.Context, evt event.Event) {
 	case event.TypeWorkerDiscover:
 		if evt.WorkerId != w.ID() {
 			w.AnnounceReadyTo(evt.WorkerId, "program", nil, false)
+		}
+	case event.TypeRequestCompleted, event.TypeRequestFailed, event.TypeRequestRejected:
+		// A reply to a script-initiated tool call (relayed through callTool).
+		// Simplest mechanism: Route replies before default-dispatch. Matching by
+		// request id; if it matches a pending call it is consumed here.
+		if !w.resolveReply(evt) {
+			w.DispatchExtension(evt)
 		}
 	default:
 		if !w.DispatchExtension(evt) {

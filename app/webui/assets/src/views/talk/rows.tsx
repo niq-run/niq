@@ -12,8 +12,8 @@ import ThinkingBlock from '../../components/ThinkingBlock'
 import ResponseBlock from '../../components/ResponseBlock'
 import SystemReminderBlock from '../../components/SystemReminderBlock'
 import {
-  getInputText, isToolResult, toolContent, toolSummary,
-  formatTime, findReferencedInput, splitSystemReminder, parseAttachments,
+  isToolResult, toolContent, toolSummary,
+  formatTime, findReferencedInput, splitSystemReminder, inputContent,
 } from '../../components/talk-utils'
 import type { EventPayload } from '../../types'
 import WorkerBadge from './WorkerBadge'
@@ -45,7 +45,8 @@ function RowBadge({ ctx, workerId, showBadge, alignRight, extraPad = false }: {
 
 function InputRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alignRight: boolean; showBadge: boolean; ctx: RowCtx }) {
   const { colors, t } = ctx
-  const parsed = parseAttachments(getInputText(evt))
+  // The rendered message body comes from the structured "content" array.
+  const parsed = inputContent(evt)
   const { reminder, content } = splitSystemReminder(parsed.text)
   const rawMode = (evt.payload?.input_mode as string) || 'append'
   const modeKey = rawMode === 'interrupt' ? 'interrupt' : rawMode === 'schedule' ? 'schedule' : 'append'
@@ -127,35 +128,7 @@ function AbortRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
   )
 }
 
-function TimerReminderRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alignRight: boolean; showBadge: boolean; ctx: RowCtx }) {
-  const { colors, t } = ctx
-  let reminderText = (evt.payload?.text as string) || (evt.payload?.purpose as string) || ''
-  if (!reminderText && evt.payload?.result) {
-    const result = evt.payload.result
-    if (typeof result === 'string') {
-      try { const p = JSON.parse(result); reminderText = p.purpose || p.text || '' } catch { reminderText = result }
-    } else if (typeof result === 'object') {
-      reminderText = (result as any).purpose || (result as any).text || ''
-    }
-  }
-  return (
-    <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
-      <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
-      <div style={{ maxWidth: alignRight ? '70%' : ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', background: colors.bgLight, border: '1px solid ' + colors.border, padding: '10px 14px', fontSize: fontSizes.base, lineHeight: 1.5, color: colors.text }}>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-          {evt.target_worker_id && <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>to: {ctx.displayName(evt.target_worker_id)}</span>}
-          <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs }}>{formatTime(evt.timestamp)}</span>
-        </div>
-        {reminderText && <div style={{ color: colors.text }}>{reminderText}</div>}
-        {evt.trace_id && (
-          <div style={{ marginTop: 6, textAlign: 'right' }}>
-            <span onClick={() => ctx.onTraceClick(evt.trace_id!)} style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.textDimmed, textDecoration: 'underline', textDecorationStyle: 'dotted' }} title={t('talk.trace.tooltip')}>{t('talk.trace')}</span>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+
 
 function CancelRow({ evt, ctx }: { evt: EventPayload; ctx: RowCtx }) {
   const { colors, t } = ctx
@@ -389,7 +362,7 @@ function ToolRowImpl({ evt, alignRight, showBadge, resultEvt, partial, ctx }: { 
 // plus the (memoized, stable) ctx.
 const MemoInputRow = memo(InputRow)
 const MemoAbortRow = memo(AbortRow)
-const MemoTimerReminderRow = memo(TimerReminderRow)
+
 const MemoTimeoutRow = memo(TimeoutRow)
 const MemoCancelRow = memo(CancelRow)
 const MemoInterruptedRow = memo(InterruptedRow)
@@ -406,7 +379,7 @@ const MemoToolRow = memo(ToolRowImpl,
 // Note: response rows are memoized above (ResponseRow) ignoring allEvents on
 // purpose, so they don't re-render on every event.
 export {
-  MemoInputRow as InputRow, MemoAbortRow as AbortRow, MemoTimerReminderRow as TimerReminderRow,
+  MemoInputRow as InputRow, MemoAbortRow as AbortRow,
   MemoTimeoutRow as TimeoutRow, MemoCancelRow as CancelRow, MemoInterruptedRow as InterruptedRow,
   MemoThinkingRow as ThinkingRow, ResponseRow,
   MemoApprovalRow as ApprovalRow, MemoToolRow as ToolRow,

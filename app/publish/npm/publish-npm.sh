@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generate and publish npm packages from a goreleaser dist/ directory.
 #
-# Usage: ./npm/publish-npm.sh <version> <dist-dir> [--dry-run]
+# Usage: ./app/publish/npm/publish-npm.sh <version> <dist-dir> [--dry-run]
 #
 # Layout produced:
 #   <dist>/npm/@niq.run/niq-<os>-<arch>/   platform subpackages (binary only)
@@ -16,7 +16,8 @@ VERSION="${1:?usage: publish-npm.sh <version> <dist-dir> [--dry-run]}"
 DIST="${2:?usage: publish-npm.sh <version> <dist-dir> [--dry-run]}"
 DRY_RUN="${3:-}"
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+NPM_DIR="${ROOT}/app/publish/npm"
 OUT="${DIST}/npm"
 
 # goos -> npm os, goarch -> npm arch
@@ -78,12 +79,12 @@ done
 # 2. Main package: copy npm/ and stamp version + matching optionalDeps.
 mkdir -p "${OUT}/niq"
 mkdir -p "${OUT}/niq/bin"
-cp "${ROOT}/npm/bin/niq.js" "${OUT}/niq/bin/"
-cp "${ROOT}/npm/README.md" "${OUT}/niq/README.md"
+cp "${NPM_DIR}/bin/niq.js" "${OUT}/niq/bin/"
+cp "${NPM_DIR}/README.md" "${OUT}/niq/README.md"
 node - "${VERSION}" "${OUT}" "${ROOT}" <<'EOF'
 const [version, out, root] = process.argv.slice(2);
 const fs = require('fs');
-const pkg = JSON.parse(fs.readFileSync(`${root}/npm/package.json`, 'utf8'));
+const pkg = JSON.parse(fs.readFileSync(`${root}/app/publish/npm/package.json`, 'utf8'));
 pkg.version = version;
 for (const dep of Object.keys(pkg.optionalDependencies || {})) {
   pkg.optionalDependencies[dep] = version;

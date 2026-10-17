@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/niq-run/niq/core/impl/reason"
+	"github.com/niq-run/niq/core/impl/reason/transcript"
 	llm "github.com/niq-run/niq/core/itfs/llm"
 )
 
@@ -58,17 +59,29 @@ func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, rotate b
 		return false, fmt.Errorf("summarize: %w", err)
 	}
 
+	head := []llm.Message{digestMessage(digest)}
+	var tail []llm.Message
 	var rewrote bool
 	if rotate {
 		// Rotate keeps the digest plus the last few clean user/assistant rounds,
 		// discarding tool traffic, keyed on round count (not tokens).
 		rounds := w.RotateRounds()
-		rewrote = t.CommitRotate(digest, rounds)
+		tail = transcript.TailRoundsClean(msgs, rounds)
+		rewrote = len(msgs) > 0
+		t.Commit(head, tail)
 		log.Printf("[reason] transcript rotated (rounds=%d, digest=%d chars, update=%v, rewrote=%v)",
 			rounds, len(digest), previousDigest != "", rewrote)
 		return rewrote, nil
 	}
-	rewrote = t.CommitEdit(digest, w.TailTokens())
+	tail = transcript.TailTokensBudget(msgs, w.TailTokens())
+	// The digest head is only added when something was actually folded away;
+	// otherwise the whole transcript already fits within the tail budget and the
+	// edit is a no-op (no digest, no fold).
+	rewrote = len(tail) < len(msgs)
+	if !rewrote {
+		head = nil
+	}
+	t.Commit(head, tail)
 	log.Printf("[reason] transcript compacted (tailTokens=%d, digest=%d chars, update=%v, rewrote=%v)",
 		w.TailTokens(), len(digest), previousDigest != "", rewrote)
 	return rewrote, nil
@@ -160,6 +173,21 @@ func summarize(ctx context.Context, prov llm.LLMProvider, projection, directive,
 
 // digestPrefix marks the head message produced by a compaction.
 const digestPrefix = "[context digest]"
+
+// digestMessage wraps a compacted transcript summary as the head message of
+// the new projection. User role: it must read as system-provided context to
+// the model without violating any pairing invariant. The [context digest]
+// prefix marks the message so update-mode summarization can detect a carried
+// digest (currentDigest parses it back). This head construction is the
+// compactor's policy, not the transcript's — the transcript only assembles the
+// head + tail it is handed.
+func digestMessage(digest string) llm.Message {
+	return llm.Message{
+		Role: llm.RoleUser,
+		Content: []llm.ContentBlock{{Type: llm.ContentText,
+			Text: digestPrefix + " " + digest}},
+	}
+}
 
 // currentDigest extracts the carried digest text from a transcript whose head
 // is a digest message (the result of a previous compaction), if any.

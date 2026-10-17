@@ -15,8 +15,8 @@ type Config struct {
 	Provider        llm.LLMProvider
 	ProviderSources reasonBase.ProviderSources
 	// ProviderName / ProviderModel record the initially active provider for
-	// status reporting (worker.status op=providers carries the current choice).
-	// Empty when unknown.
+	// status reporting (provider.current carries the current choice). Empty
+	// when unknown.
 	ProviderName    string
 	ProviderModel   string
 	Programs        []program.Program
@@ -100,7 +100,7 @@ func NewWorker(cfg Config) *Worker {
 	})
 
 	// The default worker layers its own toolkit on top of the base
-	// extensions: send_message / list_workers / context.compress /
+	// extensions: send_message / request / context.compress /
 	// context.rotate. The context ops are this worker's own strategy — it
 	// responds to the context.compress convention event by editing its
 	// transcript directly (see compact.go), not by installing a compactor
