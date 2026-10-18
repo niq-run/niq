@@ -68,12 +68,12 @@ export interface WorkerInfo {
 // registered as a remote-niw worker (the A-side niw seen from B), which is
 // likewise a valid talk partner. This is the single gate the mention component
 // and the talk worker selector use.
-export const TALK_PARTNER_TYPES = ['reason', 'coding_reason_worker', 'niw', 'remote-niw'] as const
+export const TALK_PARTNER_TYPES = ['reason', 'coding', 'niw', 'remote-niw'] as const
 
 // The reason FAMILY: workers built on the shared reasoning mechanism. They all
 // emit the reason.* event stream and produce left-side conversation bubbles, so
 // talk-view layout (avatars, alignment, direction) must treat them alike.
-export const REASON_FAMILY_TYPES = ['reason', 'coding_reason_worker'] as const
+export const REASON_FAMILY_TYPES = ['reason', 'coding'] as const
 
 // isReasonFamilyType reports whether a worker type is a reasoning worker.
 export function isReasonFamilyType(type: string): boolean {

@@ -56,7 +56,7 @@ func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
 	svc.RegisterBuilder("reason", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		return buildReasonSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("coding_reason_worker", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("coding", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		return buildCodingSpec(ctx, cfg)
 	})
 	svc.RegisterBuilder("workspace", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
@@ -263,7 +263,7 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 // ── coding reason worker ──
 
 func buildCodingSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
-	in, err := resolveReasonFamily(cfg, "coding_reason_worker")
+	in, err := resolveReasonFamily(cfg, "coding")
 	if err != nil {
 		return worker.SpawnSpec{}, err
 	}
@@ -272,7 +272,7 @@ func buildCodingSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	programWorkerID, _ := p["program_worker"].(string)
 	directoryWorkerID, _ := p["directory_worker"].(string)
 
-	connect := specConnect(ctx, in.id, "coding_reason_worker", in.pubAllow, in.subAllow)
+	connect := specConnect(ctx, in.id, "coding", in.pubAllow, in.subAllow)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return coding.NewWorker(coding.Config{
 			ID:                in.id,
@@ -302,7 +302,7 @@ func buildCodingSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 			},
 		})
 	}
-	cfg.Type = "coding_reason_worker"
+	cfg.Type = "coding"
 	return worker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
 }
 

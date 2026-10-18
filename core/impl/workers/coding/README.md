@@ -84,7 +84,7 @@ default compaction directive, and reuses the default reason-family toolkit
 (`reasonworkers.RegisterDefaultExtensions` — message / request /
 context.compress / program.*).
 
-Registered as worker type **`coding_reason_worker`**; params of interest:
+Registered as worker type **`coding`**; params of interest:
 
 | Param | Meaning |
 |---|---|
