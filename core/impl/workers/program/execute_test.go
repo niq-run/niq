@@ -117,6 +117,48 @@ func (blockingExecutor) Start(context.Context, string, map[string]any, program.T
 	return blockingSession{}, nil
 }
 
+// TestHandleRunInlineSource verifies mode B: an inline source runs without any
+// stored program.
+func TestHandleRunInlineSource(t *testing.T) {
+	ch := &stubChannel{}
+	sess := &replaySession{result: "INLINE-DONE"}
+	gotSrc := make(chan string, 1)
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir()), Executor: &replayExecutor{session: sess, gotSrc: gotSrc}})
+
+	go w.handleRun(context.Background(), baseworker.ToolCall{
+		CallerID: "caller", CallID: "c2", Name: "run",
+		Args: map[string]any{"source": "sdk.result('x')"}, TraceID: "t",
+	})
+
+	select {
+	case s := <-gotSrc:
+		if s != "sdk.result('x')" {
+			t.Fatalf("executor got %q, want the inline source", s)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("executor not started for inline source")
+	}
+}
+
+// TestHandleRunRejectsBothModes verifies exactly one of name / source is allowed.
+func TestHandleRunRejectsBothModes(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir()), Executor: blockingExecutor{}})
+
+	w.handleRun(context.Background(), baseworker.ToolCall{
+		CallerID: "caller", CallID: "c3", Name: "run",
+		Args: map[string]any{"name": "a", "source": "b"}, TraceID: "t",
+	})
+	waitUntil(t, time.Second, func() bool {
+		for _, e := range ch.snapshot() {
+			if e.Type == event.TypeRequestFailed && e.RequestId == "c3" {
+				return true
+			}
+		}
+		return false
+	}, "both-modes rejection")
+}
+
 // TestHandleRunTimesOut verifies a session that never returns is killed by the
 // per-run timeout and the worker replies failed instead of hanging.
 func TestHandleRunTimesOut(t *testing.T) {

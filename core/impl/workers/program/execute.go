@@ -105,8 +105,16 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 // stays free to receive the request.* replies those calls await.
 func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 	name, _ := tc.Args["name"].(string)
-	if name == "" {
-		w.ReplyFailed(tc.CallerID, tc.CallID, "name is required", tc.TraceID)
+	source, _ := tc.Args["source"].(string)
+
+	// Two modes: run a stored script program by name (reuse), or run inline
+	// source directly (ad-hoc / transient, nothing persisted). Exactly one.
+	switch {
+	case name == "" && source == "":
+		w.ReplyFailed(tc.CallerID, tc.CallID, "provide either name (a stored script program) or source (inline script)", tc.TraceID)
+		return
+	case name != "" && source != "":
+		w.ReplyFailed(tc.CallerID, tc.CallID, "provide only one of name or source, not both", tc.TraceID)
 		return
 	}
 	if w.executor == nil {
@@ -127,10 +135,14 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 		runCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		src, err := w.backend.Read(ctx, name)
-		if err != nil {
-			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("load %s: %v", name, err), tc.TraceID)
-			return
+		src := source
+		if src == "" {
+			loaded, err := w.backend.Read(ctx, name)
+			if err != nil {
+				w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("load %s: %v", name, err), tc.TraceID)
+				return
+			}
+			src = loaded
 		}
 
 		sess, err := w.executor.Start(runCtx, src, args, w.callTool)

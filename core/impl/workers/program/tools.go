@@ -70,27 +70,31 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event: TypeRun,
-		Description: "Run a script program (a FormType:script program — TypeScript source, not prose) in an isolated sandbox. " +
+		Description: "Run TypeScript in an isolated sandbox, in one of two modes: pass name to reuse a stored script program, or pass source to run inline script directly (ad-hoc / transient). " +
 			"Within one run the script can call other workers' tools through its SDK; each such call becomes a normal request event, and the run returns the script's final result. " +
-			"Use this to execute a sequence of tool calls the script encodes in one shot, instead of issuing them one reasoning round at a time. " +
-			"Find script programs with program__search and read one's source with program__load(name) before running it.",
+			"Use this to execute a sequence of tool calls in one shot, instead of issuing them one reasoning round at a time. " +
+			"For a stored script, find it with program__search and read its source with program__load(name). Provide exactly one of name or source.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Name of the script program to run. Its entry content is the TypeScript source executed in the sandbox; discover candidates with program__search and inspect the source with program__load(name).",
+					"description": "Mode A (reuse): name of a stored script program to run. Its entry content is the TypeScript source executed in the sandbox; discover candidates with program__search and inspect the source with program__load(name). Provide this OR source, not both.",
+				},
+				"source": map[string]any{
+					"type":        "string",
+					"description": "Mode B (ad-hoc): the TypeScript source to run directly, nothing persisted. The script body may use top-level await and sdk.call/log/result/args; e.g. `const r = await sdk.call(\"workspace\", \"bash\", { command: \"ls\" }); sdk.result(r);`. Provide this OR name, not both.",
 				},
 				"args": map[string]any{
 					"type":        "object",
-					"description": "Optional arguments object handed to the script as sdk.args (the script reads them directly, e.g. sdk.args.x). Use it to parameterise a reusable script rather than writing a new one.",
+					"description": "Optional arguments object handed to the script as sdk.args (the script reads them directly, e.g. sdk.args.x). Useful in both modes to parameterise a script.",
 				},
 				"timeout_seconds": map[string]any{
 					"type":        "number",
 					"description": "Optional wall-clock limit for the whole run in seconds (default 120). On expiry the sandbox is killed and the call fails with a timeout error.",
 				},
 			},
-			"required": []any{"name"},
+			"required": []any{},
 		},
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
