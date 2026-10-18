@@ -347,7 +347,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
                     <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.4 }}>{w.description}</span>
                   )}
                 </span>
-                {pinnedIds.includes(w.id) && <PinMark colors={colors} style={{ paddingLeft: 0 }} />}
+                {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} style={{ paddingLeft: 0 }} />}
                 <span style={{ flexShrink: 0, color: w.online === false ? colors.textDimmed : colors.toolCompleted, fontSize: fontSizes.sm }}>
                   {w.online === false ? t('worker.offline') : t('worker.online')}
                 </span>

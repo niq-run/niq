@@ -683,7 +683,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   >
                     {w.id}
                   </span>
-                  {pinnedIds.includes(w.id) && <PinMark colors={colors} />}
+                  {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} />}
                 </ContextMenuSurface>
               )
             }
@@ -706,7 +706,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                     {w.id}
                   </span>
                   {w.type ? <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, flexShrink: 0 }}>[{w.type}]</span> : null}
-                  {pinnedIds.includes(w.id) && <PinMark colors={colors} />}
+                  {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} />}
                 </span>
               </ContextMenuSurface>
             )
