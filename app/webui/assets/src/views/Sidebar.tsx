@@ -7,7 +7,7 @@ import WorkerRowMenu from '../components/WorkerRowMenu'
 import ContextMenuSurface from '../components/ContextMenuSurface'
 import PinMark from '../components/PinMark'
 import { useContextMenu, contextMenuElementStyle } from '../hooks/useContextMenu'
-import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned, movePinnedWorker } from '../pinnedWorkers'
+import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned, moveWorkerOrder } from '../pinnedWorkers'
 import pinSvg from '../assets/pin.svg'
 import pinwSvg from '../assets/pinw.svg'
 
@@ -83,12 +83,11 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   }
   // Right-click menu position for the worker under the cursor, or null.
   const [rowMenu, setRowMenu] = useState<{ id: string; x: number; y: number } | null>(null)
-  // Drag-and-drop reordering of the PINNED group. dragPinId is the row being
+  // Drag-and-drop reordering of ANY worker row. dragPinId is the row being
   // dragged; dropTarget is where it would land (before/after that row).
   const [dragPinId, setDragPinId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: string; before: boolean } | null>(null)
   const dragPropsFor = (id: string) => {
-    if (!pinnedIds.includes(id)) return {}
     return {
       draggable: true,
       onDragStart: (e: React.DragEvent<HTMLDivElement>) => {
@@ -111,7 +110,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         setDragPinId(null)
         setDropTarget(null)
         if (from && from !== target.id) {
-          movePinnedWorker(from, target.id, target.before)
+          moveWorkerOrder(from, target.id, target.before, selectorList.map((x) => x.id))
           setPrefTick((x) => x + 1)
         }
       },
