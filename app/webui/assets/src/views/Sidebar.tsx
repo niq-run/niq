@@ -5,6 +5,7 @@ import { isTalkPartnerType, type WorkerInfo, type ViewMode, type ViewSettings, t
 import WorkerPickerModal from '../components/WorkerPickerModal'
 import WorkerRowMenu from '../components/WorkerRowMenu'
 import ContextMenuSurface from '../components/ContextMenuSurface'
+import PinMark from '../components/PinMark'
 import { useContextMenu, contextMenuElementStyle } from '../hooks/useContextMenu'
 import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned } from '../pinnedWorkers'
 import pinSvg from '../assets/pin.svg'
@@ -972,19 +973,5 @@ function ToggleRow({ label, on, onToggle, colors, dark, mobile = false, size = f
         />
       </div>
     </div>
-  )
-}
-
-// PinMark is the small right-side marker on a PINNED worker row: a compact
-// upward arrow in the accent colour, so pinned rows are recognisable even
-// though they also sort to the top.
-function PinMark({ colors }: { colors: import('../theme').Palette }) {
-  return (
-    <span
-      title="pinned"
-      style={{ marginLeft: 'auto', flexShrink: 0, color: colors.accent, fontSize: fontSizes.sm, lineHeight: 1, userSelect: 'none', paddingLeft: 6 }}
-    >
-      {'\u2191'}
-    </span>
   )
 }
