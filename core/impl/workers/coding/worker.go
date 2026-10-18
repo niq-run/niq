@@ -138,6 +138,9 @@ func NewWorker(cfg Config) *Worker {
 		SeedMessages:    cfg.SeedMessages,
 		Readme:          cfg.Readme,
 		ToolListBuilder: toolListBuilder(mode, programID, directoryID),
+		// Announce as "coding" (not the default "reason") so peers, the
+		// directory and the control plane see the accurate type.
+		WorkerType: "coding",
 	})
 
 	// Reuse the default reason-family toolkit (message / request /

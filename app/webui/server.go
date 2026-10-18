@@ -1344,6 +1344,17 @@ func (s *Server) workerOnline(id string) (online bool, wtype string) {
 	return true, ""
 }
 
+// isReasonFamilyType reports whether a worker runs on the shared reasoning
+// mechanism and therefore exposes provider.* management: the generic reason
+// worker and the coding reason worker.
+func isReasonFamilyType(workerType string) bool {
+	switch workerType {
+	case "reason", "coding":
+		return true
+	}
+	return false
+}
+
 // providerListResult is the worker.query provider.list answer, reshaped for the
 // UI: the selectable providers and the worker's current choice.
 type providerListResult struct {
@@ -1371,8 +1382,8 @@ func (s *Server) handleWorkerProviders(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
 		return
 	}
-	if wtype != "reason" {
-		http.Error(w, "worker "+id+" has no switchable providers (only reason workers do)", http.StatusNotFound)
+	if !isReasonFamilyType(wtype) {
+		http.Error(w, "worker "+id+" has no switchable providers (only reason-family workers do)", http.StatusNotFound)
 		return
 	}
 
@@ -1429,8 +1440,8 @@ func (s *Server) handleWorkerSetProvider(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
 		return
 	}
-	if wtype != "reason" {
-		http.Error(w, "worker "+id+" has no switchable providers (only reason workers do)", http.StatusNotFound)
+	if !isReasonFamilyType(wtype) {
+		http.Error(w, "worker "+id+" has no switchable providers (only reason-family workers do)", http.StatusNotFound)
 		return
 	}
 

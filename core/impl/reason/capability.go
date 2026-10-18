@@ -66,7 +66,7 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 	// not treated as callable capabilities — its extensions (context.compress,
 	// program_query, ...) are never surfaced as tools here. Infra workers
 	// (workspace/timer/program/directory...) expose real tools and are kept.
-	if workerID != w.ID() && evt.Payload["type"] == "reason" {
+	if workerID != w.ID() && isReasonFamilyWorkerType(evt.Payload["type"]) {
 		return
 	}
 
@@ -279,14 +279,14 @@ func (w *BaseReasonWorker) BroadcastReady() {
 	// externally callable contract only — SelfOnly extensions are left out, so
 	// peers never see them as callable tools. This is the generic announce
 	// every worker uses; only the self-directed half below is reason-specific.
-	w.AnnounceReady("reason", nil)
+	w.AnnounceReady(w.workerType, nil)
 
 	// Second batch: the full contract (SelfOnly included) sent to itself. This
 	// is the self-directed round-trip through discovery — HandleWorkerReady
 	// treats it like any peer's announcement, so this worker's own capabilities
 	// flow through the same unified discovery pipeline as everyone else's.
 	self := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"type": "reason",
+		"type": w.workerType,
 		// Full contract, SelfOnly included (this worker's own view).
 		"watch": w.WatchEntries(true),
 	})
@@ -365,4 +365,16 @@ func ToolNameOfCapability(w *BaseReasonWorker, cap DiscoveredCapability) string 
 // reasoning round.
 func (w *BaseReasonWorker) LLMToolDefs() []llm.ToolDef {
 	return w.toolListBuilder(w, w.discoveredCapabilities())
+}
+
+// isReasonFamilyWorkerType reports whether an announced worker type is a
+// reason-family worker (the generic reason worker or the coding worker). A
+// reason-family worker's ready lists the events IT responds to, not callable
+// capabilities for peers, so the discovery path ignores it as a tool source.
+func isReasonFamilyWorkerType(v any) bool {
+	switch v {
+	case "reason", "coding":
+		return true
+	}
+	return false
 }

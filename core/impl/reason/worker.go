@@ -101,6 +101,12 @@ type Config struct {
 	// itself live in its snapshot and override this value on restore.
 	Readme string
 
+	// WorkerType is the type label this worker announces in its presence
+	// (worker.ready payload, and the baseworker AnnounceReady type). Defaults to
+	// "reason"; a reason-family worker (e.g. the coding worker) sets its own so
+	// peers and the directory see the accurate type.
+	WorkerType string
+
 	// ToolListBuilder is the LLM tool-list policy (what the model sees). nil
 	// uses DefaultToolListBuilder (all discovered capabilities). A reason-family
 	// worker supplies its own to narrow the surface — e.g. a coding worker's
@@ -164,6 +170,7 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		rotateRounds:    cfg.RotateRounds,
 		reasoningEffort: cfg.ReasoningEffort,
 		readme:          cfg.Readme,
+		workerType:      workerTypeOrDefault(cfg.WorkerType),
 	}
 	// Durable-change signalling is the base's machinery (baseworker); the
 	// mechanism only decides when to raise it (see handleSetLLMProvider).
@@ -471,6 +478,7 @@ type BaseReasonWorker struct {
 	transcript      transcript.Transcript
 	discovered      []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
 	toolListBuilder ToolListBuilder        // LLM tool list policy (extension point)
+	workerType      string                 // announced presence type (default "reason")
 	programs        []program.Program
 	readme          string // the worker's own description (worker.readme)
 	requestTracker  *requesttracker.RequestTracker
@@ -507,4 +515,13 @@ type BaseReasonWorker struct {
 	rotateRounds    int
 	lastUsageTokens int
 	budgetReminded  bool
+}
+
+// workerTypeOrDefault returns the worker's announced type, defaulting to the
+// generic reason worker's label.
+func workerTypeOrDefault(t string) string {
+	if t == "" {
+		return "reason"
+	}
+	return t
 }

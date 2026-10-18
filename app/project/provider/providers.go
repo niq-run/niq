@@ -21,7 +21,8 @@ import (
 func EnsureLLMConfigured(cfgs []worker.WorkerConfig) error {
 	needsLLM := false
 	for _, cfg := range cfgs {
-		if cfg.Type == "reason" {
+		// Reason-family workers (reason / coding) both need an LLM.
+		if cfg.Type == "reason" || cfg.Type == "coding" {
 			needsLLM = true
 			break
 		}
