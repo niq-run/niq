@@ -564,116 +564,146 @@ export default function App() {
       } catch {}
     }
 
-    const es = new EventSource(url)
-    // Keep a local "was this a reconnect?" flag so we can log reconnects
-    // (EventSource itself doesn't tell onopen apart from the first connect).
-    let hadOpen = false
-    es.onopen = () => {
-      setStreamDropped(false)
-      hadOpen = true
-      sseOpenAtRef.current = Date.now()
-      sseReconnectsRef.current += 1
-      // Treat every (re)open as a clean new stream: reset the per-connection
-      // bookkeeping so a reconnected timeline can't be polluted by the old
-      // connection's already-seen ids / deliveries. The watermark re-pull that
-      // follows (loadInitialHistory) rebuilds both from the recent history, so
-      // nothing is lost — and a message the old connection had consumed but
-      // never rendered is no longer swallowed by the stale seenRef.
-      seenRef.current = new Set()
-      deliveriesRef.current = {}
-      const ls = lastSendRef.current
-      console.debug(
-        `[stream-diag] SSE opened ${url} reconnect#${sseReconnectsRef.current}` +
-          (ls ? ` (${Math.round((Date.now() - ls.t) / 1000)}s since last send)` : ''),
-      )
-    }
-    // A dropped / erroring stream (server closed the connection, a reconnect
-    // failed, or a network blip) surfaces a banner telling the user to grab the
-    // project logs — otherwise a silently missing live stream looks like "the
-    // app ignored me". EventSource auto-reconnects, so onopen clears it again;
-    // the guard drops a stale stream's error so a torn-down subscription can't
-    // raise a phantom banner after its view switched.
-    es.onerror = () => {
-      if (streamKeyRef.current === myKey) {
-        setStreamDropped(true)
-        // window.__niqStreamDropped = true // (reserved)
-        const now = Date.now()
+    // The browser's EventSource reconnects on its own ONLY while every attempt
+    // gets 200 + text/event-stream. A non-200 — notably the 502 the control-plane
+    // proxy returns while the project restarts or is briefly unreachable (see
+    // app/control/proxy.go) — makes it fail the connection for good (readyState
+    // CLOSED) with no further retries, so the live stream would stay dead until a
+    // manual reload. We therefore drive reconnection ourselves: whenever the
+    // EventSource lands in CLOSED we close it and reconnect on a capped backoff;
+    // onopen resets the backoff and clears the dropped banner. The `src !== es`
+    // guard drops a stale source's late events after we've replaced it.
+    let es: EventSource | null = null
+    let disposed = false
+    let retry = 0
+    let retryTimer = 0
+
+    const connect = () => {
+      if (disposed) return
+      const src = new EventSource(url)
+      es = src
+      src.onopen = () => {
+        if (disposed || src !== es) return
+        setStreamDropped(false)
+        retry = 0
+        sseOpenAtRef.current = Date.now()
+        sseReconnectsRef.current += 1
+        // Treat every (re)open as a clean new stream: reset the per-connection
+        // bookkeeping so a reconnected timeline can't be polluted by the old
+        // connection's already-seen ids / deliveries. The watermark re-pull that
+        // follows (loadInitialHistory) rebuilds both from the recent history, so
+        // nothing is lost — and a message the old connection had consumed but
+        // never rendered is no longer swallowed by the stale seenRef.
+        seenRef.current = new Set()
+        deliveriesRef.current = {}
         const ls = lastSendRef.current
-        // readyState discriminates the failure mode: CLOSED (2) after a server-
-        // initiated close (the handler returned), CONNECTING (0) on a network /
-        // proxy drop where the browser is about to retry. Up-time + time since
-        // the last live event / send + reconnect count expose the drop cadence.
-        const rsName =
-          es.readyState === 1 ? 'OPEN' : es.readyState === 2 ? 'CLOSED' : 'CONNECTING'
-        const up = sseOpenAtRef.current
-          ? `${Math.round((now - sseOpenAtRef.current) / 1000)}s up`
-          : '0s up'
-        const sinceEvt = sseLastEvtAtRef.current
-          ? `${Math.round((now - sseLastEvtAtRef.current) / 1000)}s since last event`
-          : 'no event yet'
-        const sinceSend = ls
-          ? `${Math.round((now - ls.t) / 1000)}s since last send ("${ls.text}")`
-          : 'no recent send'
-        console.warn(
-          `[stream-diag] SSE ERROR at ${new Date().toISOString()} readyState=${rsName}(${es.readyState}) ${up}, ${sinceEvt}, ${sinceSend}, reconnect#${sseReconnectsRef.current}`,
+        console.debug(
+          `[stream-diag] SSE opened ${url} reconnect#${sseReconnectsRef.current}` +
+            (ls ? ` (${Math.round((Date.now() - ls.t) / 1000)}s since last send)` : ''),
         )
       }
-    }
-    // Keep a per-connection "last live event" timestamp so the error handler can
-    // report whether a drop happened mid-activity (events flowing right up to
-    // the disconnect) or after a quiet span.
-    const recordLiveEvent = () => { sseLastEvtAtRef.current = Date.now() }
-    // The server advertises the subscription watermark as a control event before
-    // any data; we use it to kick off backwards pagination for history.
-    const onWatermark = (e: MessageEvent) => { watermarkRef.current = e.data as string; loadInitialHistory(e.data as string) }
-    es.addEventListener('watermark', onWatermark)
-    es.onmessage = (msg) => {
-      recordLiveEvent()
-      const evt = JSON.parse(msg.data) as EventPayload
-      if (evt.type === 'event.delivered') {
-        const eventId = evt.payload?.event_id as string | undefined
-        const recipients = evt.payload?.recipients as string[] | undefined
-        if (eventId && recipients) {
-          deliveriesRef.current = { ...deliveriesRef.current, [eventId]: recipients }
-          setDeliveries(deliveriesRef.current)
+      // A dropped / erroring stream (server closed the connection, a reconnect
+      // failed, or a network blip) surfaces a banner telling the user to grab the
+      // project logs — otherwise a silently missing live stream looks like "the
+      // app ignored me". onopen clears it again; the streamKey guard drops a
+      // stale stream's error so a torn-down subscription can't raise a phantom
+      // banner after its view switched.
+      src.onerror = () => {
+        if (disposed || src !== es) return
+        if (streamKeyRef.current === myKey) {
+          setStreamDropped(true)
+          const now = Date.now()
+          const ls = lastSendRef.current
+          // readyState discriminates the failure mode: CLOSED (2) after a server-
+          // initiated close or a give-up, CONNECTING (0) on a network / proxy drop
+          // where the browser is about to retry. Up-time + time since the last
+          // live event / send + reconnect count expose the drop cadence.
+          const rsName =
+            src.readyState === 1 ? 'OPEN' : src.readyState === 2 ? 'CLOSED' : 'CONNECTING'
+          const up = sseOpenAtRef.current
+            ? `${Math.round((now - sseOpenAtRef.current) / 1000)}s up`
+            : '0s up'
+          const sinceEvt = sseLastEvtAtRef.current
+            ? `${Math.round((now - sseLastEvtAtRef.current) / 1000)}s since last event`
+            : 'no event yet'
+          const sinceSend = ls
+            ? `${Math.round((now - ls.t) / 1000)}s since last send ("${ls.text}")`
+            : 'no recent send'
+          console.warn(
+            `[stream-diag] SSE ERROR at ${new Date().toISOString()} readyState=${rsName}(${src.readyState}) ${up}, ${sinceEvt}, ${sinceSend}, reconnect#${sseReconnectsRef.current}`,
+          )
         }
-        return
+        // If the browser has given up (CLOSED), take over with our own retry.
+        if (src.readyState === EventSource.CLOSED) {
+          src.close()
+          if (es === src) es = null
+          const delay = Math.min(30_000, 1000 * 2 ** Math.min(retry, 5))
+          retry += 1
+          retryTimer = window.setTimeout(connect, delay)
+        }
       }
-      if (seenRef.current.has(evt.id)) return
-      // Steady live-stream events arrive in order, so the common case is a cheap
-      // sorted append: build one new array (for React to see a new reference)
-      // but skip the full-array sort and the dedupe-set rebuild. Only a rare
-      // genuinely out-of-order delivery falls back to mergeEvents, which sorts
-      // to keep the timeline ordered. This is the difference between a per-event
-      // O(n·log n) sort and a linear copy — with thousands of rows that was the
-      // dominant dom/script cost, which is why trims had to kick in so early.
-      const prev = eventsRef.current
-      const lastEvt = prev[prev.length - 1]
-      const inOrder = !!lastEvt && (
-        evt.timestamp > lastEvt.timestamp ||
-        (evt.timestamp === lastEvt.timestamp && evt.id > lastEvt.id)
-      )
-      let next: EventPayload[]
-      if (inOrder) {
-        next = prev.concat([evt])
-        eventsRef.current = next
-        seenRef.current.add(evt.id)
-        setEvents(next)
-      } else {
-        next = mergeEvents(prev, [evt])
-        eventsRef.current = next
-        setEvents(next)
-        // Rebase the dedupe set to the retained ids (only needs doing on the
-        // rare out-of-order path; the in-order path is kept identical by add).
-        seenRef.current = new Set(next.map((e) => e.id))
-      }
-      if (activeFollowingRef.current && next.length >= TRIM_HIGH) {
-        scheduleTrim(0)
+      // Keep a per-connection "last live event" timestamp so the error handler
+      // can report whether a drop happened mid-activity (events flowing right up
+      // to the disconnect) or after a quiet span.
+      const recordLiveEvent = () => { sseLastEvtAtRef.current = Date.now() }
+      // The server advertises the subscription watermark as a control event
+      // before any data; we use it to kick off backwards pagination for history.
+      const onWatermark = (e: MessageEvent) => { watermarkRef.current = e.data as string; loadInitialHistory(e.data as string) }
+      src.addEventListener('watermark', onWatermark)
+      src.onmessage = (msg) => {
+        if (src !== es) return
+        recordLiveEvent()
+        const evt = JSON.parse(msg.data) as EventPayload
+        if (evt.type === 'event.delivered') {
+          const eventId = evt.payload?.event_id as string | undefined
+          const recipients = evt.payload?.recipients as string[] | undefined
+          if (eventId && recipients) {
+            deliveriesRef.current = { ...deliveriesRef.current, [eventId]: recipients }
+            setDeliveries(deliveriesRef.current)
+          }
+          return
+        }
+        if (seenRef.current.has(evt.id)) return
+        // Steady live-stream events arrive in order, so the common case is a cheap
+        // sorted append: build one new array (for React to see a new reference)
+        // but skip the full-array sort and the dedupe-set rebuild. Only a rare
+        // genuinely out-of-order delivery falls back to mergeEvents, which sorts
+        // to keep the timeline ordered. This is the difference between a per-event
+        // O(n·log n) sort and a linear copy — with thousands of rows that was the
+        // dominant dom/script cost, which is why trims had to kick in so early.
+        const prev = eventsRef.current
+        const lastEvt = prev[prev.length - 1]
+        const inOrder = !!lastEvt && (
+          evt.timestamp > lastEvt.timestamp ||
+          (evt.timestamp === lastEvt.timestamp && evt.id > lastEvt.id)
+        )
+        let next: EventPayload[]
+        if (inOrder) {
+          next = prev.concat([evt])
+          eventsRef.current = next
+          seenRef.current.add(evt.id)
+          setEvents(next)
+        } else {
+          next = mergeEvents(prev, [evt])
+          eventsRef.current = next
+          setEvents(next)
+          // Rebase the dedupe set to the retained ids (only needs doing on the
+          // rare out-of-order path; the in-order path is kept identical by add).
+          seenRef.current = new Set(next.map((e) => e.id))
+        }
+        if (activeFollowingRef.current && next.length >= TRIM_HIGH) {
+          scheduleTrim(0)
+        }
       }
     }
+
+    connect()
+
     return () => {
-      es.close()
+      disposed = true
+      window.clearTimeout(retryTimer)
       window.clearTimeout(trimTimerRef.current)
+      if (es) es.close()
     }
     // Re-run whenever the filter changes (events view), or the selected talk
     // conversation changes — both are captured in streamKey. `view` itself is
