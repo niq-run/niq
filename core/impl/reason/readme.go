@@ -32,7 +32,7 @@ func (w *BaseReasonWorker) registerReadme() {
 	w.RegisterReadme(
 		"Read this worker's readme: a short description of what it is for. "+
 			"Use it to recall a worker's purpose before delegating to it.",
-		w.Readme, nil)
+		w.ReadmeLocked, nil)
 
 	w.Register(baseworker.Extension{
 		Event: TypeReadmeUpdate,
@@ -57,7 +57,17 @@ func (w *BaseReasonWorker) Readme() string {
 	return w.readme
 }
 
+// ReadmeLocked is Readme without taking w.mu. Extension handlers must use it:
+// they are invoked from process(), which holds w.mu for the whole dispatch, and
+// sync.Mutex is not reentrant — locking here would self-deadlock the event loop
+// (the worker then never processes another event, so it stops reasoning for
+// good).
+func (w *BaseReasonWorker) ReadmeLocked() string { return w.readme }
+
 // handleReadmeUpdate replaces the worker's readme and makes it durable.
+//
+// Runs inside process() with w.mu held (see ReadmeLocked), so it writes the
+// field directly instead of taking the lock.
 func (w *BaseReasonWorker) handleReadmeUpdate(evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
@@ -68,9 +78,7 @@ func (w *BaseReasonWorker) handleReadmeUpdate(evt event.Event) {
 		w.ReplyFailed(tc.CallerID, tc.CallID, "readme must be a string", tc.TraceID)
 		return
 	}
-	w.mu.Lock()
 	w.readme = strings.TrimSpace(text)
-	w.mu.Unlock()
 	w.NotifyDurableChange()
 	w.ReplyCompleted(tc.CallerID, tc.CallID, "readme updated", tc.TraceID)
 }
