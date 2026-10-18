@@ -52,22 +52,24 @@ func newCoding(t *testing.T, mode string) *Worker {
 	return w
 }
 
-// TestPTCModeExposesOnlyProgramTools verifies PTC mode keeps only the program
-// worker's tools (and the worker's own self tools) — every other peer tool is
+// TestPTCModeExposesDirectoryAndProgramTools verifies PTC mode keeps the
+// directory worker's tools (discovery) and the program worker's tools
+// (invocation) plus the worker's own self tools — every other peer tool is
 // dropped from the LLM tool list.
-func TestPTCModeExposesOnlyProgramTools(t *testing.T) {
+func TestPTCModeExposesDirectoryAndProgramTools(t *testing.T) {
 	w := newCoding(t, ToolModePTC)
 	names := toolNames(w)
 
-	for _, want := range []string{"program__run", "program__search", "program__load"} {
+	for _, want := range []string{
+		"program__run", "program__search", "program__load",
+		"directory__list_workers", "directory__get_worker_info",
+	} {
 		if !names[want] {
 			t.Errorf("PTC tool list missing %q (got %v)", want, names)
 		}
 	}
-	for _, unwanted := range []string{"workspace__bash", "directory__list_workers", "directory__get_worker_info"} {
-		if names[unwanted] {
-			t.Errorf("PTC tool list must not include %q", unwanted)
-		}
+	if names["workspace__bash"] {
+		t.Error("PTC tool list must not include workspace__bash (reached through a script)")
 	}
 }
 

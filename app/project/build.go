@@ -270,29 +270,31 @@ func buildCodingSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	p := cfg.Params
 	toolMode, _ := p["tool_mode"].(string)
 	programWorkerID, _ := p["program_worker"].(string)
+	directoryWorkerID, _ := p["directory_worker"].(string)
 
 	connect := specConnect(ctx, in.id, "coding_reason_worker", in.pubAllow, in.subAllow)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return coding.NewWorker(coding.Config{
-			ID:               in.id,
-			Provider:         in.providerSources.Default(),
-			ProviderSources:  in.providerSources,
-			ProviderName:     in.pname,
-			ProviderModel:    in.pmodel,
-			Programs:         in.programs,
-			EventConverters:  in.events,
-			Bus:              ch,
-			ContextWindow:    in.contextWindow,
-			BudgetSoft:       in.budgetSoft,
-			BudgetHard:       in.budgetHard,
-			TailTokens:       in.tailTokens,
-			RotateRounds:     in.rotateRounds,
-			CompactDirective: in.compactDirective,
-			Readme:           in.readme,
-			MaxPayloadBytes:  20 * 1024,
-			SeedMessages:     in.seedBrief,
-			ToolMode:         toolMode,
-			ProgramWorkerID:  programWorkerID,
+			ID:                in.id,
+			Provider:          in.providerSources.Default(),
+			ProviderSources:   in.providerSources,
+			ProviderName:      in.pname,
+			ProviderModel:     in.pmodel,
+			Programs:          in.programs,
+			EventConverters:   in.events,
+			Bus:               ch,
+			ContextWindow:     in.contextWindow,
+			BudgetSoft:        in.budgetSoft,
+			BudgetHard:        in.budgetHard,
+			TailTokens:        in.tailTokens,
+			RotateRounds:      in.rotateRounds,
+			CompactDirective:  in.compactDirective,
+			Readme:            in.readme,
+			MaxPayloadBytes:   20 * 1024,
+			SeedMessages:      in.seedBrief,
+			ToolMode:          toolMode,
+			ProgramWorkerID:   programWorkerID,
+			DirectoryWorkerID: directoryWorkerID,
 			OnDurableChange: func() {
 				if err := ctx.WorkerSvc.Checkpoint(in.id); err != nil {
 					log.Printf("[project] checkpoint %s: %v", in.id, err)

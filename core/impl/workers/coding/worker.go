@@ -40,6 +40,11 @@ const (
 // DefaultProgramWorkerID is the program worker whose tools PTC mode keeps.
 const DefaultProgramWorkerID = "program"
 
+// DefaultDirectoryWorkerID is the directory worker whose tools PTC mode keeps —
+// capability DISCOVERY is directory's job (program is capability INVOCATION), so
+// it is exposed directly rather than being reached through a script.
+const DefaultDirectoryWorkerID = "directory"
+
 // Config holds the configuration for a coding reason worker.
 type Config struct {
 	ID              string
@@ -73,6 +78,9 @@ type Config struct {
 	// ProgramWorkerID is the program worker whose tools ToolModePTC keeps.
 	// Empty uses DefaultProgramWorkerID.
 	ProgramWorkerID string
+	// DirectoryWorkerID is the directory worker whose tools ToolModePTC keeps
+	// (capability discovery). Empty uses DefaultDirectoryWorkerID.
+	DirectoryWorkerID string
 }
 
 // Worker is the coding reason worker: it embeds the shared reasoning mechanism.
@@ -89,6 +97,10 @@ func NewWorker(cfg Config) *Worker {
 	programID := cfg.ProgramWorkerID
 	if programID == "" {
 		programID = DefaultProgramWorkerID
+	}
+	directoryID := cfg.DirectoryWorkerID
+	if directoryID == "" {
+		directoryID = DefaultDirectoryWorkerID
 	}
 
 	// Coding compaction directive: keep the working set in the carried digest.
@@ -124,7 +136,7 @@ func NewWorker(cfg Config) *Worker {
 		MaxPayloadBytes: cfg.MaxPayloadBytes,
 		SeedMessages:    cfg.SeedMessages,
 		Readme:          cfg.Readme,
-		ToolListBuilder: toolListBuilder(mode, programID),
+		ToolListBuilder: toolListBuilder(mode, programID, directoryID),
 	})
 
 	// Reuse the default reason-family toolkit (message / request /
@@ -135,17 +147,18 @@ func NewWorker(cfg Config) *Worker {
 	return &Worker{BaseReasonWorker: base}
 }
 
-// toolListBuilder returns the LLM tool-list policy for the mode. PTC keeps only
-// this worker's own capabilities and the program worker's; every other peer tool
-// is dropped so the model must reach them through a script program.
-func toolListBuilder(mode, programID string) reasonBase.ToolListBuilder {
+// toolListBuilder returns the LLM tool-list policy for the mode. PTC keeps this
+// worker's own capabilities, the directory worker's (capability DISCOVERY) and
+// the program worker's (capability INVOCATION); every other peer tool is dropped
+// so the model must reach them through a script program.
+func toolListBuilder(mode, programID, directoryID string) reasonBase.ToolListBuilder {
 	if mode != ToolModePTC {
 		return reasonBase.DefaultToolListBuilder
 	}
 	return func(w *reasonBase.BaseReasonWorker, caps []reasonBase.DiscoveredCapability) []llm.ToolDef {
 		keep := make([]reasonBase.DiscoveredCapability, 0, len(caps))
 		for _, c := range caps {
-			if c.Source == w.ID() || c.Source == programID {
+			if c.Source == w.ID() || c.Source == programID || c.Source == directoryID {
 				keep = append(keep, c)
 			}
 		}
@@ -159,13 +172,14 @@ func toolListBuilder(mode, programID string) reasonBase.ToolListBuilder {
 func ptcInstructionProgram(programID string) program.Program {
 	name := "coding-ptc-tooling"
 	text := fmt.Sprintf(`## PTC tool mode
-Your tool list holds only the %[1]s worker's tools and your own self tools — other workers' tools are intentionally not listed. Do not expect a flat tool list; reach them through script programs.
+Your tool list holds the directory worker's tools (capability discovery), the %[1]s worker's tools (capability invocation), and your own self tools. Every other worker's tools are intentionally not listed — do not expect a flat tool list.
 
-Discover what other workers offer from INSIDE a script, using the directory worker:
-- await sdk.call("directory", "list_workers", {}) — the roster of workers;
-- await sdk.call("directory", "get_worker_info", { worker: "<id>" }) — one worker's capability events, arguments and schemas.
+**Discover** what other workers offer with the directory worker, called directly as a tool:
+- directory list_workers — the roster of workers;
+- directory get_worker_info { worker: "<id>" } — one worker's capability events, arguments and schemas.
+Discover once up front, then act; avoid re-listing tools you already looked up.
 
-Execute by running a TypeScript script with the %[1]s worker's run tool. Two modes:
+**Execute** by running a TypeScript script with the %[1]s worker's run tool. Two modes:
 - source: pass the script inline for a one-off;
 - name: store it first (write/upsert) and run it by name to reuse.
 
@@ -174,12 +188,12 @@ The script API (inside the script):
 - sdk.log(text); sdk.result(finalPayload); sdk.args (the run arguments).
 The script body is async (top-level await works) and cannot import fs/net — it reaches the world only through sdk.call.
 
-Prefer one script that performs the whole sequence (discover, act, summarise) over many separate tool calls. Discover once, then act; avoid re-listing tools you already looked up.`, programID)
+Prefer one script that performs the whole sequence (act, then summarise) over many separate tool calls.`, programID)
 	return program.Program{
 		Meta: program.Meta{
 			Name:        name,
 			ContentType: program.ContentTypeInstruction,
-			Description: "How to work in PTC tool mode: discover via directory inside a script, execute via program.run.",
+			Description: "How to work in PTC tool mode: discover via the directory worker's tools, execute via the program worker's run.",
 			Locked:      true,
 		},
 		EntryContent: program.ProgramContent{

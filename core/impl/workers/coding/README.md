@@ -14,32 +14,36 @@ It differs from the generic reason worker in exactly two places.
 | Mode | Tool list | How tools are used |
 |---|---|---|
 | `normal` (default) | every discovered capability | like the generic reason worker |
-| `ptc` | **only the program worker's tools** (+ this worker's own self tools) | the model discovers other workers' tools via the **directory** worker *from inside a script*, and executes them by running that script with **`program.run`** |
+| `ptc` | **the directory worker's tools** (capability discovery) + **the program worker's tools** (capability invocation) + this worker's own self tools | discover peers' capabilities with **directory** directly, then execute via a script run with **`program.run`** |
 
 PTC exists to keep the tool list small and stable (better prompt-cache
-behaviour, less tool-list churn) while still reaching the whole bus: the model
-writes a TypeScript script (`source` for a one-off, or `write` + run by `name`
-to reuse), and the script calls tools through `sdk.call(target, event, args)`.
-In PTC mode the worker seeds a **locked instruction program**
-(`coding-ptc-tooling`) that renders into the system prompt and explains this
-workflow.
+behaviour, less tool-list churn) while still reaching the whole bus. The split
+is deliberate: **discovery is the directory worker's job, invocation is the
+program worker's** — so both are exposed directly. Every other peer's tools are
+reached only from inside a script: the model writes one (`source` for a
+one-off, or `write` + run by `name` to reuse) and the script calls tools through
+`sdk.call(target, event, args)`. In PTC mode the worker seeds a **locked
+instruction program** (`coding-ptc-tooling`) that renders into the system prompt
+and explains this workflow.
 
 The policy lives in the injected `ToolListBuilder`:
 
 ```go
-func toolListBuilder(mode, programID string) reasonBase.ToolListBuilder {
+func toolListBuilder(mode, programID, directoryID string) reasonBase.ToolListBuilder {
     if mode != ToolModePTC {
         return reasonBase.DefaultToolListBuilder
     }
     return func(w *reasonBase.BaseReasonWorker, caps []reasonBase.DiscoveredCapability) []llm.ToolDef {
-        keep := caps filtered to (Source == w.ID() || Source == programID)
+        keep := caps filtered to (Source == w.ID() || Source == programID || Source == directoryID)
         return reasonBase.DefaultToolListBuilder(w, keep) // same naming + cache-stable sort
     }
 }
 ```
 
 Every other peer capability is dropped, so the equivalent tools are absent from
-the LLM's own tool field — that is the point.
+the LLM's own tool field — that is the point. `directory` is the exception that
+stays: capability discovery is a first-class step, not something to reach
+through a script.
 
 ## 2. Compaction keeps the coding working set
 
@@ -72,6 +76,7 @@ Registered as worker type **`coding_reason_worker`**; params of interest:
 |---|---|
 | `tool_mode` | `normal` (default) or `ptc` |
 | `program_worker` | id of the program worker to keep in PTC mode (default `program`) |
+| `directory_worker` | id of the directory worker to keep in PTC mode (default `directory`) |
 
 Everything else (`provider` / `model` / `context_window` / `budget_*` /
 `tail_tokens` / `compact_directive` / `goal` / `brief` / `readme` / `publish` /
