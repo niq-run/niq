@@ -54,6 +54,11 @@ type Config struct {
 	// spawner's handover brief (goal goes to Programs instead). nil for a
 	// fresh worker.
 	SeedMessages []llm.Message
+
+	// Readme is the worker's own description of what it is for: the seed of
+	// worker.readme. Runtime updates by the worker itself are persisted in its
+	// snapshot and override this value on restore.
+	Readme string
 }
 
 // Worker is the generic reason-family worker: it embeds the shared reasoning
@@ -97,6 +102,7 @@ func NewWorker(cfg Config) *Worker {
 		RotateRounds:    cfg.RotateRounds,
 		MaxPayloadBytes: cfg.MaxPayloadBytes,
 		SeedMessages:    cfg.SeedMessages,
+		Readme:          cfg.Readme,
 	})
 
 	// The default worker layers its own toolkit on top of the base

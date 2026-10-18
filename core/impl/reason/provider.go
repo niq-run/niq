@@ -99,6 +99,10 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 	}, func(evt event.Event) {
 		w.handleStatusQuery(evt)
 	})
+
+	// Self-description (worker.readme + worker.readme.update): every reason-family
+	// worker can be asked what it is for and can revise that answer.
+	w.registerReadme()
 }
 
 // setActiveProvider switches this worker's active LLM provider. It must be

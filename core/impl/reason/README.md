@@ -38,6 +38,7 @@ Division between the loop and dispatch:
 | `process.go` | event dispatch `process` + handlers (abort/timeout/tool-result/input) + the event→transcript-input conversion (`DefaultConverter` / `ConvertInputEvent` / `resultOutcome`) |
 | `capability.go` | **capability**, both directions plus its applications. Inbound `worker.ready` / `worker.gone` handling + the `DiscoveredCapability` universe; outbound `BroadcastReady` (two-batch: peers then self) / `BroadcastDiscover` (via `WatchEntries`); resolution over the universe — `toolNameOfCapability` / `capabilityByToolName` / `capabilityBySourceEvent` / `findProvider` / `isRequestCap`; the convention capabilities the mechanism itself invokes — the `invokeCapability` primitive with `invokeContextCompress` (self) / `invokeElapseReminder` (peer) and their names; and applying the universe to the LLM — `ToolListBuilder` / `LLMToolDefs` (what the model sees) |
 | `provider.go` | provider management, exposed through the extension mechanism: `ProviderSources` / `ProviderInfo` + `registerBaseExtensions` (provider.switch/list/current) + `setActiveProvider` / `resolveContextWindow` |
+| `readme.go` | the worker's self-description: the generic `worker.readme` read capability + the SelfOnly `worker.readme.update` write, seeded from `params.readme`, with runtime updates persisted in the snapshot |
 | `llmerror.go` | LLM error policy: context overflow → compression request, rate limit → backoff reminder, 4xx → fail, else retry |
 | `systemprompt.go` | renders the system prompt from programs |
 
@@ -137,6 +138,25 @@ the same auditable bus path as every other invocation. The completion echoes
 the request's id via the same `request.*` convention. The system-side
 compaction triggers (hard budget, `ErrorContextLength`) funnel through the
 same `context.compress` event.
+
+### Self-description (readme)
+
+Every reason worker carries a readme: a short, first-person statement of what it
+is for. It is seeded from `params.readme` at creation and then owned by the
+worker — the point is that after weeks of drifting, the description still says
+what the worker actually became, not what the spawner guessed.
+
+- `worker.readme` (peer-facing) returns the current text, so the recall flow is:
+  list/search the roster (directory), then read the readme of the candidates to
+  confirm which worker is the right one.
+- `worker.readme.update { readme }` replaces it. It is **SelfOnly**: only the
+  worker's own tool list advertises it, so peers do not see "update this worker"
+  in the roster — but a directed request still dispatches, since the bus ACL, not
+  the announcement, decides who may write.
+- The value is durable. An update signals the host to checkpoint; `Snapshot`
+  always carries the current text (a pointer, so a deliberate clear survives),
+  and `Restore` overrides the config seed. A managed restart is a fresh rebuild
+  and therefore re-seeds from `params.readme`.
 
 ### Tool-call lifecycle (placeholders)
 
