@@ -93,8 +93,6 @@ Registered as worker type **`coding`**; params of interest:
 | Param | Meaning |
 |---|---|
 | `tool_mode` | `normal` (default) or `ptc` |
-| `program_worker` | id of the program worker to keep in PTC mode (default `program`) |
-| `directory_worker` | id of the directory worker to keep in PTC mode (default `directory`) |
 
 Everything else (`provider` / `model` / `context_window` / `budget_*` /
 `tail_tokens` / `compact_directive` / `goal` / `brief` / `readme` / `publish` /

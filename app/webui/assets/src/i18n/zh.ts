@@ -238,8 +238,6 @@ export const zh: Record<StringKey, string> = {
   'workers.create.toolMode': 'tool mode',
   'workers.create.toolMode.normalHint': 'normal：模型能看到所有已发现的工具，各自作为独立工具。',
   'workers.create.toolMode.ptcHint': 'ptc：模型只看到 program + directory 两类工具，通过脚本程序（program.run）干活，在脚本里发现并调用其它 worker 的工具。',
-  'workers.create.programWorker': 'program worker（可选）',
-  'workers.create.directoryWorker': 'directory worker（可选）',
   'workers.create.rootDir': '挂载目录（第一个为主挂载）',
   'workers.create.tags': '标签 (逗号分隔，可选)',
   'workers.create.tags.hint': '用于在目标选择器中对工作单元分组的斜杠路径标签，如 ops/backup、service/analytics，用逗号分隔。',

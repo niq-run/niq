@@ -247,8 +247,6 @@ export const en = {
   'workers.create.toolMode': 'tool mode',
   'workers.create.toolMode.normalHint': 'normal: the model sees every discovered capability as its own tool.',
   'workers.create.toolMode.ptcHint': 'ptc: the model sees only the program + directory workers and drives work through script programs (program.run), discovering and calling other workers\' tools from inside a script.',
-  'workers.create.programWorker': 'program worker (optional)',
-  'workers.create.directoryWorker': 'directory worker (optional)',
   'workers.create.rootDir': 'mount directory (primary mount)',
   'workers.create.tags': 'tags (comma-separated, optional)',
   'workers.create.tags.hint': 'Slash-path labels used to group this worker in the target picker, e.g. ops/backup, service/analytics. Symbol-separated by comma.',

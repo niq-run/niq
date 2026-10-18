@@ -65,8 +65,6 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   // Coding-only: the tool-list policy. "ptc" keeps only the program +
   // directory workers' tools and drives work through script programs.
   const [toolMode, setToolMode] = useState('normal')
-  const [programWorker, setProgramWorker] = useState('')
-  const [directoryWorker, setDirectoryWorker] = useState('')
   const [rootDir, setRootDir] = useState('')
   const [command, setCommand] = useState('')
   const [cwd, setCwd] = useState('')
@@ -169,15 +167,10 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         // Self-description (worker.readme). A param, not display metadata: the
         // worker can revise it at runtime and other workers read it by recall.
         if (readme.trim()) params.readme = readme.trim()
-        if (effType === 'coding') {
-          params.tool_mode = toolMode
-          // Only meaningful in ptc mode; empty falls back to the defaults
-          // (program / directory).
-          if (toolMode === 'ptc') {
-            if (programWorker.trim()) params.program_worker = programWorker.trim()
-            if (directoryWorker.trim()) params.directory_worker = directoryWorker.trim()
-          }
-        }
+        // Coding's only knob: the tool-list policy. Which peers PTC keeps is
+        // part of the PTC contract (program for invocation, directory for
+        // discovery), not configuration.
+        if (effType === 'coding') params.tool_mode = toolMode
         if (Object.keys(params).length > 0) body.params = params
       }
       if ((effType === 'workspace' || effType === 'program') && rootDir.trim()) {
@@ -485,18 +478,6 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
                     {toolMode === 'ptc' ? t('workers.create.toolMode.ptcHint') : t('workers.create.toolMode.normalHint')}
                   </div>
                 </div>
-                {toolMode === 'ptc' && (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <div style={{ ...field, flex: 1 }}>
-                      <label style={label}>{t('workers.create.programWorker')}</label>
-                      <input style={input} value={programWorker} onChange={e => setProgramWorker(e.target.value)} placeholder="program" />
-                    </div>
-                    <div style={{ ...field, flex: 1 }}>
-                      <label style={label}>{t('workers.create.directoryWorker')}</label>
-                      <input style={input} value={directoryWorker} onChange={e => setDirectoryWorker(e.target.value)} placeholder="directory" />
-                    </div>
-                  </div>
-                )}
               </>
             )}
           </>

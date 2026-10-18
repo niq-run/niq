@@ -75,13 +75,11 @@ type Config struct {
 
 	// ToolMode selects the tool-list policy: ToolModeNormal (default) or
 	// ToolModePTC.
+	//
+	// Which peers PTC keeps is NOT configurable: the program worker is the
+	// invocation channel and the directory worker is discovery, both fixed by
+	// the PTC contract (see DefaultProgramWorkerID / DefaultDirectoryWorkerID).
 	ToolMode string
-	// ProgramWorkerID is the program worker whose tools ToolModePTC keeps.
-	// Empty uses DefaultProgramWorkerID.
-	ProgramWorkerID string
-	// DirectoryWorkerID is the directory worker whose tools ToolModePTC keeps
-	// (capability discovery). Empty uses DefaultDirectoryWorkerID.
-	DirectoryWorkerID string
 }
 
 // Worker is the coding reason worker: it embeds the shared reasoning mechanism.
@@ -95,14 +93,8 @@ func NewWorker(cfg Config) *Worker {
 	if mode == "" {
 		mode = ToolModeNormal
 	}
-	programID := cfg.ProgramWorkerID
-	if programID == "" {
-		programID = DefaultProgramWorkerID
-	}
-	directoryID := cfg.DirectoryWorkerID
-	if directoryID == "" {
-		directoryID = DefaultDirectoryWorkerID
-	}
+	programID := DefaultProgramWorkerID
+	directoryID := DefaultDirectoryWorkerID
 
 	// Coding compaction directive: keep the working set in the carried digest.
 	compactDirective := cfg.CompactDirective
