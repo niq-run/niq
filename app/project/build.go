@@ -14,8 +14,10 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
+	reasonbase "github.com/niq-run/niq/core/impl/reason"
 	bunexec "github.com/niq-run/niq/core/impl/scriptexec/bun"
 	"github.com/niq-run/niq/core/impl/workerhost"
+	"github.com/niq-run/niq/core/impl/workers/coding"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/impl/workers/history"
 	"github.com/niq-run/niq/core/impl/workers/hiw"
@@ -53,6 +55,9 @@ type BuildContext struct {
 func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
 	svc.RegisterBuilder("reason", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		return buildReasonSpec(ctx, cfg)
+	})
+	svc.RegisterBuilder("coding_reason_worker", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+		return buildCodingSpec(ctx, cfg)
 	})
 	svc.RegisterBuilder("workspace", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		return buildWorkspaceSpec(ctx, cfg)
@@ -105,10 +110,34 @@ func specConnect(ctx BuildContext, id, typ string, pubAllow []event.PublishPatte
 
 // ── reason ──
 
-func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+// reasonFamilyIn is the computed construction input shared by every
+// reason-family worker (the generic reason worker and the coding worker). It
+// keeps the two builders on one code path: same param parsing, provider
+// resolution, program seeding, budget knobs and durable-checkpoint hook.
+type reasonFamilyIn struct {
+	id               string
+	pubAllow         []event.PublishPattern
+	subAllow         []event.EventPattern
+	programs         []programpkg.Program
+	events           []reason.EventConverter
+	providerSources  reasonbase.ProviderSources
+	pname, pmodel    string
+	contextWindow    int
+	budgetSoft       float64
+	budgetHard       float64
+	tailTokens       int
+	rotateRounds     int
+	compactDirective string
+	readme           string
+	seedBrief        []llm.Message
+}
+
+// resolveReasonFamily computes the shared inputs from a worker config. typ is
+// the worker type label used for validation messages and the bus identity.
+func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, error) {
 	id := cfg.ID
 	if id == "" {
-		return worker.SpawnSpec{}, fmt.Errorf("reason: id is required")
+		return nil, fmt.Errorf("%s: id is required", typ)
 	}
 	p := cfg.Params
 
@@ -127,13 +156,9 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 		"worker.ready", "worker.gone", "worker.discover", "worker.abort",
 		"worker.input",
 	})
-	// PublishAllow default stays "*": the reason worker forwards tool
+	// PublishAllow default stays "*": a reason-family worker forwards tool
 	// invocations to whichever peers it discovers, under the peers' own event
-	// types (ls, timer.timeout, program.query, user extensions...) — a set
-	// that is inherently dynamic and cannot be enumerated statically. This is
-	// a control-plane grant, not a worker-side declaration: it can be
-	// narrowed at runtime via the control plane's allow editing, or
-	// statically via params.publish in the worker spec.
+	// types — an inherently dynamic set that cannot be enumerated statically.
 	pubAllow := publishPatterns(p["publish"])
 	if len(pubAllow) == 0 {
 		pubAllow = []event.PublishPattern{event.NewPublishPattern("*")}
@@ -143,8 +168,7 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 
 	// Spawn seeding (context-builder.md §6): goal lands in the system prompt
 	// (program space, survives compaction); brief lands as the transcript's
-	// first message (working material, compactable). The two must stay
-	// separate or compaction threatens the goal itself.
+	// first message (working material, compactable).
 	goal, _ := p["goal"].(string)
 	brief, _ := p["brief"].(string)
 	if goal != "" {
@@ -159,66 +183,125 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 		}}
 	}
 
-	// Context budget params (optional; defaults live in the reason package).
 	contextWindow := pInt(p, "context_window")
 	budgetSoft, _ := p["budget_soft"].(float64)
 	budgetHard, _ := p["budget_hard"].(float64)
 	// Tail retention is a token budget now, not a fixed message count. Accept
-	// tail_tokens first with keep_tail as a legacy alias. pInt handles JSON
-	// numbers, which arrive as float64 from the persisted project.json.
+	// tail_tokens first with keep_tail as a legacy alias.
 	tailTokens := pInt(p, "tail_tokens")
 	if tailTokens == 0 {
 		tailTokens = pInt(p, "keep_tail")
 	}
 	rotateRounds := pInt(p, "rotate_rounds")
 	compactDirective, _ := p["compact_directive"].(string)
-	// Readme is the worker's own description of what it is for — the seed of
-	// worker.readme (the worker may revise it at runtime; the snapshot wins).
 	readme, _ := p["readme"].(string)
 
-	connect := specConnect(ctx, id, "reason", pubAllow, subAllow)
 	providerSources := providerpkg.NewProviderSources(provider, apiKey, baseURL, model)
 	pname, pmodel := providerpkg.InitialProviderInfo(provider, apiKey, baseURL, model)
+
+	return &reasonFamilyIn{
+		id:               id,
+		pubAllow:         pubAllow,
+		subAllow:         subAllow,
+		programs:         programs,
+		events:           events,
+		providerSources:  providerSources,
+		pname:            pname,
+		pmodel:           pmodel,
+		contextWindow:    contextWindow,
+		budgetSoft:       budgetSoft,
+		budgetHard:       budgetHard,
+		tailTokens:       tailTokens,
+		rotateRounds:     rotateRounds,
+		compactDirective: compactDirective,
+		readme:           readme,
+		seedBrief:        seedBrief,
+	}, nil
+}
+
+// ── reason ──
+
+func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	in, err := resolveReasonFamily(cfg, "reason")
+	if err != nil {
+		return worker.SpawnSpec{}, err
+	}
+	connect := specConnect(ctx, in.id, "reason", in.pubAllow, in.subAllow)
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
-		w := reason.NewWorker(reason.Config{
-			ID:               id,
-			Provider:         providerSources.Default(),
-			ProviderSources:  providerSources,
-			ProviderName:     pname,
-			ProviderModel:    pmodel,
-			Programs:         programs,
-			EventConverters:  events,
+		return reason.NewWorker(reason.Config{
+			ID:               in.id,
+			Provider:         in.providerSources.Default(),
+			ProviderSources:  in.providerSources,
+			ProviderName:     in.pname,
+			ProviderModel:    in.pmodel,
+			Programs:         in.programs,
+			EventConverters:  in.events,
 			Bus:              ch,
-			ContextWindow:    contextWindow,
-			BudgetSoft:       budgetSoft,
-			BudgetHard:       budgetHard,
-			TailTokens:       tailTokens,
-			RotateRounds:     rotateRounds,
-			CompactDirective: compactDirective,
-			Readme:           readme,
-			// Fixed per-message payload cap for tool results / inputs; not
-			// configurable through worker params.
+			ContextWindow:    in.contextWindow,
+			BudgetSoft:       in.budgetSoft,
+			BudgetHard:       in.budgetHard,
+			TailTokens:       in.tailTokens,
+			RotateRounds:     in.rotateRounds,
+			CompactDirective: in.compactDirective,
+			Readme:           in.readme,
+			// Fixed per-message payload cap for tool results / inputs.
 			MaxPayloadBytes: 20 * 1024,
-			SeedMessages:    seedBrief,
-			// A runtime provider switch (worker.update provider.switch) must
-			// outlive this process, so the worker signals it and the assembly
-			// layer checkpoints it. The worker builds its provider from
-			// provider.json, which it knows nothing about — persistence is
-			// the host's job, not the mechanism's.
+			SeedMessages:    in.seedBrief,
+			// A runtime provider switch must outlive this process, so the
+			// worker signals it and the assembly checkpoints it.
 			OnDurableChange: func() {
-				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
-					log.Printf("[project] checkpoint %s: %v", id, err)
+				if err := ctx.WorkerSvc.Checkpoint(in.id); err != nil {
+					log.Printf("[project] checkpoint %s: %v", in.id, err)
 				}
 			},
 		})
-		return w
 	}
 	cfg.Type = "reason"
-	return worker.SpawnSpec{
-		Config:  cfg,
-		Connect: connect,
-		Build:   build,
-	}, nil
+	return worker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
+}
+
+// ── coding reason worker ──
+
+func buildCodingSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	in, err := resolveReasonFamily(cfg, "coding_reason_worker")
+	if err != nil {
+		return worker.SpawnSpec{}, err
+	}
+	p := cfg.Params
+	toolMode, _ := p["tool_mode"].(string)
+	programWorkerID, _ := p["program_worker"].(string)
+
+	connect := specConnect(ctx, in.id, "coding_reason_worker", in.pubAllow, in.subAllow)
+	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		return coding.NewWorker(coding.Config{
+			ID:               in.id,
+			Provider:         in.providerSources.Default(),
+			ProviderSources:  in.providerSources,
+			ProviderName:     in.pname,
+			ProviderModel:    in.pmodel,
+			Programs:         in.programs,
+			EventConverters:  in.events,
+			Bus:              ch,
+			ContextWindow:    in.contextWindow,
+			BudgetSoft:       in.budgetSoft,
+			BudgetHard:       in.budgetHard,
+			TailTokens:       in.tailTokens,
+			RotateRounds:     in.rotateRounds,
+			CompactDirective: in.compactDirective,
+			Readme:           in.readme,
+			MaxPayloadBytes:  20 * 1024,
+			SeedMessages:     in.seedBrief,
+			ToolMode:         toolMode,
+			ProgramWorkerID:  programWorkerID,
+			OnDurableChange: func() {
+				if err := ctx.WorkerSvc.Checkpoint(in.id); err != nil {
+					log.Printf("[project] checkpoint %s: %v", in.id, err)
+				}
+			},
+		})
+	}
+	cfg.Type = "coding_reason_worker"
+	return worker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
 }
 
 // ── workspace ──
@@ -651,7 +734,6 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 			// The local script-program execution backend. Swappable for a local
 			// sandbox / remote gateway later.
 			Executor: bunexec.New(bunexec.Options{Args: execArgs}),
-			Params:   p,
 		})
 	}
 	cfg.ID = id

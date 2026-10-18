@@ -31,6 +31,16 @@ import (
 // does not call this. compactDirective is the program-provided summarizer
 // override (empty for the built-in fallback); it is owned by this worker, not
 // the mechanism, and captured here so the context strategy can resolve it.
+// RegisterDefaultExtensions registers the default reason-family toolkit on w:
+// message / request / context.compress / program.query / program.update. The
+// generic reason worker uses it via NewWorker; a PARALLEL reason-family worker
+// (e.g. the coding worker) reuses the same baseline while adding its own
+// differences (tool-list policy, compaction directive). compactDirective is the
+// summarizer override (empty for the built-in fallback).
+func RegisterDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective string) {
+	registerDefaultExtensions(w, compactDirective)
+}
+
 func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective string) {
 	obj := func(props map[string]any) map[string]any {
 		return map[string]any{"type": "object", "properties": props}

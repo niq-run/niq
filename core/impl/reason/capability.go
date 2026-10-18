@@ -347,6 +347,19 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 	return defs
 }
 
+// DefaultToolListBuilder is the default ToolListBuilder policy (all discovered
+// capabilities, own and peer, sorted by name for a cache-stable list). Exported
+// so a reason-family worker can compose it over a filtered universe (e.g. keep
+// only self + the program worker) instead of reimplementing the naming/sorting.
+var DefaultToolListBuilder ToolListBuilder = defaultToolListBuilder
+
+// ToolNameOfCapability is the LLM-facing name of a discovered capability (own:
+// event type with dots→underscores; peer: provider__event). Exported so a custom
+// ToolListBuilder can name the defs it emits.
+func ToolNameOfCapability(w *BaseReasonWorker, cap DiscoveredCapability) string {
+	return toolNameOfCapability(w, cap)
+}
+
 // LLMToolDefs builds the LLM tool list via the worker's tool-list builder
 // over the discovered capability universe. Called at the start of every
 // reasoning round.

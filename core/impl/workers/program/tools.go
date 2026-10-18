@@ -28,11 +28,10 @@ func (w *Worker) registerExtensions() {
 	ctx := context.Background()
 
 	// Self-description: the generic worker.readme read capability, so peers, the
-	// WebUI and the worker itself can recall what this worker is for. A
-	// declaration may override/append it via params.readme / params.readme_append.
+	// WebUI and the worker itself can recall what this worker is for.
 	w.RegisterReadme(
 		"Read this worker's readme: what the program worker is for (managing and running Programs).",
-		w.readmeText, w.params)
+		w.readmeText, nil)
 
 	w.Register(baseworker.Extension{
 		Event:       TypeSearch,

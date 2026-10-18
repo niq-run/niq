@@ -23,7 +23,7 @@ interface CreateWorkerDialogProps {
 // assembly owns — creating them from the UI is not a thing. timer, directory
 // and history are built-in singletons (one per project), so a second one is
 // never wanted. niw is a bridge worker that dials another niq's bus.
-const MANAGED_TYPES = ['reason', 'workspace', 'program', 'niw', 'mcp'] as const
+const MANAGED_TYPES = ['reason', 'coding_reason_worker', 'workspace', 'program', 'niw', 'mcp'] as const
 
 // parseNiwConfig turns the far-side bus's copyable worker config (KEY=value
 // lines, as rendered by that bus for a created remote worker) into a map.

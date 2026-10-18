@@ -31,9 +31,6 @@ type Config struct {
 	// when nil, program.run replies "executor not configured" so a worker that
 	// only stores/loads programs works without one.
 	Executor program.ScriptProgramExecutor
-	// Params is the worker's construction params, used by the readme to support
-	// declaration-level customization (readme / readme_append).
-	Params map[string]any
 }
 
 // Worker is a bus-facing worker that manages Program lifecycle.
@@ -49,7 +46,6 @@ type Worker struct {
 	baseworker.BaseWorker
 	backend  program.Backend
 	executor program.ScriptProgramExecutor
-	params   map[string]any
 
 	started bool
 	cancel  context.CancelFunc
@@ -70,7 +66,6 @@ func New(cfg Config) *Worker {
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		backend:    cfg.Backend,
 		executor:   cfg.Executor,
-		params:     cfg.Params,
 	}
 	w.registerExtensions()
 	return w

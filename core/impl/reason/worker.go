@@ -100,6 +100,12 @@ type Config struct {
 	// of the worker's readme (worker.readme); runtime updates by the worker
 	// itself live in its snapshot and override this value on restore.
 	Readme string
+
+	// ToolListBuilder is the LLM tool-list policy (what the model sees). nil
+	// uses DefaultToolListBuilder (all discovered capabilities). A reason-family
+	// worker supplies its own to narrow the surface — e.g. a coding worker's
+	// "ptc" mode exposing only the program worker's tools.
+	ToolListBuilder ToolListBuilder
 }
 
 // NewBaseReasonWorker assembles a BaseReasonWorker from a Config: applies
@@ -135,6 +141,11 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		}
 	}
 
+	toolListBuilder := defaultToolListBuilder
+	if cfg.ToolListBuilder != nil {
+		toolListBuilder = cfg.ToolListBuilder
+	}
+
 	w := &BaseReasonWorker{
 		BaseWorker:      baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
 		llmProvider:     initialProvider,
@@ -142,10 +153,10 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		providerName:    cfg.ProviderName,
 		providerModel:   cfg.ProviderModel,
 		transcript:      cfg.Transcript,
-		toolListBuilder: defaultToolListBuilder,
 		eventConverters: cfg.EventConverters,
 		programs:        cfg.Programs,
 		requestTracker:  requesttracker.NewRequestTracker(),
+		toolListBuilder:  toolListBuilder,
 		contextWindow:   cfg.ContextWindow,
 		budgetSoft:      cfg.BudgetSoft,
 		budgetHard:      cfg.BudgetHard,
