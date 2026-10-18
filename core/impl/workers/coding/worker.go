@@ -22,6 +22,7 @@ import (
 	"github.com/niq-run/niq/core/impl/reason/transcript"
 	reasonworkers "github.com/niq-run/niq/core/impl/workers/reason"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
+	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
 	"github.com/niq-run/niq/core/itfs/program"
 )
@@ -147,20 +148,41 @@ func NewWorker(cfg Config) *Worker {
 	return &Worker{BaseReasonWorker: base}
 }
 
-// toolListBuilder returns the LLM tool-list policy for the mode. PTC keeps this
-// worker's own capabilities, the directory worker's (capability DISCOVERY) and
-// the program worker's (capability INVOCATION); every other peer tool is dropped
-// so the model must reach them through a script program.
+// codingExcludedSelfEvents are the worker's OWN tools a coding agent should not
+// spend rounds on: it compacts automatically under budget pressure (the
+// mechanism fires context.compress itself; the model need not call it) and it
+// should not rewrite its own program list.
+var codingExcludedSelfEvents = map[event.EventType]bool{
+	reasonBase.TypeContextCompress:  true,
+	reasonworkers.TypeProgramUpdate: true,
+}
+
+// toolListBuilder returns the LLM tool-list policy for the mode.
+//
+// Coding focus applies in BOTH modes: context.compress and program.update are
+// always dropped from the model's tool list. In PTC mode the list additionally
+// keeps this worker's own tools, the directory worker's (capability DISCOVERY)
+// and the program worker's (capability INVOCATION), drops every other peer tool,
+// and also drops the self `request` escape hatch so peer calls go through
+// program.run rather than an ad-hoc event call.
 func toolListBuilder(mode, programID, directoryID string) reasonBase.ToolListBuilder {
-	if mode != ToolModePTC {
-		return reasonBase.DefaultToolListBuilder
-	}
+	ptc := mode == ToolModePTC
 	return func(w *reasonBase.BaseReasonWorker, caps []reasonBase.DiscoveredCapability) []llm.ToolDef {
 		keep := make([]reasonBase.DiscoveredCapability, 0, len(caps))
 		for _, c := range caps {
-			if c.Source == w.ID() || c.Source == programID || c.Source == directoryID {
-				keep = append(keep, c)
+			self := c.Source == w.ID()
+			if self && codingExcludedSelfEvents[c.Event] {
+				continue
 			}
+			if ptc {
+				if self && c.Event == reasonBase.TypeRequest {
+					continue
+				}
+				if !self && c.Source != programID && c.Source != directoryID {
+					continue
+				}
+			}
+			keep = append(keep, c)
 		}
 		return reasonBase.DefaultToolListBuilder(w, keep)
 	}
@@ -172,7 +194,7 @@ func toolListBuilder(mode, programID, directoryID string) reasonBase.ToolListBui
 func ptcInstructionProgram(programID string) program.Program {
 	name := "coding-ptc-tooling"
 	text := fmt.Sprintf(`## PTC tool mode
-Your tool list holds the directory worker's tools (capability discovery), the %[1]s worker's tools (capability invocation), and your own self tools. Every other worker's tools are intentionally not listed — do not expect a flat tool list.
+Your tool list holds the directory worker's tools (capability discovery), the %[1]s worker's tools (capability invocation), and your own message / program_query tools. Every other worker's tools are intentionally not listed — do not expect a flat tool list.
 
 **Discover** what other workers offer with the directory worker, called directly as a tool:
 - directory list_workers — the roster of workers;
@@ -187,6 +209,8 @@ The script API (inside the script):
 - await sdk.call(target, event, args) — invoke a capability as a normal request (returns its result);
 - sdk.log(text); sdk.result(finalPayload); sdk.args (the run arguments).
 The script body is async (top-level await works) and cannot import fs/net — it reaches the world only through sdk.call.
+
+Note: there is no request tool in this mode — to invoke a peer capability, do it inside a script via sdk.call. Context compaction happens automatically under budget pressure; you do not need to call it.
 
 Prefer one script that performs the whole sequence (act, then summarise) over many separate tool calls.`, programID)
 	return program.Program{

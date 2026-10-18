@@ -73,24 +73,48 @@ func TestPTCModeExposesDirectoryAndProgramTools(t *testing.T) {
 	}
 }
 
-// TestPTCModeKeepsSelfCommunicationTools verifies the worker's OWN tools —
-// the communication channels message / request and the context/program tools —
-// survive PTC mode (PTC only drops PEER tools, never self tools).
-func TestPTCModeKeepsSelfCommunicationTools(t *testing.T) {
+// TestPTCModeKeepsMessageButDropsRequestAndFocusTools verifies PTC keeps the
+// agent-to-agent message channel but drops the request escape hatch (peer calls
+// must go through program.run) and the focus-excluded self tools.
+func TestPTCModeKeepsMessageButDropsRequestAndFocusTools(t *testing.T) {
 	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: ToolModePTC})
 	// The worker's own full contract (SelfOnly included), as it sends itself.
 	announce(w, "coder", "reason", "message", "request", "context.compress", "program.query", "program.update")
 	announce(w, "program", "program", "run")
+	announce(w, "directory", "directory", "list_workers", "get_worker_info")
 	announce(w, "workspace", "workspace", "bash")
 
 	names := toolNames(w)
-	for _, want := range []string{"message", "request", "context_compress", "program_query", "program_update", "program__run"} {
+	for _, want := range []string{"message", "program_query", "program__run", "directory__list_workers"} {
 		if !names[want] {
-			t.Errorf("PTC must keep the self/communication tool %q (got %v)", want, names)
+			t.Errorf("PTC should keep %q (got %v)", want, names)
 		}
 	}
-	if names["workspace__bash"] {
-		t.Error("PTC must still drop peer tools like workspace__bash")
+	for _, unwanted := range []string{"request", "context_compress", "program_update", "workspace__bash"} {
+		if names[unwanted] {
+			t.Errorf("PTC must drop %q (got %v)", unwanted, names)
+		}
+	}
+}
+
+// TestNormalModeDropsFocusToolsButKeepsRequest verifies the coding focus filter
+// applies in normal mode too: context.compress and program.update are dropped,
+// while request and every peer tool stay.
+func TestNormalModeDropsFocusToolsButKeepsRequest(t *testing.T) {
+	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: ToolModeNormal})
+	announce(w, "coder", "reason", "message", "request", "context.compress", "program.query", "program.update")
+	announce(w, "workspace", "workspace", "bash")
+
+	names := toolNames(w)
+	for _, want := range []string{"message", "request", "program_query", "workspace__bash"} {
+		if !names[want] {
+			t.Errorf("normal mode should keep %q (got %v)", want, names)
+		}
+	}
+	for _, unwanted := range []string{"context_compress", "program_update"} {
+		if names[unwanted] {
+			t.Errorf("normal mode must drop %q (got %v)", unwanted, names)
+		}
 	}
 }
 
