@@ -63,7 +63,8 @@ Plus optional `args` (exposed to the script as `sdk.args`) and
 |---|---|
 | `worker.go` | `Worker` (embeds `baseworker.BaseWorker`) + `Config` (`ID` / `Bus` / `Backend` / `Executor`) + lifecycle (`Start`/`Stop`/`Snapshot`/`Restore`) + the event loop (`watch`/`process`) + Program lookup over the storage backend (`search` / `programForPath` / `matchProgram`) |
 | `tools.go` | the tool event types (`search` / `load` / `edit` / `upsert` / `write` / `delete` / `run`) + `registerExtensions` + the per-tool handlers (`handleSearch` / `handleLoad` / `handleEdit` / `handleUpsert` / `handleWrite` / `handleDelete`) |
-| `execute.go` | script-program execution: `handleRun` (both modes, timeout, log forwarding) + `callTool` (the `ToolCaller` implementation — mint id, send `request`, await reply) + `resolveReply` (route `request.*` replies to the waiting call) |
+| `execute.go` | script-program execution: `handleRun` (both modes, timeout, log collection + reply) + `callTool` (the `ToolCaller` implementation — mint id, send `request`, await reply) + `resolveReply` (route `request.*` replies to the waiting call) |
+| `scriptlog.go` | the run's `sdk.log` buffer: capped tail + the `--- script log ---` reply section |
 | `pgbackend/` | the filesystem storage backend |
 
 Related, outside this package:
@@ -79,7 +80,9 @@ Inside a run the script is handed a minimal `sdk`:
 
 - `sdk.call(target, event, arguments)` → `Promise<result>` — invoke a capability
   on another worker (a bus request).
-- `sdk.log(text)` — a log line (forwarded to the worker log).
+- `sdk.log(text)` — a log line. Mirrored to the worker log AND returned to the caller
+  after the result under a `--- script log ---` header (last 100 lines / 8 KiB,
+  with a dropped-lines note), so a failing run is debuggable in the same round.
 - `sdk.result(payload)` — the run's final result (or `return` a value).
 - `sdk.args` — the `program.run` `args`.
 

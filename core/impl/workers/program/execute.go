@@ -150,10 +150,16 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("start: %v", err), tc.TraceID)
 			return
 		}
-		// Forward the script's sdk.log lines to this worker's log so a run is
-		// observable (a future pass streams them to the webui / caller too).
+		// Drain the script's sdk.log lines: mirrored into this worker's log (so a
+		// run is observable server-side) AND collected for the reply, so the
+		// caller sees them without a second round. The session closes the stream
+		// when it ends, so the drain finishes on its own.
+		logs := &scriptLog{}
+		drained := make(chan struct{})
 		go func() {
+			defer close(drained)
 			for line := range sess.Logs() {
+				logs.add(line)
 				log.Printf("[program %s] script: %s", w.ID(), line)
 			}
 		}()
@@ -161,11 +167,17 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 		// Result returns when the script finishes or the session ctx is done
 		// (timeout / cancel); the executor tears the sandbox down either way.
 		result, err := sess.Result(runCtx)
+		// Give the drain a moment to consume the tail; the channel is already
+		// closed by now, so this only covers the goroutine's hand-off.
+		select {
+		case <-drained:
+		case <-time.After(500 * time.Millisecond):
+		}
 		if err != nil {
 			sess.Cancel()
-			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("run: %v", err), tc.TraceID)
+			w.ReplyFailed(tc.CallerID, tc.CallID, withScriptLog(fmt.Sprintf("run: %v", err), logs), tc.TraceID)
 			return
 		}
-		w.ReplyCompleted(tc.CallerID, tc.CallID, result, tc.TraceID)
+		w.ReplyCompleted(tc.CallerID, tc.CallID, withScriptLog(result, logs), tc.TraceID)
 	}()
 }

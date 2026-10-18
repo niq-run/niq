@@ -2,6 +2,7 @@ package program
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -267,4 +268,112 @@ func TestHandleRunRelaysAndReplies(t *testing.T) {
 		}
 		return false
 	}, "program.run reply")
+}
+
+// scriptedSession emits a script's log lines and then a result, so the reply
+// path can be asserted end to end.
+type scriptedSession struct {
+	lines  []string
+	result string
+	logs   chan string
+}
+
+func (s *scriptedSession) Logs() <-chan string { return s.logs }
+func (s *scriptedSession) Result(ctx context.Context) (string, error) {
+	for _, l := range s.lines {
+		s.logs <- l
+	}
+	close(s.logs)
+	return s.result, nil
+}
+func (s *scriptedSession) Cancel() {}
+
+type scriptedExecutor struct{ sess *scriptedSession }
+
+func (e scriptedExecutor) Start(context.Context, string, map[string]any, program.ToolCaller) (program.ScriptSession, error) {
+	e.sess.logs = make(chan string)
+	return e.sess, nil
+}
+
+// replyResult returns the result text of the first request.completed/failed for
+// the given call id.
+func replyText(t *testing.T, ch *stubChannel, callID string) (string, bool) {
+	t.Helper()
+	for _, e := range ch.snapshot() {
+		if e.RequestId != callID {
+			continue
+		}
+		if e.Type == event.TypeRequestCompleted || e.Type == event.TypeRequestFailed {
+			r, _ := e.Payload["result"].(string)
+			return r, e.Type == event.TypeRequestCompleted
+		}
+	}
+	return "", false
+}
+
+// TestHandleRunReturnsScriptLog verifies a script's sdk.log lines come back to
+// the CALLER inside the run reply (not just to the worker's own log): the
+// result stays first and the log follows under its own header.
+func TestHandleRunReturnsScriptLog(t *testing.T) {
+	ch := &stubChannel{}
+	sess := &scriptedSession{lines: []string{"step 1", "step 2"}, result: "THE-RESULT"}
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir()), Executor: scriptedExecutor{sess: sess}})
+
+	go w.handleRun(context.Background(), baseworker.ToolCall{
+		CallerID: "coder", CallID: "call-log", TraceID: "tr",
+		Args: map[string]any{"source": "sdk.log('x'); return 1"},
+	})
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := replyText(t, ch, "call-log")
+		return ok
+	}, "program.run reply")
+
+	got, _ := replyText(t, ch, "call-log")
+	if !strings.HasPrefix(got, "THE-RESULT") {
+		t.Fatalf("reply must lead with the result, got %q", got)
+	}
+	if !strings.Contains(got, "--- script log ---") || !strings.Contains(got, "step 1") || !strings.Contains(got, "step 2") {
+		t.Fatalf("reply must carry the script log, got %q", got)
+	}
+}
+
+// TestHandleRunOmitsEmptyScriptLog verifies a silent run replies with exactly
+// its result (no empty log section).
+func TestHandleRunOmitsEmptyScriptLog(t *testing.T) {
+	ch := &stubChannel{}
+	sess := &scriptedSession{result: "ONLY-RESULT"}
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir()), Executor: scriptedExecutor{sess: sess}})
+
+	go w.handleRun(context.Background(), baseworker.ToolCall{
+		CallerID: "coder", CallID: "call-quiet", TraceID: "tr",
+		Args: map[string]any{"source": "return 'ONLY-RESULT'"},
+	})
+
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := replyText(t, ch, "call-quiet")
+		return ok
+	}, "program.run reply")
+	if got, _ := replyText(t, ch, "call-quiet"); got != "ONLY-RESULT" {
+		t.Fatalf("quiet run reply = %q, want exactly the result", got)
+	}
+}
+
+// TestScriptLogCapsTail verifies the retained window is the END of the run and
+// that dropped lines are reported.
+func TestScriptLogCapsTail(t *testing.T) {
+	var l scriptLog
+	for i := 0; i < scriptLogMaxLines+5; i++ {
+		l.add("line " + strconv.Itoa(i))
+	}
+	text := l.text()
+	if !strings.Contains(text, "[5 earlier line(s) dropped]") {
+		t.Fatalf("want a dropped-lines note, got %q", text[:60])
+	}
+	if !strings.Contains(text, "line "+strconv.Itoa(scriptLogMaxLines+4)) {
+		t.Fatal("want the tail of the log retained")
+	}
+	if strings.Contains(text, "line 0\n") {
+		t.Fatal("head of the log should have been dropped")
+	}
 }
