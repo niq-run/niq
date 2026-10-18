@@ -36,6 +36,15 @@ func newCallID() string {
 // each call gets its own pending slot, so a script may fire many calls in
 // parallel await their results independently.
 func (w *Worker) callTool(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (string, error) {
+	// Fail fast on a target that is not on the bus: the send would be routed
+	// nowhere, no reply could ever resolve this call, and the script (and the
+	// caller's round) would hang until the run timeout. A typo'd or not-yet-
+	// started worker is the common case, so it deserves an immediate, precise
+	// error the model can act on.
+	if !w.awaitKnown(ctx, target) {
+		return "", fmt.Errorf("unknown worker: %s", target)
+	}
+
 	callID := newCallID()
 	ch := make(chan callResult, 1)
 
@@ -104,17 +113,22 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 // through callTool. It runs on its own goroutine so the worker's event loop
 // stays free to receive the request.* replies those calls await.
 func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
-	name, _ := tc.Args["name"].(string)
+	// path is the unified address vocabulary (load/edit/write/search/delete all
+	// take path); name is the pre-accessor spelling, still accepted.
+	name, _ := tc.Args["path"].(string)
+	if name == "" {
+		name, _ = tc.Args["name"].(string)
+	}
 	source, _ := tc.Args["source"].(string)
 
 	// Two modes: run a stored script program by name (reuse), or run inline
 	// source directly (ad-hoc / transient, nothing persisted). Exactly one.
 	switch {
 	case name == "" && source == "":
-		w.ReplyFailed(tc.CallerID, tc.CallID, "provide either name (a stored script program) or source (inline script)", tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "provide either path (a stored script program) or source (inline script)", tc.TraceID)
 		return
 	case name != "" && source != "":
-		w.ReplyFailed(tc.CallerID, tc.CallID, "provide only one of name or source, not both", tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "provide only one of path or source, not both", tc.TraceID)
 		return
 	}
 	if w.executor == nil {
@@ -178,6 +192,6 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 			w.ReplyFailed(tc.CallerID, tc.CallID, withScriptLog(fmt.Sprintf("run: %v", err), logs), tc.TraceID)
 			return
 		}
-		w.ReplyCompleted(tc.CallerID, tc.CallID, withScriptLog(result, logs), tc.TraceID)
+		w.ReplyCompleted(tc.CallerID, tc.CallID, withScriptLog(capScriptResult(result), logs), tc.TraceID)
 	}()
 }

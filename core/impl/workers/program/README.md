@@ -46,8 +46,9 @@ LLM/peer ── program.run{name|source, args} ──▶ program worker
 
 `program.run` takes **exactly one** of two modes:
 
-- `name` — run a stored script program (its entry content is the source); reuse.
-- `source` — run inline TypeScript directly, nothing persisted; ad-hoc.
+- `path` — run a stored script program (its entry content is the source); reuse.
+  `name` is still accepted as a legacy alias.
+- `source` — run inline JavaScript directly, nothing persisted; ad-hoc.
 
 Plus optional `args` (exposed to the script as `sdk.args`) and
 `timeout_seconds` (default 120s; the sandbox is killed on expiry).
@@ -78,13 +79,23 @@ Related, outside this package:
 
 Inside a run the script is handed a minimal `sdk`:
 
-- `sdk.call(target, event, arguments)` → `Promise<result>` — invoke a capability
-  on another worker (a bus request).
+- `sdk.call(target, event, args)` — a normal request to another worker; resolves with the
+  target's reply TEXT (a tool-level failure is a result, not an exception), rejects on
+  unknown worker / failed / rejected. Concurrent (`Promise.all` fans out). An unknown
+  target fails fast: the worker keeps a live roster from `worker.ready` / `worker.gone`.
 - `sdk.log(text)` — a log line. Mirrored to the worker log AND returned to the caller
   after the result under a `--- script log ---` header (last 100 lines / 8 KiB,
   with a dropped-lines note), so a failing run is debuggable in the same round.
-- `sdk.result(payload)` — the run's final result (or `return` a value).
-- `sdk.args` — the `program.run` `args`.
+- `sdk.result(payload)` — the run's final result: a string verbatim, anything
+  else JSON-encoded; the last call wins, and a top-level `return` is used only
+  when `sdk.result` was never called (neither → the empty string).
+- `sdk.args` — the `program.run` `args` (always an object, defaults to `{}`).
+
+The reply is the result, plus — when the script logged — a `--- script log ---`
+section. The result is capped at 20 KiB (head + tail, with an elided-bytes
+note); `timeout_seconds` (default 120) bounds the whole run including nested
+calls, and on expiry the log collected so far comes back with the error. A
+script error is reported with the failing line of the user's own source.
 
 The script body is compiled in memory as an async function body: top-level
 `await` works, `import` does not (so it cannot reach `fs`/`net`); the Bun

@@ -15,6 +15,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -50,7 +51,13 @@ type Worker struct {
 	started bool
 	cancel  context.CancelFunc
 
-	mu sync.Mutex // guards started / cancel
+	mu sync.Mutex // guards started / cancel / known
+
+	// known is the live worker roster, learned from worker.ready /
+	// worker.gone. It exists so a script's call to a worker that is not on the
+	// bus fails immediately ("unknown worker: x") instead of waiting for a
+	// reply that can never arrive and burning the whole run timeout.
+	known map[string]struct{}
 
 	callMu  sync.Mutex                 // guards pending
 	pending map[string]chan callResult // script tool-call slots, keyed by request id
@@ -66,6 +73,7 @@ func New(cfg Config) *Worker {
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		backend:    cfg.Backend,
 		executor:   cfg.Executor,
+		known:      map[string]struct{}{id: {}},
 	}
 	w.registerExtensions()
 	return w
@@ -95,6 +103,9 @@ func (w *Worker) Start(ctx context.Context) error {
 	busCh, _ := w.Channel.Receive(runCtx)
 	go w.watch(runCtx, busCh)
 	w.AnnounceReady("program", nil)
+	// Presence may predate this worker: ask the fleet to re-announce so the
+	// roster starts complete (each peer answers with a DIRECTED ready).
+	w.broadcastDiscover()
 
 	w.started = true
 	log.Printf("[program] started with %d programs", len(progs))
@@ -129,18 +140,21 @@ func (w *Worker) readmeText() string {
 		"into tool calls) and runs script programs.\n\n" +
 		"A Program has two axes: content_type (instruction = a binding rule; " +
 		"playbook = a procedural how-to) and form_type (prompt = natural language; " +
-		"script = TypeScript interpreted into tool calls). A script program is the " +
+		"script = JavaScript interpreted into tool calls). A script program is the " +
 		"script-form counterpart of a playbook.\n\n" +
 		"Tools:\n" +
 		"- search / load / write / edit / upsert / delete — manage Program content. " +
 		"load returns a program's entry content or a sub-content by path.\n" +
 		"- run — execute a FormType:script program in a sandbox. Provide exactly one " +
-		"of name (a stored script program, reused) or source (inline TypeScript, " +
-		"ad-hoc); optional args (exposed to the script as sdk.args) and " +
-		"timeout_seconds. The script may call other workers' tools via its SDK — " +
-		"each call becomes a normal request event — and the run returns the script's " +
-		"final result, so a whole encoded sequence of tool calls runs in one call " +
-		"instead of one reasoning round per call."
+		"of path (a stored script program, reused; name still works) or source " +
+		"(inline JavaScript, ad-hoc); optional args (exposed to the script as " +
+		"sdk.args) and timeout_seconds (default 120, covering nested calls). The " +
+		"script may call other workers' tools via its SDK — each call becomes a " +
+		"normal request event, and a tool-level failure comes back as a result, not " +
+		"an exception. The run returns the script's final result, followed (when it " +
+		"logged) by a '--- script log ---' section, so a whole encoded sequence of " +
+		"tool calls runs in one call plus one reply instead of one reasoning round " +
+		"per call. A script error names the failing line of the script itself."
 }
 
 // ── Program lookup ──
@@ -226,6 +240,10 @@ func (w *Worker) watch(ctx context.Context, busCh <-chan event.Event) {
 
 func (w *Worker) process(ctx context.Context, evt event.Event) {
 	switch evt.Type {
+	case event.TypeWorkerReady:
+		w.remember(evt.WorkerId)
+	case event.TypeWorkerGone:
+		w.forget(evt.WorkerId)
 	case event.TypeWorkerDiscover:
 		if evt.WorkerId != w.ID() {
 			w.AnnounceReadyTo(evt.WorkerId, "program", nil, false)
@@ -240,6 +258,72 @@ func (w *Worker) process(ctx context.Context, evt event.Event) {
 	default:
 		if !w.DispatchExtension(evt) {
 			log.Printf("[program %s] no extension for event %s", w.ID(), evt.Type)
+		}
+	}
+}
+
+// rosterDiscoverWait bounds the cold-start discovery round a single call may
+// spend before its target is declared unknown.
+const rosterDiscoverWait = 500 * time.Millisecond
+
+// ── live roster ──
+
+// remember/forget maintain the roster from the presence lifecycle.
+func (w *Worker) remember(id string) {
+	if id == "" {
+		return
+	}
+	w.mu.Lock()
+	w.known[id] = struct{}{}
+	w.mu.Unlock()
+}
+
+func (w *Worker) forget(id string) {
+	w.mu.Lock()
+	delete(w.known, id)
+	w.mu.Unlock()
+}
+
+// isKnown reports whether id is on the roster.
+func (w *Worker) isKnown(id string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, ok := w.known[id]
+	return ok
+}
+
+// broadcastDiscover asks the fleet who is online; peers answer with a directed
+// ready, which lands in process() and fills the roster.
+func (w *Worker) broadcastDiscover() {
+	disc := event.New(event.TypeWorkerDiscover, w.ID(), map[string]any{"worker_id": w.ID()})
+	disc.Transient = true // presence: live-only, not durable history
+	_ = w.Channel.Broadcast(context.Background(), disc)
+}
+
+// awaitKnown resolves a call target, tolerating roster cold-start races: an id
+// that is not yet known triggers ONE discovery round, giving a live peer the
+// chance to re-announce, before the caller treats it as unknown. The wait is
+// short and bounded — the point is to fail fast, not to replace the run
+// timeout.
+func (w *Worker) awaitKnown(ctx context.Context, id string) bool {
+	if w.isKnown(id) {
+		return true
+	}
+	w.broadcastDiscover()
+	deadline := time.NewTimer(rosterDiscoverWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			if w.isKnown(id) {
+				return true
+			}
+		case <-deadline.C:
+			return w.isKnown(id)
+		case <-ctx.Done():
+			return w.isKnown(id)
 		}
 	}
 }

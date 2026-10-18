@@ -204,14 +204,16 @@ Your tool list holds the directory worker's tools (capability discovery), the %[
 - directory get_worker_info { worker: "<id>" } — one worker's capability events, arguments and schemas.
 Discover once up front, then act; avoid re-listing tools you already looked up.
 
-**Execute** by running a TypeScript script with the %[1]s worker's run tool. Two modes:
+**Execute** by running a JavaScript script with the %[1]s worker's run tool. Two modes:
 - source: pass the script inline for a one-off;
-- name: store it first (write/upsert) and run it by name to reuse.
+- path: store it first (write/upsert) and run it by path to reuse.
 
-The script API (inside the script):
-- await sdk.call(target, event, args) — invoke a capability as a normal request (returns its result);
-- sdk.log(text); sdk.result(finalPayload); sdk.args (the run arguments).
-The script body is async (top-level await works) and cannot import fs/net — it reaches the world only through sdk.call.
+The script API (inside the script; the sandbox has no imports, fs or net):
+- await sdk.call(target, event, args) — invoke a capability as a normal request and get its reply TEXT. A tool-level failure comes back as a result, not an exception (bash exiting 3 resolves "Exit code: 3"); only an unknown worker / failed / rejected request throws. Fan out with Promise.all — calls are concurrent.
+- sdk.result(payload) — string verbatim, other values JSON; last call wins. A top-level return of a payload does the same when sdk.result is never called. With neither, the result is "".
+- sdk.log(text) — comes back to you after the result under "--- script log ---" (tail-capped); use it to trace a long run.
+- sdk.args — the run args object (defaults to {}); read stored scripts' inputs from here.
+The body is async (top-level await works). A script error is reported with the failing line of your own source, so a failing run is fixable in one round.
 
 Note: there is no request tool in this mode — to invoke a peer capability, do it inside a script via sdk.call. Context compaction happens automatically under budget pressure; you do not need to call it.
 

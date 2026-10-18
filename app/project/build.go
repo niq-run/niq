@@ -714,7 +714,10 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 			event.NewPublishPattern("worker.ready"),
 			event.NewPublishPattern("*"),
 		},
-		subAllowFromParams(p, []string{"worker.discover"}))
+		// worker.ready / worker.gone feed the run-time roster, so a script call to
+		// a worker that is not on the bus fails fast ("unknown worker: x")
+		// instead of waiting for a reply that can never arrive.
+		subAllowFromParams(p, []string{"worker.discover", "worker.ready", "worker.gone"}))
 	// script_executor_args overrides the executor command prefix (default: the
 	// Bun sandbox). E.g. ["node"] on a host without bun (UNSANDBOXED — tests /
 	// trusted hosts only).

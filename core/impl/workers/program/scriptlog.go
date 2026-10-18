@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // Script-log return policy. A run's sdk.log lines are returned to the CALLER
@@ -15,6 +16,13 @@ import (
 const (
 	scriptLogMaxLines = 100
 	scriptLogMaxBytes = 8 * 1024
+
+	// scriptResultMaxBytes caps the RESULT text handed back to the caller, in the
+	// same spirit (and roughly the same size) as the workspace tools' 20KB
+	// output cap: a run that returns a huge blob must not silently blow up the
+	// caller's context. Head and tail are kept, the middle is elided, so both
+	// the beginning and the ending of the payload stay readable.
+	scriptResultMaxBytes = 20 * 1024
 )
 
 // scriptLog collects a run's sdk.log lines for the reply. It is written by the
@@ -70,4 +78,28 @@ func withScriptLog(result string, logs *scriptLog) string {
 		return strings.TrimPrefix(header, "\n\n") + text
 	}
 	return result + header + text
+}
+
+// capScriptResult keeps a result within scriptResultMaxBytes by eliding its
+// middle. The note states how much was dropped, so the caller can tell a
+// truncated payload from a short one.
+func capScriptResult(result string) string {
+	if len(result) <= scriptResultMaxBytes {
+		return result
+	}
+	head := scriptResultMaxBytes / 2
+	tail := scriptResultMaxBytes - head
+	// Cut on rune boundaries so the kept text stays valid UTF-8.
+	headEnd := head
+	for headEnd > 0 && !utf8.RuneStart(result[headEnd]) {
+		headEnd--
+	}
+	tailStart := len(result) - tail
+	for tailStart < len(result) && !utf8.RuneStart(result[tailStart]) {
+		tailStart++
+	}
+	elided := tailStart - headEnd
+	return result[:headEnd] +
+		"\n\n[... " + strconv.Itoa(elided) + " bytes elided ...]\n\n" +
+		result[tailStart:]
 }

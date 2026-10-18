@@ -21,6 +21,13 @@ func (c *stubChannel) snapshot() []event.Event {
 	return append([]event.Event(nil), c.sent...)
 }
 
+// peerReady puts a worker on the program worker's roster the way the bus does
+// (a worker.ready delivery), so a script's call to it is not rejected as
+// unknown.
+func peerReady(w *Worker, id string) {
+	w.process(context.Background(), event.New(event.TypeWorkerReady, id, map[string]any{}))
+}
+
 func waitUntil(t *testing.T, d time.Duration, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(d)
@@ -39,6 +46,7 @@ func TestCallToolAwaitsReply(t *testing.T) {
 	ch := &stubChannel{}
 	root := t.TempDir()
 	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root)})
+	peerReady(w, "ws")
 
 	out := make(chan string, 1)
 	go func() {
@@ -225,6 +233,7 @@ func TestHandleRunRelaysAndReplies(t *testing.T) {
 	sess := &replaySession{result: "DONE"}
 	gotSrc := make(chan string, 1)
 	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: &replayExecutor{session: sess, gotSrc: gotSrc}})
+	peerReady(w, "ws")
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "caller", CallID: "c1", Name: "run",
@@ -375,5 +384,83 @@ func TestScriptLogCapsTail(t *testing.T) {
 	}
 	if strings.Contains(text, "line 0\n") {
 		t.Fatal("head of the log should have been dropped")
+	}
+}
+
+// TestCallToolUnknownWorkerFailsFast verifies a call to a worker that is not on
+// the bus is rejected immediately instead of waiting for a reply that can never
+// arrive (which used to burn the whole run timeout, or hang the caller's round).
+func TestCallToolUnknownWorkerFailsFast(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir())})
+	peerReady(w, "ws")
+	// Keep the discovery round out of the timing: no peer answers, so the call
+	// must give up after rosterDiscoverWait at the latest.
+	start := time.Now()
+	_, err := w.callTool(context.Background(), "no_such_worker", "bash", map[string]any{})
+	elapsed := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "unknown worker: no_such_worker") {
+		t.Fatalf("err = %v, want unknown worker", err)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("unknown target took %s, want a fast failure", elapsed)
+	}
+}
+
+// TestRosterTracksPresence verifies ready/gone maintain the roster and that a
+// worker that goes away is treated as unknown again.
+func TestRosterTracksPresence(t *testing.T) {
+	w := New(Config{ID: "program", Bus: &stubChannel{}, Backend: pgbackend.New(t.TempDir())})
+	if !w.isKnown("program") {
+		t.Fatal("the worker must know itself")
+	}
+	peerReady(w, "ws")
+	if !w.isKnown("ws") {
+		t.Fatal("worker.ready must add the peer")
+	}
+	w.process(context.Background(), event.New(event.TypeWorkerGone, "ws", map[string]any{}))
+	if w.isKnown("ws") {
+		t.Fatal("worker.gone must remove the peer")
+	}
+}
+
+// TestHandleRunAcceptsPath verifies the unified address spelling: path runs a
+// stored program (name stays accepted as the legacy alias).
+func TestHandleRunAcceptsPath(t *testing.T) {
+	ch := &stubChannel{}
+	root := t.TempDir()
+	writeProgramAs(t, root, "ptc-path", "ptc-path", "script", "stored script", "return 1")
+	sess := &scriptedSession{result: "VIA-PATH"}
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: scriptedExecutor{sess: sess}})
+
+	go w.handleRun(context.Background(), baseworker.ToolCall{
+		CallerID: "coder", CallID: "call-path", TraceID: "tr",
+		Args: map[string]any{"path": "ptc-path"},
+	})
+	waitUntil(t, 3*time.Second, func() bool {
+		_, ok := replyText(t, ch, "call-path")
+		return ok
+	}, "program.run reply")
+	if got, _ := replyText(t, ch, "call-path"); !strings.HasPrefix(got, "VIA-PATH") {
+		t.Fatalf("reply = %q, want the program's result", got)
+	}
+}
+
+// TestCapScriptResultKeepsHeadAndTail verifies the result cap elides the middle
+// and says how much it dropped.
+func TestCapScriptResultKeepsHeadAndTail(t *testing.T) {
+	big := strings.Repeat("A", scriptResultMaxBytes) + strings.Repeat("B", scriptResultMaxBytes)
+	got := capScriptResult(big)
+	if len(got) > scriptResultMaxBytes+200 {
+		t.Fatalf("capped length %d exceeds the cap by too much", len(got))
+	}
+	if !strings.HasPrefix(got, "A") || !strings.HasSuffix(got, "B") {
+		t.Fatal("cap must keep the head and the tail")
+	}
+	if !strings.Contains(got, "bytes elided") {
+		t.Fatal("cap must report the elided amount")
+	}
+	if small := capScriptResult("short"); small != "short" {
+		t.Fatalf("small result must pass through, got %q", small)
 	}
 }

@@ -76,28 +76,47 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event: TypeRun,
-		Description: "Run TypeScript in an isolated sandbox, in one of two modes: pass name to reuse a stored script program, or pass source to run inline script directly (ad-hoc / transient). " +
-			"Within one run the script can call other workers' tools through its SDK; each such call becomes a normal request event, and the run returns the script's final result. " +
-			"Use this to execute a sequence of tool calls in one shot, instead of issuing them one reasoning round at a time. " +
-			"For a stored script, find it with program__search and read its source with program__load(name). Provide exactly one of name or source.",
+		Description: "Run a fresh, stateless JAVASCRIPT snippet in an isolated sandbox and return its result. Two modes, exactly one: " +
+			"path = run a stored script program (path is its entry content, e.g. \"ptc-report\"; find candidates with program__search, read source with program__load), " +
+			"or source = run inline code (ad-hoc, nothing persisted). " +
+			"Sandbox API is ONLY `sdk` (no imports, no fs, no net): " +
+			"(1) await sdk.call(target, event, args) sends a normal request to another worker and resolves with its reply TEXT. " +
+			"A TOOL-LEVEL failure is an ordinary result, not an exception (e.g. bash exiting 3 resolves to \"Exit code: 3\"), so parse the text instead of wrapping everything in try/catch; " +
+			"only a CAPABILITY-level failure rejects (unknown worker, request.failed / rejected). " +
+			"Calls run concurrently — `await Promise.all([...])` fans out; keep fan-out modest. " +
+			"(2) sdk.result(payload) sets the run result: a string is returned verbatim, anything else is JSON-encoded, and the LAST call wins. " +
+			"A top-level `return payload` renders the same way but is used only when sdk.result was never called; with neither, the result is the empty string. " +
+			"(3) sdk.log(text) is echoed back to the caller AFTER the result under a \"--- script log ---\" header (last 100 lines / 8KB, older lines dropped) — use it for progress and diagnosis. " +
+			"(4) sdk.args is the run's args object (never undefined, defaults to {}); a stored script should read its inputs from it. " +
+			"Discovering peers: this worker's own tool list need not contain other workers' tools, so look them up with the directory worker (list_workers / get_worker_info) and call them from the script; " +
+			"an unknown target fails fast with \"unknown worker: <id>\". " +
+			"Timing and size: timeout_seconds (default 120) bounds the WHOLE run including every nested call; on expiry the sandbox is killed, in-flight requests are abandoned, and the log collected so far comes back with the error. " +
+			"Result text larger than 20KB is truncated to head + tail. " +
+			"Diagnostics: a script error is reported with the failing line of YOUR source (e.g. \"at script line 3:7: throw new Error(...)\"); " +
+			"use this to execute a whole sequence of tool calls in one shot instead of one reasoning round per call. " +
+			"Provide exactly one of path or source.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Mode A (reuse): content path of a stored script program — its name for the entry content (e.g. \"ptc-report\"), or name/sub.md for a sub-content. Its entry content is the JavaScript executed in the sandbox. Provide this OR source, not both.",
+				},
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Mode A (reuse): name of a stored script program to run. Its entry content is the TypeScript source executed in the sandbox; discover candidates with program__search and inspect the source with program__load(name). Provide this OR source, not both.",
+					"description": "Deprecated alias of path; prefer path (the same address the load/edit/write/search/delete tools take).",
 				},
 				"source": map[string]any{
 					"type":        "string",
-					"description": "Mode B (ad-hoc): the TypeScript source to run directly, nothing persisted. The script body may use top-level await and sdk.call/log/result/args; e.g. `const r = await sdk.call(\"workspace\", \"bash\", { command: \"ls\" }); sdk.result(r);`. Provide this OR name, not both.",
+					"description": "Mode B (ad-hoc): the JavaScript source to run directly, nothing persisted. The body is async (top-level await works) and may use sdk.call/log/result/args; e.g. `const r = await sdk.call(\"workspace\", \"bash\", { command: \"ls\" }); sdk.result(r);`. Provide this OR path, not both.",
 				},
 				"args": map[string]any{
 					"type":        "object",
-					"description": "Optional arguments object handed to the script as sdk.args (the script reads them directly, e.g. sdk.args.x). Useful in both modes to parameterise a script.",
+					"description": "Optional arguments object handed to the script as sdk.args (always an object; defaults to {}). Must be JSON-serializable. A stored script should read its inputs from here rather than hard-coding them.",
 				},
 				"timeout_seconds": map[string]any{
 					"type":        "number",
-					"description": "Optional wall-clock limit for the whole run in seconds (default 120). On expiry the sandbox is killed and the call fails with a timeout error.",
+					"description": "Optional wall-clock limit for the whole run in seconds (default 120), covering every nested call. On expiry the sandbox is killed, in-flight requests are abandoned, and the log collected so far is returned with the timeout error.",
 				},
 			},
 			"required": []any{},
