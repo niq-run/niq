@@ -651,6 +651,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 			// The local script-program execution backend. Swappable for a local
 			// sandbox / remote gateway later.
 			Executor: bunexec.New(bunexec.Options{Args: execArgs}),
+			Params:   p,
 		})
 	}
 	cfg.ID = id

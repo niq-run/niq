@@ -27,6 +27,13 @@ const (
 func (w *Worker) registerExtensions() {
 	ctx := context.Background()
 
+	// Self-description: the generic worker.readme read capability, so peers, the
+	// WebUI and the worker itself can recall what this worker is for. A
+	// declaration may override/append it via params.readme / params.readme_append.
+	w.RegisterReadme(
+		"Read this worker's readme: what the program worker is for (managing and running Programs).",
+		w.readmeText, w.params)
+
 	w.Register(baseworker.Extension{
 		Event:       TypeSearch,
 		Description: "Search for available programs by name, description, or tag. Returns matching programs with their metadata (name, content_type, description, tags, locked), the root path to load their entry content, and the paths of any sub-contents.",

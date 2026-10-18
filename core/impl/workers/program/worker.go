@@ -31,6 +31,9 @@ type Config struct {
 	// when nil, program.run replies "executor not configured" so a worker that
 	// only stores/loads programs works without one.
 	Executor program.ScriptProgramExecutor
+	// Params is the worker's construction params, used by the readme to support
+	// declaration-level customization (readme / readme_append).
+	Params map[string]any
 }
 
 // Worker is a bus-facing worker that manages Program lifecycle.
@@ -46,6 +49,7 @@ type Worker struct {
 	baseworker.BaseWorker
 	backend  program.Backend
 	executor program.ScriptProgramExecutor
+	params   map[string]any
 
 	started bool
 	cancel  context.CancelFunc
@@ -66,6 +70,7 @@ func New(cfg Config) *Worker {
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		backend:    cfg.Backend,
 		executor:   cfg.Executor,
+		params:     cfg.Params,
 	}
 	w.registerExtensions()
 	return w
@@ -121,6 +126,27 @@ func (w *Worker) Stop() error {
 
 func (w *Worker) Snapshot() ([]byte, error)  { return nil, nil }
 func (w *Worker) Restore(state []byte) error { return nil }
+
+// readmeText is the built-in guide the worker.readme call returns (before any
+// declaration-level readme / readme_append customization).
+func (w *Worker) readmeText() string {
+	return "Program worker — manages niq Programs (reusable sources that compile " +
+		"into tool calls) and runs script programs.\n\n" +
+		"A Program has two axes: content_type (instruction = a binding rule; " +
+		"playbook = a procedural how-to) and form_type (prompt = natural language; " +
+		"script = TypeScript interpreted into tool calls). A script program is the " +
+		"script-form counterpart of a playbook.\n\n" +
+		"Tools:\n" +
+		"- search / load / write / edit / upsert / delete — manage Program content. " +
+		"load returns a program's entry content or a sub-content by path.\n" +
+		"- run — execute a FormType:script program in a sandbox. Provide exactly one " +
+		"of name (a stored script program, reused) or source (inline TypeScript, " +
+		"ad-hoc); optional args (exposed to the script as sdk.args) and " +
+		"timeout_seconds. The script may call other workers' tools via its SDK — " +
+		"each call becomes a normal request event — and the run returns the script's " +
+		"final result, so a whole encoded sequence of tool calls runs in one call " +
+		"instead of one reasoning round per call."
+}
 
 // ── Program lookup ──
 

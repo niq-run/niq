@@ -2,6 +2,7 @@ package program
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +116,27 @@ type blockingExecutor struct{}
 
 func (blockingExecutor) Start(context.Context, string, map[string]any, program.ToolCaller) (program.ScriptSession, error) {
 	return blockingSession{}, nil
+}
+
+// TestReadmeExposed verifies the worker answers a worker.readme call with its
+// self-description guide.
+func TestReadmeExposed(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir())})
+
+	evt := event.New(event.TypeWorkerReadme, "asker", map[string]any{})
+	evt.RequestId = "r1"
+	w.DispatchExtension(evt)
+
+	waitUntil(t, time.Second, func() bool {
+		for _, e := range ch.snapshot() {
+			if e.Type == event.TypeRequestCompleted && e.RequestId == "r1" {
+				r, _ := e.Payload["result"].(string)
+				return strings.Contains(r, "Program worker") && strings.Contains(r, "run")
+			}
+		}
+		return false
+	}, "worker.readme reply")
 }
 
 // TestHandleRunInlineSource verifies mode B: an inline source runs without any
