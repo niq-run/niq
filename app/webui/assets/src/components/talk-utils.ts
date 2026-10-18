@@ -233,6 +233,10 @@ export function getWorkerTypeColor(type: string, colors: import('../theme').Pale
   switch (type) {
     case "reason":
       return colors.eventType.reason
+    case "coding_reason_worker":
+      // A reason-family worker: same hue as reason so the type badge reads as
+      // "a reasoning worker" rather than an unrelated tool.
+      return colors.eventType.reason
     case "timer":
       return colors.eventType.timer
     case "hiw":
