@@ -95,6 +95,11 @@ type Config struct {
 	MaxPayloadBytes int
 
 	SeedMessages []llm.Message
+
+	// Readme is this worker's own description of what it is for. It is the seed
+	// of the worker's readme (worker.readme); runtime updates by the worker
+	// itself live in its snapshot and override this value on restore.
+	Readme string
 }
 
 // NewBaseReasonWorker assembles a BaseReasonWorker from a Config: applies
@@ -147,6 +152,7 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		tailTokens:      cfg.TailTokens,
 		rotateRounds:    cfg.RotateRounds,
 		reasoningEffort: cfg.ReasoningEffort,
+		readme:          cfg.Readme,
 	}
 	// Durable-change signalling is the base's machinery (baseworker); the
 	// mechanism only decides when to raise it (see handleSetLLMProvider).
@@ -309,6 +315,10 @@ type reasonState struct {
 	// slice. Snapshot always persists the current value, so restore
 	// unconditionally overrides config — there is no "edited" flag.
 	Programs []program.Program `json:"programs"`
+	// Readme is the worker's self-description. A pointer distinguishes "never
+	// set at runtime" (old snapshots, keep the config seed) from "cleared by the
+	// worker" (empty string, override the seed).
+	Readme *string `json:"readme,omitempty"`
 	// Requests is the tracker's blob: the tool calls still in flight when the
 	// snapshot was taken. Both halves of one wait (the transcript's placeholder
 	// and the tracker's entry) are captured together, so a [pending] message is
@@ -358,6 +368,10 @@ func (w *BaseReasonWorker) Snapshot() ([]byte, error) {
 	cp := make([]program.Program, len(w.programs))
 	copy(cp, w.programs)
 	state.Programs = cp
+	// Readme: always persist the current value, including empty (the worker may
+	// have deliberately cleared its description).
+	readme := w.readme
+	state.Readme = &readme
 	return json.Marshal(state)
 }
 
@@ -403,6 +417,11 @@ func (w *BaseReasonWorker) Restore(state []byte) error {
 	if s.Programs != nil {
 		w.programs = s.Programs
 	}
+	// A readme updated by the worker itself wins over the config seed. Absent
+	// (older snapshots) keeps the seed.
+	if s.Readme != nil {
+		w.readme = *s.Readme
+	}
 	// Re-applying the selection rebuilds the provider, so the worker really
 	// uses it rather than only reporting it. A stale selection (the provider or
 	// model is no longer configured) is not fatal: note it and stay on the
@@ -442,6 +461,7 @@ type BaseReasonWorker struct {
 	discovered      []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
 	toolListBuilder ToolListBuilder        // LLM tool list policy (extension point)
 	programs        []program.Program
+	readme          string // the worker's own description (worker.readme)
 	requestTracker  *requesttracker.RequestTracker
 	// toolCallSeq mints globally-unique tool-call ids for calls whose model
 	// omitted one. It must be monotonic across rounds (not per-turn) because the
