@@ -148,15 +148,21 @@ func NewWorker(cfg Config) *Worker {
 	return &Worker{BaseReasonWorker: base}
 }
 
-// codingExcludedSelfEvents are the worker's OWN tools a coding agent should not
-// spend rounds on: it compacts automatically under budget pressure (the
-// mechanism fires context.compress itself; the model need not call it) and its
-// programs are fixed at creation time, so it neither reads nor rewrites its own
-// program list.
+// codingExcludedSelfEvents are the worker's OWN tools that stay REGISTERED but
+// are kept out of the model's own tool list. Registration is what lets peers,
+// the WebUI and the control plane still use them (e.g. switch this worker's
+// model); the filter only hides them from the agent itself:
+//   - context.compress: compaction is automatic under budget pressure;
+//   - program.query / program.update: programs are fixed at creation time;
+//   - provider.current / provider.list / provider.switch: model management is a
+//     control-plane action, not something the agent does to itself.
 var codingExcludedSelfEvents = map[event.EventType]bool{
 	reasonBase.TypeContextCompress:  true,
 	reasonworkers.TypeProgramQuery:  true,
 	reasonworkers.TypeProgramUpdate: true,
+	reasonBase.TypeProviderCurrent:  true,
+	reasonBase.TypeProviderList:     true,
+	reasonBase.TypeProviderSwitch:   true,
 }
 
 // toolListBuilder returns the LLM tool-list policy for the mode.

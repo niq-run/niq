@@ -34,7 +34,11 @@ always drops:
 - `context_compress` — compaction is automatic under budget pressure; the model
   never needs to call it;
 - `program_query` / `program_update` — the coding agent's programs are fixed
-  at creation time, so it neither reads nor rewrites its own program list.
+  at creation time, so it neither reads nor rewrites its own program list;
+- `provider_current` / `provider_list` / `provider_switch` — model management is
+  a control-plane action. These stay **registered** (peers / the WebUI can still
+  read and switch this worker's provider — the detail panel's provider switcher
+  works), they are only hidden from the agent's own tool list.
 
 In PTC mode it additionally drops the self **`request`** escape hatch, so peer
 calls must go through `program.run` rather than an ad-hoc event call. The

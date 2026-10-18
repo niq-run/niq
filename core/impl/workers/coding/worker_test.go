@@ -119,6 +119,36 @@ func TestNormalModeDropsFocusToolsButKeepsRequest(t *testing.T) {
 	}
 }
 
+// TestProviderToolsRegisteredButHidden verifies the model-management tools are
+// still registered (peers / the control plane can switch this worker's model)
+// while being hidden from the agent's own LLM tool list.
+func TestProviderToolsRegisteredButHidden(t *testing.T) {
+	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}})
+	announce(w, "coder", "reason", "message", "provider.switch", "provider.list", "provider.current")
+
+	// Registered: peers can still call them.
+	have := map[string]bool{}
+	for _, e := range w.Extensions() {
+		have[string(e.Event)] = true
+	}
+	for _, want := range []string{"provider.switch", "provider.list", "provider.current"} {
+		if !have[want] {
+			t.Errorf("provider tool %q must stay registered (got %v)", want, have)
+		}
+	}
+
+	// Hidden from the model.
+	names := toolNames(w)
+	for _, unwanted := range []string{"provider_switch", "provider_list", "provider_current"} {
+		if names[unwanted] {
+			t.Errorf("provider tool %q must not be in the LLM tool list (got %v)", unwanted, names)
+		}
+	}
+	if !names["message"] {
+		t.Error("message should stay in the LLM tool list")
+	}
+}
+
 // TestNormalModeExposesAllTools verifies normal mode keeps every discovered
 // capability, like the generic reason worker.
 func TestNormalModeExposesAllTools(t *testing.T) {
