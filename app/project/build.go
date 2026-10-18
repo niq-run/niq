@@ -172,6 +172,9 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 	}
 	rotateRounds := pInt(p, "rotate_rounds")
 	compactDirective, _ := p["compact_directive"].(string)
+	// Readme is the worker's own description of what it is for — the seed of
+	// worker.readme (the worker may revise it at runtime; the snapshot wins).
+	readme, _ := p["readme"].(string)
 
 	connect := specConnect(ctx, id, "reason", pubAllow, subAllow)
 	providerSources := providerpkg.NewProviderSources(provider, apiKey, baseURL, model)
@@ -192,6 +195,7 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 			TailTokens:       tailTokens,
 			RotateRounds:     rotateRounds,
 			CompactDirective: compactDirective,
+			Readme:           readme,
 			// Fixed per-message payload cap for tool results / inputs; not
 			// configurable through worker params.
 			MaxPayloadBytes: 20 * 1024,

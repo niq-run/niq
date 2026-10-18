@@ -52,6 +52,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [extType, setExtType] = useState('')
   const [id, setId] = useState('')
   const [instruction, setInstruction] = useState('')
+  const [readme, setReadme] = useState('')
   const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
   const [rootDir, setRootDir] = useState('')
@@ -146,6 +147,9 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         if (instruction.trim()) body.instruction = instruction.trim()
         if (provider.trim()) body.provider = provider.trim()
         if (model.trim()) body.model = model.trim()
+        // Self-description (worker.readme). A param, not display metadata: the
+        // worker can revise it at runtime and other workers read it by recall.
+        if (readme.trim()) body.params = { readme: readme.trim() }
       }
       if ((effType === 'workspace' || effType === 'program') && rootDir.trim()) {
         // WorkerConfig takes a mounts array (first entry = primary mount).
@@ -395,6 +399,13 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
             <div style={field}>
               <label style={label}>{t('workers.create.instruction')}</label>
               <textarea style={{ ...input, resize: 'vertical', minHeight: 64 }} value={instruction} onChange={e => setInstruction(e.target.value)} />
+            </div>
+            <div style={field}>
+              <label style={label}>{t('workers.create.readme')}</label>
+              <textarea style={{ ...input, resize: 'vertical', minHeight: 48 }} value={readme} onChange={e => setReadme(e.target.value)} placeholder={t('workers.create.readme.placeholder')} />
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                {t('workers.create.readme.hint')}
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ ...field, flex: 1 }}>
