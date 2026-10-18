@@ -73,6 +73,27 @@ func TestPTCModeExposesDirectoryAndProgramTools(t *testing.T) {
 	}
 }
 
+// TestPTCModeKeepsSelfCommunicationTools verifies the worker's OWN tools —
+// the communication channels message / request and the context/program tools —
+// survive PTC mode (PTC only drops PEER tools, never self tools).
+func TestPTCModeKeepsSelfCommunicationTools(t *testing.T) {
+	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: ToolModePTC})
+	// The worker's own full contract (SelfOnly included), as it sends itself.
+	announce(w, "coder", "reason", "message", "request", "context.compress", "program.query", "program.update")
+	announce(w, "program", "program", "run")
+	announce(w, "workspace", "workspace", "bash")
+
+	names := toolNames(w)
+	for _, want := range []string{"message", "request", "context_compress", "program_query", "program_update", "program__run"} {
+		if !names[want] {
+			t.Errorf("PTC must keep the self/communication tool %q (got %v)", want, names)
+		}
+	}
+	if names["workspace__bash"] {
+		t.Error("PTC must still drop peer tools like workspace__bash")
+	}
+}
+
 // TestNormalModeExposesAllTools verifies normal mode keeps every discovered
 // capability, like the generic reason worker.
 func TestNormalModeExposesAllTools(t *testing.T) {
