@@ -55,6 +55,18 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [readme, setReadme] = useState('')
   const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
+  // Provider override details (rare; leave empty to use the global provider.json).
+  const [apiKey, setApiKey] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  // Spawn seeding: goal rides the system prompt (survives compaction), brief
+  // lands as the transcript's first message (working material).
+  const [goal, setGoal] = useState('')
+  const [brief, setBrief] = useState('')
+  // Coding-only: the tool-list policy. "ptc" keeps only the program +
+  // directory workers' tools and drives work through script programs.
+  const [toolMode, setToolMode] = useState('normal')
+  const [programWorker, setProgramWorker] = useState('')
+  const [directoryWorker, setDirectoryWorker] = useState('')
   const [rootDir, setRootDir] = useState('')
   const [command, setCommand] = useState('')
   const [cwd, setCwd] = useState('')
@@ -147,9 +159,26 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         if (instruction.trim()) body.instruction = instruction.trim()
         if (provider.trim()) body.provider = provider.trim()
         if (model.trim()) body.model = model.trim()
+        if (apiKey.trim()) body.api_key = apiKey.trim()
+        if (baseUrl.trim()) body.base_url = baseUrl.trim()
+        // Spawn seeding has no typed declaration field: it is a param
+        // (context-builder: goal → system prompt, brief → first message).
+        const params: Record<string, unknown> = {}
+        if (goal.trim()) params.goal = goal.trim()
+        if (brief.trim()) params.brief = brief.trim()
         // Self-description (worker.readme). A param, not display metadata: the
         // worker can revise it at runtime and other workers read it by recall.
-        if (readme.trim()) body.params = { readme: readme.trim() }
+        if (readme.trim()) params.readme = readme.trim()
+        if (effType === 'coding') {
+          params.tool_mode = toolMode
+          // Only meaningful in ptc mode; empty falls back to the defaults
+          // (program / directory).
+          if (toolMode === 'ptc') {
+            if (programWorker.trim()) params.program_worker = programWorker.trim()
+            if (directoryWorker.trim()) params.directory_worker = directoryWorker.trim()
+          }
+        }
+        if (Object.keys(params).length > 0) body.params = params
       }
       if ((effType === 'workspace' || effType === 'program') && rootDir.trim()) {
         // WorkerConfig takes a mounts array (first entry = primary mount).
@@ -417,6 +446,59 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
                 <input style={input} value={model} onChange={e => setModel(e.target.value)} />
               </div>
             </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ ...field, flex: 1 }}>
+                <label style={label}>{t('workers.create.baseUrl')}</label>
+                <input style={input} value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://…" />
+              </div>
+              <div style={{ ...field, flex: 1 }}>
+                <label style={label}>{t('workers.create.apiKey')}</label>
+                <input style={input} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={t('workers.create.apiKeyPlaceholder')} />
+              </div>
+            </div>
+
+            {/* Spawn seeding: the two knobs that decide what the worker starts
+                with — its standing goal (prompt space) and its handover brief
+                (working material). */}
+            <div style={field}>
+              <label style={label}>{t('workers.create.goal')}</label>
+              <textarea style={{ ...input, resize: 'vertical', minHeight: 48 }} value={goal} onChange={e => setGoal(e.target.value)} placeholder={t('workers.create.goalPlaceholder')} />
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                {t('workers.create.goal.hint')}
+              </div>
+            </div>
+            <div style={field}>
+              <label style={label}>{t('workers.create.brief')}</label>
+              <textarea style={{ ...input, resize: 'vertical', minHeight: 48 }} value={brief} onChange={e => setBrief(e.target.value)} placeholder={t('workers.create.briefPlaceholder')} />
+            </div>
+
+            {effType === 'coding' && (
+              <>
+                <div style={field}>
+                  <label style={label}>{t('workers.create.toolMode')}</label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {(['normal', 'ptc'] as const).map(m => (
+                      <span key={m} style={pill(toolMode === m)} onClick={() => setToolMode(m)}>{m}</span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                    {toolMode === 'ptc' ? t('workers.create.toolMode.ptcHint') : t('workers.create.toolMode.normalHint')}
+                  </div>
+                </div>
+                {toolMode === 'ptc' && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ ...field, flex: 1 }}>
+                      <label style={label}>{t('workers.create.programWorker')}</label>
+                      <input style={input} value={programWorker} onChange={e => setProgramWorker(e.target.value)} placeholder="program" />
+                    </div>
+                    <div style={{ ...field, flex: 1 }}>
+                      <label style={label}>{t('workers.create.directoryWorker')}</label>
+                      <input style={input} value={directoryWorker} onChange={e => setDirectoryWorker(e.target.value)} placeholder="directory" />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
         {isManaged && (effType === 'workspace' || effType === 'program') && (
