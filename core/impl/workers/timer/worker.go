@@ -20,6 +20,7 @@ import (
 // timers are persisted via Snapshot/Restore so they survive a restart.
 type Worker struct {
 	baseworker.BaseWorker
+	params    map[string]any // declaration params, for the readme customization
 	timers    map[string]*Entry
 	started   bool
 	cancelRun context.CancelFunc
@@ -33,6 +34,9 @@ type Config struct {
 	// OnDurableChange is invoked when the set of pending timers changed and
 	// must survive a restart. Baseworker machinery; nil leaves signalling off.
 	OnDurableChange func()
+	// Params is the declaration's raw construction params, read only for the
+	// readme customization (params.readme / readme_append and {{key}} placeholders).
+	Params map[string]any
 }
 
 // The timer worker's tools, each its own event type (see the request-response
@@ -54,6 +58,7 @@ func New(cfg Config) *Worker {
 	}
 	w := &Worker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
+		params:     cfg.Params,
 		timers:     make(map[string]*Entry),
 	}
 	// Durable-change signalling is the base's machinery (baseworker); the
@@ -70,11 +75,9 @@ func (w *Worker) registerExtensions() {
 		return map[string]any{"type": "object", "properties": props}
 	}
 
-	w.Register(baseworker.Extension{
-		Event:       event.TypeWorkerReadme,
-		Description: "Read this worker's usage guide: the timer tools, and how reminders and timeouts behave.",
-		Parameters:  obj(map[string]any{}),
-	}, w.handleReadme)
+	w.RegisterReadme(
+		"Read this worker's usage guide: the timer tools, and how reminders and timeouts behave.",
+		w.readmeText, w.params)
 
 	w.Register(baseworker.Extension{
 		Event:       TypeTimeout,
@@ -213,14 +216,6 @@ delivered as a directed worker.input and never auto-cancelled.
   comes later.
 - Pending timers are persisted, so they survive a restart.
 - timeout fires timer.timeout; reminders fire worker.input.`
-
-func (w *Worker) handleReadme(evt event.Event) {
-	tc := baseworker.ParseToolCall(evt)
-	if tc.CallID == "" {
-		return
-	}
-	w.ReplyCompleted(tc.CallerID, tc.CallID, w.readmeText(), tc.TraceID)
-}
 
 // readmeText is the guide plus the number of pending timers.
 func (w *Worker) readmeText() string {

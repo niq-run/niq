@@ -45,6 +45,9 @@ type Config struct {
 	// defaults. history.get ignores both.
 	MaxListEvents    int
 	MaxListItemBytes int
+	// Params is the declaration's raw construction params, read only for the
+	// readme customization (params.readme / readme_append and {{key}} placeholders).
+	Params map[string]any
 }
 
 // Worker is a history worker: it embeds the shared base, holds a read-only
@@ -55,6 +58,7 @@ type Worker struct {
 	store            store.EventStore
 	maxListEvents    int
 	maxListItemBytes int
+	params           map[string]any // declaration params, for the readme customization
 	started          bool
 	cancelRun        context.CancelFunc
 }
@@ -81,6 +85,7 @@ func New(cfg Config) *Worker {
 		store:            cfg.Store,
 		maxListEvents:    me,
 		maxListItemBytes: mib,
+		params:           cfg.Params,
 	}
 }
 
@@ -161,11 +166,9 @@ func (w *Worker) registerTools() {
 		return map[string]any{"type": "object", "properties": props}
 	}
 
-	w.Register(baseworker.Extension{
-		Event:       event.TypeWorkerReadme,
-		Description: "Read this worker's usage guide: what history answers, its two tools, and how to query them.",
-		Parameters:  obj(map[string]any{}),
-	}, w.handleReadme)
+	w.RegisterReadme(
+		"Read this worker's usage guide: what history answers, its two tools, and how to query them.",
+		w.readmeText, w.params)
 
 	w.Register(baseworker.Extension{
 		Event:       TypeHistoryList,
@@ -239,14 +242,6 @@ inspect present state (for that, use the directory worker).
   history.get for the real content.
 - The store is append-only and live. Don't page through a whole history you only
   cursor-checked once.`
-
-func (w *Worker) handleReadme(evt event.Event) {
-	tc := baseworker.ParseToolCall(evt)
-	if tc.CallID == "" {
-		return
-	}
-	w.ReplyCompleted(tc.CallerID, tc.CallID, w.readmeText(), tc.TraceID)
-}
 
 // readmeText is the guide plus the worker's list defaults.
 func (w *Worker) readmeText() string {

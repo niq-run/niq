@@ -76,6 +76,7 @@ func (w *Worker) registerExtensions() {
 			"properties": map[string]any{
 				"name": map[string]any{"type": "string", "description": "Script program name (the entry content is the script source)."},
 				"args": map[string]any{"type": "object", "description": "Optional invocation arguments exposed to the script (sdk.args)."},
+				"timeout_seconds": map[string]any{"type": "number", "description": "Optional per-run timeout in seconds (default 120); the sandbox is killed when it elapses."},
 			},
 			"required": []any{"name"},
 		},

@@ -173,14 +173,17 @@ type Server struct {
 	registry  corebus.IdentityRegistry
 	workerSvc *workerhost.WorkerService
 
-	ctxMu       sync.RWMutex
-	context     ContextInfo
-	archived    ArchivedStore
-	unmngd      UnmanagedController
-	declCreator WorkerDeclCreator
-	declRemover WorkerDeclRemover
-	metaUpdater WorkerMetaUpdater
-	workerMeta  map[string]WorkerMeta
+	ctxMu          sync.RWMutex
+	context        ContextInfo
+	archived       ArchivedStore
+	unmngd         UnmanagedController
+	declCreator    WorkerDeclCreator
+	declRemover    WorkerDeclRemover
+	metaUpdater    WorkerMetaUpdater
+	paramsUpdater  WorkerParamsUpdater
+	managedRestart ManagedRestarter
+	workerMeta     map[string]WorkerMeta
+	paramsProvider WorkerParamsProvider
 
 	metaMu sync.RWMutex
 
@@ -233,6 +236,10 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	// Update a worker's display metadata (tags / description): a pure
 	// declaration edit persisted to project.json + the in-memory workerMeta.
 	mux.HandleFunc("PUT /api/workers/{id}/meta", s.handleUpdateWorkerMeta)
+
+	// Worker params: persist an edit to the declaration. Params are build-time
+	// input, so the change applies on restart.
+	mux.HandleFunc("PUT /api/workers/{id}/params", s.handleUpdateWorkerParams)
 
 	// Model provider: read and switch a reason worker's active LLM provider.
 	// These go over the bus as worker.query / worker.update and wait for the
@@ -1042,6 +1049,45 @@ func (s *Server) SetWorkerMeta(m map[string]WorkerMeta) {
 	s.workerMeta = m
 }
 
+// WorkerParamsProvider returns the declared construction params (project.json
+// `params`) of every worker, keyed by worker id. It is read per request, so the
+// worker view reflects runtime create/delete; implemented by the assembly layer
+// (which owns project.json). nil disables params display.
+type WorkerParamsProvider interface {
+	WorkerParamsMap() map[string]map[string]any
+}
+
+// SetWorkerParamsProvider attaches the params provider (nil disables it).
+func (s *Server) SetWorkerParamsProvider(p WorkerParamsProvider) {
+	s.paramsProvider = p
+}
+
+// WorkerParamsUpdater persists a worker's declared construction params
+// (project.json `params`). Implemented by the assembly layer; nil disables
+// PUT /api/workers/{id}/params.
+type WorkerParamsUpdater interface {
+	UpdateWorkerParams(id string, params map[string]any) error
+}
+
+// SetWorkerParamsUpdater attaches the params persistence (nil disables the
+// endpoint).
+func (s *Server) SetWorkerParamsUpdater(u WorkerParamsUpdater) {
+	s.paramsUpdater = u
+}
+
+// ManagedRestarter rebuilds a host-managed worker from its declaration, which
+// is how a params edit reaches a live worker. Implemented by the assembly
+// layer; nil disables the managed branch of the restart endpoint.
+type ManagedRestarter interface {
+	RestartManaged(id string) error
+}
+
+// SetManagedRestarter attaches the managed-worker restarter (nil disables the
+// managed branch of the restart endpoint).
+func (s *Server) SetManagedRestarter(r ManagedRestarter) {
+	s.managedRestart = r
+}
+
 // workerMetaFor returns the display metadata for a worker id, or zero values.
 func (s *Server) workerMetaFor(id string) WorkerMeta {
 	s.metaMu.RLock()
@@ -1058,6 +1104,7 @@ type WorkerView struct {
 	Type           string                 `json:"type"`
 	Tags           []string               `json:"tags,omitempty"`
 	Description    string                 `json:"description,omitempty"`
+	Params         map[string]any         `json:"params,omitempty"`
 	Credential     string                 `json:"credential,omitempty"`
 	PublishAllow   []event.PublishPattern `json:"publish_allow,omitempty"`
 	SubscribeAllow []event.EventPattern   `json:"subscribe_allow,omitempty"`
@@ -1079,6 +1126,13 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		online[id] = true
 	}
 
+	// Declared construction params (project.json `params`), read live so the view
+	// reflects workers created/deleted at runtime.
+	var params map[string]map[string]any
+	if s.paramsProvider != nil {
+		params = s.paramsProvider.WorkerParamsMap()
+	}
+
 	managed := map[string]string{} // id → state
 	for _, wi := range s.workerSvc.ListWorkers("") {
 		managed[wi.ID] = string(wi.State)
@@ -1098,6 +1152,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 			Online: online[id.WorkerID]}
 		meta := s.workerMetaFor(id.WorkerID)
 		v.Tags, v.Description = meta.Tags, meta.Description
+		v.Params = params[id.WorkerID]
 		if state, ok := managed[id.WorkerID]; ok {
 			v.Managed = true
 			v.State = state
@@ -1119,7 +1174,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 			meta := s.workerMetaFor(wi.ID)
 			views = append(views, WorkerView{
 				ID: wi.ID, Type: wi.Type, Managed: true, State: string(wi.State), Online: online[wi.ID],
-				Tags: meta.Tags, Description: meta.Description,
+				Tags: meta.Tags, Description: meta.Description, Params: params[wi.ID],
 			})
 		}
 	}
@@ -1139,13 +1194,13 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 			}
 			views = append(views, WorkerView{
 				ID: st.ID, Type: st.Type, Managed: true, State: "stopped",
-				Tags: meta.Tags, Description: meta.Description,
+				Tags: meta.Tags, Description: meta.Description, Params: params[st.ID],
 			})
 			continue
 		}
 		views = append(views, WorkerView{
 			ID: st.ID, Type: st.Type, Unmanaged: true, UnmanagedState: st.State, Remote: st.Remote,
-			Tags: meta.Tags, Description: meta.Description,
+			Tags: meta.Tags, Description: meta.Description, Params: params[st.ID],
 		})
 	}
 
@@ -1560,11 +1615,26 @@ func (s *Server) handleUnmanagedStop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUnmanagedRestart(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	// A managed worker has no supervisor entry: restart it by rebuilding it from
+	// its declaration (destroy + spawn), which is what applies a params edit.
+	if s.workerSvc != nil && s.workerSvc.HasWorker(id) {
+		if s.managedRestart == nil {
+			http.Error(w, "managed worker restart unavailable", http.StatusNotFound)
+			return
+		}
+		if err := s.managedRestart.RestartManaged(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 	if s.unmngd == nil {
 		http.Error(w, "unmanaged control unavailable", 404)
 		return
 	}
-	if err := s.unmngd.Restart(r.PathValue("id")); err != nil {
+	if err := s.unmngd.Restart(id); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
@@ -1662,6 +1732,34 @@ func (s *Server) handleUpdateWorkerMeta(w http.ResponseWriter, r *http.Request) 
 	s.workerMeta[id] = meta
 	s.metaMu.Unlock()
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+// handleUpdateWorkerParams persists a worker's construction params to its
+// declaration. Params are build-time input: nothing live is touched, so the
+// edit takes effect on the next restart. Keeping it out of the running worker
+// also means a malformed edit cannot take the worker down before it is reverted.
+func (s *Server) handleUpdateWorkerParams(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.paramsUpdater == nil {
+		http.Error(w, "worker params updates unavailable", http.StatusNotFound)
+		return
+	}
+	var in struct {
+		Params map[string]any `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.Params == nil {
+		in.Params = map[string]any{}
+	}
+	if err := s.paramsUpdater.UpdateWorkerParams(id, in.Params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "params": in.Params})
 }
 
 // handleDeleteWorker permanently removes a worker: it stops the live process

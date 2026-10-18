@@ -5,6 +5,7 @@
 package project
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -185,6 +186,27 @@ func workerMetaFromDecl(workers []WorkerConfig) map[string]webui.WorkerMeta {
 	return m
 }
 
+// webuiParamsProvider implements webui.WorkerParamsProvider: it returns the
+// declared construction params (project.json `params`) of every worker, read
+// fresh each call so the worker view reflects runtime create/delete.
+type webuiParamsProvider struct {
+	projectID string
+}
+
+func (p webuiParamsProvider) WorkerParamsMap() map[string]map[string]any {
+	proj, err := LoadProject(p.projectID)
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]map[string]any)
+	for _, wc := range proj.Workers {
+		if len(wc.Params) > 0 {
+			m[wc.ID] = wc.Params
+		}
+	}
+	return m
+}
+
 // webuiMetaUpdater implements webui.WorkerMetaUpdater: it persists a worker's
 // display metadata (tags / description) to its project.json declaration. Tags
 // are pure WebUI management metadata — the running worker ignores them, so
@@ -198,6 +220,46 @@ func (u webuiMetaUpdater) UpdateWorkerMeta(id string, meta webui.WorkerMeta) err
 		return fmt.Errorf("worker metadata update requires a project")
 	}
 	return UpdateWorkerMeta(u.projectID, id, meta.Tags, meta.Description)
+}
+
+// webuiParamsUpdater implements webui.WorkerParamsUpdater: a params edit lands
+// in the project.json declaration only, so the running worker keeps its current
+// definition until it is restarted.
+type webuiParamsUpdater struct {
+	projectID string
+}
+
+func (u webuiParamsUpdater) UpdateWorkerParams(id string, params map[string]any) error {
+	if u.projectID == "" {
+		return fmt.Errorf("worker params update requires a project")
+	}
+	return UpdateWorkerParams(u.projectID, id, params)
+}
+
+// webuiManagedRestarter implements webui.ManagedRestarter: it rebuilds a
+// host-managed worker from its declaration. This is the path that makes a
+// params edit reach a live worker.
+type webuiManagedRestarter struct {
+	svc       *workerhost.WorkerService
+	projectID string
+}
+
+func (r webuiManagedRestarter) RestartManaged(id string) error {
+	if r.projectID == "" {
+		return fmt.Errorf("managed restart requires a project")
+	}
+	p, err := LoadProject(r.projectID)
+	if err != nil {
+		return err
+	}
+	wc, ok := FindWorker(p, id)
+	if !ok {
+		return fmt.Errorf("worker %s is not declared", id)
+	}
+	if !isManagedWorker(wc) {
+		return fmt.Errorf("worker %s is not managed", id)
+	}
+	return r.svc.RestartWorker(context.Background(), spawnConfig(wc))
 }
 
 // webuiDeclRemover implements webui.WorkerDeclRemover for a specific project,

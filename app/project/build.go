@@ -14,6 +14,7 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
+	bunexec "github.com/niq-run/niq/core/impl/scriptexec/bun"
 	"github.com/niq-run/niq/core/impl/workerhost"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/impl/workers/history"
@@ -391,7 +392,7 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
-		return timer.New(timer.Config{ID: id, Bus: ch,
+		return timer.New(timer.Config{ID: id, Bus: ch, Params: p,
 			// A scheduled/cancelled timer must survive a restart, so the worker
 			// signals it and the assembly layer checkpoints it — the same
 			// arrangement as the reason worker's provider switch.
@@ -430,11 +431,13 @@ func buildMCPSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 		subAllowFromParams(cfg.Params, []string{"worker.discover", "worker.ready", "worker.gone"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return mcp.New(mcp.WorkerConfig{
-			ID:      id,
-			Bus:     ch,
-			Expose:  mcf.Expose,
-			Fixed:   mcf.Fixed,
-			Servers: mcf.Servers,
+			ID:           id,
+			Bus:          ch,
+			Expose:       mcf.Expose,
+			Fixed:        mcf.Fixed,
+			Servers:      mcf.Servers,
+			AllowedTools: mcf.AllowedTools,
+			Params:       cfg.Params,
 			// A runtime server add/remove must outlive this process, so the
 			// worker signals it and the assembly layer checkpoints it — the
 			// same arrangement as the timer/workspace runtime changes.
@@ -613,17 +616,37 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	// PublishAllow: replies and presence. SubscribeAllow: worker.discover, so
 	// the program worker re-announces its tools to joiners. Program
 	// query/update arrive directed.
+	// PublishAllow includes "*": the script-program executor relays script-
+	// initiated calls under THIS worker's identity, and those carry the target's
+	// own event type (bash, ...) — inherently dynamic, so it cannot be
+	// enumerated. The executor is the single controlled exit; a target
+	// allow-list belongs there, not in the ACL.
 	connect := specConnect(ctx, id, "program",
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
+			event.NewPublishPattern("*"),
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))
+	// script_executor_args overrides the executor command prefix (default: the
+	// Bun sandbox). E.g. ["node"] on a host without bun (UNSANDBOXED — tests /
+	// trusted hosts only).
+	var execArgs []string
+	if raw, ok := p["script_executor_args"].([]any); ok {
+		for _, v := range raw {
+			if s, ok := v.(string); ok {
+				execArgs = append(execArgs, s)
+			}
+		}
+	}
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return programworker.New(programworker.Config{
 			ID:      id,
 			Bus:     ch,
 			Backend: pgbackend.New(abs),
+			// The local script-program execution backend. Swappable for a local
+			// sandbox / remote gateway later.
+			Executor: bunexec.New(bunexec.Options{Args: execArgs}),
 		})
 	}
 	cfg.ID = id
@@ -835,6 +858,7 @@ func buildHistorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 			Store:            ctx.EventStore,
 			MaxListEvents:    pInt(p, "max_list_events"),
 			MaxListItemBytes: pInt(p, "max_list_item_bytes"),
+			Params:           p,
 		})
 	}
 	cfg.ID = id
@@ -879,7 +903,7 @@ func buildDirectorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 		},
 		subAllowFromParams(p, []string{"worker.discover", "worker.ready", "worker.gone"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
-		return directory.New(directory.Config{ID: id, Bus: ch})
+		return directory.New(directory.Config{ID: id, Bus: ch, Params: p})
 	}
 	cfg.ID = id
 	cfg.Type = "directory"

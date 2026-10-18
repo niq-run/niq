@@ -60,6 +60,43 @@ func TestFixedModeIgnoresSnapshot(t *testing.T) {
 	}
 }
 
+// TestReadmeStatesAllowedTools verifies the readme's Current section reflects
+// the configured duty: the allowlist (or "all") and the mode.
+func TestReadmeStatesAllowedTools(t *testing.T) {
+	w := New(WorkerConfig{ID: "mcp", Bus: channel{}, Fixed: true, Expose: ExposeReady,
+		AllowedTools: []string{"search", "fetch_content"}})
+	text := w.readmeText()
+	if !strings.Contains(text, "allowed tools: search, fetch_content") {
+		t.Fatalf("readme missing the allowlist:\n%s", text)
+	}
+	if !strings.Contains(text, "mode: fixed") || !strings.Contains(text, "exposure: ready") {
+		t.Fatalf("readme missing the mode/exposure:\n%s", text)
+	}
+
+	all := New(WorkerConfig{ID: "mcp", Bus: channel{}})
+	if got := all.readmeText(); !strings.Contains(got, "allowed tools: all") {
+		t.Fatalf("readme without an allowlist = %q, want 'allowed tools: all'", got)
+	}
+}
+
+// TestFilterAllowedTools verifies the allowed_tools allowlist filters the tool
+// surface (and callability), and that unset means everything passes.
+func TestFilterAllowedTools(t *testing.T) {
+	w := New(WorkerConfig{ID: "mcp", Bus: channel{}, AllowedTools: []string{"a", "c"}})
+	got := w.filterAllowed([]toolInfo{{Name: "a"}, {Name: "b"}, {Name: "c"}})
+	if len(got) != 2 || got[0].Name != "a" || got[1].Name != "c" {
+		t.Fatalf("filtered = %+v, want [a c]", got)
+	}
+	if w.toolAllowed("b") || !w.toolAllowed("a") {
+		t.Fatal("toolAllowed mismatch")
+	}
+
+	all := New(WorkerConfig{ID: "mcp", Bus: channel{}})
+	if len(all.filterAllowed([]toolInfo{{Name: "x"}})) != 1 || !all.toolAllowed("anything") {
+		t.Fatal("unset allowlist must not filter")
+	}
+}
+
 func TestNewSeedsStaticServers(t *testing.T) {
 	w := New(WorkerConfig{
 		ID: "mcp", Bus: channel{}, Expose: ExposeAgentic,
