@@ -43,15 +43,35 @@ export function setSleptWorker(id: string, slept: boolean): string[] {
 }
 export function isSlept(id: string): boolean { return readSet(SLEPT_KEY).includes(id) }
 
-// Order worker rows with the pinned ones first, preserving each group's
-// relative order. Non-pinned workers keep their incoming order.
+// Order worker rows with the pinned ones first. The pinned group follows the
+// PERSISTED pinned order (the array order), so it is stable across renders and
+// reorderable by dragging; non-pinned workers keep their incoming order.
 export function orderWithPinned<T>(items: T[], idOf: (t: T) => string): T[] {
-  const pinned = new Set(readSet(PINNED_KEY))
+  const order = readSet(PINNED_KEY)
+  const byId = new Map(items.map((it) => [idOf(it), it]))
   const top: T[] = []
-  const rest: T[] = []
-  for (const it of items) {
-    if (pinned.has(idOf(it))) top.push(it)
-    else rest.push(it)
+  for (const id of order) {
+    const it = byId.get(id)
+    if (it !== undefined) top.push(it)
   }
+  const pinned = new Set(order)
+  const rest = items.filter((it) => !pinned.has(idOf(it)))
   return [...top, ...rest]
+}
+
+// movePinnedWorker reorders the pinned group: drop `dragId` immediately before
+// (or after) `targetId`. No-op unless both are pinned. Returns the new order.
+export function movePinnedWorker(dragId: string, targetId: string, before: boolean): string[] {
+  const cur = readSet(PINNED_KEY)
+  if (dragId === targetId) return cur
+  const from = cur.indexOf(dragId)
+  if (from < 0 || cur.indexOf(targetId) < 0) return cur
+  const next = cur.slice()
+  next.splice(from, 1)
+  const targetIdx = next.indexOf(targetId)
+  next.splice(before ? targetIdx : targetIdx + 1, 0, dragId)
+  try {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(next))
+  } catch { /* quota / disabled storage */ }
+  return next
 }
