@@ -69,14 +69,26 @@ func (w *Worker) registerExtensions() {
 	})
 
 	w.Register(baseworker.Extension{
-		Event:       TypeRun,
-		Description: "Run a FormType:script program in the sandbox: loads the script content, executes it via the configured executor, and returns its final result. The script may call other tools via the SDK; those become normal request events.",
+		Event: TypeRun,
+		Description: "Run a script program (a FormType:script program — TypeScript source, not prose) in an isolated sandbox. " +
+			"Within one run the script can call other workers' tools through its SDK; each such call becomes a normal request event, and the run returns the script's final result. " +
+			"Use this to execute a sequence of tool calls the script encodes in one shot, instead of issuing them one reasoning round at a time. " +
+			"Find script programs with program__search and read one's source with program__load(name) before running it.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "Script program name (the entry content is the script source)."},
-				"args": map[string]any{"type": "object", "description": "Optional invocation arguments exposed to the script (sdk.args)."},
-				"timeout_seconds": map[string]any{"type": "number", "description": "Optional per-run timeout in seconds (default 120); the sandbox is killed when it elapses."},
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Name of the script program to run. Its entry content is the TypeScript source executed in the sandbox; discover candidates with program__search and inspect the source with program__load(name).",
+				},
+				"args": map[string]any{
+					"type":        "object",
+					"description": "Optional arguments object handed to the script as sdk.args (the script reads them directly, e.g. sdk.args.x). Use it to parameterise a reusable script rather than writing a new one.",
+				},
+				"timeout_seconds": map[string]any{
+					"type":        "number",
+					"description": "Optional wall-clock limit for the whole run in seconds (default 120). On expiry the sandbox is killed and the call fails with a timeout error.",
+				},
 			},
 			"required": []any{"name"},
 		},
