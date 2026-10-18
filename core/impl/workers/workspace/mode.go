@@ -9,8 +9,8 @@ import (
 	"errors"
 	"log"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // Mode names on the wire (mode.set payload / snapshot).

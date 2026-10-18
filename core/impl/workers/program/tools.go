@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/program"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // The program worker's tools, each its own event type.

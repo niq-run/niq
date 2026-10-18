@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/niq-run/niq/core/itfs/worker"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/workerhost"
+	"github.com/niq-run/niq/core/itfs/worker"
 )
 
 // newTestEngine wires up a registry, engine and in-process listener exactly as

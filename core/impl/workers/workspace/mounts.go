@@ -14,8 +14,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // The mount management extensions use their own event types rather than
@@ -109,7 +109,7 @@ func (w *WorkspaceWorker) requestMountApproval(evt event.Event, path string, mou
 	_, existsErr := os.Stat(path)
 	appr := event.New(event.TypeApprovalRequest, w.ID(), jsonSafe(map[string]any{
 		"origin":       evt.WorkerId, // who set this in motion (reason worker / human UI)
-		"requested_by": w.ID(),      // the worker sending this approval request
+		"requested_by": w.ID(),       // the worker sending this approval request
 		"action":       "mount.add",
 		"path":         path,
 		"exists":       existsErr == nil,

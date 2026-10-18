@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	backend "github.com/niq-run/niq/core/impl/embedws"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // stubChannel satisfies corebus.WorkerSideChannel for handler tests; it

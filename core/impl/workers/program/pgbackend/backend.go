@@ -22,8 +22,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/niq-run/niq/core/itfs/program"
 	"github.com/niq-run/niq/core/impl/embedws"
+	"github.com/niq-run/niq/core/itfs/program"
 	"gopkg.in/yaml.v3"
 )
 

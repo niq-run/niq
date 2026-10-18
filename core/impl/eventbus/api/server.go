@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/eventbus"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // Server serves the bus event API over HTTP.

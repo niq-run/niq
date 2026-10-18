@@ -16,9 +16,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	backend "github.com/niq-run/niq/core/impl/embedws"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // pendingApproval is a parked operation awaiting the approver's decision.

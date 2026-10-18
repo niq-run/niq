@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // The host worker's tools, each its own event type.
@@ -53,7 +53,7 @@ func (w *HostWorker) registerExtensions() {
 			"tags": map[string]any{
 				"type":        "array",
 				"description": "Optional slash-path labels that group this worker in the WebUI selector (e.g. [\"ops/backup\", \"work\"]). Display metadata only; carried to the declaration so it can be found and filtered-by in the UI. A comma-separated string is also accepted.",
-				"items": map[string]any{"type": "string"},
+				"items":       map[string]any{"type": "string"},
 			},
 			"description": map[string]any{
 				"type":        "string",

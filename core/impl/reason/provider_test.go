@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/core/impl/reason/transcript"
 	"github.com/niq-run/niq/core/itfs/event"
 	llm "github.com/niq-run/niq/core/itfs/llm"
-	"github.com/niq-run/niq/core/impl/reason/transcript"
 )
 
 // fakeSources is a canned ProviderSources used to exercise switching.

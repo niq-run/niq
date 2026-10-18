@@ -52,8 +52,8 @@ type Worker struct {
 
 	mu sync.Mutex // guards started / cancel
 
-	callMu  sync.Mutex                    // guards pending
-	pending map[string]chan callResult    // script tool-call slots, keyed by request id
+	callMu  sync.Mutex                 // guards pending
+	pending map[string]chan callResult // script tool-call slots, keyed by request id
 }
 
 // New creates a Program Worker.

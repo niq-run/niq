@@ -156,7 +156,7 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		eventConverters: cfg.EventConverters,
 		programs:        cfg.Programs,
 		requestTracker:  requesttracker.NewRequestTracker(),
-		toolListBuilder:  toolListBuilder,
+		toolListBuilder: toolListBuilder,
 		contextWindow:   cfg.ContextWindow,
 		budgetSoft:      cfg.BudgetSoft,
 		budgetHard:      cfg.BudgetHard,

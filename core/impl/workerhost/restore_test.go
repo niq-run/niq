@@ -27,11 +27,11 @@ type fakeWorker struct {
 	snap     []byte // what Snapshot() returns, so a test can see a fresh read
 }
 
-func (f *fakeWorker) ID() string                          { return f.id }
-func (f *fakeWorker) Start(context.Context) error         { f.started = true; return nil }
-func (f *fakeWorker) Stop() error                         { return nil }
-func (f *fakeWorker) Snapshot() ([]byte, error)           { return f.snap, nil }
-func (f *fakeWorker) Restore(state []byte) error          { f.restored = state; return nil }
+func (f *fakeWorker) ID() string                  { return f.id }
+func (f *fakeWorker) Start(context.Context) error { f.started = true; return nil }
+func (f *fakeWorker) Stop() error                 { return nil }
+func (f *fakeWorker) Snapshot() ([]byte, error)   { return f.snap, nil }
+func (f *fakeWorker) Restore(state []byte) error  { f.restored = state; return nil }
 
 // memoryStore is an in-memory WorkerStore for tests. It only holds runtime
 // state — the definitions come from the caller on recovery.

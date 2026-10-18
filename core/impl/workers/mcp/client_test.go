@@ -7,18 +7,18 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // channel is a minimal WorkerSideChannel used only so worker construction
 // (which stores the channel without using it) does not need a real bus.
 type channel struct{}
 
-func (c channel) ID() string   { return "none" }
+func (c channel) ID() string                                               { return "none" }
 func (c channel) Send(_ context.Context, _ event.Event, _ ...string) error { return nil }
-func (c channel) Broadcast(_ context.Context, _ event.Event) error { return nil }
+func (c channel) Broadcast(_ context.Context, _ event.Event) error         { return nil }
 func (c channel) Receive(context.Context) (<-chan event.Event, error) {
 	ch := make(chan event.Event)
 	close(ch)

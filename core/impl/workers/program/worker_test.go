@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/niq-run/niq/core/itfs/event"
-	coreprogram "github.com/niq-run/niq/core/itfs/program"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
+	"github.com/niq-run/niq/core/itfs/event"
+	coreprogram "github.com/niq-run/niq/core/itfs/program"
 )
 
 // writeProgram creates a program directory at relDir under root, with a

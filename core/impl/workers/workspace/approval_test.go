@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	backend "github.com/niq-run/niq/core/impl/embedws"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // testTimeout bounds waits on asynchronous tool dispatches in these tests.
