@@ -1223,6 +1223,7 @@ export default function App() {
         isMobile={isMobile}
         open={sidebarOpen}
         onMention={handleMention}
+        onOpenDetail={openWorkerDetail}
         onNavigate={() => setSidebarOpen(false)}
       />
 

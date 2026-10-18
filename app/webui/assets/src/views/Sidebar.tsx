@@ -47,6 +47,8 @@ interface SidebarProps {
   // Right-click "mention" action for a talk-partner worker: prefixes the
   // talk input with an @mention for that worker (let handleMention do it).
   onMention?: (id: string) => void
+  // Open a worker's detail panel (right-click → view details on a selector row).
+  onOpenDetail?: (id: string) => void
 }
 
 // Sidebar resize: the draggable width range, persisted in localStorage.
@@ -58,7 +60,7 @@ function loadSidebarWidth(): number {
   return Math.min(Math.max(v, MIN_SIDEBAR_WIDTH), Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.5))
 }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, onClearWorkers, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, onMention }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, onClearWorkers, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, onMention, onOpenDetail }: SidebarProps) {
   const { dark, toggle, colors, inverted, toggleInverted } = useTheme()
   const { lang, setLang, t } = useI18n()
   // Hovered sidebar option (non-toggle, non-checkbox rows) — shows a full-width
@@ -680,6 +682,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   >
                     {w.id}
                   </span>
+                  {pinnedIds.includes(w.id) && <PinMark colors={colors} />}
                 </ContextMenuSurface>
               )
             }
@@ -702,6 +705,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                     {w.id}
                   </span>
                   {w.type ? <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, flexShrink: 0 }}>[{w.type}]</span> : null}
+                  {pinnedIds.includes(w.id) && <PinMark colors={colors} />}
                 </span>
               </ContextMenuSurface>
             )
@@ -889,6 +893,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           slept={sleptIds.includes(rowMenu.id)}
           mentionable={rowMenuMentionable}
           onMention={() => onMention?.(rowMenu.id)}
+          onDetail={onOpenDetail ? () => onOpenDetail(rowMenu.id) : undefined}
           onTogglePin={() => togglePinned(rowMenu.id)}
           onToggleSleep={() => toggleSlept(rowMenu.id)}
           onClose={() => setRowMenu(null)}
@@ -967,5 +972,19 @@ function ToggleRow({ label, on, onToggle, colors, dark, mobile = false, size = f
         />
       </div>
     </div>
+  )
+}
+
+// PinMark is the small right-side marker on a PINNED worker row: a compact
+// upward arrow in the accent colour, so pinned rows are recognisable even
+// though they also sort to the top.
+function PinMark({ colors }: { colors: import('../theme').Palette }) {
+  return (
+    <span
+      title="pinned"
+      style={{ marginLeft: 'auto', flexShrink: 0, color: colors.accent, fontSize: fontSizes.sm, lineHeight: 1, userSelect: 'none', paddingLeft: 6 }}
+    >
+      {'\u2191'}
+    </span>
   )
 }

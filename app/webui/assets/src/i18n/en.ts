@@ -169,6 +169,7 @@ export const en = {
   'talk.input.broadcast': 'all',
   'talk.input.target.tooltip': 'targeting {target} — click to change',
   'talk.input.broadcast.tooltip': 'broadcasting; click to target a worker',
+  'picker.detail': 'details',
   'picker.mention': 'mention',
   'picker.target': 'target',
   'picker.broadcast': 'broadcast (no target)',

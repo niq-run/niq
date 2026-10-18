@@ -161,6 +161,7 @@ export const zh: Record<StringKey, string> = {
   'talk.input.broadcast': '广播',
   'talk.input.target.tooltip': '目标：{target} — 点击更改',
   'talk.input.broadcast.tooltip': '广播中；点击指定一个 worker 作为目标',
+  'picker.detail': '详情',
   'picker.mention': '提及',
   'picker.target': '目标',
   'picker.broadcast': '广播（无目标）',
