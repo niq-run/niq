@@ -70,6 +70,16 @@ export interface WorkerInfo {
 // and the talk worker selector use.
 export const TALK_PARTNER_TYPES = ['reason', 'coding_reason_worker', 'niw', 'remote-niw'] as const
 
+// The reason FAMILY: workers built on the shared reasoning mechanism. They all
+// emit the reason.* event stream and produce left-side conversation bubbles, so
+// talk-view layout (avatars, alignment, direction) must treat them alike.
+export const REASON_FAMILY_TYPES = ['reason', 'coding_reason_worker'] as const
+
+// isReasonFamilyType reports whether a worker type is a reasoning worker.
+export function isReasonFamilyType(type: string): boolean {
+  return (REASON_FAMILY_TYPES as readonly string[]).includes(type)
+}
+
 // isTalkPartnerType reports whether a worker type can be a talk partner.
 export function isTalkPartnerType(type: string): boolean {
   return (TALK_PARTNER_TYPES as readonly string[]).includes(type)

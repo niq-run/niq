@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { createWorker } from '../services/api'
-import { type CreateWorkerResult } from '../types'
+import { isReasonFamilyType, type CreateWorkerResult } from '../types'
 
 interface CreateWorkerDialogProps {
   open: boolean
@@ -143,7 +143,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     if (tagList.length > 0) body.tags = tagList
     if (description.trim()) body.description = description.trim()
     if (isManaged) {
-      if (effType === 'reason') {
+      if (isReasonFamilyType(effType)) {
         if (instruction.trim()) body.instruction = instruction.trim()
         if (provider.trim()) body.provider = provider.trim()
         if (model.trim()) body.model = model.trim()
@@ -394,7 +394,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           <input style={input} value={description} onChange={e => setDescription(e.target.value)} placeholder={t('workers.create.description.placeholder')} />
         </div>
 
-        {isManaged && effType === 'reason' && (
+        {isManaged && isReasonFamilyType(effType) && (
           <>
             <div style={field}>
               <label style={label}>{t('workers.create.instruction')}</label>

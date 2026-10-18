@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry } from '../types'
+import { isReasonFamilyType, type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
 import SendEventForm from '../components/SendEventForm'
 import SelectDropdown from '../components/SelectDropdown'
@@ -514,7 +514,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 					{/* Model / Provider — only reason workers carry ProviderSources.
 							 Keyed by worker id so switching workers cannot leak one worker's
 								 provider state into another. */}
-					{worker.type === 'reason' && tab === 'events' && <ProviderSection key={worker.id} workerId={worker.id} />}
+					{isReasonFamilyType(worker.type) && tab === 'events' && <ProviderSection key={worker.id} workerId={worker.id} />}
 
 					{/* Mounts — the workspace counterpart: the worker's mounted
 							 directories are its read/write boundary; list, mount and

@@ -3,7 +3,7 @@ import ViewHeader from '../components/ViewHeader'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { isToolResult } from '../components/talk-utils'
-import { isTalkPartnerType, type EventPayload } from '../types'
+import { isReasonFamilyType, isTalkPartnerType, type EventPayload } from '../types'
 import { useChatScroll } from './talk/useChatScroll'
 import TalkRows from './talk/TalkRows'
 import StreamingTail from './talk/StreamingTail'
@@ -54,7 +54,11 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   const bubbleMax = isMobile ? '90%' : '70%'
   // Only reason workers (the conversation partners) get a standalone avatar
   // row; other workers' events carry their worker ID inline in the block title.
-  const isReason = useCallback((wid: string) => workerTypes[wid] === 'reason', [workerTypes])
+  // A reason-FAMILY check: the generic reason worker and the coding reason
+  // worker (and any future reason-family worker) all produce the reason.*
+  // stream and left-side bubbles. Comparing to 'reason' exactly would drop the
+  // others' avatars, so their replies would inherit the previous speaker's.
+  const isReason = useCallback((wid: string) => isReasonFamilyType(workerTypes[wid]), [workerTypes])
   // A talk-partner check (reason / niw / remote-niw) gates single-click avatar
   // mention: any partner's badge can be clicked to @mention it into the input.
   const isPartner = useCallback((wid: string) => isTalkPartnerType(workerTypes[wid]), [workerTypes])

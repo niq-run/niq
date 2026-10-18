@@ -4,6 +4,7 @@ import { useI18n } from '../i18n'
 import { usePolling } from '../hooks/usePolling'
 import JsonEditor from '../components/JsonEditor'
 import BufferedInput, { envToText, textToMap } from '../components/BufferedInput'
+import { isReasonFamilyType } from '../types'
 import ViewHeader from '../components/ViewHeader'
 import ResizablePanel from '../components/ResizablePanel'
 import { CONTROL, fetchTemplates, fetchTemplate, createTemplateBody, updateTemplate, deleteTemplate, fetchProjects } from '../services/api'
@@ -301,14 +302,14 @@ export default function TemplatesView({ isMobile }: { isMobile?: boolean }) {
                 style={{ width: '100%', boxSizing: 'border-box', ...cardInput(colors) }}
               />
             ))}
-            {w.type === 'reason' && field(t('templates.field.instruction'), (
+            {isReasonFamilyType(w.type) && field(t('templates.field.instruction'), (
               <textarea
                 value={w.instruction || ''}
                 onChange={(e) => updateWorker(i, { instruction: e.target.value })}
                 style={{ ...cardInput(colors), resize: 'vertical', minHeight: 56, width: '100%', boxSizing: 'border-box' }}
               />
             ))}
-            {w.type === 'reason' && (
+            {isReasonFamilyType(w.type) && (
               <div style={{ display: 'flex', gap: 8 }}>
                 {field(t('templates.field.provider'), (
                   <input value={w.provider || ''} onChange={(e) => updateWorker(i, { provider: e.target.value })} style={{ width: '100%', boxSizing: 'border-box', ...cardInput(colors) }} />
