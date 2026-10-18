@@ -29,7 +29,9 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
   // ── Filter: three dropdowns (type, tag, online status) drive the table.
   const [typeFilter, setTypeFilter] = useState('')
   const [tagFilter, setTagFilter] = useState('')
-  const [onlineFilter, setOnlineFilter] = useState<'' | 'online' | 'offline'>('')
+  // Default to ONLINE: the worker list is an at-a-glance roster of who is
+  // live right now; offline declarations are one dropdown step away.
+  const [onlineFilter, setOnlineFilter] = useState<'' | 'online' | 'offline'>('online')
 
   const availableTypes = useMemo(() => {
     const set = new Set<string>()
