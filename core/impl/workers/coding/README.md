@@ -14,7 +14,7 @@ It differs from the generic reason worker in exactly two places.
 | Mode | Tool list | How tools are used |
 |---|---|---|
 | `normal` (default) | every discovered capability | like the generic reason worker |
-| `ptc` | **the directory worker's tools** (capability discovery) + **the program worker's tools** (capability invocation) + this worker's own `message` / `program_query` | discover peers' capabilities with **directory** directly, then execute via a script run with **`program.run`** |
+| `ptc` | **the directory worker's tools** (capability discovery) + **the program worker's tools** (capability invocation) + this worker's own `message` | discover peers' capabilities with **directory** directly, then execute via a script run with **`program.run`** |
 
 PTC exists to keep the tool list small and stable (better prompt-cache
 behaviour, less tool-list churn) while still reaching the whole bus. The split
@@ -33,8 +33,8 @@ always drops:
 
 - `context_compress` — compaction is automatic under budget pressure; the model
   never needs to call it;
-- `program_update` — the agent does not rewrite its own program list
-  (`program_query` stays for reading).
+- `program_query` / `program_update` — the coding agent's programs are fixed
+  at creation time, so it neither reads nor rewrites its own program list.
 
 In PTC mode it additionally drops the self **`request`** escape hatch, so peer
 calls must go through `program.run` rather than an ad-hoc event call. The

@@ -150,10 +150,12 @@ func NewWorker(cfg Config) *Worker {
 
 // codingExcludedSelfEvents are the worker's OWN tools a coding agent should not
 // spend rounds on: it compacts automatically under budget pressure (the
-// mechanism fires context.compress itself; the model need not call it) and it
-// should not rewrite its own program list.
+// mechanism fires context.compress itself; the model need not call it) and its
+// programs are fixed at creation time, so it neither reads nor rewrites its own
+// program list.
 var codingExcludedSelfEvents = map[event.EventType]bool{
 	reasonBase.TypeContextCompress:  true,
+	reasonworkers.TypeProgramQuery:  true,
 	reasonworkers.TypeProgramUpdate: true,
 }
 
@@ -194,7 +196,7 @@ func toolListBuilder(mode, programID, directoryID string) reasonBase.ToolListBui
 func ptcInstructionProgram(programID string) program.Program {
 	name := "coding-ptc-tooling"
 	text := fmt.Sprintf(`## PTC tool mode
-Your tool list holds the directory worker's tools (capability discovery), the %[1]s worker's tools (capability invocation), and your own message / program_query tools. Every other worker's tools are intentionally not listed — do not expect a flat tool list.
+Your tool list holds the directory worker's tools (capability discovery), the %[1]s worker's tools (capability invocation), and your own message tool. Every other worker's tools are intentionally not listed — do not expect a flat tool list.
 
 **Discover** what other workers offer with the directory worker, called directly as a tool:
 - directory list_workers — the roster of workers;

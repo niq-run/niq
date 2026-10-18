@@ -85,12 +85,12 @@ func TestPTCModeKeepsMessageButDropsRequestAndFocusTools(t *testing.T) {
 	announce(w, "workspace", "workspace", "bash")
 
 	names := toolNames(w)
-	for _, want := range []string{"message", "program_query", "program__run", "directory__list_workers"} {
+	for _, want := range []string{"message", "program__run", "directory__list_workers"} {
 		if !names[want] {
 			t.Errorf("PTC should keep %q (got %v)", want, names)
 		}
 	}
-	for _, unwanted := range []string{"request", "context_compress", "program_update", "workspace__bash"} {
+	for _, unwanted := range []string{"request", "context_compress", "program_query", "program_update", "workspace__bash"} {
 		if names[unwanted] {
 			t.Errorf("PTC must drop %q (got %v)", unwanted, names)
 		}
@@ -98,20 +98,21 @@ func TestPTCModeKeepsMessageButDropsRequestAndFocusTools(t *testing.T) {
 }
 
 // TestNormalModeDropsFocusToolsButKeepsRequest verifies the coding focus filter
-// applies in normal mode too: context.compress and program.update are dropped,
-// while request and every peer tool stay.
+// applies in normal mode too: context.compress and both program tools are
+// dropped (programs are fixed at creation), while request and every peer tool
+// stay.
 func TestNormalModeDropsFocusToolsButKeepsRequest(t *testing.T) {
 	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: ToolModeNormal})
 	announce(w, "coder", "reason", "message", "request", "context.compress", "program.query", "program.update")
 	announce(w, "workspace", "workspace", "bash")
 
 	names := toolNames(w)
-	for _, want := range []string{"message", "request", "program_query", "workspace__bash"} {
+	for _, want := range []string{"message", "request", "workspace__bash"} {
 		if !names[want] {
 			t.Errorf("normal mode should keep %q (got %v)", want, names)
 		}
 	}
-	for _, unwanted := range []string{"context_compress", "program_update"} {
+	for _, unwanted := range []string{"context_compress", "program_query", "program_update"} {
 		if names[unwanted] {
 			t.Errorf("normal mode must drop %q (got %v)", unwanted, names)
 		}
