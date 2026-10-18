@@ -82,7 +82,10 @@ Inside a run the script is handed a minimal `sdk`:
 - `sdk.call(target, event, args)` — a normal request to another worker; resolves with the
   target's reply TEXT (a tool-level failure is a result, not an exception), rejects on
   unknown worker / failed / rejected. Concurrent (`Promise.all` fans out). An unknown
-  target fails fast: the worker keeps a live roster from `worker.ready` / `worker.gone`.
+  target fails fast: the roster is the directory worker's (it already collects
+  `worker.ready` / `worker.gone` for the fleet), so the program worker asks it —
+  no second copy to drift. An unreachable directory degrades to "cannot tell"
+  (the call proceeds, bounded by the run timeout) instead of blocking.
 - `sdk.log(text)` — a log line. Mirrored to the worker log AND returned to the caller
   after the result under a `--- script log ---` header (last 100 lines / 8 KiB,
   with a dropped-lines note), so a failing run is debuggable in the same round.

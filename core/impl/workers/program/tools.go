@@ -89,7 +89,7 @@ func (w *Worker) registerExtensions() {
 			"(3) sdk.log(text) is echoed back to the caller AFTER the result under a \"--- script log ---\" header (last 100 lines / 8KB, older lines dropped) — use it for progress and diagnosis. " +
 			"(4) sdk.args is the run's args object (never undefined, defaults to {}); a stored script should read its inputs from it. " +
 			"Discovering peers: this worker's own tool list need not contain other workers' tools, so look them up with the directory worker (list_workers / get_worker_info) and call them from the script; " +
-			"an unknown target fails fast with \"unknown worker: <id>\". " +
+			"a target the directory does not know fails fast with \"unknown worker: <id>\" (the directory worker owns the roster; the program worker asks it). " +
 			"Timing and size: timeout_seconds (default 120) bounds the WHOLE run including every nested call; on expiry the sandbox is killed, in-flight requests are abandoned, and the log collected so far comes back with the error. " +
 			"Result text larger than 20KB is truncated to head + tail. " +
 			"Diagnostics: a script error is reported with the failing line of YOUR source (e.g. \"at script line 3:7: throw new Error(...)\"); " +

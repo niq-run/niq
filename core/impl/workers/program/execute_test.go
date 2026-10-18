@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/program"
@@ -21,11 +22,42 @@ func (c *stubChannel) snapshot() []event.Event {
 	return append([]event.Event(nil), c.sent...)
 }
 
-// peerReady puts a worker on the program worker's roster the way the bus does
-// (a worker.ready delivery), so a script's call to it is not rejected as
-// unknown.
-func peerReady(w *Worker, id string) {
-	w.process(context.Background(), event.New(event.TypeWorkerReady, id, map[string]any{}))
+// serveDirectory stands in for the directory worker: it answers the program
+// worker's get_worker_info probes, reporting the ids in known as present and
+// everything else as absent (request.failed), exactly like the real one.
+func serveDirectory(t *testing.T, w *Worker, ch *stubChannel, known ...string) {
+	t.Helper()
+	present := map[string]bool{}
+	for _, k := range known {
+		present[k] = true
+	}
+	seen := map[string]bool{}
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Millisecond):
+			}
+			for _, e := range ch.snapshot() {
+				if e.Type != directory.TypeGetWorkerInfo || e.RequestId == "" || seen[e.RequestId] {
+					continue
+				}
+				seen[e.RequestId] = true
+				id, _ := e.Payload["worker"].(string)
+				var reply event.Event
+				if present[id] {
+					reply = event.New(event.TypeRequestCompleted, "directory", map[string]any{"result": "{}"})
+				} else {
+					reply = event.New(event.TypeRequestFailed, "directory", map[string]any{"error": "unknown worker " + id})
+				}
+				reply.RequestId = e.RequestId
+				w.resolveReply(reply)
+			}
+		}
+	}()
 }
 
 func waitUntil(t *testing.T, d time.Duration, cond func() bool, msg string) {
@@ -46,7 +78,7 @@ func TestCallToolAwaitsReply(t *testing.T) {
 	ch := &stubChannel{}
 	root := t.TempDir()
 	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root)})
-	peerReady(w, "ws")
+	serveDirectory(t, w, ch, "ws")
 
 	out := make(chan string, 1)
 	go func() {
@@ -233,7 +265,7 @@ func TestHandleRunRelaysAndReplies(t *testing.T) {
 	sess := &replaySession{result: "DONE"}
 	gotSrc := make(chan string, 1)
 	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: &replayExecutor{session: sess, gotSrc: gotSrc}})
-	peerReady(w, "ws")
+	serveDirectory(t, w, ch, "ws")
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "caller", CallID: "c1", Name: "run",
@@ -393,7 +425,7 @@ func TestScriptLogCapsTail(t *testing.T) {
 func TestCallToolUnknownWorkerFailsFast(t *testing.T) {
 	ch := &stubChannel{}
 	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir())})
-	peerReady(w, "ws")
+	serveDirectory(t, w, ch, "ws")
 	// Keep the discovery round out of the timing: no peer answers, so the call
 	// must give up after rosterDiscoverWait at the latest.
 	start := time.Now()
@@ -407,20 +439,49 @@ func TestCallToolUnknownWorkerFailsFast(t *testing.T) {
 	}
 }
 
-// TestRosterTracksPresence verifies ready/gone maintain the roster and that a
-// worker that goes away is treated as unknown again.
-func TestRosterTracksPresence(t *testing.T) {
-	w := New(Config{ID: "program", Bus: &stubChannel{}, Backend: pgbackend.New(t.TempDir())})
-	if !w.isKnown("program") {
-		t.Fatal("the worker must know itself")
+// TestTargetValidationUsesDirectory verifies the roster is NOT tracked locally:
+// a target the directory does not know is rejected, and one it reports is let
+// through to the real dispatch.
+func TestTargetValidationUsesDirectory(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir())})
+	serveDirectory(t, w, ch, "ws")
+
+	if err := w.checkTarget(context.Background(), "ws"); err != nil {
+		t.Fatalf("known target rejected: %v", err)
 	}
-	peerReady(w, "ws")
-	if !w.isKnown("ws") {
-		t.Fatal("worker.ready must add the peer")
+	if err := w.checkTarget(context.Background(), "ghost"); err == nil || !strings.Contains(err.Error(), "unknown worker: ghost") {
+		t.Fatalf("unknown target = %v, want unknown worker", err)
 	}
-	w.process(context.Background(), event.New(event.TypeWorkerGone, "ws", map[string]any{}))
-	if w.isKnown("ws") {
-		t.Fatal("worker.gone must remove the peer")
+	// The worker itself and the directory are never probed (no recursion).
+	if err := w.checkTarget(context.Background(), "program"); err != nil {
+		t.Fatalf("self must not be probed: %v", err)
+	}
+	if err := w.checkTarget(context.Background(), "directory"); err != nil {
+		t.Fatalf("the directory must not be probed: %v", err)
+	}
+}
+
+// TestTargetValidationDegradesWithoutDirectory verifies an absent directory
+// (nothing answers) does not block calls: after the first indeterminate probe,
+// checks are backed off so later calls go straight through.
+func TestTargetValidationDegradesWithoutDirectory(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir())})
+	if err := w.checkTarget(context.Background(), "ws"); err != nil {
+		t.Fatalf("no directory must not reject the call, got %v", err)
+	}
+	// Backed off: the second check returns instantly without another probe.
+	before := len(ch.snapshot())
+	start := time.Now()
+	if err := w.checkTarget(context.Background(), "other"); err != nil {
+		t.Fatalf("backed-off check must pass, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("backed-off check took %s, want an immediate pass", elapsed)
+	}
+	if after := len(ch.snapshot()); after != before {
+		t.Fatalf("backed-off check sent %d extra event(s)", after-before)
 	}
 }
 
