@@ -1,5 +1,5 @@
 // Package pgbackend provides a filesystem-based implementation of
-// program.Backend using wsbackend.EmbeddedBackend.
+// program.Store using wsbackend.EmbeddedBackend.
 //
 // It stores each Program as a directory whose entry file — PROGRAM.md, or
 // SKILL.md so a mainstream agent's skill directory can be dropped in
@@ -31,7 +31,7 @@ import (
 // PROGRAM.md is niq's own; SKILL.md is the mainstream agent skill convention.
 var entryFileNames = []string{"PROGRAM.md", "SKILL.md"}
 
-// Backend adapts wsbackend.EmbeddedBackend to program.Backend.
+// Backend adapts wsbackend.EmbeddedBackend to program.Store.
 //
 // It keeps a name → directory index so single-address operations (Read, Edit,
 // Remove) resolve without walking the mount. List always walks afresh and
@@ -44,7 +44,7 @@ type Backend struct {
 	index map[string]string // program name → directory, relative to the mount
 }
 
-var _ program.Backend = (*Backend)(nil)
+var _ program.Store = (*Backend)(nil)
 
 // New returns a new Backend rooted at dir (a single mount).
 func New(dir string) *Backend {
@@ -62,7 +62,7 @@ type discovered struct {
 
 // List enumerates every Program on disk. Each carries abstract addresses
 // only — the directory it was found in stays internal. Implements
-// [program.Backend].
+// [program.Store].
 func (b *Backend) List(ctx context.Context) ([]*program.Program, error) {
 	found, err := b.discover(ctx)
 	if err != nil {
@@ -128,7 +128,7 @@ func (b *Backend) Read(ctx context.Context, addr string) (string, error) {
 
 // Upsert persists a Program's metadata, creating it or replacing an existing
 // one. The entry body is never touched — a new Program starts empty, and an
-// update keeps the body it already has. Implements [program.Backend].
+// update keeps the body it already has. Implements [program.Store].
 func (b *Backend) Upsert(ctx context.Context, p *program.Program) error {
 	if p == nil || p.Name == "" {
 		return fmt.Errorf("pgbackend: program name is required")
@@ -166,7 +166,7 @@ func (b *Backend) Upsert(ctx context.Context, p *program.Program) error {
 // Write replaces the content at an abstract address. At a Program's root path
 // it replaces the entry body and leaves the metadata alone; at any deeper path
 // it writes that file. The Program must already exist. Implements
-// [program.Backend].
+// [program.Store].
 func (b *Backend) Write(ctx context.Context, addr, content string) error {
 	dir, rel, err := b.resolve(ctx, addr)
 	if err != nil {
@@ -202,7 +202,7 @@ func (b *Backend) Write(ctx context.Context, addr, content string) error {
 }
 
 // Edit performs an atomic find-and-replace within the stored content at an
-// abstract address. Implements [program.Backend].
+// abstract address. Implements [program.Store].
 func (b *Backend) Edit(ctx context.Context, addr, oldStr, newStr string) error {
 	dir, rel, err := b.resolve(ctx, addr)
 	if err != nil {
@@ -216,7 +216,7 @@ func (b *Backend) Edit(ctx context.Context, addr, oldStr, newStr string) error {
 }
 
 // Remove deletes the Program at a root address, or a single content file at a
-// deeper one. Implements [program.Backend].
+// deeper one. Implements [program.Store].
 func (b *Backend) Remove(ctx context.Context, addr string) error {
 	dir, rel, err := b.resolve(ctx, addr)
 	if err != nil {

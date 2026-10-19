@@ -25,18 +25,16 @@ import (
 
 // Config holds the configuration for a Program Worker.
 type Config struct {
-	ID      string
-	Bus     corebus.WorkerSideChannel
-	Backend program.Backend
+	ID  string
+	Bus corebus.WorkerSideChannel
+	// Backend is the whole program environment: Store (content) + Executor
+	// (how a script program runs). Optional Executor halves are created with
+	// program.Compose.
+	Backend program.ProgramBackend
 	// DirectoryID is the directory worker used to validate a script's call
 	// targets (it owns the fleet roster, so there is no second copy here).
 	// Empty disables target validation; DefaultDirectoryID otherwise.
 	DirectoryID string
-
-	// Executor runs FormType:script programs (the execution backend). Optional:
-	// when nil, program.run replies "executor not configured" so a worker that
-	// only stores/loads programs works without one.
-	Executor program.ScriptProgramExecutor
 }
 
 // DefaultDirectoryID is the directory worker consulted for target validation.
@@ -53,8 +51,7 @@ const DefaultDirectoryID = "directory"
 // lets the backend resolve them.
 type Worker struct {
 	baseworker.BaseWorker
-	backend     program.Backend
-	executor    program.ScriptProgramExecutor
+	backend     program.ProgramBackend
 	directoryID string // directory worker consulted for target validation
 
 	started bool
@@ -85,7 +82,6 @@ func New(cfg Config) *Worker {
 	w := &Worker{
 		BaseWorker:  baseworker.NewBaseWorker(id, cfg.Bus),
 		backend:     cfg.Backend,
-		executor:    cfg.Executor,
 		directoryID: directoryID,
 	}
 	w.registerExtensions()

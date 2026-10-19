@@ -17,16 +17,16 @@ import (
 // holds bus credentials or the channel.
 type ToolCaller func(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (string, error)
 
-// ScriptProgramExecutor runs a FormType:script program in an isolated sandbox.
-// It is the program worker's EXECUTION backend — the counterpart of the storage
-// Backend. Implementations are interchangeable: local (Bun --sandbox), a future
-// local sandbox, or a remote sandbox gateway, without the program worker or the
-// SDK changing (this is what makes the execution layer replaceable).
+// Executor runs a FormType:script program in an isolated sandbox. It is the
+// execution half of a ProgramBackend — the counterpart of Store. Implementations
+// are interchangeable: local (Bun --sandbox), a future local sandbox, or a
+// remote sandbox gateway, without the program worker or the SDK changing (this
+// is what makes the execution layer replaceable).
 //
 // Scripts only ever reach the world through ToolCaller; they cannot touch the
 // bus or the filesystem. Each Start returns a ScriptSession that streams the
 // script's log lines and yields its final sdk.result.
-type ScriptProgramExecutor interface {
+type Executor interface {
 	// Start begins one script session without blocking on its completion.
 	// src is the script program's code; args are the program.run arguments; call
 	// is the ToolCaller that the script's call() is relayed through. Start owns

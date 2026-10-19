@@ -9,8 +9,9 @@
 // there), so the worker keeps its mechanism and the environment-specific code
 // stays in its own package.
 //
-// It is one implementation of program.ScriptProgramExecutor. A remote sandbox
-// (self-hosted or a provider) can be dropped in behind the same interface.
+// It is one implementation of program.Executor (the execution half of a
+// ProgramBackend). A remote sandbox (self-hosted or a provider) can be dropped
+// in behind the same interface.
 package bunexec
 
 import (
@@ -42,11 +43,14 @@ type Options struct {
 	Launcher []byte
 }
 
-// Executor is the local Bun-sandbox ScriptProgramExecutor.
+// Executor is the local Bun-sandbox execution backend.
 type Executor struct {
 	args     []string
 	launcher []byte
 }
+
+// Executor is the execution half of a ProgramBackend.
+var _ program.Executor = (*Executor)(nil)
 
 // New builds the executor with the given options (zero Options = the defaults).
 func New(opts Options) *Executor {

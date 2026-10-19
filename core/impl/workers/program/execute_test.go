@@ -77,7 +77,7 @@ func waitUntil(t *testing.T, d time.Duration, cond func() bool, msg string) {
 func TestCallToolAwaitsReply(t *testing.T) {
 	ch := &stubChannel{}
 	root := t.TempDir()
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root)})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(root), nil)})
 	serveDirectory(t, w, ch, "ws")
 
 	out := make(chan string, 1)
@@ -163,7 +163,7 @@ func (blockingExecutor) Start(context.Context, string, map[string]any, program.T
 // self-description guide.
 func TestReadmeExposed(t *testing.T) {
 	ch := &stubChannel{}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir())})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(t.TempDir()), nil)})
 
 	evt := event.New(event.TypeWorkerReadme, "asker", map[string]any{})
 	evt.RequestId = "r1"
@@ -186,7 +186,7 @@ func TestHandleRunInlineSource(t *testing.T) {
 	ch := &stubChannel{}
 	sess := &replaySession{result: "INLINE-DONE"}
 	gotSrc := make(chan string, 1)
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir()), Executor: &replayExecutor{session: sess, gotSrc: gotSrc}})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(t.TempDir()), &replayExecutor{session: sess, gotSrc: gotSrc})})
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "caller", CallID: "c2", Name: "run",
@@ -206,7 +206,7 @@ func TestHandleRunInlineSource(t *testing.T) {
 // TestHandleRunRejectsBothModes verifies exactly one of name / source is allowed.
 func TestHandleRunRejectsBothModes(t *testing.T) {
 	ch := &stubChannel{}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir()), Executor: blockingExecutor{}})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(t.TempDir()), blockingExecutor{})})
 
 	w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "caller", CallID: "c3", Name: "run",
@@ -228,7 +228,7 @@ func TestHandleRunTimesOut(t *testing.T) {
 	root := t.TempDir()
 	writeProgram(t, root, "hang", "hang", "demo", "// never returns")
 	ch := &stubChannel{}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: blockingExecutor{}})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(root), blockingExecutor{})})
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "caller", CallID: "c9", Name: "run",
@@ -264,7 +264,7 @@ func TestHandleRunRelaysAndReplies(t *testing.T) {
 	ch := &stubChannel{}
 	sess := &replaySession{result: "DONE"}
 	gotSrc := make(chan string, 1)
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: &replayExecutor{session: sess, gotSrc: gotSrc}})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(root), &replayExecutor{session: sess, gotSrc: gotSrc})})
 	serveDirectory(t, w, ch, "ws")
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
@@ -358,7 +358,7 @@ func replyText(t *testing.T, ch *stubChannel, callID string) (string, bool) {
 func TestHandleRunReturnsScriptLog(t *testing.T) {
 	ch := &stubChannel{}
 	sess := &scriptedSession{lines: []string{"step 1", "step 2"}, result: "THE-RESULT"}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir()), Executor: scriptedExecutor{sess: sess}})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(t.TempDir()), scriptedExecutor{sess: sess})})
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "coder", CallID: "call-log", TraceID: "tr",
@@ -384,7 +384,7 @@ func TestHandleRunReturnsScriptLog(t *testing.T) {
 func TestHandleRunOmitsEmptyScriptLog(t *testing.T) {
 	ch := &stubChannel{}
 	sess := &scriptedSession{result: "ONLY-RESULT"}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir()), Executor: scriptedExecutor{sess: sess}})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(t.TempDir()), scriptedExecutor{sess: sess})})
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "coder", CallID: "call-quiet", TraceID: "tr",
@@ -424,7 +424,7 @@ func TestScriptLogCapsTail(t *testing.T) {
 // arrive (which used to burn the whole run timeout, or hang the caller's round).
 func TestCallToolUnknownWorkerFailsFast(t *testing.T) {
 	ch := &stubChannel{}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir())})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(t.TempDir()), nil)})
 	serveDirectory(t, w, ch, "ws")
 	// Keep the discovery round out of the timing: no peer answers, so the call
 	// must give up after rosterDiscoverWait at the latest.
@@ -444,7 +444,7 @@ func TestCallToolUnknownWorkerFailsFast(t *testing.T) {
 // through to the real dispatch.
 func TestTargetValidationUsesDirectory(t *testing.T) {
 	ch := &stubChannel{}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir())})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(t.TempDir()), nil)})
 	serveDirectory(t, w, ch, "ws")
 
 	if err := w.checkTarget(context.Background(), "ws"); err != nil {
@@ -467,7 +467,7 @@ func TestTargetValidationUsesDirectory(t *testing.T) {
 // checks are backed off so later calls go straight through.
 func TestTargetValidationDegradesWithoutDirectory(t *testing.T) {
 	ch := &stubChannel{}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(t.TempDir())})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(t.TempDir()), nil)})
 	if err := w.checkTarget(context.Background(), "ws"); err != nil {
 		t.Fatalf("no directory must not reject the call, got %v", err)
 	}
@@ -492,7 +492,7 @@ func TestHandleRunAcceptsPath(t *testing.T) {
 	root := t.TempDir()
 	writeProgramAs(t, root, "ptc-path", "ptc-path", "script", "stored script", "return 1")
 	sess := &scriptedSession{result: "VIA-PATH"}
-	w := New(Config{ID: "program", Bus: ch, Backend: pgbackend.New(root), Executor: scriptedExecutor{sess: sess}})
+	w := New(Config{ID: "program", Bus: ch, Backend: program.Compose(pgbackend.New(root), scriptedExecutor{sess: sess})})
 
 	go w.handleRun(context.Background(), baseworker.ToolCall{
 		CallerID: "coder", CallID: "call-path", TraceID: "tr",

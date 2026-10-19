@@ -12,6 +12,7 @@ import (
 	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/itfs/program"
 )
 
 // defaultRunTimeout bounds one script-program session; a runaway (or unfaithful
@@ -140,7 +141,7 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 		w.ReplyFailed(tc.CallerID, tc.CallID, "provide only one of path or source, not both", tc.TraceID)
 		return
 	}
-	if w.executor == nil {
+	if w.backend == nil {
 		w.ReplyFailed(tc.CallerID, tc.CallID, "executor not configured", tc.TraceID)
 		return
 	}
@@ -168,7 +169,13 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 			src = loaded
 		}
 
-		sess, err := w.executor.Start(runCtx, src, args, w.callTool)
+		sess, err := w.backend.Start(runCtx, src, args, w.callTool)
+		if errors.Is(err, program.ErrNoExecutor) {
+			// A store-only environment: the worker manages content but cannot run
+			// a script. Say that, rather than surfacing a start failure.
+			w.ReplyFailed(tc.CallerID, tc.CallID, "executor not configured", tc.TraceID)
+			return
+		}
 		if err != nil {
 			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("start: %v", err), tc.TraceID)
 			return

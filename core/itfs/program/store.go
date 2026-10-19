@@ -2,11 +2,11 @@ package program
 
 import "context"
 
-// Backend is the storage interface for Program content.
+// Store is the storage half of a ProgramBackend: where Program content lives.
 // Implementations may use the local filesystem, a database, an object store,
 // or any other storage medium. The caller is agnostic to the storage backend.
 //
-// A Backend is the sole interpreter of Program addresses. Every path argument
+// A Store is the sole interpreter of Program addresses. Every path argument
 // below is an abstract address in the form "{program name}" for a Program's
 // entry content, or "{program name}/path/to/file.type" for one of its
 // contents. How an address maps onto actual storage is the Backend's own
@@ -15,12 +15,12 @@ import "context"
 //
 // The same applies to storage format. The bundled filesystem implementation
 // (pgbackend) stores each content as YAML frontmatter plus a markdown body and
-// reads the body back; another Backend could store metadata in columns. Callers
+// reads the body back; another Store could store metadata in columns. Callers
 // see content, not serialisation.
-type Backend interface {
-	// List enumerates every Program the Backend holds. Each carries its
+type Store interface {
+	// List enumerates every Program the Store holds. Each carries its
 	// name, its root path, and the paths of its contents — all abstract
-	// addresses. There is no notion of a directory here; a Backend whose
+	// addresses. There is no notion of a directory here; a Store whose
 	// storage is hierarchical flattens it.
 	List(ctx context.Context) ([]*Program, error)
 

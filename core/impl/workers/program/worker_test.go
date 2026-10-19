@@ -50,7 +50,7 @@ func writeContent(t *testing.T, root, relDir, relFile, body string) {
 }
 
 func newTestWorker(root string) *Worker {
-	return New(Config{ID: "program", Backend: pgbackend.New(root)})
+	return New(Config{ID: "program", Backend: coreprogram.Compose(pgbackend.New(root), nil)})
 }
 
 // listByName is a small helper for tests that just want one program.
@@ -383,7 +383,7 @@ func (c *stubChannel) Receive(context.Context) (<-chan event.Event, error) {
 func (c *stubChannel) Close() error { return nil }
 
 func newToolWorker(root string) *Worker {
-	return New(Config{ID: "program", Bus: &stubChannel{}, Backend: pgbackend.New(root)})
+	return New(Config{ID: "program", Bus: &stubChannel{}, Backend: coreprogram.Compose(pgbackend.New(root), nil)})
 }
 
 func toolCall(args map[string]any) baseworker.ToolCall {

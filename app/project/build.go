@@ -730,12 +730,12 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return programworker.New(programworker.Config{
-			ID:      id,
-			Bus:     ch,
-			Backend: pgbackend.New(abs),
-			// The local script-program execution backend. Swappable for a local
-			// sandbox / remote gateway later.
-			Executor: bunexec.New(bunexec.Options{Args: execArgs}),
+			ID:  id,
+			Bus: ch,
+			// The whole program environment: a filesystem Store plus the local
+			// Bun-sandbox Executor. Either half is swappable (a remote sandbox
+			// gateway, an object-store Store) without the worker changing.
+			Backend: programpkg.Compose(pgbackend.New(abs), bunexec.New(bunexec.Options{Args: execArgs})),
 		})
 	}
 	cfg.ID = id
