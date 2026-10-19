@@ -181,7 +181,16 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   const tFontSize = compactMode ? fontSizes.xs : fontSizes.base
   // Separator between title segments: a left border on each segment (instead
   // of a standalone "|"), so a wrapped line never ends with a dangling bar.
-  const itemSep: CSSProperties = { borderLeft: '1px solid ' + colors.textDimmed, paddingLeft: 8 }
+  // Memoized: this object is a ctx dependency, so a fresh literal every render
+  // would give ctx a new identity each time and silently defeat every row's
+  // memo. The response rows would then re-resolve their quote against the
+  // volatile allEvents on every event — the quote flickering in late (a height
+  // jump right after the reply settles) or away. Its only input is the (stable)
+  // theme colours, so it is stable across renders.
+  const itemSep: CSSProperties = useMemo(
+    () => ({ borderLeft: '1px solid ' + colors.textDimmed, paddingLeft: 8 }),
+    [colors],
+  )
 
   // Shared context handed to every row component. Memoized so its reference is
   // stable across live events (the derived helper closures are useCallback'd),

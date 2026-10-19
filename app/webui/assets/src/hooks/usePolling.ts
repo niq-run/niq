@@ -15,11 +15,22 @@ export function usePolling<T>(url: string, intervalMs: number, onData: (data: T)
   useEffect(() => {
     if (!enabled) return
     let active = true
+    // Last delivered payload, re-serialized for comparison. A poll routinely
+    // returns a fresh object graph with identical content every tick; handing
+    // that to React as new state re-renders every consumer (and re-derives the
+    // talk view's ctx, reflowing the memoized rows on every interval). Skip the
+    // callback when nothing actually changed.
+    let lastJSON = ''
     const load = async () => {
       try {
         const res = await fetch(url)
         const data = await res.json()
-        if (active) onDataRef.current(data)
+        if (!active) return
+        let json = ''
+        try { json = JSON.stringify(data) } catch { json = '' }
+        if (json && json === lastJSON) return
+        lastJSON = json
+        onDataRef.current(data)
       } catch {
         // ignore fetch errors for polling endpoints
       }
