@@ -343,7 +343,11 @@ func (l *scriptLog) text() string {
 	}
 	var b strings.Builder
 	if l.dropped > 0 {
-		b.WriteString("[" + strconv.Itoa(l.dropped) + " earlier line(s) dropped]\n")
+		// Written in pieces: one WriteString per piece, no throwaway
+		// concatenation (a linter flags the concatenated form).
+		b.WriteString("[")
+		b.WriteString(strconv.Itoa(l.dropped))
+		b.WriteString(" earlier line(s) dropped]\n")
 	}
 	b.WriteString(strings.Join(l.lines, "\n"))
 	return b.String()
