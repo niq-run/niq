@@ -147,6 +147,9 @@ export const en = {
 
   // ── Response block ──
   'response.jump.tooltip': 'jump to original message',
+  'response.copy': 'copy',
+  'response.copied': 'copied',
+  'response.copy.tooltip': 'copy this response to the clipboard',
 
   // ── Payload gate ──
   'payload.copy.tooltip': 'copy the raw payload to the clipboard',

@@ -142,6 +142,9 @@ export const zh: Record<StringKey, string> = {
   'thinking.chars': '{n} 字',
 
   'response.jump.tooltip': '跳转到原消息',
+  'response.copy': '复制',
+  'response.copied': '已复制',
+  'response.copy.tooltip': '复制这条回复到剪贴板',
 
   'payload.copy.tooltip': '复制原始载荷到剪贴板',
   'payload.copied': '已复制',
