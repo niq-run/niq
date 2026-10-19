@@ -65,8 +65,7 @@ Plus optional `args` (exposed to the script as `sdk.args`) and
 |---|---|
 | `worker.go` | `Worker` (embeds `baseworker.BaseWorker`) + `Config` (`ID` / `Bus` / `Backend` / `Executor`) + lifecycle (`Start`/`Stop`/`Snapshot`/`Restore`) + the event loop (`watch`/`process`) + Program lookup over the storage backend (`search` / `programForPath` / `matchProgram`) |
 | `tools.go` | the tool event types (`search` / `load` / `edit` / `upsert` / `write` / `delete` / `run`) + `registerExtensions` + the per-tool handlers (`handleSearch` / `handleLoad` / `handleEdit` / `handleUpsert` / `handleWrite` / `handleDelete`) |
-| `execute.go` | script-program execution: `handleRun` (both modes, timeout, log collection + reply) + `callTool` (the `ToolCaller` implementation — mint id, send `request`, await reply) + `resolveReply` (route `request.*` replies to the waiting call) |
-| `runreply.go` | reply shaping for a run (backend-agnostic): the `sdk.log` tail buffer, the `--- script log ---` section, and the 20 KiB result cap |
+| `execute.go` | script-program execution and its reply shaping: `handleRun` (both modes, timeout, log collection), `callTool`/`relay` (the `ToolCaller` — mint id, send `request`, await reply), `resolveReply` (route `request.*` replies to the waiting call), `checkTarget` (ask the directory worker), and the `sdk.log` tail buffer + 20 KiB result cap that decide what the reply text looks like |
 | `pgbackend/` | the filesystem store (one `program.Store` implementation) |
 | `bunexec/` | the local Bun-sandbox executor (one `program.Executor` implementation) + the embedded `launcher.mjs` (trusted bootstrap: in-memory compile, minimal SDK injection, error-location mapping) |
 
