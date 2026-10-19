@@ -12,6 +12,16 @@
 // It is one implementation of program.Executor (the execution half of a
 // ProgramBackend). A remote sandbox (self-hosted or a provider) can be dropped
 // in behind the same interface.
+//
+// Isolation: there is NO OS-level sandbox here. The launcher compiles the
+// script with new Function, which blocks STATIC import syntax, but the process
+// is a normal bun/node process — runtime `await import("node:fs")` and globals
+// like fetch are reachable (verified). The security posture is therefore
+// "application-level contract, not a boundary": a script is expected to reach
+// the world only through sdk.call, and a target allow-list belongs in the proxy
+// (program worker), but a malicious/buggy script is NOT contained. Real
+// containment needs a wrapper command (sandbox-exec / bwrap / container) via
+// Options.Args or a remote execution backend.
 package bunexec
 
 import (
@@ -37,8 +47,9 @@ var defaultLauncher []byte
 // Options configures the Bun-sandbox executor.
 type Options struct {
 	// Args is the command prefix the launcher path is appended to. Defaults to
-	// "bun run --sandbox --offline". Injectable (e.g. "node") for tests / a
-	// host that already sandboxes by other means.
+	// "bun run". Injectable (e.g. "node") for tests, and the intended way to
+	// wrap execution in a real sandbox (sandbox-exec / bwrap / a container) on a
+	// host that needs one — see the package comment on isolation.
 	Args []string
 	// Launcher overrides the embedded launcher source. Injectable for tests.
 	Launcher []byte
@@ -57,7 +68,12 @@ var _ program.Executor = (*Executor)(nil)
 func New(opts Options) *Executor {
 	args := opts.Args
 	if args == nil {
-		args = []string{"bun", "run", "--sandbox", "--offline"}
+		// Plain "bun run": the "--sandbox --offline" this used to carry do not
+		// exist in bun (unknown flags are silently ignored — verified on 1.4.3),
+		// so they provided no isolation and only implied one. Isolation, if
+		// wanted, comes from wrapping the command (Options.Args) or from a
+		// remote execution backend.
+		args = []string{"bun", "run"}
 	}
 	launcher := opts.Launcher
 	if launcher == nil {

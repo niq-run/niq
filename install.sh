@@ -10,6 +10,7 @@
 #   NIQ_INSTALL_DIR      target directory (default: ~/.niq/bin)
 #   NIQ_VERSION          exact release tag to install (default: latest)
 #   NIQ_NO_MODIFY_PATH   set to 1 to skip PATH setup
+#   NIQ_SKIP_BUN         set to 1 to skip the bun dependency check/install
 
 set -eu
 
@@ -71,6 +72,29 @@ chmod +x "$INSTALL_DIR/niq"
 
 log "installed: $INSTALL_DIR/niq"
 "$INSTALL_DIR/niq" --version || true
+
+# --- runtime dependency: bun ---
+# niq's program worker runs script programs (PTC) through a local Bun sandbox,
+# so a machine without bun can manage programs but cannot run them. Install it
+# up front rather than failing later at the first program.run.
+if [ "${NIQ_SKIP_BUN:-}" = "1" ]; then
+  log "NIQ_SKIP_BUN=1 — skipped the bun check"
+elif command -v bun >/dev/null 2>&1; then
+  log "bun found: $(bun --version)"
+else
+  log "bun not found — installing (required to run script programs)"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL https://bun.sh/install | sh || fail "bun install failed. Install it manually: https://bun.sh"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- https://bun.sh/install | sh || fail "bun install failed. Install it manually: https://bun.sh"
+  else
+    fail "bun is required to run script programs, and neither curl nor wget is available to install it. See https://bun.sh"
+  fi
+  BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+  PATH="$BUN_INSTALL/bin:$PATH"
+  command -v bun >/dev/null 2>&1 || fail "bun was installed but is not on PATH. Add $BUN_INSTALL/bin to your PATH and re-run."
+  log "bun installed: $(bun --version) ($BUN_INSTALL/bin)"
+fi
 
 # --- PATH setup: make `niq` callable in new shells ---
 if [ "${NIQ_NO_MODIFY_PATH:-}" = "1" ]; then

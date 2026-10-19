@@ -22,7 +22,7 @@ The worker is the home of Programs, and it has a backend for each axis:
 |---|---|---|---|
 | **Backend (whole environment)** | `program.ProgramBackend` = `program.Store` + `program.Executor` | One value to swap: where content lives and how a script program runs | `program.Compose(pgbackend, bunexec)` |
 | Store half | `program.Store` | Program content List/Read/Upsert/Write/Edit/Remove | `pgbackend` (filesystem: a directory per Program, `PROGRAM.md`/`SKILL.md` entry, YAML frontmatter + body) |
-| Executor half | `program.Executor` | Run a `FormType:script` program in an isolated sandbox | `bunexec` (local Bun sandbox + embedded launcher) |
+| Executor half | `program.Executor` | Run a `FormType:script` program in a separate process | `bunexec` (local `bun run` + embedded launcher) |
 
 Both are swappable: a remote object store can back storage, and a local/remote
 sandbox can back execution, without the worker or the scripts changing.
@@ -101,8 +101,13 @@ calls, and on expiry the log collected so far comes back with the error. A
 script error is reported with the failing line of the user's own source.
 
 The script body is compiled in memory as an async function body: top-level
-`await` works, `import` does not (so it cannot reach `fs`/`net`); the Bun
-sandbox is the system-level backstop.
+`await` works and static `import` syntax does not parse, so a normal script
+cannot pull in modules. **This is a contract, not a containment boundary**: the
+script runs in a plain `bun run` process, and a runtime `await import("node:fs")`
+or a global like `fetch` is reachable (verified). Containment, when required,
+comes from wrapping the command (`script_executor_args`, e.g. sandbox-exec /
+bwrap / a container) or from a remote execution backend — see the package
+comment in `bunexec`.
 
 ## Relationship to the reason worker
 
