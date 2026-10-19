@@ -234,7 +234,12 @@ func (e *remoteError) Error() string { return e.target + ": " + e.reason }
 // Only a definitive "no such worker" fails the call — an unreachable directory
 // means "cannot tell", which must not block a call that may well work.
 func (w *Worker) checkTarget(ctx context.Context, target string) error {
-	if target == "" || target == w.ID() || target == w.directoryID || w.directoryID == "" {
+	// An empty target cannot be routed anywhere; say so instead of sending a
+	// request that would wait for the run timeout.
+	if target == "" {
+		return fmt.Errorf("call requires a target worker id")
+	}
+	if target == w.ID() || target == w.directoryID || w.directoryID == "" {
 		return nil
 	}
 	// A recent probe came back indeterminate: skip probing for a while.
