@@ -3,6 +3,7 @@ package bunexec
 import (
 	"context"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,5 +77,32 @@ func TestExecutorSurfacesScriptError(t *testing.T) {
 	defer cancel()
 	if _, err := sess.Result(ctx); err == nil {
 		t.Fatal("expected an error from a throwing script")
+	}
+}
+
+// TestExecutorReportsProtocolStreamError verifies a protocol stream that ends
+// without a terminal frame reports the scanner's own error (here: a line beyond
+// the token limit) instead of a generic "exited without a result", so a broken
+// launcher is diagnosable.
+func TestExecutorReportsProtocolStreamError(t *testing.T) {
+	// A launcher that writes one oversized line and exits: the scanner stops
+	// with ErrTooLong before any JSON frame is complete.
+	huge := "process.stdout.write('x'.repeat(9 * 1024 * 1024));"
+	ex := New(Options{Args: []string{"node"}, Launcher: []byte(huge + "\n")})
+	sess, err := ex.Start(context.Background(), `return 1`, nil,
+		func(context.Context, string, event.EventType, map[string]any) (string, error) { return "", nil })
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sess.Cancel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_, err = sess.Result(ctx)
+	if err == nil {
+		t.Fatal("expected an error from an undecodable protocol stream")
+	}
+	if !strings.Contains(err.Error(), "protocol stream") {
+		t.Fatalf("err = %v, want it to name the protocol stream", err)
 	}
 }

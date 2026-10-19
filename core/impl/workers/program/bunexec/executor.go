@@ -19,6 +19,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -207,6 +208,13 @@ func (s *session) readStdout(r io.Reader, call program.ToolCaller) {
 			return
 		}
 	}
+	// The stream ended without a terminal frame. Read the scanner's own error
+	// first: a failed/oversized line is the actual cause, and reporting only
+	// "exited without a result" would hide it.
+	if err := sc.Err(); err != nil {
+		s.finish("", fmt.Errorf("bun: protocol stream: %w", err))
+		return
+	}
 	s.finish("", fmt.Errorf("bun: launcher exited without a result"))
 }
 
@@ -227,11 +235,26 @@ func (s *session) handleCall(m map[string]any, call program.ToolCaller) {
 	_ = s.writeLine(resp)
 }
 
+// drainStderr mirrors the sandbox's diagnostics (warnings, stack traces) into
+// the worker log. It never fails the session — a broken stderr stream is not a
+// run failure — but the error is reported so a missing tail is explainable.
 func (s *session) drainStderr(r io.Reader) {
 	sc := bufio.NewScanner(r)
+	// Diagnostics can be one huge line (a dumped object, a minified source);
+	// the default 64 KiB token limit would end the drain mid-stream.
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for sc.Scan() {
 		log.Printf("[ptc] %s", sc.Text())
 	}
+	if err := sc.Err(); err != nil && !isClosed(err) {
+		log.Printf("[ptc] stderr stream ended: %v", err)
+	}
+}
+
+// isClosed reports whether err is the pipe being closed under us (normal when
+// the sandbox exits), which is not worth a log line.
+func isClosed(err error) bool {
+	return errors.Is(err, os.ErrClosed) || errors.Is(err, io.EOF)
 }
 
 // finish ends the session exactly once: kills the process, closes the log
