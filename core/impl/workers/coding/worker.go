@@ -32,9 +32,10 @@ const (
 	// ToolModeNormal exposes every discovered capability, like the generic
 	// reason worker.
 	ToolModeNormal = "normal"
-	// ToolModePTC exposes only the program worker's tools (and this worker's own
-	// self tools). Other workers' tools are discovered via the directory worker
-	// from inside a script and executed by running that script (program.run).
+	// ToolModePTC (Programmatic Tool Call) exposes only the program worker's
+	// tools (and this worker's own self tools). Other workers' tools are
+	// discovered via the directory worker from inside a script and executed by
+	// running that script (program.run).
 	ToolModePTC = "ptc"
 )
 
