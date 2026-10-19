@@ -21,7 +21,7 @@ The worker is the home of Programs, and it has a backend for each axis:
 | Backend | Interface | Responsibility | Built-in implementation |
 |---|---|---|---|
 | **Storage** | `program.Backend` | Program content List/Read/Upsert/Write/Edit/Remove | `pgbackend` (filesystem: a directory per Program, `PROGRAM.md`/`SKILL.md` entry, YAML frontmatter + body) |
-| **Execution** | `program.ScriptProgramExecutor` | Run a `FormType:script` program in an isolated sandbox | `core/impl/scriptexec/bun` (local Bun sandbox + embedded launcher) |
+| **Execution** | `program.ScriptProgramExecutor` | Run a `FormType:script` program in an isolated sandbox | `bunexec` (local Bun sandbox + embedded launcher) |
 
 Both are swappable: a remote object store can back storage, and a local/remote
 sandbox can back execution, without the worker or the scripts changing.
@@ -65,15 +65,15 @@ Plus optional `args` (exposed to the script as `sdk.args`) and
 | `worker.go` | `Worker` (embeds `baseworker.BaseWorker`) + `Config` (`ID` / `Bus` / `Backend` / `Executor`) + lifecycle (`Start`/`Stop`/`Snapshot`/`Restore`) + the event loop (`watch`/`process`) + Program lookup over the storage backend (`search` / `programForPath` / `matchProgram`) |
 | `tools.go` | the tool event types (`search` / `load` / `edit` / `upsert` / `write` / `delete` / `run`) + `registerExtensions` + the per-tool handlers (`handleSearch` / `handleLoad` / `handleEdit` / `handleUpsert` / `handleWrite` / `handleDelete`) |
 | `execute.go` | script-program execution: `handleRun` (both modes, timeout, log collection + reply) + `callTool` (the `ToolCaller` implementation — mint id, send `request`, await reply) + `resolveReply` (route `request.*` replies to the waiting call) |
-| `scriptlog.go` | the run's `sdk.log` buffer: capped tail + the `--- script log ---` reply section |
-| `pgbackend/` | the filesystem storage backend |
+| `runreply.go` | reply shaping for a run (backend-agnostic): the `sdk.log` tail buffer, the `--- script log ---` section, and the 20 KiB result cap |
+| `pgbackend/` | the filesystem storage backend (one `program.Backend` implementation) |
+| `bunexec/` | the local Bun-sandbox executor (one `program.ScriptProgramExecutor` implementation) + the embedded `launcher.mjs` (trusted bootstrap: in-memory compile, minimal SDK injection, error-location mapping) |
 
 Related, outside this package:
 
 | Location | Responsibility |
 |---|---|
 | `core/itfs/program` | the contracts: `Program` / `Meta` / `ContentType` / `FormType`, the storage `Backend`, and the execution `ScriptProgramExecutor` / `ScriptSession` / `ToolCaller` |
-| `core/impl/scriptexec/bun` | the local Bun-sandbox executor (`bun run --sandbox --offline`) + the embedded `launcher.mjs` (trusted bootstrap: in-memory compile + minimal SDK injection) |
 
 ## The script SDK
 

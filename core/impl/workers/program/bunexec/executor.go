@@ -1,12 +1,17 @@
-// Package bun implements the program worker's local script-program execution
-// backend: it runs a FormType:script program inside a Bun sandbox, speaking a
-// JSON-Lines protocol with an embedded, trusted launcher over stdio. The
-// launcher compiles the untrusted script in memory and injects a minimal SDK;
-// every SDK call() is relayed back here and turned into a bus request.
+// Package bunexec implements the program worker's local script-program
+// execution backend: it runs a FormType:script program inside a Bun sandbox,
+// speaking a JSON-Lines protocol with an embedded, trusted launcher over stdio.
+// The launcher compiles the untrusted script in memory and injects a minimal
+// SDK; every SDK call() is relayed back here and turned into a bus request.
+//
+// It sits next to pgbackend for the same reason: both are swappable
+// implementations of one program-worker interface (execution here, storage
+// there), so the worker keeps its mechanism and the environment-specific code
+// stays in its own package.
 //
 // It is one implementation of program.ScriptProgramExecutor. A remote sandbox
 // (self-hosted or a provider) can be dropped in behind the same interface.
-package bun
+package bunexec
 
 import (
 	"bufio"
