@@ -28,12 +28,17 @@ npm install -g @niq.run/niq
 curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/install.sh | sh
 ```
 
-**From source** (Go 1.25+):
+**From source** (Go 1.25+, plus [bun](https://bun.sh) — see below):
 
 ```sh
 git clone https://github.com/niq-run/niq
 cd niq && make build   # → ./bin/niq
 ```
+
+**Runtime dependency: [bun](https://bun.sh).** The program worker runs script
+programs (PTC) with `bun run`, so a machine without bun can manage programs but
+cannot execute them. `install.sh` installs it when missing (skip with
+`NIQ_SKIP_BUN=1`); with npm or a source build, install bun yourself.
 
 ## Quick start
 
