@@ -123,15 +123,12 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 }
 
 // replyValue is the value a script receives for a request.completed reply: the
-// "result" as-is (a string for prose, a structured value for JSON replies), or —
-// for a content-block reply (ReplyPayload, e.g. workspace.readImg), which has no
-// result field — the payload itself. Typed rather than encoded: the script gets
-// what the capability declared, so it never has to guess whether to JSON.parse.
+// payload itself for an object reply (including the {"content":[…]} multi-modal
+// shape), or its "result" entry for a text/scalar/array reply. Typed rather than
+// encoded: the script gets what the capability declared, so it never has to
+// guess whether to JSON.parse.
 func replyValue(payload map[string]any) any {
-	if v, ok := payload["result"]; ok {
-		return v
-	}
-	return payload
+	return event.ReplyValue(payload)
 }
 
 // handleRun serves the program.run tool: it resolves the script source from

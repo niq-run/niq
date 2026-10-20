@@ -104,27 +104,52 @@ func ParseToolCall(evt event.Event) ToolCall {
 // ReplyCompleted answers a request caller with a request.completed result,
 // echoing the request's id and propagating the trace ID.
 //
-// The payload is ALWAYS {"result": value}, and value keeps its type: a string
-// reply stays a string, a structured reply (an object, an array, a number) stays
-// structured JSON. Callers render it as they need — a reason worker puts the text
-// into its transcript (JSON-encoding a structured value), a script receives the
-// text or the JSON. Tools that used to json.Marshal a reply and send the string
-// should pass the value instead, so consumers do not have to double-parse.
+// It is a CONVENIENCE, not the protocol: the bus only requires that a
+// request.completed payload be a JSON object, and a worker is free to build one
+// by hand when its reply does not fit this helper's two shapes. What the helper
+// does:
 //
-// Content-block replies (a multi-modal result the reason worker decodes into llm
-// blocks) are NOT a "result" value: those use ReplyPayload, which sends the
-// payload verbatim.
+//   - an object reply (map[string]any) IS the payload — no wrapper, so the
+//     event log shows the reply itself;
+//   - anything else (a string, a number, a bool, an array) cannot be a payload
+//     on its own, so it is wrapped as {"result": value}.
+//
+// Two keys are therefore reserved at the top level of a reply payload: "result"
+// (a non-object reply) and "content" (multi-modal blocks, which the reason
+// worker decodes into llm content blocks). A structured reply must not use them.
+//
+// ReplyString / ReplyObject are the same call with the shape made explicit.
 func (w *BaseWorker) ReplyCompleted(callerID, callID string, result any, traceID string) {
-	payload := map[string]any{"result": jsonValue(result)}
+	if payload, ok := result.(map[string]any); ok {
+		w.writeCompleted(callerID, callID, payload, traceID)
+		return
+	}
+	w.writeCompleted(callerID, callID, map[string]any{"result": jsonValue(result)}, traceID)
+}
+
+// ReplyString answers with text: the payload is {"result": text}.
+func (w *BaseWorker) ReplyString(callerID, callID, text, traceID string) {
+	w.ReplyCompleted(callerID, callID, text, traceID)
+}
+
+// ReplyObject answers with a structured payload: the map IS the payload. Use it
+// for a reply that is already an object (including the {"content":[…]}
+// multi-modal shape) and for a worker that builds its payload by hand.
+func (w *BaseWorker) ReplyObject(callerID, callID string, payload map[string]any, traceID string) {
+	w.writeCompleted(callerID, callID, payload, traceID)
+}
+
+// writeCompleted emits the request.completed event and logs the reply.
+func (w *BaseWorker) writeCompleted(callerID, callID string, payload map[string]any, traceID string) {
 	ev := event.New(event.TypeRequestCompleted, w.ID(), payload)
 	ev.RequestId = callID
 	ev.TraceID = traceID
-	if s, ok := result.(string); ok {
+	if s, ok := payload["result"].(string); ok {
 		log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s result_len=%d",
 			w.ID(), callerID, callID, len(s))
 	} else {
-		log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s result_type=%T",
-			w.ID(), callerID, callID, result)
+		log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s payload_keys=%d",
+			w.ID(), callerID, callID, len(payload))
 	}
 	_ = w.Channel.Send(context.Background(), ev, callerID)
 }
@@ -143,19 +168,6 @@ func jsonValue(v any) any {
 		return fmt.Sprintf("%v", v)
 	}
 	return v
-}
-
-// ReplyPayload answers a request caller with a payload sent verbatim, for replies
-// that are not a plain value: today the content-block shape
-// {"content":[{"type":"image",…}]} that the reason worker decodes into llm
-// content blocks. Everything else belongs in ReplyCompleted.
-func (w *BaseWorker) ReplyPayload(callerID, callID string, payload map[string]any, traceID string) {
-	ev := event.New(event.TypeRequestCompleted, w.ID(), payload)
-	ev.RequestId = callID
-	ev.TraceID = traceID
-	log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s payload_keys=%d",
-		w.ID(), callerID, callID, len(payload))
-	_ = w.Channel.Send(context.Background(), ev, callerID)
 }
 
 // ReplyFailed answers a request caller with a request.failed error message,

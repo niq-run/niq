@@ -70,18 +70,13 @@ func firedEvent(t *testing.T, ch *stubChannel, typ string) event.Event {
 // still parsed, so the helper covers both.
 func resultMap(t *testing.T, evt event.Event) map[string]any {
 	t.Helper()
-	if m, ok := evt.Payload["result"].(map[string]any); ok {
+	// A structured reply IS the payload; text and arrays arrive under "result".
+	// event.ReplyValue normalizes both for assertions.
+	if m, ok := event.ReplyValue(evt.Payload).(map[string]any); ok {
 		return m
 	}
-	s, _ := evt.Payload["result"].(string)
-	if s == "" {
-		t.Fatalf("event %s has no result payload: %+v", evt.Type, evt.Payload)
-	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
-		t.Fatalf("result not JSON: %s", s)
-	}
-	return m
+	t.Fatalf("event %s has no object result payload: %+v", evt.Type, evt.Payload)
+	return nil
 }
 
 func toolCall(typ event.EventType, callID, callerID string, args map[string]any) event.Event {

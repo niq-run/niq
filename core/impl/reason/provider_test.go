@@ -324,7 +324,7 @@ func TestStatusQueryProviders(t *testing.T) {
 		Providers []map[string]any `json:"providers"`
 		Current   map[string]any   `json:"current"`
 	}
-	res := event.ReplyResult(s.Payload)
+	res := event.ReplyText(s.Payload)
 	if err := json.Unmarshal([]byte(res), &snapshot); err != nil {
 		t.Fatalf("status result is not valid JSON: %v (result=%q)", err, res)
 	}
@@ -360,7 +360,7 @@ func TestStatusQueryCurrent(t *testing.T) {
 		Provider string `json:"provider"`
 		Model    string `json:"model"`
 	}
-	res := event.ReplyResult(s.Payload)
+	res := event.ReplyText(s.Payload)
 	if err := json.Unmarshal([]byte(res), &current); err != nil {
 		t.Fatalf("current result is not valid JSON: %v (result=%q)", err, res)
 	}

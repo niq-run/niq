@@ -274,7 +274,7 @@ func TestHandleStatus(t *testing.T) {
 	if len(local.sends) == 0 || local.sends[0].Type != event.TypeRequestCompleted {
 		t.Fatalf("expected a request.completed from status, got %v", local.sends)
 	}
-	res := event.ReplyResult(local.sends[0].Payload)
+	res := event.ReplyText(local.sends[0].Payload)
 	var st statusState
 	if err := json.Unmarshal([]byte(res), &st); err != nil {
 		t.Fatalf("status result not JSON: %q: %v", res, err)

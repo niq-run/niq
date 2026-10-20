@@ -1294,7 +1294,7 @@ const askTimeout = 20 * time.Second
 // pre-encoded strings) as their JSON. Callers that only need the text keep
 // working, and they no longer have to care which shape the worker sent.
 func replyResultText(evt event.Event) string {
-	return event.ReplyResult(evt.Payload)
+	return event.ReplyText(evt.Payload)
 }
 
 func (s *Server) ask(ctx context.Context, target string, evt event.Event, want ...event.EventType) (event.Event, error) {

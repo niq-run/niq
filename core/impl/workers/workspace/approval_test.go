@@ -261,7 +261,7 @@ func TestMountAddFromOtherWorkerWaitsForApproval(t *testing.T) {
 	var result struct {
 		Mounts []string `json:"mounts"`
 	}
-	if err := json.Unmarshal([]byte(event.ReplyResult(last.Payload)), &result); err != nil || !mountsContain(result.Mounts, extra) {
+	if err := json.Unmarshal([]byte(event.ReplyText(last.Payload)), &result); err != nil || !mountsContain(result.Mounts, extra) {
 		t.Fatalf("result = %v", last.Payload["result"])
 	}
 }

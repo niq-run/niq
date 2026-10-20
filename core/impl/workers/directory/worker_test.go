@@ -39,18 +39,9 @@ func (s *stubChannel) result() string {
 		if s.sent[i].Type != event.TypeRequestCompleted {
 			continue
 		}
-		v, ok := s.sent[i].Payload["result"]
-		if !ok {
-			return ""
-		}
-		if str, ok := v.(string); ok {
-			return str
-		}
-		b, err := json.Marshal(v)
-		if err != nil {
-			return ""
-		}
-		return string(b)
+		// An object reply IS the payload; a string/array reply is wrapped in
+		// "result". event.ReplyText normalizes both for assertions.
+		return event.ReplyText(s.sent[i].Payload)
 	}
 	return ""
 }

@@ -448,7 +448,7 @@ func resultOutcome(evt event.Event) ([]llm.ContentBlock, bool) {
 		// A structured result (an object, an array, a number) is JSON text to the
 		// model — the same thing a JSON-string reply used to carry, minus the
 		// double encoding.
-		text = event.ReplyResult(evt.Payload)
+		text = event.ReplyText(evt.Payload)
 	case event.TypeRequestFailed:
 		if e, ok := evt.Payload["error"]; ok {
 			text = "Tool call failed: " + fmt.Sprintf("%v", e)

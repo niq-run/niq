@@ -56,8 +56,9 @@ type Extension struct {
 	// field, which keeps its type (see ReplyCompleted) — a string for a prose
 	// reply, an object/array/number for a structured one. So
 	// {type: object, properties: …} means "result IS an object with these keys".
-	// (A content-block reply is the exception: workspace.readImg uses
-	// ReplyPayload and sends {"content":[…]} verbatim, decoded into llm blocks.)
+	// A reply that is an OBJECT is sent as the payload itself; a non-object reply
+	// (text, number, array) is wrapped as {"result": value}. "content" and
+	// "result" are therefore reserved top-level keys of a reply payload.
 	//
 	// Optional: a capability whose reply is prose leaves this nil. A structured
 	// reply (a JSON list, an object with fixed keys) should declare it.

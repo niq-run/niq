@@ -57,7 +57,7 @@ func TestProgramQueryViaBus(t *testing.T) {
 	}, "request.completed reply for program.query")
 
 	completed := ch.eventsOf(event.TypeRequestCompleted)[0]
-	res := event.ReplyResult(completed.Payload)
+	res := event.ReplyText(completed.Payload)
 	var programs []program.Program
 	if err := json.Unmarshal([]byte(res), &programs); err != nil {
 		t.Fatalf("query result is not valid JSON: %v (result=%q)", err, res)
@@ -89,7 +89,7 @@ func TestProgramUpdateViaBus(t *testing.T) {
 	})
 	waitCond(t, progTestTimeout, func() bool {
 		for _, e := range ch.eventsOf(event.TypeRequestCompleted) {
-			if event.ReplyResult(e.Payload) == "added program p1" {
+			if event.ReplyText(e.Payload) == "added program p1" {
 				return true
 			}
 		}
@@ -103,7 +103,7 @@ func TestProgramUpdateViaBus(t *testing.T) {
 		return len(ch.eventsOf(event.TypeRequestCompleted)) >= 2
 	}, "request.completed reply for second program.query")
 	completed := ch.eventsOf(event.TypeRequestCompleted)[1]
-	res := event.ReplyResult(completed.Payload)
+	res := event.ReplyText(completed.Payload)
 	var programs []program.Program
 	if err := json.Unmarshal([]byte(res), &programs); err != nil {
 		t.Fatalf("query result is not valid JSON: %v (result=%q)", err, res)
