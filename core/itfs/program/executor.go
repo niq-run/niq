@@ -19,9 +19,10 @@ type ToolCaller func(ctx context.Context, target string, eventType event.EventTy
 
 // Executor runs a FormType:script program in an isolated sandbox. It is the
 // execution half of a ProgramBackend — the counterpart of Store. Implementations
-// are interchangeable: local (Bun --sandbox), a future local sandbox, or a
-// remote sandbox gateway, without the program worker or the SDK changing (this
-// is what makes the execution layer replaceable).
+// are interchangeable: a local subprocess (bun/node, containing accidental
+// misuse), a real sandbox such as the planned QuickJS one, or a remote sandbox
+// gateway, without the program worker or the SDK changing (this is what makes
+// the execution layer replaceable).
 //
 // Scripts only ever reach the world through ToolCaller; they cannot touch the
 // bus or the filesystem. Each Start returns a ScriptSession that streams the
