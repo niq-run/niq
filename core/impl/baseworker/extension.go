@@ -47,11 +47,22 @@ type Extension struct {
 	Parameters  map[string]any
 	// Response describes the SHAPE of the reply (a JSON Schema object), when the
 	// capability has one — the response half of the request/response pair, where
-	// Parameters describes the request. Documentation only: replies travel as
-	// text in request.completed and nothing validates them. It exists so an
-	// agent can plan how to parse a reply BEFORE calling — which is what makes a
-	// PTC script writable in one shot — and it rides the advertised contract
-	// (WatchEntries -> worker.ready -> the directory worker's roster).
+	// Parameters describes the request. Documentation only: nothing validates a
+	// reply. It exists so an agent can plan how to parse a reply BEFORE calling —
+	// which is what makes a PTC script writable in one shot — and it rides the
+	// advertised contract (WatchEntries -> worker.ready -> the directory roster).
+	//
+	// It describes what the CALLER receives, which is one of two wire shapes
+	// (see ReplyCompleted):
+	//
+	//   - text: the payload is {"result": "<text>"} and the text is what the
+	//     caller sees — a reason worker puts it straight into its transcript, a
+	//     script receives it as the call's return value. So a schema like
+	//     {type: object, properties: …} means "the result text is JSON with this
+	//     shape", not "the payload has these keys".
+	//   - structured content: a capability answering with content blocks (e.g.
+	//     workspace.readImg) sends the payload itself, {"content":[…]}, and the
+	//     caller decodes that into blocks.
 	//
 	// Optional: a capability whose reply is prose leaves this nil. A structured
 	// reply (a JSON list, an object with fixed keys) should declare it.

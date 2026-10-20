@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -108,8 +109,7 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 
 	switch evt.Type {
 	case event.TypeRequestCompleted:
-		text, _ := evt.Payload["result"].(string)
-		ch <- callResult{text: text}
+		ch <- callResult{text: replyText(evt.Payload)}
 	case event.TypeRequestFailed:
 		msg, _ := evt.Payload["error"].(string)
 		ch <- callResult{err: msg}
@@ -120,6 +120,30 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 		return false
 	}
 	return true
+}
+
+// replyText renders a request.completed payload as the text a script receives.
+//
+// A text reply travels as {"result": "<text>"}; a capability that answers with
+// STRUCTURED content (workspace.readImg answers {"content":[{type:"image",…}]}
+// so a reason worker can decode it into an image block) sends its payload as-is,
+// with no result field. A script cannot render an image, but it must not receive
+// an empty string either: hand it the payload as JSON so nothing is lost
+// silently.
+func replyText(payload map[string]any) string {
+	if s, ok := payload["result"].(string); ok {
+		return s
+	}
+	if v, ok := payload["result"]; ok && v != nil {
+		if s, ok := v.(fmt.Stringer); ok {
+			return s.String()
+		}
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // handleRun serves the program.run tool: it resolves the script source from

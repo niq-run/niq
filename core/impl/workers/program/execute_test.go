@@ -338,7 +338,7 @@ func (e scriptedExecutor) Start(context.Context, string, map[string]any, program
 
 // replyResult returns the result text of the first request.completed/failed for
 // the given call id.
-func replyText(t *testing.T, ch *stubChannel, callID string) (string, bool) {
+func replyFor(t *testing.T, ch *stubChannel, callID string) (string, bool) {
 	t.Helper()
 	for _, e := range ch.snapshot() {
 		if e.RequestId != callID {
@@ -366,11 +366,11 @@ func TestHandleRunReturnsScriptLog(t *testing.T) {
 	})
 
 	waitUntil(t, 3*time.Second, func() bool {
-		_, ok := replyText(t, ch, "call-log")
+		_, ok := replyFor(t, ch, "call-log")
 		return ok
 	}, "program.run reply")
 
-	got, _ := replyText(t, ch, "call-log")
+	got, _ := replyFor(t, ch, "call-log")
 	if !strings.HasPrefix(got, "THE-RESULT") {
 		t.Fatalf("reply must lead with the result, got %q", got)
 	}
@@ -392,10 +392,10 @@ func TestHandleRunOmitsEmptyScriptLog(t *testing.T) {
 	})
 
 	waitUntil(t, 3*time.Second, func() bool {
-		_, ok := replyText(t, ch, "call-quiet")
+		_, ok := replyFor(t, ch, "call-quiet")
 		return ok
 	}, "program.run reply")
-	if got, _ := replyText(t, ch, "call-quiet"); got != "ONLY-RESULT" {
+	if got, _ := replyFor(t, ch, "call-quiet"); got != "ONLY-RESULT" {
 		t.Fatalf("quiet run reply = %q, want exactly the result", got)
 	}
 }
@@ -499,10 +499,10 @@ func TestHandleRunAcceptsPath(t *testing.T) {
 		Args: map[string]any{"path": "ptc-path"},
 	})
 	waitUntil(t, 3*time.Second, func() bool {
-		_, ok := replyText(t, ch, "call-path")
+		_, ok := replyFor(t, ch, "call-path")
 		return ok
 	}, "program.run reply")
-	if got, _ := replyText(t, ch, "call-path"); !strings.HasPrefix(got, "VIA-PATH") {
+	if got, _ := replyFor(t, ch, "call-path"); !strings.HasPrefix(got, "VIA-PATH") {
 		t.Fatalf("reply = %q, want the program's result", got)
 	}
 }
@@ -523,5 +523,21 @@ func TestCapScriptResultKeepsHeadAndTail(t *testing.T) {
 	}
 	if small := capScriptResult("short"); small != "short" {
 		t.Fatalf("small result must pass through, got %q", small)
+	}
+}
+
+// TestReplyTextHandlesStructuredPayload verifies the two reply shapes reach a
+// script intact: the {"result": text} envelope yields its text, and a
+// structured payload (workspace.readImg answers {"content":[{type:"image",…}]})
+// is handed over as JSON instead of the empty string an untyped
+// payload["result"].(string) produced.
+func TestReplyTextHandlesStructuredPayload(t *testing.T) {
+	if got := replyText(map[string]any{"result": "Exit code: 0"}); got != "Exit code: 0" {
+		t.Fatalf("text envelope = %q, want the bare text", got)
+	}
+	structured := map[string]any{"content": []any{map[string]any{"type": "image", "mime": "image/png", "data": "AAA"}}}
+	got := replyText(structured)
+	if !strings.Contains(got, `"type":"image"`) || !strings.Contains(got, `"mime":"image/png"`) {
+		t.Fatalf("structured payload = %q, want its JSON", got)
 	}
 }

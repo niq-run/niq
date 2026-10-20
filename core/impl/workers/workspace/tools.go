@@ -239,7 +239,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 			}, "required": []any{"path"}},
 		},
 		"readImg": {
-			resp: baseworker.StringSchema("an image content block (not text) the model can view; the file is re-encoded and capped at 1568px on the long edge"),
+			resp: baseworker.ObjectSchema(map[string]any{"content": baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"type": map[string]any{"type": "string", "enum": []string{"image"}}, "mime": map[string]any{"type": "string"}, "data": map[string]any{"type": "string", "description": "bare base64 (no data: prefix)"}}))}),
 			desc: "Read an image file within the workspace and return it to the model as a viewable image (not text). Supports png/jpeg/gif; the long edge is capped at 1568px and the image is re-encoded, so it is a normalized snapshot rather than a byte-exact copy. Use this to let the model see screenshots, UI mockups, diagrams, and charts.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"path": map[string]any{"type": "string", "description": "Path to the image. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
