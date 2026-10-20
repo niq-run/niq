@@ -245,12 +245,14 @@ func (s *session) handleCall(m map[string]any, call program.ToolCaller) {
 	if args == nil {
 		args = map[string]any{}
 	}
-	text, err := call(s.ctx, str(m["target"]), event.EventType(str(m["event"])), args)
+	value, err := call(s.ctx, str(m["target"]), event.EventType(str(m["event"])), args)
 	resp := map[string]any{"type": "call_result", "id": str(m["id"])}
 	if err != nil {
 		resp["error"] = err.Error()
 	} else {
-		resp["text"] = text
+		// The reply keeps its type on the wire: a string stays a string, a
+		// structured reply arrives in the script as an object/array.
+		resp["value"] = value
 	}
 	_ = s.writeLine(resp)
 }

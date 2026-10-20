@@ -80,10 +80,10 @@ Related, outside this package:
 Inside a run the script is handed a minimal `sdk`:
 
 - `sdk.call(target, event, args)` — a normal request to another worker; resolves with the
-  target's reply as TEXT: a string reply verbatim, a structured reply (the target's
-  `result` as an object/array) JSON-encoded, so `JSON.parse` is the one parse a script
-  needs (a tool-level failure is a result, not an exception), rejects on unknown worker /
-  failed / rejected. Concurrent (`Promise.all` fans out). An unknown target fails fast:
+  reply VALUE, type preserved: a prose reply is a string, a structured reply is a real
+  JS object/array (no `JSON.parse`), because the worker sends `result` as-is rather than
+  encoded (a tool-level failure is a result, not an exception) and rejects on unknown
+  worker / failed / rejected. Concurrent (`Promise.all` fans out). An unknown target fails fast:
   the roster is the directory worker's (it already collects `worker.ready` /
   `worker.gone` for the fleet), so the program worker asks it — no second copy to drift.
   An unreachable directory degrades to "cannot tell" (the call proceeds, bounded by the

@@ -20,7 +20,7 @@
 //
 // Protocol (one JSON object per line):
 //   worker -> script: {type:"run", src, args}
-//                     {type:"call_result", id, text | error}
+//                     {type:"call_result", id, value | error}
 //   script -> worker: {type:"call", id, target, event, arguments}
 //                     {type:"log", text}
 //                     {type:"result", payload}
@@ -153,7 +153,10 @@ rl.on("line", (line) => {
     if (!p) return;
     pending.delete(msg.id);
     if (msg.error) p.reject(new Error(String(msg.error)));
-    else p.resolve(msg.text ?? "");
+    // The worker sends the reply VALUE: a string for prose, an object/array for a
+    // structured reply. Resolving with it directly means a script gets the shape
+    // the capability declared, with no JSON.parse guesswork.
+    else p.resolve(msg.value);
     return;
   }
 

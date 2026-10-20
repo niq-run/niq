@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -26,10 +25,11 @@ import (
 const defaultRunTimeout = 120 * time.Second
 
 // callResult is the outcome of a forwarded tool call: either the
-// request.completed text or the request.failed / rejected reason.
+// request.completed reply value (string or structured JSON) or the
+// request.failed / rejected reason.
 type callResult struct {
-	text string
-	err  string
+	value any
+	err   string
 }
 
 func newCallID() string {
@@ -43,7 +43,7 @@ func newCallID() string {
 // failed / rejected reply (matched by a minted request id). Concurrent-safe —
 // each call gets its own pending slot, so a script may fire many calls in
 // parallel await their results independently.
-func (w *Worker) callTool(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (string, error) {
+func (w *Worker) callTool(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (any, error) {
 	// Fail fast on a target no one can answer: the send would be routed nowhere,
 	// no reply could ever resolve this call, and the script (and the caller's
 	// round) would hang until the run timeout. A typo'd or not-yet-started
@@ -57,7 +57,7 @@ func (w *Worker) callTool(ctx context.Context, target string, eventType event.Ev
 // relay performs one request/reply round trip, WITHOUT validating the target.
 // callTool is relay plus the target check; the directory probe uses relay
 // directly so it cannot recurse into itself.
-func (w *Worker) relay(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (string, error) {
+func (w *Worker) relay(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (any, error) {
 	callID := newCallID()
 	ch := make(chan callResult, 1)
 
@@ -84,11 +84,11 @@ func (w *Worker) relay(ctx context.Context, target string, eventType event.Event
 		if r.err != "" {
 			// Capability-level failure reported by the peer: a typed error, so
 			// checkTarget can tell "answered no" from "never answered".
-			return "", &remoteError{target: target, reason: r.err}
+			return nil, &remoteError{target: target, reason: r.err}
 		}
-		return r.text, nil
+		return r.value, nil
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
@@ -109,7 +109,7 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 
 	switch evt.Type {
 	case event.TypeRequestCompleted:
-		ch <- callResult{text: replyText(evt.Payload)}
+		ch <- callResult{value: replyValue(evt.Payload)}
 	case event.TypeRequestFailed:
 		msg, _ := evt.Payload["error"].(string)
 		ch <- callResult{err: msg}
@@ -122,25 +122,16 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 	return true
 }
 
-// replyText renders a request.completed payload as the text a script receives.
-//
-// A text reply travels as {"result": "<text>"}; a capability that answers with
-// STRUCTURED content (workspace.readImg answers {"content":[{type:"image",…}]}
-// so a reason worker can decode it into an image block) sends its payload as-is,
-// with no result field. A script cannot render an image, but it must not receive
-// an empty string either: hand it the payload as JSON so nothing is lost
-// silently.
-func replyText(payload map[string]any) string {
-	if _, ok := payload["result"]; ok {
-		return event.ReplyResult(payload)
+// replyValue is the value a script receives for a request.completed reply: the
+// "result" as-is (a string for prose, a structured value for JSON replies), or —
+// for a content-block reply (ReplyPayload, e.g. workspace.readImg), which has no
+// result field — the payload itself. Typed rather than encoded: the script gets
+// what the capability declared, so it never has to guess whether to JSON.parse.
+func replyValue(payload map[string]any) any {
+	if v, ok := payload["result"]; ok {
+		return v
 	}
-	// No "result": a content-block reply (ReplyPayload, e.g. workspace.readImg).
-	// A script cannot render an image, but it must not receive an empty string
-	// either — hand it the payload as JSON so nothing disappears silently.
-	if b, err := json.Marshal(payload); err == nil {
-		return string(b)
-	}
-	return ""
+	return payload
 }
 
 // handleRun serves the program.run tool: it resolves the script source from

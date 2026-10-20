@@ -97,7 +97,7 @@ func (w *Worker) registerExtensions() {
 			"path = run a stored script program (path is its entry content, e.g. \"ptc-report\"; find candidates with program__search, read source with program__load), " +
 			"or source = run inline code (ad-hoc, nothing persisted). " +
 			"The only API you are given is `sdk` — do not import modules or touch the filesystem/network directly; reach the world through sdk.call (direct access is outside the contract and unsupported): " +
-			"(1) await sdk.call(target, event, args) sends a normal request to another worker and resolves with its reply TEXT. " +
+			"(1) await sdk.call(target, event, args) sends a normal request to another worker and resolves with its reply VALUE — a string for a prose reply, a real JS object/array for a structured one (no JSON.parse needed; JSON.stringify it if you need text). " +
 			"A TOOL-LEVEL failure is an ordinary result, not an exception (e.g. bash exiting 3 resolves to \"Exit code: 3\"), so parse the text instead of wrapping everything in try/catch; " +
 			"only a CAPABILITY-level failure rejects (unknown worker, request.failed / rejected). " +
 			"Calls run concurrently — `await Promise.all([...])` fans out; keep fan-out modest. " +

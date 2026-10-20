@@ -2,6 +2,8 @@ package program
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -82,12 +84,12 @@ func TestCallToolAwaitsReply(t *testing.T) {
 
 	out := make(chan string, 1)
 	go func() {
-		text, err := w.callTool(context.Background(), "ws", "bash", map[string]any{"cmd": "ls"})
+		value, err := w.callTool(context.Background(), "ws", "bash", map[string]any{"cmd": "ls"})
 		if err != nil {
 			out <- "ERR:" + err.Error()
 			return
 		}
-		out <- text
+		out <- fmt.Sprintf("%v", value)
 	}()
 
 	var callID string
@@ -129,11 +131,11 @@ func (s *replaySession) Logs() <-chan string {
 	return c
 }
 func (s *replaySession) Result(ctx context.Context) (string, error) {
-	text, err := s.call(ctx, "ws", "bash", map[string]any{"cmd": "ls"})
+	value, err := s.call(ctx, "ws", "bash", map[string]any{"cmd": "ls"})
 	if err != nil {
 		return "ERR:" + err.Error(), nil
 	}
-	return s.result + ":" + text, nil
+	return s.result + ":" + fmt.Sprintf("%v", value), nil
 }
 func (s *replaySession) Cancel() {}
 
@@ -526,21 +528,23 @@ func TestCapScriptResultKeepsHeadAndTail(t *testing.T) {
 	}
 }
 
-// TestReplyTextHandlesStructuredPayload verifies every reply shape reaches a
-// script intact: a text result yields its text, a structured result yields its
-// JSON (not a nested envelope), and a content-block payload (ReplyPayload, e.g.
-// workspace.readImg) yields the payload's JSON instead of the empty string an
-// untyped payload["result"].(string) produced.
-func TestReplyTextHandlesStructuredPayload(t *testing.T) {
-	if got := replyText(map[string]any{"result": "Exit code: 0"}); got != "Exit code: 0" {
-		t.Fatalf("text envelope = %q, want the bare text", got)
+// TestReplyValueKeepsType verifies a script receives the reply value with the
+// type the capability declared: prose as a string, a structured reply as the
+// object itself (no JSON.parse guesswork), and a content-block payload (which
+// has no result field) as the payload.
+func TestReplyValueKeepsType(t *testing.T) {
+	if got := replyValue(map[string]any{"result": "Exit code: 0"}); got != "Exit code: 0" {
+		t.Fatalf("text reply = %v (%T), want the string", got, got)
 	}
-	structured := map[string]any{"content": []any{map[string]any{"type": "image", "mime": "image/png", "data": "AAA"}}}
-	if got := replyText(map[string]any{"result": map[string]any{"mounts": []any{"/a"}}}); got != `{"mounts":["/a"]}` {
-		t.Fatalf("structured result = %q, want the value's JSON, not the envelope", got)
+	mounts := map[string]any{"mounts": []any{"/a"}}
+	if got := replyValue(map[string]any{"result": mounts}); !reflect.DeepEqual(got, mounts) {
+		t.Fatalf("structured reply = %#v, want the value itself", got)
 	}
-	got := replyText(structured)
-	if !strings.Contains(got, `"type":"image"`) || !strings.Contains(got, `"mime":"image/png"`) {
-		t.Fatalf("structured payload = %q, want its JSON", got)
+	if got := replyValue(map[string]any{"result": []any{"a", "b"}}); !reflect.DeepEqual(got, []any{"a", "b"}) {
+		t.Fatalf("array reply = %#v, want the array itself", got)
+	}
+	blocks := map[string]any{"content": []any{map[string]any{"type": "image"}}}
+	if got := replyValue(blocks); !reflect.DeepEqual(got, blocks) {
+		t.Fatalf("content-block payload = %#v, want the payload", got)
 	}
 }

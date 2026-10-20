@@ -7,15 +7,19 @@ import (
 )
 
 // ToolCaller performs a tool call on behalf of a running script: it turns the
-// script's `call(target, event, arguments)` into a bus `request` to `target`
-// and returns the request.completed / request.failed text. It must be safe for
-// concurrent use — the program worker mints a distinct request id per call and
-// awaits its reply, so a script may fire many calls in parallel.
+// script's `call(target, event, arguments)` into a bus `request` to `target` and
+// returns the reply VALUE — a string for a prose reply, the structured JSON value
+// for a structured one (see event.ReplyResult for the same normalization applied
+// to text). Returning the value, not its encoding, is what lets a script work
+// with an object directly instead of parsing a string that may or may not be
+// JSON. It must be safe for concurrent use — the program worker mints a distinct
+// request id per call and awaits its reply, so a script may fire many calls in
+// parallel.
 //
 // Only the trusted bus side (the program worker, which holds the WorkerSideChannel)
 // implements it; the sandbox side just relays through this callback and never
 // holds bus credentials or the channel.
-type ToolCaller func(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (string, error)
+type ToolCaller func(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (any, error)
 
 // Executor runs a FormType:script program in an isolated sandbox. It is the
 // execution half of a ProgramBackend — the counterpart of Store. Implementations

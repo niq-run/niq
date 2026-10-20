@@ -25,7 +25,7 @@ func TestExecutorRunsScriptUnderNode(t *testing.T) {
 		sdk.result("got:" + r);
 	`
 	var gotTarget, gotEvent string
-	call := func(_ context.Context, target string, evt event.EventType, args map[string]any) (string, error) {
+	call := func(_ context.Context, target string, evt event.EventType, args map[string]any) (any, error) {
 		gotTarget, gotEvent = target, string(evt)
 		return "LS-OUT", nil
 	}
@@ -67,7 +67,7 @@ func TestExecutorSurfacesScriptError(t *testing.T) {
 	}
 	ex := New(Options{Args: []string{"node"}})
 	sess, err := ex.Start(context.Background(), `throw new Error("boom");`, nil,
-		func(context.Context, string, event.EventType, map[string]any) (string, error) { return "", nil })
+		func(context.Context, string, event.EventType, map[string]any) (any, error) { return "", nil })
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestExecutorReportsProtocolStreamError(t *testing.T) {
 	huge := "process.stdout.write('x'.repeat(9 * 1024 * 1024));"
 	ex := New(Options{Args: []string{"node"}, Launcher: []byte(huge + "\n")})
 	sess, err := ex.Start(context.Background(), `return 1`, nil,
-		func(context.Context, string, event.EventType, map[string]any) (string, error) { return "", nil })
+		func(context.Context, string, event.EventType, map[string]any) (any, error) { return "", nil })
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -104,5 +104,47 @@ func TestExecutorReportsProtocolStreamError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "protocol stream") {
 		t.Fatalf("err = %v, want it to name the protocol stream", err)
+	}
+}
+
+// TestCallResultKeepsType verifies a structured reply reaches the script as a
+// real object: the worker sends the reply value, the launcher resolves the
+// promise with it, so a script reads r.mounts directly instead of JSON.parse-ing
+// a string it had to guess about.
+func TestCallResultKeepsType(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	ex := New(Options{Args: []string{"node"}})
+	src := `
+		const listing = await sdk.call("directory", "list_workers", {});
+		const text = await sdk.call("ws", "bash", { cmd: "ls" });
+		sdk.result([
+			typeof listing,
+			Array.isArray(listing) ? listing[0].worker_id : null,
+			typeof text,
+			text,
+		].join("|"));
+	`
+	call := func(_ context.Context, target string, _ event.EventType, _ map[string]any) (any, error) {
+		if target == "directory" {
+			return []any{map[string]any{"worker_id": "workspace", "type": "workspace"}}, nil
+		}
+		return "LS-OUT", nil
+	}
+	sess, err := ex.Start(context.Background(), src, nil, call)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer sess.Cancel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := sess.Result(ctx)
+	if err != nil {
+		t.Fatalf("result: %v", err)
+	}
+	if res != "object|workspace|string|LS-OUT" {
+		t.Fatalf("result = %q, want object|workspace|string|LS-OUT", res)
 	}
 }
