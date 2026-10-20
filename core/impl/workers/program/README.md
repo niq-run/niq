@@ -2,7 +2,7 @@
 
 `program` is niq's domain-service worker for **Programs** — the reusable
 "source" a worker loads and that compiles into tool calls. It manages a
-Program's lifecycle (search / load / write / edit / upsert / delete on the bun)
+Program's lifecycle (search / load / write / edit / upsert / delete)
 and, for **script programs**, executes them.
 
 Two axes define a Program (`core/itfs/program`):
@@ -20,9 +20,9 @@ The worker is the home of Programs, and it has a backend for each axis:
 
 | Backend | Interface | Responsibility | Built-in implementation |
 |---|---|---|---|
-| **Backend (whole environment)** | `program.ProgramBackend` = `program.Store` + `program.Executor` | One value to swap: where content lives and how a script program runs | `program.Compose(pgbackend, bunexec)` |
+| **Backend (whole environment)** | `program.ProgramBackend` = `program.Store` + `program.Executor` | One value to swap: where content lives and how a script program runs | `program.Compose(pgbackend, jsexec)` |
 | Store half | `program.Store` | Program content List/Read/Upsert/Write/Edit/Remove | `pgbackend` (filesystem: a directory per Program, `PROGRAM.md`/`SKILL.md` entry, YAML frontmatter + body) |
-| Executor half | `program.Executor` | Run a `FormType:script` program in a separate process | `bunexec` (local `bun run` + embedded launcher) |
+| Executor half | `program.Executor` | Run a `FormType:script` program in a separate process | `jsexec` (local `node` + embedded launcher) |
 
 Both are swappable: a remote object store can back storage, and a local/remote
 sandbox can back execution, without the worker or the scripts changing.
@@ -67,7 +67,7 @@ Plus optional `args` (exposed to the script as `sdk.args`) and
 | `tools.go` | the tool event types (`search` / `load` / `edit` / `upsert` / `write` / `delete` / `run`) + `registerExtensions` + the per-tool handlers (`handleSearch` / `handleLoad` / `handleEdit` / `handleUpsert` / `handleWrite` / `handleDelete`) |
 | `execute.go` | script-program execution and its reply shaping: `handleRun` (both modes, timeout, log collection), `callTool`/`relay` (the `ToolCaller` — mint id, send `request`, await reply), `resolveReply` (route `request.*` replies to the waiting call), `checkTarget` (ask the directory worker), and the `sdk.log` tail buffer + 20 KiB result cap that decide what the reply text looks like |
 | `pgbackend/` | the filesystem store (one `program.Store` implementation) |
-| `bunexec/` | the local Bun-sandbox executor (one `program.Executor` implementation) + the embedded `launcher.mjs` (trusted bootstrap: in-memory compile, minimal SDK injection, error-location mapping) |
+| `jsexec/` | the local subprocess executor (one `program.Executor` implementation; `node` by default, `script_executor_args` to change it) + the embedded `launcher.mjs` (trusted bootstrap: in-memory compile, minimal SDK injection, error-location mapping) |
 
 Related, outside this package:
 
@@ -103,7 +103,7 @@ script error is reported with the failing line of the user's own source.
 The script body is compiled in memory as an async function body: top-level
 `await` works and static `import` syntax does not parse, so a normal script
 cannot pull in modules. **This is accident containment, not a security
-boundary**: the script runs in a plain `bun run` (or `node`) process, so a
+boundary**: the script runs in a plain `node` process, so a
 runtime `await import("node:fs")` or a global like `fetch` is reachable, and it
 runs as the same OS user. That is by design — the goal is to stop a script from
 misbehaving by mistake, not to withstand one that attacks on purpose (scripts

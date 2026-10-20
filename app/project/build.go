@@ -24,7 +24,7 @@ import (
 	"github.com/niq-run/niq/core/impl/workers/mcp"
 	"github.com/niq-run/niq/core/impl/workers/niw"
 	programworker "github.com/niq-run/niq/core/impl/workers/program"
-	"github.com/niq-run/niq/core/impl/workers/program/bunexec"
+	"github.com/niq-run/niq/core/impl/workers/program/jsexec"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 	"github.com/niq-run/niq/core/impl/workers/reason"
 	"github.com/niq-run/niq/core/impl/workers/timer"
@@ -718,8 +718,8 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 		// (see program.checkTarget), so only discovery is consumed.
 		subAllowFromParams(p, []string{"worker.discover"}))
 	// script_executor_args overrides the executor command prefix (default: the
-	// Bun sandbox). E.g. ["node"] on a host without bun (UNSANDBOXED — tests /
-	// trusted hosts only).
+	// node binary). E.g. ["bun", "run"], or a sandbox wrapper
+	// (sandbox-exec / bwrap / a container).
 	var execArgs []string
 	if raw, ok := p["script_executor_args"].([]any); ok {
 		for _, v := range raw {
@@ -733,9 +733,9 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 			ID:  id,
 			Bus: ch,
 			// The whole program environment: a filesystem Store plus the local
-			// Bun-sandbox Executor. Either half is swappable (a remote sandbox
-			// gateway, an object-store Store) without the worker changing.
-			Backend: programpkg.Compose(pgbackend.New(abs), bunexec.New(bunexec.Options{Args: execArgs})),
+			// subprocess Executor. Either half is swappable (a QuickJS sandbox, a
+			// remote gateway, an object-store Store) without the worker changing.
+			Backend: programpkg.Compose(pgbackend.New(abs), jsexec.New(jsexec.Options{Args: execArgs})),
 		})
 	}
 	cfg.ID = id

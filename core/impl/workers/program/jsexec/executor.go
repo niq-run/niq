@@ -1,13 +1,15 @@
-// Package bunexec implements the program worker's local script-program
-// execution backend: it runs a FormType:script program inside a Bun sandbox,
-// speaking a JSON-Lines protocol with an embedded, trusted launcher over stdio.
-// The launcher compiles the untrusted script in memory and injects a minimal
-// SDK; every SDK call() is relayed back here and turned into a bus request.
+// Package jsexec implements the program worker's local script-program execution
+// backend: it spawns a JavaScript runtime (node by default, or whatever
+// Options.Args names) running an embedded, trusted launcher, and speaks a
+// JSON-Lines protocol with it over stdio. The launcher compiles the script in
+// memory and injects a minimal SDK; every SDK call() is relayed back here and
+// turned into a bus request.
 //
 // It sits next to pgbackend for the same reason: both are swappable
-// implementations of one program-worker interface (execution here, storage
-// there), so the worker keeps its mechanism and the environment-specific code
-// stays in its own package.
+// implementations of one program-worker interface (execution there, storage
+// here), so the worker keeps its mechanism and the environment-specific code
+// stays in its own package. A QuickJS sandbox (planned) becomes a sibling
+// implementation of the same program.Executor.
 //
 // It is one implementation of program.Executor (the execution half of a
 // ProgramBackend). A remote sandbox (self-hosted or a provider) can be dropped
@@ -25,7 +27,7 @@
 // Executor: a QuickJS sandbox (planned), a wrapper command via Options.Args
 // (sandbox-exec / bwrap / container), or a remote execution backend. The seam
 // exists so that swap costs nothing in the worker, the SDK or the scripts.
-package bunexec
+package jsexec
 
 import (
 	"bufio"
@@ -47,18 +49,18 @@ import (
 //go:embed launcher.mjs
 var defaultLauncher []byte
 
-// Options configures the Bun-sandbox executor.
+// Options configures the subprocess executor.
 type Options struct {
 	// Args is the command prefix the launcher path is appended to. Defaults to
-	// "bun run". Injectable (e.g. "node") for tests, and the intended way to
-	// wrap execution in a real sandbox (sandbox-exec / bwrap / a container) on a
-	// host that needs one — see the package comment on isolation.
+	// the node binary (present on the vast majority of hosts); override it with
+	// script_executor_args, e.g. ["bun", "run"] or a sandbox wrapper
+	// (sandbox-exec / bwrap / a container) — see the package comment.
 	Args []string
 	// Launcher overrides the embedded launcher source. Injectable for tests.
 	Launcher []byte
 }
 
-// Executor is the local Bun-sandbox execution backend.
+// Executor is the local subprocess execution backend.
 type Executor struct {
 	args     []string
 	launcher []byte
@@ -71,12 +73,11 @@ var _ program.Executor = (*Executor)(nil)
 func New(opts Options) *Executor {
 	args := opts.Args
 	if args == nil {
-		// Plain "bun run": the "--sandbox --offline" this used to carry do not
-		// exist in bun (unknown flags are silently ignored — verified on 1.4.3),
-		// so they provided no isolation and only implied one. Isolation, if
-		// wanted, comes from wrapping the command (Options.Args) or from a
-		// remote execution backend.
-		args = []string{"bun", "run"}
+		// node is the baseline runtime: it is what the launcher protocol is
+		// written against, and it is present on nearly every host. bun works
+		// equally well via Options.Args, and a QuickJS-based Executor will
+		// replace this subprocess implementation entirely.
+		args = []string{"node"}
 	}
 	launcher := opts.Launcher
 	if launcher == nil {
@@ -112,7 +113,7 @@ func (e *Executor) Start(ctx context.Context, src string, args map[string]any, c
 	}
 	if err := cmd.Start(); err != nil {
 		os.Remove(path)
-		return nil, fmt.Errorf("bun: start %s: %w", e.args[0], err)
+		return nil, fmt.Errorf("executor: start %s: %w", e.args[0], err)
 	}
 
 	s := &session{
@@ -130,7 +131,7 @@ func (e *Executor) Start(ctx context.Context, src string, args map[string]any, c
 		args = map[string]any{}
 	}
 	if err := s.writeLine(map[string]any{"type": "run", "src": src, "args": args}); err != nil {
-		s.finish("", fmt.Errorf("bun: send run: %w", err))
+		s.finish("", fmt.Errorf("executor: send run: %w", err))
 		return nil, err
 	}
 	return s, nil
@@ -184,7 +185,7 @@ func (s *session) Result(ctx context.Context) (string, error) {
 	}
 }
 
-func (s *session) Cancel() { s.finish("", fmt.Errorf("bun: cancelled")) }
+func (s *session) Cancel() { s.finish("", fmt.Errorf("executor: cancelled")) }
 
 // writeLine sends one JSONL protocol message to the launcher.
 func (s *session) writeLine(v any) error {
@@ -195,7 +196,7 @@ func (s *session) writeLine(v any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done {
-		return fmt.Errorf("bun: session closed")
+		return fmt.Errorf("executor: session closed")
 	}
 	_, err = s.stdin.Write(append(b, '\n'))
 	return err
@@ -231,10 +232,10 @@ func (s *session) readStdout(r io.Reader, call program.ToolCaller) {
 	// first: a failed/oversized line is the actual cause, and reporting only
 	// "exited without a result" would hide it.
 	if err := sc.Err(); err != nil {
-		s.finish("", fmt.Errorf("bun: protocol stream: %w", err))
+		s.finish("", fmt.Errorf("executor: protocol stream: %w", err))
 		return
 	}
-	s.finish("", fmt.Errorf("bun: launcher exited without a result"))
+	s.finish("", fmt.Errorf("executor: launcher exited without a result"))
 }
 
 // handleCall relays one SDK call to the bus via the ToolCaller and writes the

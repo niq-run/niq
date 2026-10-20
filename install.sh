@@ -10,7 +10,6 @@
 #   NIQ_INSTALL_DIR      target directory (default: ~/.niq/bin)
 #   NIQ_VERSION          exact release tag to install (default: latest)
 #   NIQ_NO_MODIFY_PATH   set to 1 to skip PATH setup
-#   NIQ_SKIP_BUN         set to 1 to skip the bun dependency check/install
 
 set -eu
 
@@ -73,27 +72,16 @@ chmod +x "$INSTALL_DIR/niq"
 log "installed: $INSTALL_DIR/niq"
 "$INSTALL_DIR/niq" --version || true
 
-# --- runtime dependency: bun ---
-# niq's program worker runs script programs (PTC) through a local Bun sandbox,
-# so a machine without bun can manage programs but cannot run them. Install it
-# up front rather than failing later at the first program.run.
-if [ "${NIQ_SKIP_BUN:-}" = "1" ]; then
-  log "NIQ_SKIP_BUN=1 — skipped the bun check"
-elif command -v bun >/dev/null 2>&1; then
-  log "bun found: $(bun --version)"
+# --- runtime check: node ---
+# Script programs (PTC) run through a local node process, so a host without node
+# can manage programs but cannot execute them. Not fatal: everything else works,
+# and the executor can be pointed elsewhere via script_executor_args.
+if command -v node >/dev/null 2>&1; then
+  log "node found: $(node --version)"
 else
-  log "bun not found — installing (required to run script programs)"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL https://bun.sh/install | sh || fail "bun install failed. Install it manually: https://bun.sh"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO- https://bun.sh/install | sh || fail "bun install failed. Install it manually: https://bun.sh"
-  else
-    fail "bun is required to run script programs, and neither curl nor wget is available to install it. See https://bun.sh"
-  fi
-  BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
-  PATH="$BUN_INSTALL/bin:$PATH"
-  command -v bun >/dev/null 2>&1 || fail "bun was installed but is not on PATH. Add $BUN_INSTALL/bin to your PATH and re-run."
-  log "bun installed: $(bun --version) ($BUN_INSTALL/bin)"
+  log "warning: node not found — script programs (program.run) will fail until a"
+  log "         JS runtime is available (install node, or set the program worker's"
+  log "         script_executor_args to e.g. [\"bun\", \"run\"])"
 fi
 
 # --- PATH setup: make `niq` callable in new shells ---

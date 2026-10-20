@@ -1,4 +1,4 @@
-package bunexec
+package jsexec
 
 import (
 	"context"
