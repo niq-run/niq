@@ -368,6 +368,12 @@ func withResponseHint(desc string, response map[string]any) string {
 	if len(response) == 0 {
 		return desc
 	}
+	// A bare {"type":"string"} says nothing a caller could not assume, and the
+	// hint is paid for in every request's tool list: skip it. A string WITH a
+	// description (an output convention) is worth carrying.
+	if len(response) == 1 && response["type"] == "string" {
+		return desc
+	}
 	b, err := json.Marshal(response)
 	if err != nil {
 		return desc

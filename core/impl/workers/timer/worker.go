@@ -81,6 +81,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeTimeout,
+		Response:    baseworker.ObjectSchema(map[string]any{"tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"scheduled"}}, "fire_at": map[string]any{"type": "string", "description": "RFC3339, when the timer will fire"}}),
 		Description: "Set a timeout for your pending tool calls. When the timer fires, unresponsive tool calls will be automatically cancelled so you can proceed. If all tool calls complete before the timeout, the timer is cancelled automatically. Call this after issuing tool calls that may take a while.",
 		Parameters: obj(map[string]any{
 			"duration_ms": map[string]any{
@@ -101,6 +102,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeElapse,
+		Response:    baseworker.ObjectSchema(map[string]any{"tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"scheduled"}}, "fire_at": map[string]any{"type": "string", "description": "RFC3339, when the timer will fire"}}),
 		Description: "Set a reminder timer. After the specified duration you are woken with a worker.input carrying the purpose. Unlike the timeout tool, this timer is never automatically cancelled — it always fires. Use this for general-purpose timing and reminders.",
 		Parameters: obj(map[string]any{
 			"duration_ms": map[string]any{
@@ -121,6 +123,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeAt,
+		Response:    baseworker.ObjectSchema(map[string]any{"tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"scheduled"}}, "fire_at": map[string]any{"type": "string", "description": "RFC3339, when the timer will fire"}}),
 		Description: "Set a reminder timer at a specific point in time instead of after a relative delay. When the wall-clock reaches the given time, you are woken with a worker.input carrying the purpose. Use this to schedule reminders/timers at an absolute time (e.g. 17:00 this evening), which survive a worker restart.",
 		Parameters: obj(map[string]any{
 			"fire_at": map[string]any{
@@ -143,6 +146,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeInterval,
+		Response:    baseworker.ObjectSchema(map[string]any{"tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"scheduled"}}, "interval_ms": map[string]any{"type": "number"}, "fire_at": map[string]any{"type": "string", "description": "RFC3339, first fire"}}),
 		Description: "Set a repeating reminder. From the (optional) first fire time, or after interval_ms, the caller is woken with a worker.input every interval_ms until the timer is cancelled. Use this for recurring reminders, unlike the one-shot elapse/at timers.",
 		Parameters: obj(map[string]any{
 			"interval_ms": map[string]any{
@@ -169,6 +173,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeList,
+		Response:    baseworker.ObjectSchema(map[string]any{"timers": baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"timer_id": map[string]any{"type": "string"}, "caller_id": map[string]any{"type": "string"}, "tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "fire_at": map[string]any{"type": "string"}, "duration_ms": map[string]any{"type": "number"}, "interval_ms": map[string]any{"type": "number"}}))}),
 		Description: "List all currently pending timers: id, tick_type, caller, purpose, and when each fires.",
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
@@ -177,6 +182,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeCancelTimer,
+		Response:    baseworker.ObjectSchema(map[string]any{"status": map[string]any{"type": "string", "enum": []string{"cancelled"}}}),
 		Description: "Cancel a pending timer by its timer_id.",
 		Parameters: obj(map[string]any{
 			"timer_id": map[string]any{

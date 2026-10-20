@@ -108,13 +108,15 @@ func (w *Worker) registerExtensions() {
 			"and call remote tools. Read it first, then drive the concrete events.",
 		w.readmeText, w.cfg.Params)
 	w.Register(baseworker.Extension{
-		Event: EvtServerList,
+		Event:    EvtServerList,
+		Response: baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "url": map[string]any{"type": "string"}, "protocol": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"configured", "connected"}}, "tools": map[string]any{"type": "number", "description": "cached tool count"}})),
 		Description: "List configured MCP servers (name, url, tool count, status). " +
 			"Call this first to discover what remote MCP servers are available.",
 		Parameters: obj(map[string]any{}),
 	}, w.handleServerList)
 	w.Register(baseworker.Extension{
 		Event:       EvtToolList,
+		Response:    baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}, "schema": map[string]any{"type": "object", "description": "the tool's input schema"}, "response": map[string]any{"type": "object", "description": "the tool's declared output schema, when the server declares one"}})),
 		Description: "List the tools exposed by one MCP server (provide server).",
 		Parameters: obj(map[string]any{
 			"server": map[string]any{"type": "string", "description": "server name from mcp.server.list"},
@@ -122,6 +124,7 @@ func (w *Worker) registerExtensions() {
 	}, w.handleToolList)
 	w.Register(baseworker.Extension{
 		Event:       EvtToolCall,
+		Response:    baseworker.StringSchema("the remote tool's content as text; when the server returns structured output, its JSON follows the text"),
 		Description: "Call a tool on a remote MCP server. Provide server, tool, and arguments.",
 		Parameters: obj(map[string]any{
 			"server":    map[string]any{"type": "string"},
@@ -134,6 +137,7 @@ func (w *Worker) registerExtensions() {
 	if !w.cfg.Fixed {
 		w.Register(baseworker.Extension{
 			Event:       EvtServerAdd,
+			Response:    baseworker.StringSchema("confirmation naming the server"),
 			Description: "Add an MCP server at runtime (persisted). Provide name, url, and optional headers/protocol.",
 			Parameters: obj(map[string]any{
 				"name":     map[string]any{"type": "string"},
@@ -144,6 +148,7 @@ func (w *Worker) registerExtensions() {
 		}, w.handleServerAdd)
 		w.Register(baseworker.Extension{
 			Event:       EvtServerRemove,
+			Response:    baseworker.StringSchema("confirmation naming the server"),
 			Description: "Remove an MCP server at runtime (persisted). Provide name.",
 			Parameters: obj(map[string]any{
 				"name": map[string]any{"type": "string"},
@@ -151,6 +156,7 @@ func (w *Worker) registerExtensions() {
 		}, w.handleServerRemove)
 		w.Register(baseworker.Extension{
 			Event:       EvtServerUpdate,
+			Response:    baseworker.StringSchema("confirmation naming the server"),
 			Description: "Update an MCP server's url/headers/protocol at runtime (persisted). Provide name and the fields to change.",
 			Parameters: obj(map[string]any{
 				"name":     map[string]any{"type": "string"},
@@ -160,7 +166,8 @@ func (w *Worker) registerExtensions() {
 			}),
 		}, w.handleServerUpdate)
 		w.Register(baseworker.Extension{
-			Event: EvtExpose,
+			Event:    EvtExpose,
+			Response: baseworker.ObjectSchema(map[string]any{"mode": map[string]any{"type": "string", "enum": []any{ExposeAgentic, ExposeReady}}}),
 			Description: "Get or set the exposure mode. agentic exposes a fixed discovery surface " +
 				"(server.list / tool.list / tool.call); ready additionally flattens every remote tool " +
 				"into its own capability. Omit mode to read the current mode.",

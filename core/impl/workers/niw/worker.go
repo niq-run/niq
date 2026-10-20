@@ -494,6 +494,7 @@ func (w *Worker) deliverToLocalRecipient(ctx context.Context, evt event.Event) {
 func (w *Worker) registerExtensions() {
 	w.Register(baseworker.Extension{
 		Event:       TypeRecipientSet,
+		Response:    baseworker.StringSchema("confirmation naming the local recipient"),
 		Description: "Bind which local worker receives the far side's messages.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -506,11 +507,13 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeRecipientUnset,
+		Response:    baseworker.StringSchema("confirmation"),
 		Description: "Clear the local recipient: stop delivering far-side messages locally.",
 	}, func(evt event.Event) { w.handleLocalUnset(evt) })
 
 	w.Register(baseworker.Extension{
 		Event:       TypeRecipientGet,
+		Response:    baseworker.ObjectSchema(map[string]any{"local": map[string]any{"type": "string"}, "remote": map[string]any{"type": "string"}}),
 		Description: "Return the current local/remote recipient bindings as JSON.",
 	}, func(evt event.Event) { w.handleGet(evt) })
 
@@ -519,6 +522,7 @@ func (w *Worker) registerExtensions() {
 	// discover and drive the link.
 	w.Register(baseworker.Extension{
 		Event:       TypeDial,
+		Response:    baseworker.StringSchema("connection outcome"),
 		Description: "Actively connect/reconnect the bridge to the far side. Optionally repoint it with remote_url / remote_worker_id / remote_credential.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -532,6 +536,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeStatus,
+		Response:    baseworker.ObjectSchema(map[string]any{"connected": map[string]any{"type": "boolean"}, "remote_url": map[string]any{"type": "string"}, "remote_worker_id": map[string]any{"type": "string"}, "remote_cred_set": map[string]any{"type": "boolean"}, "local_recipient": map[string]any{"type": "string"}, "remote_recipient": map[string]any{"type": "string"}}),
 		Description: "Return the current bridge status: connected, remote target, and recipient bindings.",
 	}, func(evt event.Event) { w.handleStatus(evt) })
 }

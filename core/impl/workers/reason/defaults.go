@@ -51,6 +51,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		// SelfOnly: a worker's own addressed-messaging tool is not something
 		// peers should be able to call, so it is announced only to itself.
 		SelfOnly:    true,
+		Response:    baseworker.StringSchema("confirmation: \"message sent to <worker>\"; the target's answer, if any, arrives later as worker.input"),
 		Description: "Send a message to a specific worker on the bus. The message is delivered in append mode: it does not interrupt the target's in-flight reasoning — it is appended as a supplement and the target schedules a fresh round.",
 		Parameters: obj(map[string]any{
 			"target": map[string]any{"type": "string", "description": "Target worker ID"},
@@ -70,6 +71,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		// placeholder is needed. This handler is defensive only (normally never
 		// reached).
 		SelfOnly:    true,
+		Response:    baseworker.ObjectSchema(map[string]any{"result": map[string]any{"type": "string", "description": "the target capability's reply text — its shape is whatever that capability declares as its response"}}),
 		Description: "Invoke a capability on another worker without it being a listed tool: provide target (worker id), event (the capability event type, as shown by get_worker_info), and arguments. The call awaits the worker's request.completed and returns its result.",
 		Parameters: obj(map[string]any{
 			"target":    map[string]any{"type": "string", "description": "Target worker ID"},
@@ -88,6 +90,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		// The event type comes from the mechanism, so the emitter
 		// (invokeContextCompress) and this handler cannot drift apart.
 		Event:       reasonBase.TypeContextCompress,
+		Response:    baseworker.StringSchema("how much was compacted"),
 		Description: "Compact your own context history: older messages are replaced by a summary, the most recent messages are kept.",
 		Parameters: obj(map[string]any{
 			"directive": map[string]any{"type": "string",
@@ -120,7 +123,8 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	// edit), so handleToolCalls dispatches them normally and the
 	// request.completed reply schedules the next round.
 	w.Register(baseworker.Extension{
-		Event: TypeProgramQuery,
+		Event:    TypeProgramQuery,
+		Response: baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "content_type": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}, "tags": baseworker.ArraySchema(map[string]any{"type": "string"}), "locked": map[string]any{"type": "boolean"}, "path": map[string]any{"type": "string"}})),
 		Description: "List this worker's instruction and playbook programs (name, type, description, tags, locked, path). " +
 			"Instructions carry their content here; playbooks are references — only metadata is listed, and their content " +
 			"is loaded from the program worker by passing the path to program__load.",
@@ -130,7 +134,8 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	})
 
 	w.Register(baseworker.Extension{
-		Event: TypeProgramUpdate,
+		Event:    TypeProgramUpdate,
+		Response: baseworker.StringSchema("confirmation naming the program added or removed"),
 		Description: "Add or remove one of this worker's programs. Instruction: supply content and it is inlined " +
 			"into the system prompt — self-contained, nothing to set up elsewhere. Playbook: only name/description/tags " +
 			"are kept here (surfaced in the prompt); its content lives in the program worker, so create it there first " +

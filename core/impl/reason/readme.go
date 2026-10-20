@@ -40,6 +40,7 @@ func (w *BaseReasonWorker) registerReadme() {
 		// capability peers should see in the roster. A directed request from
 		// another authorized worker still dispatches here.
 		SelfOnly: true,
+		Response: baseworker.StringSchema("confirmation that the readme was replaced"),
 		Description: "Replace this worker's readme — the short self-description of what it is for. " +
 			"Write it when the worker's role or scope changes, so later recall " +
 			"(list/search, then read the readme) finds an accurate description.",

@@ -287,3 +287,24 @@ func TestResponseHintIsCapped(t *testing.T) {
 		t.Fatal("no Response must leave the description untouched")
 	}
 }
+
+// TestOwnCapabilitiesDeclareResponse verifies this worker's own generated tools
+// describe their reply too — the model sees them in every round, and a PTC
+// script may call them through request, so an undeclared reply would be the same
+// blind spot the peer tools just lost.
+func TestOwnCapabilitiesDeclareResponse(t *testing.T) {
+	w, _ := newTestWorker2()
+	want := []event.EventType{TypeProviderCurrent, TypeProviderList, TypeProviderSwitch}
+	have := map[event.EventType]bool{}
+	for _, e := range w.WatchEntries(true) {
+		ev, _ := e["event"].(string)
+		if _, ok := e["response"]; ok {
+			have[event.EventType(ev)] = true
+		}
+	}
+	for _, ev := range want {
+		if !have[ev] {
+			t.Errorf("%s does not declare a response schema", ev)
+		}
+	}
+}

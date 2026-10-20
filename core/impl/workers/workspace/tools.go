@@ -224,9 +224,13 @@ func (w *WorkspaceWorker) registerExtensions() {
 	type spec struct {
 		desc   string
 		params map[string]any
+		// resp documents the reply shape (the capability's Response half), so a
+		// caller — or a PTC script written before the call — knows what it gets.
+		resp map[string]any
 	}
 	specs := map[string]spec{
 		"read": {
+			resp: baseworker.StringSchema("file content with line numbers"),
 			desc: "Read the contents of a file within the workspace. Returns content with line numbers. Supports offset/limit pagination for large files.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"path":   map[string]any{"type": "string", "description": "Path to the file. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
@@ -235,12 +239,14 @@ func (w *WorkspaceWorker) registerExtensions() {
 			}, "required": []any{"path"}},
 		},
 		"readImg": {
+			resp: baseworker.StringSchema("an image content block (not text) the model can view; the file is re-encoded and capped at 1568px on the long edge"),
 			desc: "Read an image file within the workspace and return it to the model as a viewable image (not text). Supports png/jpeg/gif; the long edge is capped at 1568px and the image is re-encoded, so it is a normalized snapshot rather than a byte-exact copy. Use this to let the model see screenshots, UI mockups, diagrams, and charts.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"path": map[string]any{"type": "string", "description": "Path to the image. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
 			}, "required": []any{"path"}},
 		},
 		"write": {
+			resp: baseworker.StringSchema("confirmation that the file was written"),
 			desc: "Write content to a file within the workspace. Overwrites the entire file. Creates parent directories if needed.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"path":    map[string]any{"type": "string", "description": "Path to the file. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
@@ -248,6 +254,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 			}, "required": []any{"path", "content"}},
 		},
 		"edit": {
+			resp: baseworker.StringSchema("confirmation listing the applied edits"),
 			desc: "Edit a file by applying one or more find-and-replace operations. Each edit specifies old_text and new_text. Uses fuzzy Unicode quote normalization as fallback.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"path": map[string]any{"type": "string", "description": "Path to the file. Relative paths resolve against the primary mount (the first mount); absolute paths are accepted when they fall inside any mounted directory."},
@@ -260,6 +267,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 			}, "required": []any{"path", "edits"}},
 		},
 		"bash": {
+			resp: baseworker.StringSchema("\"Exit code: <n>\\nSTDOUT:\\n<out>\\nSTDERR:\\n<err>\"; output over 20KB is truncated to head + tail; a timeout keeps the partial output and appends a notice"),
 			desc: "Run a shell command within the workspace. Returns exit code, stdout, and stderr. Output larger than 20KB is truncated to its head and tail. On timeout the command is killed and the partial output is preserved alongside a timeout notice.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"command": map[string]any{"type": "string", "description": "The shell command to execute."},
@@ -268,6 +276,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 			}, "required": []any{"command"}},
 		},
 		"grep": {
+			resp: baseworker.StringSchema("matching lines as file:line:content"),
 			desc: "Search files recursively using grep -rn. Returns file:line:content matches.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"pattern": map[string]any{"type": "string", "description": "Regex pattern to search for."},
@@ -277,6 +286,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 			}, "required": []any{"pattern"}},
 		},
 		"find": {
+			resp: baseworker.StringSchema("matching paths, one per line"),
 			desc: "Find files by name glob using find -name.",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"path":    map[string]any{"type": "string", "description": "Directory to search. Defaults to the primary mount."},
@@ -284,6 +294,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 			}, "required": []any{"pattern"}},
 		},
 		"ls": {
+			resp: baseworker.StringSchema("one entry per line, marked [file] or [dir]"),
 			desc: "List directory contents. Returns a structured summary with entries marked as [file] or [dir].",
 			params: map[string]any{"type": "object", "properties": map[string]any{
 				"path": map[string]any{"type": "string", "description": "Directory to list. Defaults to the primary mount."},
@@ -295,7 +306,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 			continue
 		}
 		name := name
-		w.Register(baseworker.Extension{Event: event.EventType(name), Description: sp.desc, Parameters: sp.params}, func(evt event.Event) {
+		w.Register(baseworker.Extension{Event: event.EventType(name), Description: sp.desc, Parameters: sp.params, Response: sp.resp}, func(evt event.Event) {
 			tc := baseworker.ParseToolCall(evt)
 			// Every tool runs on its own goroutine: none of them may stall the
 			// worker's single event loop, and concurrent tool calls execute in

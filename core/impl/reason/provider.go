@@ -77,6 +77,7 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeProviderSwitch,
+		Response:    baseworker.StringSchema("confirmation naming the provider and model now in effect"),
 		Description: "Switch active LLM provider/model.",
 		Parameters: obj(map[string]any{
 			"provider": map[string]any{"type": "string", "description": "Provider name"},
@@ -88,6 +89,7 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeProviderList,
+		Response:    baseworker.ObjectSchema(map[string]any{"providers": baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "default": map[string]any{"type": "string"}, "models": baseworker.ArraySchema(map[string]any{"type": "string"})})), "current": baseworker.ObjectSchema(map[string]any{"provider": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}})}),
 		Description: "List available providers and the current selection.",
 	}, func(evt event.Event) {
 		w.handleStatusQuery(evt)
@@ -95,6 +97,7 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeProviderCurrent,
+		Response:    baseworker.ObjectSchema(map[string]any{"provider": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}}),
 		Description: "Current provider/model.",
 	}, func(evt event.Event) {
 		w.handleStatusQuery(evt)

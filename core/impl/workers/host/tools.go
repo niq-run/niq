@@ -25,6 +25,7 @@ func (w *HostWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeSpawn,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"created"}}, "type": map[string]any{"type": "string"}}),
 		Description: "Create a new worker. Type determines worker kind (reason, workspace, ...). Type-specific arguments (e.g. path, provider, model, programs, events) are passed as top-level properties.",
 		Parameters: obj(map[string]any{
 			"type": map[string]any{
@@ -68,6 +69,7 @@ func (w *HostWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeSuspend,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"suspended"}}}),
 		Description: "Suspend a running worker: snapshots its state, stops its goroutine and releases its bus connection. The worker can later be resumed.",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{
@@ -83,6 +85,7 @@ func (w *HostWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeResume,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"running"}}}),
 		Description: "Resume a suspended worker: reconnects its bus channel, restores its snapshot and starts it.",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{

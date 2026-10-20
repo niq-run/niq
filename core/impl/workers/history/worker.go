@@ -172,6 +172,7 @@ func (w *Worker) registerTools() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeHistoryList,
+		Response:    baseworker.ObjectSchema(map[string]any{"events": map[string]any{"type": "array", "description": "matching events, each with its payload truncated to a per-item cap"}, "next_cursor": map[string]any{"type": "string"}}),
 		Description: "Recall PAST events from the event bus store (your own or another worker's) across time and restarts. USE this only to recover/verify historical facts NOT already in your current context — e.g. after a restart you lost your working memory, or you need a tool result you sent/ran turns ago. Each call the store returns any number of events, so always narrow with worker + types + limit (default 50) and keep the page small; the bus also appends continuously, so don't page through a whole history you only cursor-checked once. DON'T use it for present state (use list_workers/get_worker_info), for anything your current context already answers, or to satisfy idle curiosity — it costs tokens and a large listing wastes them. Events come back with payloads truncated to a per-item cap; for one event's full content, drill in with history.get.",
 		Parameters: obj(map[string]any{
 			"worker": map[string]any{"type": "string",
@@ -206,6 +207,7 @@ func (w *Worker) registerTools() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeHistoryGet,
+		Response:    baseworker.ArraySchema(map[string]any{"type": "object"}),
 		Description: "Drill into the FULL, untruncated content of specific historical events. USE this only after history.list has shown you a truncated stub or given you an exact id/request_id you need — pass 'id' for one event, or 'request_id' for its whole request→response pair (the tool call and whichever request.* reply echoed it). DON'T fetch many events by hand here (that's history.list's narrowing job), and don't call it without a specific id/request_id in hand. A single result can be large (e.g. a big tool output) and is returned verbatim, so only fetch what you genuinely need — not deducible from what you already have.",
 		Parameters: obj(map[string]any{
 			"id": map[string]any{"type": "string",

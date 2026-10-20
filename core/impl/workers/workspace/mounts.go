@@ -43,6 +43,7 @@ type MountManager interface {
 func (w *WorkspaceWorker) registerMountExtensions() {
 	w.Register(baseworker.Extension{
 		Event:       TypeMountAdd,
+		Response:    baseworker.ObjectSchema(map[string]any{"mounts": baseworker.ArraySchema(map[string]any{"type": "string"}), "primary": map[string]any{"type": "string", "description": "the first mount"}, "added": map[string]any{"type": "string", "description": "the mount just added"}}),
 		Description: "Mount an additional directory into the workspace. The path must exist and be a directory. Requests from the workspace's approver apply directly; requests from any other worker wait for the approver's consent (approval.request/approval.decision). Relative tool paths keep resolving against the primary (first) mount; absolute paths inside any mount are accepted.",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"path": map[string]any{"type": "string", "description": "Absolute directory path to mount (~ expansion allowed). Must exist."},
@@ -51,11 +52,13 @@ func (w *WorkspaceWorker) registerMountExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeMountList,
+		Response:    baseworker.ObjectSchema(map[string]any{"mounts": baseworker.ArraySchema(map[string]any{"type": "string"}), "primary": map[string]any{"type": "string", "description": "the first mount"}, "added": map[string]any{"type": "string", "description": "the mount just added"}}),
 		Description: "List the workspace's mounted directories. The first one is the primary mount.",
 	}, w.handleMountList)
 
 	w.Register(baseworker.Extension{
 		Event:       TypeMountRemove,
+		Response:    baseworker.ObjectSchema(map[string]any{"mounts": baseworker.ArraySchema(map[string]any{"type": "string"}), "primary": map[string]any{"type": "string", "description": "the first mount"}, "added": map[string]any{"type": "string", "description": "the mount just added"}}),
 		Description: "Unmount a mounted directory. Relative tool paths resolve against the primary (first) mount, so removing it promotes the next one. The last remaining mount cannot be removed.",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"path": map[string]any{"type": "string", "description": "Mounted directory path to remove (~ expansion allowed)."},

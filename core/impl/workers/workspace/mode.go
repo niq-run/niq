@@ -31,6 +31,7 @@ var mutatingTools = map[string]bool{"write": true, "edit": true, "bash": true}
 func (w *WorkspaceWorker) registerModeExtension() {
 	w.Register(baseworker.Extension{
 		Event:       TypeModeSet,
+		Response:    baseworker.ObjectSchema(map[string]any{"mode": map[string]any{"type": "string", "enum": []string{"readwrite", "readonly"}}}),
 		Description: "Switch the workspace between readwrite (default) and readonly. In readonly mode write/edit/bash calls are rejected; the tools stay declared.",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"mode": map[string]any{"type": "string", "enum": []any{ModeNameReadWrite, ModeNameReadOnly}, "description": "Target mode."},

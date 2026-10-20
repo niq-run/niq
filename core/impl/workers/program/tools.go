@@ -92,7 +92,8 @@ func (w *Worker) registerExtensions() {
 	})
 
 	w.Register(baseworker.Extension{
-		Event: TypeRun,
+		Event:    TypeRun,
+		Response: baseworker.StringSchema("the script's result text, followed by a \"--- script log ---\" section when it logged; capped at 20KB (head + tail)"),
 		Description: "Run a fresh, stateless JAVASCRIPT snippet in an isolated sandbox and return its result. Two modes, exactly one: " +
 			"path = run a stored script program (path is its entry content, e.g. \"ptc-report\"; find candidates with program__search, read source with program__load), " +
 			"or source = run inline code (ad-hoc, nothing persisted). " +
@@ -146,6 +147,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeEdit,
+		Response:    baseworker.StringSchema("confirmation"),
 		Description: "Edit a program's content with an atomic find-and-replace. Cannot edit locked programs.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -172,6 +174,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeUpsert,
+		Response:    baseworker.StringSchema("confirmation"),
 		Description: "Create a program, or update an existing one's metadata (content_type, description, tags). Omit a field to leave it as it is; only 'name' is required when updating. This never touches content — write content with the write tool, change it in place with edit. Cannot modify locked programs.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -204,6 +207,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeWrite,
+		Response:    baseworker.StringSchema("confirmation"),
 		Description: "Replace a program's content outright. '{program_name}' replaces the entry content; '{program_name}/rules/go.md' replaces a sub-content (creating the file if absent). The program must exist — create it with upsert first. For small in-place changes prefer edit. Cannot write to locked programs.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -226,6 +230,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeDelete,
+		Response:    baseworker.StringSchema("confirmation"),
 		Description: "Delete a program and all its contents, or a single content file. Cannot delete locked programs.",
 		Parameters: map[string]any{
 			"type": "object",

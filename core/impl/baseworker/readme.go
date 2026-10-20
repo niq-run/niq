@@ -26,6 +26,7 @@ import (
 func (w *BaseWorker) RegisterReadme(description string, text func() string, params map[string]any) {
 	w.Register(Extension{
 		Event:       event.TypeWorkerReadme,
+		Response:    StringSchema("the worker's self-description (its readme text)"),
 		Description: description,
 		Parameters: map[string]any{
 			"type":       "object",

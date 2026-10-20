@@ -255,3 +255,27 @@ func TestMetaRotateEchoesToolCallID(t *testing.T) {
 }
 
 func (p *rotateFlowProvider) ListModels(context.Context) ([]llm.ModelInfo, error) { return nil, nil }
+
+// TestDefaultToolsDeclareResponse verifies the reason toolkit's own generated
+// tools describe their reply as well: the model sees them every round, and a
+// PTC script can reach them through request, so an undeclared reply there would
+// be the blind spot peer tools no longer have.
+func TestDefaultToolsDeclareResponse(t *testing.T) {
+	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
+	want := []event.EventType{
+		reasonBase.TypeMessage, reasonBase.TypeRequest, reasonBase.TypeContextCompress,
+		TypeProgramQuery, TypeProgramUpdate,
+	}
+	have := map[event.EventType]bool{}
+	for _, e := range w.WatchEntries(true) {
+		ev, _ := e["event"].(string)
+		if _, ok := e["response"]; ok {
+			have[event.EventType(ev)] = true
+		}
+	}
+	for _, ev := range want {
+		if !have[ev] {
+			t.Errorf("%s does not declare a response schema", ev)
+		}
+	}
+}
