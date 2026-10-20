@@ -24,16 +24,16 @@ func TestUnregisterRemovesExtensions(t *testing.T) {
 	}
 }
 
-// TestWatchEntriesCarriesReturns verifies the declared reply shape rides the
+// TestWatchEntriesCarriesResponse verifies the declared reply shape rides the
 // advertised contract (it is how peers, the directory roster and PTC scripts
 // learn what a capability returns).
-func TestWatchEntriesCarriesReturns(t *testing.T) {
+func TestWatchEntriesCarriesResponse(t *testing.T) {
 	w := NewBaseWorker("w1", nil)
 	w.Register(Extension{
 		Event:       "typed",
 		Description: "returns a typed reply",
 		Parameters:  map[string]any{"type": "object"},
-		Returns:     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		Response:    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 	}, func(event.Event) {})
 	w.Register(Extension{Event: "plain", Description: "no schema"}, func(event.Event) {})
 
@@ -43,11 +43,11 @@ func TestWatchEntriesCarriesReturns(t *testing.T) {
 		ev, _ := e["event"].(string)
 		byEvent[ev] = e
 	}
-	got, ok := byEvent["typed"]["returns"].(map[string]any)
+	got, ok := byEvent["typed"]["response"].(map[string]any)
 	if !ok || got["type"] != "array" {
-		t.Fatalf("typed.returns = %#v, want the declared schema", byEvent["typed"]["returns"])
+		t.Fatalf("typed.response = %#v, want the declared schema", byEvent["typed"]["response"])
 	}
-	if _, present := byEvent["plain"]["returns"]; present {
-		t.Fatal("a capability without Returns must not advertise one")
+	if _, present := byEvent["plain"]["response"]; present {
+		t.Fatal("a capability without a Response must not advertise one")
 	}
 }

@@ -35,7 +35,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event: TypeSearch,
-		Returns: map[string]any{
+		Response: map[string]any{
 			"type": "array",
 			"items": map[string]any{
 				"type": "object",
@@ -74,7 +74,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeLoad,
-		Returns:     map[string]any{"type": "string", "description": "the content body (frontmatter stripped)"},
+		Response:    map[string]any{"type": "string", "description": "the content body (frontmatter stripped)"},
 		Description: "Load a program's content by its path. '{program_name}' loads the program's entry content; '{program_name}/path/to/file.md' loads one of its sub-contents.",
 		Parameters: map[string]any{
 			"type": "object",

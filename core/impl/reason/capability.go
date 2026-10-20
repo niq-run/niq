@@ -38,11 +38,12 @@ type DiscoveredCapability struct {
 	Event       event.EventType // the extension's own event type (send_message, context.compress, ...)
 	Description string
 	Parameters  map[string]any
-	// Returns is the declared shape of a successful reply (JSON Schema), when the
-	// declaring worker published one. Carried so the model can plan how to parse
-	// a result before calling — essential in PTC mode, where a script's logic
-	// depends on the expected output.
-	Returns map[string]any
+	// Response is the declared shape of the reply (JSON Schema), when the
+	// declaring worker published one — the response half of the request/response
+	// pair. Carried so the model can plan how to parse a result before calling:
+	// essential in PTC mode, where a script's logic depends on the expected
+	// output.
+	Response map[string]any
 }
 
 // discoveredCapabilities returns the unified capability universe: every
@@ -102,7 +103,7 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 		dc := DiscoveredCapability{Source: workerID, Event: event.EventType(typ)}
 		dc.Description, _ = e["desc"].(string)
 		dc.Parameters, _ = e["parameters"].(map[string]any)
-		dc.Returns, _ = e["returns"].(map[string]any)
+		dc.Response, _ = e["response"].(map[string]any)
 		w.discovered = append(w.discovered, dc)
 	}
 	if len(watch) > 0 {
@@ -341,7 +342,7 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 	for _, cap := range caps {
 		defs = append(defs, llm.ToolDef{
 			Name:        toolNameOfCapability(w, cap),
-			Description: withReturnsHint(cap.Description, cap.Returns),
+			Description: withResponseHint(cap.Description, cap.Response),
 			Parameters:  cap.Parameters,
 		})
 	}
@@ -353,32 +354,32 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 	return defs
 }
 
-// returnsHintMaxBytes caps the schema text appended to a tool description. The
+// responseHintMaxBytes caps the schema text appended to a tool description. The
 // hint is there to tell the model what shape to expect, not to be a full
 // reference: an enormous schema would bloat every request's tool list, and the
 // authoritative copy is the directory worker's get_worker_info.
-const returnsHintMaxBytes = 600
+const responseHintMaxBytes = 600
 
-// withReturnsHint appends the declared reply shape to a tool description, so the
-// model knows what it will get back. Tool definitions have no output-schema
+// withResponseHint appends the declared reply shape to a tool description, so the
+// model knows what it will get back. Tool definitions have no response-schema
 // field in the function-calling APIs, so the description is where it goes;
 // capabilities that declare nothing keep their description untouched.
-func withReturnsHint(desc string, returns map[string]any) string {
-	if len(returns) == 0 {
+func withResponseHint(desc string, response map[string]any) string {
+	if len(response) == 0 {
 		return desc
 	}
-	b, err := json.Marshal(returns)
+	b, err := json.Marshal(response)
 	if err != nil {
 		return desc
 	}
 	hint := string(b)
-	if len(hint) > returnsHintMaxBytes {
-		hint = hint[:returnsHintMaxBytes] + "…"
+	if len(hint) > responseHintMaxBytes {
+		hint = hint[:responseHintMaxBytes] + "…"
 	}
 	if desc == "" {
-		return "Returns (JSON Schema): " + hint
+		return "Response (JSON Schema): " + hint
 	}
-	return desc + "\n\nReturns (JSON Schema): " + hint
+	return desc + "\n\nResponse (JSON Schema): " + hint
 }
 
 // DefaultToolListBuilder is the default ToolListBuilder policy (all discovered

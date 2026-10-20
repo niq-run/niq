@@ -216,7 +216,7 @@ func (w *DirectoryWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event: TypeListWorkers,
-		Returns: obj(map[string]any{
+		Response: obj(map[string]any{
 			"type": "array",
 			"items": obj(map[string]any{
 				"worker_id": map[string]any{"type": "string"},
@@ -232,7 +232,7 @@ func (w *DirectoryWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event: TypeGetWorkerInfo,
-		Returns: obj(map[string]any{
+		Response: obj(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"worker_id": map[string]any{"type": "string"},
@@ -242,7 +242,7 @@ func (w *DirectoryWorker) registerExtensions() {
 						"event":      map[string]any{"type": "string"},
 						"desc":       map[string]any{"type": "string"},
 						"parameters": map[string]any{"type": "object"},
-						"returns":    map[string]any{"type": "object"},
+						"response":   map[string]any{"type": "object"},
 					})},
 				"publishes": map[string]any{"type": "array"},
 			},
@@ -259,7 +259,7 @@ func (w *DirectoryWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event: TypeSearchWorkers,
-		Returns: obj(map[string]any{
+		Response: obj(map[string]any{
 			"type": "array",
 			"items": obj(map[string]any{
 				"worker_id": map[string]any{"type": "string"},

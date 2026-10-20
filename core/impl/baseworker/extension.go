@@ -45,16 +45,17 @@ type Extension struct {
 
 	Description string
 	Parameters  map[string]any
-	// Returns describes the SHAPE of a successful reply (a JSON Schema object),
-	// when the capability has one. Documentation only: results travel as text in
-	// request.completed and nothing validates them. It exists so an agent can
-	// plan how to parse a reply BEFORE calling — which is what makes a PTC
-	// script writable in one shot — and it rides the advertised contract
+	// Response describes the SHAPE of the reply (a JSON Schema object), when the
+	// capability has one — the response half of the request/response pair, where
+	// Parameters describes the request. Documentation only: replies travel as
+	// text in request.completed and nothing validates them. It exists so an
+	// agent can plan how to parse a reply BEFORE calling — which is what makes a
+	// PTC script writable in one shot — and it rides the advertised contract
 	// (WatchEntries -> worker.ready -> the directory worker's roster).
 	//
 	// Optional: a capability whose reply is prose leaves this nil. A structured
 	// reply (a JSON list, an object with fixed keys) should declare it.
-	Returns map[string]any
+	Response map[string]any
 }
 
 // ExtensionHandler executes when the registered event arrives on the bus.
@@ -165,8 +166,8 @@ func (w *BaseWorker) WatchEntries(includeSelfOnly bool) []map[string]any {
 		if len(e.Parameters) > 0 {
 			entry["parameters"] = e.Parameters
 		}
-		if len(e.Returns) > 0 {
-			entry["returns"] = e.Returns
+		if len(e.Response) > 0 {
+			entry["response"] = e.Response
 		}
 		out = append(out, entry)
 	}

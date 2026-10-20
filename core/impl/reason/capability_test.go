@@ -222,11 +222,11 @@ func TestPeerToolDispatchable(t *testing.T) {
 	}
 }
 
-// TestReadyReturnsReachTheToolList verifies a peer's declared reply shape is
+// TestReadyResponseReachesTheToolList verifies a peer's declared reply shape is
 // learned from worker.ready and surfaces in the LLM tool description, so the
 // model knows what a call will return before making it (the basis of PTC: a
 // script is written against an expected output).
-func TestReadyReturnsReachTheToolList(t *testing.T) {
+func TestReadyResponseReachesTheToolList(t *testing.T) {
 	w, _ := newTestWorker2()
 
 	evt := event.New(event.TypeWorkerReady, "mcp", map[string]any{
@@ -238,7 +238,7 @@ func TestReadyReturnsReachTheToolList(t *testing.T) {
 			"parameters": map[string]any{
 				"type": "object",
 			},
-			"returns": map[string]any{
+			"response": map[string]any{
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
 			},
@@ -256,8 +256,8 @@ func TestReadyReturnsReachTheToolList(t *testing.T) {
 	if found == nil {
 		t.Fatal("capability not discovered")
 	}
-	if found.Returns == nil || found.Returns["type"] != "array" {
-		t.Fatalf("Returns = %#v, want the declared schema", found.Returns)
+	if found.Response == nil || found.Response["type"] != "array" {
+		t.Fatalf("Response = %#v, want the declared schema", found.Response)
 	}
 
 	var def *llm.ToolDef
@@ -270,20 +270,20 @@ func TestReadyReturnsReachTheToolList(t *testing.T) {
 	if def == nil {
 		t.Fatal("mcp__search missing from the tool list")
 	}
-	if !strings.Contains(def.Description, "Returns (JSON Schema)") || !strings.Contains(def.Description, `"type":"array"`) {
+	if !strings.Contains(def.Description, "Response (JSON Schema)") || !strings.Contains(def.Description, `"type":"array"`) {
 		t.Fatalf("description = %q, want the returns hint", def.Description)
 	}
 }
 
-// TestReturnsHintIsCapped verifies a huge declared schema cannot bloat every
+// TestResponseHintIsCapped verifies a huge declared schema cannot bloat every
 // request's tool list.
-func TestReturnsHintIsCapped(t *testing.T) {
-	big := map[string]any{"type": "object", "description": strings.Repeat("x", returnsHintMaxBytes*2)}
-	hint := withReturnsHint("desc", big)
-	if len(hint) > returnsHintMaxBytes+100 {
-		t.Fatalf("hint length %d, want it capped near %d", len(hint), returnsHintMaxBytes)
+func TestResponseHintIsCapped(t *testing.T) {
+	big := map[string]any{"type": "object", "description": strings.Repeat("x", responseHintMaxBytes*2)}
+	hint := withResponseHint("desc", big)
+	if len(hint) > responseHintMaxBytes+100 {
+		t.Fatalf("hint length %d, want it capped near %d", len(hint), responseHintMaxBytes)
 	}
-	if withReturnsHint("desc", nil) != "desc" {
-		t.Fatal("no Returns must leave the description untouched")
+	if withResponseHint("desc", nil) != "desc" {
+		t.Fatal("no Response must leave the description untouched")
 	}
 }

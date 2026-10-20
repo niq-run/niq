@@ -395,7 +395,7 @@ func TestRemoveSignalsDurableChange(t *testing.T) {
 }
 
 // TestReadyToolsCarryOutputSchema verifies MCP structured output is republished
-// as the capability's Returns, so peers (and the directory roster) can see the
+// as the capability's Response, so peers (and the directory roster) can see the
 // result shape before calling — without it a PTC script cannot be planned.
 func TestReadyToolsCarryOutputSchema(t *testing.T) {
 	w := New(WorkerConfig{ID: "mcp", Bus: channel{}, Expose: ExposeReady})
@@ -418,12 +418,12 @@ func TestReadyToolsCarryOutputSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("typed tool not exposed; events: %v", byEvent)
 	}
-	ret, ok := typed["returns"].(map[string]any)
+	ret, ok := typed["response"].(map[string]any)
 	if !ok || ret["type"] != "object" {
-		t.Fatalf("typed.returns = %#v, want the declared output schema", typed["returns"])
+		t.Fatalf("typed.response = %#v, want the declared output schema", typed["response"])
 	}
-	if _, present := byEvent[string(toolEventName("srv", "plain"))]["returns"]; present {
-		t.Fatal("a tool without outputSchema must not advertise returns")
+	if _, present := byEvent[string(toolEventName("srv", "plain"))]["response"]; present {
+		t.Fatal("a tool without outputSchema must not advertise a response schema")
 	}
 }
 

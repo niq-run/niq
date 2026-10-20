@@ -17,8 +17,9 @@ type toolInfo struct {
 	Schema      any
 	// OutputSchema is the remote tool's declared result shape (MCP structured
 	// output). Kept verbatim so it can be republished as the capability's
-	// Returns — an agent needs it to know how to parse a call's result, and in
-	// PTC mode a script cannot be written without it.
+	// Response — the reply half of request/response. An agent needs it to know
+	// how to parse a call's result, and in PTC mode a script cannot be written
+	// without it.
 	OutputSchema any
 }
 

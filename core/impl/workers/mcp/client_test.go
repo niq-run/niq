@@ -41,7 +41,7 @@ func newTestMCPServer(t *testing.T, requireAuth string) *httptest.Server {
 			"text": map[string]any{"type": "string"},
 		}},
 		// structured output: the result shape a caller can plan against, and
-		// what the worker republishes as the capability's Returns.
+		// what the worker republishes as the capability's Response.
 		OutputSchema: map[string]any{"type": "object", "properties": map[string]any{
 			"echoed": map[string]any{"type": "string"},
 		}},
@@ -85,7 +85,7 @@ func TestServerClientListAndCall(t *testing.T) {
 		t.Fatalf("tools = %+v", tools)
 	}
 	// The declared output schema must survive the projection: it becomes the
-	// capability's Returns, which is how an agent (or a PTC script) knows what
+	// capability's Response, which is how an agent (or a PTC script) knows what
 	// shape to expect back.
 	if out, ok := tools[0].OutputSchema.(map[string]any); !ok || out["type"] != "object" {
 		t.Fatalf("OutputSchema = %#v, want the declared schema", tools[0].OutputSchema)
