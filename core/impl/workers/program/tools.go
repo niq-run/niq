@@ -2,7 +2,6 @@ package program
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 
@@ -296,13 +295,7 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 		results[i] = item
 	}
 
-	b, err := json.Marshal(results)
-	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("marshal error: %v", err), tc.TraceID)
-		return
-	}
-
-	w.ReplyCompleted(tc.CallerID, tc.CallID, string(b), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, results, tc.TraceID)
 	log.Printf("[program] search query=%q ct=%q → %d results", query, ctStr, len(results))
 }
 

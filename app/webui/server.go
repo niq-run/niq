@@ -538,7 +538,7 @@ type searchResultItem struct {
 }
 
 func (s *Server) parseProgramSearch(evt event.Event, out *[]ProgramSummary) {
-	if res, _ := evt.Payload["result"].(string); res != "" {
+	if res := replyResultText(evt); res != "" {
 		var items []searchResultItem
 		if err := json.Unmarshal([]byte(res), &items); err == nil {
 			for _, it := range items {
@@ -591,7 +591,7 @@ func (s *Server) handleGetProgram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var items []searchResultItem
-	if res, _ := searchReply.Payload["result"].(string); res != "" {
+	if res := replyResultText(searchReply); res != "" {
 		_ = json.Unmarshal([]byte(res), &items)
 	}
 	var found *searchResultItem
@@ -625,7 +625,7 @@ func (s *Server) handleGetProgram(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, programErrStatus(msg))
 		return
 	}
-	if body, _ := loadReply.Payload["result"].(string); body != "" {
+	if body := replyResultText(loadReply); body != "" {
 		out.Body = body
 	}
 	if out.Contents == nil {
@@ -666,7 +666,7 @@ func (s *Server) handleGetProgramContent(w http.ResponseWriter, r *http.Request)
 		http.Error(w, msg, programErrStatus(msg))
 		return
 	}
-	body, _ := reply.Payload["result"].(string)
+	body := replyResultText(reply)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ProgramContent{Name: path, Body: body})
 }
@@ -1289,6 +1289,14 @@ const askTimeout = 20 * time.Second
 // events addressed to a worker that is not connected — so callers must
 // pre-check that the worker is online (see workerOnline) or they would sit here
 // until the timeout for a worker that will never answer.
+// replyResultText renders a request.completed "result" as text: strings
+// verbatim, structured values (the bus now carries replies as JSON, not as
+// pre-encoded strings) as their JSON. Callers that only need the text keep
+// working, and they no longer have to care which shape the worker sent.
+func replyResultText(evt event.Event) string {
+	return event.ReplyResult(evt.Payload)
+}
+
 func (s *Server) ask(ctx context.Context, target string, evt event.Event, want ...event.EventType) (event.Event, error) {
 	traceID, _ := uuid.NewV7() // only fails if crypto/rand fails
 	tid := traceID.String()
@@ -1404,7 +1412,7 @@ func (s *Server) handleWorkerProviders(w http.ResponseWriter, r *http.Request) {
 	// handleStatusQuery). Parse defensively: a shape change there must not
 	// 500 the UI.
 	out := providerListResult{}
-	if res, _ := reply.Payload["result"].(string); res != "" {
+	if res := replyResultText(reply); res != "" {
 		var structured providerListResult
 		if err := json.Unmarshal([]byte(res), &structured); err == nil {
 			out = structured
@@ -1475,7 +1483,7 @@ type mountListResult struct {
 // workspace worker marshals) into out. Parse defensively: a shape change in
 // the worker must not 500 the UI.
 func parseMountResult(reply event.Event, out *mountListResult) {
-	if res, _ := reply.Payload["result"].(string); res != "" {
+	if res := replyResultText(reply); res != "" {
 		var structured mountListResult
 		if err := json.Unmarshal([]byte(res), &structured); err == nil {
 			*out = structured

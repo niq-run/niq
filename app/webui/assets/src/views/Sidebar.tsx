@@ -829,7 +829,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           above it, so it reads as a distinct region in every mode. */}
       <div style={{ flexShrink: 0, margin: '16px -' + edgePadX + 'px 0', padding: '16px ' + contentPadX + 'px 0', borderTop: '1px solid ' + colors.border, display: 'flex', alignItems: 'center', gap: 12 }}>
         {mode === 'project' && project && (
-          <div style={{ flex: 1, minWidth: 0, position: 'relative', alignSelf: 'stretch', display: 'flex' }}>
+          <div style={{ flex: 1, minWidth: 0, position: 'relative', alignSelf: 'stretch', display: 'flex',
+            // The trigger below draws its own 1px border + 8px horizontal padding,
+            // which would inset the project NAME ~9px past the options' text line
+            // above. Shift the whole block left by exactly that inset so the text
+            // — not the hover outline — lines up with the items above, idle and on
+            // hover alike (the border is always laid out, just transparent at rest).
+            marginLeft: -9 }}>
             <div
               onClick={(e) => {
                 e.stopPropagation()

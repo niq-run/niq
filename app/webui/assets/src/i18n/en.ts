@@ -22,7 +22,7 @@ export const en = {
   'sidebar.tagFilter.none': 'no tags',
   'sidebar.tagFilter.tooltip.idle': 'filter workers by tag',
   'sidebar.tagFilter.tooltip.active': 'tag filter active — click to change',
-  'sidebar.viewSettings': 'View Settings',
+  'sidebar.viewSettings': 'Talk View Settings',
   'sidebar.projects': 'Projects',
   'sidebar.resources': 'Resources',
   'sidebar.programs': 'Programs',

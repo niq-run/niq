@@ -562,8 +562,7 @@ func (w *Worker) handleLocalUnset(evt event.Event) {
 func (w *Worker) handleGet(evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	l, r := w.bindings()
-	data, _ := json.Marshal(bindingState{Local: l, Remote: r})
-	w.ReplyCompleted(tc.CallerID, tc.CallID, string(data), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, map[string]any{"local": l, "remote": r}, tc.TraceID)
 }
 
 // statusState is the live bridge status served by niw.status.
@@ -636,8 +635,7 @@ func (w *Worker) handleStatus(evt event.Event) {
 		LocalRecipient:  l,
 		RemoteRecipient: r,
 	}
-	data, _ := json.Marshal(st)
-	w.ReplyCompleted(tc.CallerID, tc.CallID, string(data), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, st, tc.TraceID)
 }
 
 // ── Control events — remote channel ──

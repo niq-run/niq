@@ -14,7 +14,6 @@
 package reason
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -222,13 +221,8 @@ func (w *BaseReasonWorker) handleStatusQuery(evt event.Event) {
 			fmt.Sprintf("unknown provider query event: %q", evt.Type), evt.TraceID)
 		return
 	}
-	b, err := json.Marshal(snapshot)
-	if err != nil {
-		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
-		return
-	}
 	// Read-only query: its result is transient, not durable history.
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, string(b), evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, snapshot, evt.TraceID)
 	log.Printf("[reason %s] provider query %s", w.ID(), evt.Type)
 }
 

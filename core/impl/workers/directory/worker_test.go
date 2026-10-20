@@ -29,13 +29,28 @@ func (s *stubChannel) Receive(context.Context) (<-chan event.Event, error) {
 }
 func (s *stubChannel) Close() error { return nil }
 
+// result renders the last completed reply as JSON text. A structured reply
+// carries its value directly (the worker no longer pre-encodes it), so both
+// shapes are normalized here for assertions.
 func (s *stubChannel) result() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := len(s.sent) - 1; i >= 0; i-- {
-		if s.sent[i].Type == event.TypeRequestCompleted {
-			return s.sent[i].Payload["result"].(string)
+		if s.sent[i].Type != event.TypeRequestCompleted {
+			continue
 		}
+		v, ok := s.sent[i].Payload["result"]
+		if !ok {
+			return ""
+		}
+		if str, ok := v.(string); ok {
+			return str
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
 	}
 	return ""
 }

@@ -64,7 +64,7 @@ func lastResult(t *testing.T, ch *stubChannel) string {
 	var last string
 	for _, r := range ch.replies() {
 		if r.Type == event.TypeRequestCompleted {
-			last = r.Payload["result"].(string)
+			last = event.ReplyResult(r.Payload)
 		}
 	}
 	if last == "" {

@@ -9,7 +9,6 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"os"
@@ -99,7 +98,7 @@ func (w *WorkspaceWorker) handleMountAdd(evt event.Event) {
 	}
 	log.Printf("[workspace %s] mounted %s", w.ID(), added)
 	w.NotifyDurableChange()
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshotJSON(added, mm), evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshot(added, mm), evt.TraceID)
 }
 
 // requestMountApproval parks a non-approver's mount.add behind the approver's
@@ -156,7 +155,7 @@ func (w *WorkspaceWorker) handleMountRemove(evt event.Event) {
 				log.Printf("[workspace %s] unmounted %s", w.ID(), path)
 				w.NotifyDurableChange()
 			}
-			w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshotJSON("", mm), evt.TraceID)
+			w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshot("", mm), evt.TraceID)
 			return
 		}
 	}
@@ -174,7 +173,7 @@ func (w *WorkspaceWorker) handleMountList(evt event.Event) {
 		return
 	}
 	// Read-only query: its result is transient, not durable history.
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshotJSON("", mm), evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshot("", mm), evt.TraceID)
 }
 
 // mountManager probes the backend for the MountManager interface.
@@ -189,7 +188,9 @@ func (w *WorkspaceWorker) mountManager() (MountManager, error) {
 // mountSnapshotJSON renders the mount list (plus the just-added path when
 // non-empty) as the reply result. Only string values and []string travel in
 // the snapshot, so marshalling cannot fail.
-func mountSnapshotJSON(added string, mm MountManager) string {
+// mountSnapshot is the reply value of the mount tools: the full mount list plus
+// the primary mount, and (for add) the directory just mounted.
+func mountSnapshot(added string, mm MountManager) map[string]any {
 	mounts := mm.Mounts()
 	snapshot := map[string]any{"mounts": mounts}
 	if added != "" {
@@ -198,6 +199,5 @@ func mountSnapshotJSON(added string, mm MountManager) string {
 	if len(mounts) > 0 {
 		snapshot["primary"] = mounts[0]
 	}
-	b, _ := json.Marshal(snapshot)
-	return string(b)
+	return snapshot
 }

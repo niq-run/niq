@@ -324,7 +324,7 @@ func TestStatusQueryProviders(t *testing.T) {
 		Providers []map[string]any `json:"providers"`
 		Current   map[string]any   `json:"current"`
 	}
-	res, _ := s.Payload["result"].(string)
+	res := event.ReplyResult(s.Payload)
 	if err := json.Unmarshal([]byte(res), &snapshot); err != nil {
 		t.Fatalf("status result is not valid JSON: %v (result=%q)", err, res)
 	}
@@ -355,12 +355,12 @@ func TestStatusQueryCurrent(t *testing.T) {
 		t.Fatal("expected a request.completed snapshot")
 	}
 	s := statuses[len(statuses)-1]
-	// The snapshot travels as a JSON string in the reply's "result" field.
+	// The snapshot travels as the reply's structured "result" value.
 	var current struct {
 		Provider string `json:"provider"`
 		Model    string `json:"model"`
 	}
-	res, _ := s.Payload["result"].(string)
+	res := event.ReplyResult(s.Payload)
 	if err := json.Unmarshal([]byte(res), &current); err != nil {
 		t.Fatalf("current result is not valid JSON: %v (result=%q)", err, res)
 	}

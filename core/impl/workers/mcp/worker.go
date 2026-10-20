@@ -334,8 +334,7 @@ func (w *Worker) handleServerList(evt event.Event) {
 			"tools":    len(w.tools[sc.Name]),
 		})
 	}
-	b, _ := json.Marshal(list)
-	w.reply(tc, string(b), "")
+	w.replyValue(tc, list)
 }
 
 // mcpReadme is the agent-facing usage guide returned by worker.readme: the
@@ -452,8 +451,7 @@ func (w *Worker) handleToolList(evt event.Event) {
 		}
 		list = append(list, entry)
 	}
-	b, _ := json.Marshal(list)
-	w.reply(tc, string(b), "")
+	w.replyValue(tc, list)
 }
 
 func (w *Worker) handleToolCall(evt event.Event) {
@@ -854,6 +852,12 @@ func (w *Worker) reply(tc baseworker.ToolCall, result, errStr string) {
 		return
 	}
 	w.ReplyCompleted(tc.CallerID, tc.CallID, result, tc.TraceID)
+}
+
+// replyValue answers with a structured value (a list of servers/tools) so it
+// travels as real JSON instead of a pre-encoded string.
+func (w *Worker) replyValue(tc baseworker.ToolCall, value any) {
+	w.ReplyCompleted(tc.CallerID, tc.CallID, value, tc.TraceID)
 }
 
 func serverFromArgs(args map[string]any) (ServerConfig, error) {

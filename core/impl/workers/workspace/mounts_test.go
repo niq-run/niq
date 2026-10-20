@@ -170,7 +170,7 @@ func TestHandleMountAddAndList(t *testing.T) {
 		Added  string   `json:"added"`
 		Mounts []string `json:"mounts"`
 	}
-	if err := json.Unmarshal([]byte(ch.sent[len(ch.sent)-1].Payload["result"].(string)), &addReply); err != nil {
+	if err := json.Unmarshal([]byte(event.ReplyResult(ch.sent[len(ch.sent)-1].Payload)), &addReply); err != nil {
 		t.Fatalf("parse add reply: %v", err)
 	}
 	if addReply.Added != extra || len(addReply.Mounts) != 2 {
@@ -184,7 +184,7 @@ func TestHandleMountAddAndList(t *testing.T) {
 	var listReply struct {
 		Mounts []string `json:"mounts"`
 	}
-	if err := json.Unmarshal([]byte(ch.sent[len(ch.sent)-1].Payload["result"].(string)), &listReply); err != nil {
+	if err := json.Unmarshal([]byte(event.ReplyResult(ch.sent[len(ch.sent)-1].Payload)), &listReply); err != nil {
 		t.Fatalf("parse list reply: %v", err)
 	}
 	if len(listReply.Mounts) != 2 || listReply.Mounts[0] != primary || listReply.Mounts[1] != extra {

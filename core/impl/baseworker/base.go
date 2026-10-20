@@ -11,6 +11,7 @@ package baseworker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -103,18 +104,18 @@ func ParseToolCall(evt event.Event) ToolCall {
 // ReplyCompleted answers a request caller with a request.completed result,
 // echoing the request's id and propagating the trace ID.
 //
-// result is a neutral, JSON-serializable value. A string becomes the traditional
-// {"result": …} payload; a map[string]any is used as the payload directly so a
-// tool can return a structured multi-modal payload (e.g. the `{content:[…]}`
-// shape the reason worker decodes into llm content blocks); any other value is
-// serialized into a "result" string for lossless forwarding.
+// The payload is ALWAYS {"result": value}, and value keeps its type: a string
+// reply stays a string, a structured reply (an object, an array, a number) stays
+// structured JSON. Callers render it as they need — a reason worker puts the text
+// into its transcript (JSON-encoding a structured value), a script receives the
+// text or the JSON. Tools that used to json.Marshal a reply and send the string
+// should pass the value instead, so consumers do not have to double-parse.
+//
+// Content-block replies (a multi-modal result the reason worker decodes into llm
+// blocks) are NOT a "result" value: those use ReplyPayload, which sends the
+// payload verbatim.
 func (w *BaseWorker) ReplyCompleted(callerID, callID string, result any, traceID string) {
-	payload := map[string]any{"result": result}
-	if m, ok := result.(map[string]any); ok {
-		payload = m
-	} else if _, ok := result.(string); !ok {
-		payload = map[string]any{"result": fmt.Sprintf("%v", result)}
-	}
+	payload := map[string]any{"result": jsonValue(result)}
 	ev := event.New(event.TypeRequestCompleted, w.ID(), payload)
 	ev.RequestId = callID
 	ev.TraceID = traceID
@@ -125,6 +126,35 @@ func (w *BaseWorker) ReplyCompleted(callerID, callID string, result any, traceID
 		log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s result_type=%T",
 			w.ID(), callerID, callID, result)
 	}
+	_ = w.Channel.Send(context.Background(), ev, callerID)
+}
+
+// jsonValue keeps a reply value as-is when it is JSON-encodable, and otherwise
+// falls back to its textual form (so an arbitrary struct or error still reaches
+// the caller instead of failing the reply).
+func jsonValue(v any) any {
+	if _, ok := v.(string); ok {
+		return v
+	}
+	if v == nil {
+		return ""
+	}
+	if _, err := json.Marshal(v); err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return v
+}
+
+// ReplyPayload answers a request caller with a payload sent verbatim, for replies
+// that are not a plain value: today the content-block shape
+// {"content":[{"type":"image",…}]} that the reason worker decodes into llm
+// content blocks. Everything else belongs in ReplyCompleted.
+func (w *BaseWorker) ReplyPayload(callerID, callID string, payload map[string]any, traceID string) {
+	ev := event.New(event.TypeRequestCompleted, w.ID(), payload)
+	ev.RequestId = callID
+	ev.TraceID = traceID
+	log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s payload_keys=%d",
+		w.ID(), callerID, callID, len(payload))
 	_ = w.Channel.Send(context.Background(), ev, callerID)
 }
 

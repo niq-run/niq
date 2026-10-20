@@ -184,7 +184,7 @@ func (w *WorkspaceWorker) handleApprovalDecision(ctx context.Context, evt event.
 		go w.dispatchHandler(ctx, pending.toolCall())
 		return
 	}
-	w.ReplyCompleted(pending.CallerID, pending.CallID, mountSnapshotJSON("", mm), pending.TraceID)
+	w.ReplyCompleted(pending.CallerID, pending.CallID, mountSnapshot("", mm), pending.TraceID)
 }
 
 // parkedApprovals snapshots the pending set for Snapshot.

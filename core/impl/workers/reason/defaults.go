@@ -12,7 +12,6 @@ package reason
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 
@@ -318,14 +317,9 @@ func handleContextOp(w *reasonBase.BaseReasonWorker, evt event.Event, overrideDi
 // (sync.Mutex is not reentrant; locking would self-deadlock the event loop).
 func handleProgramQuery(w *reasonBase.BaseReasonWorker, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
-	b, err := json.Marshal(w.ProgramsLocked())
-	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID,
-			fmt.Sprintf("program.query could not serialize the program list: %v", err), tc.TraceID)
-		return
-	}
-	// Read-only query: its result is transient, not durable history.
-	w.ReplyCompleted(tc.CallerID, tc.CallID, string(b), tc.TraceID)
+	// Read-only query: its result is transient, not durable history. The program
+	// list travels as structured JSON, not a pre-encoded string.
+	w.ReplyCompleted(tc.CallerID, tc.CallID, w.ProgramsLocked(), tc.TraceID)
 }
 
 // handleProgramUpdate serves the program.update tool: add or remove a single

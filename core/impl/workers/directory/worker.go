@@ -14,7 +14,6 @@ package directory
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -342,12 +341,7 @@ func (w *DirectoryWorker) handleListWorkers(evt event.Event, tc baseworker.ToolC
 	}
 	w.dirMu.Unlock()
 
-	b, err := json.Marshal(roster)
-	if err != nil {
-		w.ReplyFailed(evt.WorkerId, tc.CallID, err.Error(), tc.TraceID)
-		return
-	}
-	w.ReplyCompleted(evt.WorkerId, tc.CallID, string(b), tc.TraceID)
+	w.ReplyCompleted(evt.WorkerId, tc.CallID, roster, tc.TraceID)
 	log.Printf("[directory %s] list_workers → %d worker(s)", w.ID(), len(roster))
 }
 
@@ -366,17 +360,12 @@ func (w *DirectoryWorker) handleGetWorkerInfo(evt event.Event, tc baseworker.Too
 			fmt.Sprintf("unknown worker %q — call list_workers to see the known ids", target), tc.TraceID)
 		return
 	}
-	b, err := json.Marshal(map[string]any{
+	w.ReplyCompleted(evt.WorkerId, tc.CallID, map[string]any{
 		"worker_id": target,
 		"type":      rec.Type,
 		"tools":     rec.Watch,
 		"publishes": rec.Publishes,
-	})
-	if err != nil {
-		w.ReplyFailed(evt.WorkerId, tc.CallID, err.Error(), tc.TraceID)
-		return
-	}
-	w.ReplyCompleted(evt.WorkerId, tc.CallID, string(b), tc.TraceID)
+	}, tc.TraceID)
 	log.Printf("[directory %s] get_worker_info → %s", w.ID(), target)
 }
 
@@ -430,16 +419,11 @@ func (w *DirectoryWorker) handleSearchWorkers(evt event.Event, tc baseworker.Too
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
-	b, err := json.Marshal(map[string]any{
+	w.ReplyCompleted(evt.WorkerId, tc.CallID, map[string]any{
 		"query":   query,
 		"total":   total,
 		"workers": hits,
-	})
-	if err != nil {
-		w.ReplyFailed(evt.WorkerId, tc.CallID, err.Error(), tc.TraceID)
-		return
-	}
-	w.ReplyCompleted(evt.WorkerId, tc.CallID, string(b), tc.TraceID)
+	}, tc.TraceID)
 	log.Printf("[directory %s] search_workers %q → %d/%d hit(s)", w.ID(), query, len(hits), total)
 }
 

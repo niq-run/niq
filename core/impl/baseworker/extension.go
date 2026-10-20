@@ -52,17 +52,12 @@ type Extension struct {
 	// which is what makes a PTC script writable in one shot — and it rides the
 	// advertised contract (WatchEntries -> worker.ready -> the directory roster).
 	//
-	// It describes what the CALLER receives, which is one of two wire shapes
-	// (see ReplyCompleted):
-	//
-	//   - text: the payload is {"result": "<text>"} and the text is what the
-	//     caller sees — a reason worker puts it straight into its transcript, a
-	//     script receives it as the call's return value. So a schema like
-	//     {type: object, properties: …} means "the result text is JSON with this
-	//     shape", not "the payload has these keys".
-	//   - structured content: a capability answering with content blocks (e.g.
-	//     workspace.readImg) sends the payload itself, {"content":[…]}, and the
-	//     caller decodes that into blocks.
+	// It describes what the CALLER receives: the value of the reply's "result"
+	// field, which keeps its type (see ReplyCompleted) — a string for a prose
+	// reply, an object/array/number for a structured one. So
+	// {type: object, properties: …} means "result IS an object with these keys".
+	// (A content-block reply is the exception: workspace.readImg uses
+	// ReplyPayload and sends {"content":[…]} verbatim, decoded into llm blocks.)
 	//
 	// Optional: a capability whose reply is prose leaves this nil. A structured
 	// reply (a JSON list, an object with fixed keys) should declare it.

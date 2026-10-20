@@ -526,16 +526,19 @@ func TestCapScriptResultKeepsHeadAndTail(t *testing.T) {
 	}
 }
 
-// TestReplyTextHandlesStructuredPayload verifies the two reply shapes reach a
-// script intact: the {"result": text} envelope yields its text, and a
-// structured payload (workspace.readImg answers {"content":[{type:"image",…}]})
-// is handed over as JSON instead of the empty string an untyped
-// payload["result"].(string) produced.
+// TestReplyTextHandlesStructuredPayload verifies every reply shape reaches a
+// script intact: a text result yields its text, a structured result yields its
+// JSON (not a nested envelope), and a content-block payload (ReplyPayload, e.g.
+// workspace.readImg) yields the payload's JSON instead of the empty string an
+// untyped payload["result"].(string) produced.
 func TestReplyTextHandlesStructuredPayload(t *testing.T) {
 	if got := replyText(map[string]any{"result": "Exit code: 0"}); got != "Exit code: 0" {
 		t.Fatalf("text envelope = %q, want the bare text", got)
 	}
 	structured := map[string]any{"content": []any{map[string]any{"type": "image", "mime": "image/png", "data": "AAA"}}}
+	if got := replyText(map[string]any{"result": map[string]any{"mounts": []any{"/a"}}}); got != `{"mounts":["/a"]}` {
+		t.Fatalf("structured result = %q, want the value's JSON, not the envelope", got)
+	}
 	got := replyText(structured)
 	if !strings.Contains(got, `"type":"image"`) || !strings.Contains(got, `"mime":"image/png"`) {
 		t.Fatalf("structured payload = %q, want its JSON", got)

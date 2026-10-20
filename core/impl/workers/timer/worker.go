@@ -411,12 +411,11 @@ func (w *Worker) handleTickAfter(callID, toolName, callerID string, args map[str
 		ID: callID, CallerID: callerID, TickType: tickType, Purpose: purpose, TraceID: traceID,
 	}, time.Duration(durationMS)*time.Millisecond)
 
-	result, _ := json.Marshal(map[string]any{
+	w.ReplyCompleted(callerID, callID, map[string]any{
 		"tick_type": tickType,
 		"purpose":   purpose,
 		"status":    "scheduled",
-	})
-	w.ReplyCompleted(callerID, callID, string(result), traceID)
+	}, traceID)
 }
 
 // handleInterval schedules a recurring reminder. After an optional first fire
@@ -446,14 +445,13 @@ func (w *Worker) handleInterval(callID, toolName, callerID string, args map[stri
 	w.mu.Unlock()
 	w.NotifyDurableChange()
 
-	result, _ := json.Marshal(map[string]any{
+	w.ReplyCompleted(callerID, callID, map[string]any{
 		"tick_type":   tickType,
 		"purpose":     purpose,
 		"status":      "scheduled",
 		"interval_ms": intervalMS,
 		"fire_at":     first.Format(time.RFC3339),
-	})
-	w.ReplyCompleted(callerID, callID, string(result), traceID)
+	}, traceID)
 }
 
 // parseFireAt reads the absolute trigger time from an "at" argument set. It
@@ -499,13 +497,12 @@ func (w *Worker) handleTickAt(callID, toolName, callerID string, args map[string
 	w.mu.Unlock()
 	w.NotifyDurableChange()
 
-	result, _ := json.Marshal(map[string]any{
+	w.ReplyCompleted(callerID, callID, map[string]any{
 		"tick_type": tickType,
 		"purpose":   purpose,
 		"status":    "scheduled",
 		"fire_at":   fireAt.Format(time.RFC3339),
-	})
-	w.ReplyCompleted(callerID, callID, string(result), traceID)
+	}, traceID)
 }
 
 // listTimers is the wire entry for one pending timer, as returned by the list
@@ -530,8 +527,7 @@ func (w *Worker) handleList(callID, toolName, callerID, traceID string) {
 	}
 	w.mu.Unlock()
 
-	result, _ := json.Marshal(listTimers{Timers: items})
-	w.ReplyCompleted(callerID, callID, string(result), traceID)
+	w.ReplyCompleted(callerID, callID, map[string]any{"timers": items}, traceID)
 }
 
 func (w *Worker) handleCancel(callID, toolName, callerID string, args map[string]any, traceID string) {
@@ -547,7 +543,7 @@ func (w *Worker) handleCancel(callID, toolName, callerID string, args map[string
 
 	if ok {
 		w.NotifyDurableChange()
-		w.ReplyCompleted(callerID, callID, `{"status":"cancelled"}`, traceID)
+		w.ReplyCompleted(callerID, callID, map[string]any{"status": "cancelled"}, traceID)
 	} else {
 		w.ReplyFailed(callerID, callID, "timer not found: "+timerID, traceID)
 	}

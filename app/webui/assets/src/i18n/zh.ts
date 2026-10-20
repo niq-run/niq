@@ -23,7 +23,7 @@ export const zh: Record<StringKey, string> = {
   'sidebar.tagFilter.none': '无标签',
   'sidebar.tagFilter.tooltip.idle': '按标签筛选工作单元',
   'sidebar.tagFilter.tooltip.active': '标签筛选已启用 — 点击修改',
-  'sidebar.viewSettings': '视图设置',
+  'sidebar.viewSettings': '对话视图设置',
   'sidebar.projects': '项目',
   'sidebar.resources': '资源',
   'sidebar.programs': '程序',

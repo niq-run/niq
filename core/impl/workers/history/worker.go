@@ -317,12 +317,7 @@ func (w *Worker) handleList(tc baseworker.ToolCall) {
 	res.Count = len(res.Events)
 	res.Truncated = anyTruncated
 
-	b, err := json.Marshal(res)
-	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("history.list: serialize: %v", err), tc.TraceID)
-		return
-	}
-	w.ReplyCompleted(tc.CallerID, tc.CallID, string(b), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, res, tc.TraceID)
 	log.Printf("[history %s] history.list → %d events (caller=%s)", w.ID(), res.Count, tc.CallerID)
 }
 
@@ -423,12 +418,7 @@ func (w *Worker) handleGet(tc baseworker.ToolCall) {
 
 	// Full, untruncated detail: no trim here, the structured payload is what
 	// the caller came for.
-	b, err := json.Marshal(events)
-	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("history.get: serialize: %v", err), tc.TraceID)
-		return
-	}
-	w.ReplyCompleted(tc.CallerID, tc.CallID, string(b), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, events, tc.TraceID)
 	log.Printf("[history %s] history.get → %d event(s) (caller=%s)", w.ID(), len(events), tc.CallerID)
 }
 

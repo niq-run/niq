@@ -131,19 +131,16 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 // an empty string either: hand it the payload as JSON so nothing is lost
 // silently.
 func replyText(payload map[string]any) string {
-	if s, ok := payload["result"].(string); ok {
-		return s
+	if _, ok := payload["result"]; ok {
+		return event.ReplyResult(payload)
 	}
-	if v, ok := payload["result"]; ok && v != nil {
-		if s, ok := v.(fmt.Stringer); ok {
-			return s.String()
-		}
+	// No "result": a content-block reply (ReplyPayload, e.g. workspace.readImg).
+	// A script cannot render an image, but it must not receive an empty string
+	// either — hand it the payload as JSON so nothing disappears silently.
+	if b, err := json.Marshal(payload); err == nil {
+		return string(b)
 	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return ""
-	}
-	return string(b)
+	return ""
 }
 
 // handleRun serves the program.run tool: it resolves the script source from

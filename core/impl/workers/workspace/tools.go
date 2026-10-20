@@ -353,5 +353,13 @@ func (w *WorkspaceWorker) dispatchHandler(ctx context.Context, tc baseworker.Too
 		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
 		return
 	}
+	// A content-block reply (readImg) is not a "result" value: it has to reach the
+	// caller as a payload so a reason worker can decode the image block.
+	if blocks, ok := result.(map[string]any); ok {
+		if _, isContent := blocks["content"]; isContent {
+			w.ReplyPayload(tc.CallerID, tc.CallID, blocks, tc.TraceID)
+			return
+		}
+	}
 	w.ReplyCompleted(tc.CallerID, tc.CallID, result, tc.TraceID)
 }

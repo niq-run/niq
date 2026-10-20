@@ -65,8 +65,14 @@ func firedEvent(t *testing.T, ch *stubChannel, typ string) event.Event {
 	return event.Event{}
 }
 
+// resultMap reads a reply's result as a map. A structured reply arrives as real
+// JSON (the worker passes the value, not a pre-encoded string); a text reply is
+// still parsed, so the helper covers both.
 func resultMap(t *testing.T, evt event.Event) map[string]any {
 	t.Helper()
+	if m, ok := evt.Payload["result"].(map[string]any); ok {
+		return m
+	}
 	s, _ := evt.Payload["result"].(string)
 	if s == "" {
 		t.Fatalf("event %s has no result payload: %+v", evt.Type, evt.Payload)
@@ -295,7 +301,12 @@ func TestListPending(t *testing.T) {
 		t.Fatalf("expected a request.completed reply, got %+v", sent)
 	}
 	res := resultMap(t, sent[0])
-	raw, _ := res["timers"].([]any)
+	// The reply carries Go values now (no JSON round-trip on the producer side),
+	// so normalize the slice the way the wire would.
+	var raw []any
+	if b, err := json.Marshal(res["timers"]); err == nil {
+		_ = json.Unmarshal(b, &raw)
+	}
 	if len(raw) != 2 {
 		t.Fatalf("list returned %d timers, want 2: %s", len(raw), sent[0].Payload["result"])
 	}

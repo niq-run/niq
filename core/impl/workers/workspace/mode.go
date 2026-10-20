@@ -63,7 +63,7 @@ func (w *WorkspaceWorker) handleModeSet(evt event.Event) {
 	w.AnnounceReady("workspace", nil)
 	w.NotifyDurableChange()
 	log.Printf("[workspace %s] mode set to %s", w.ID(), modeName)
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, `{"mode":"`+modeName+`"}`, evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, map[string]any{"mode": modeName}, evt.TraceID)
 }
 
 // modeName renders the current mode for the snapshot.
