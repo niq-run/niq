@@ -34,7 +34,23 @@ func (w *Worker) registerExtensions() {
 		w.readmeText, nil)
 
 	w.Register(baseworker.Extension{
-		Event:       TypeSearch,
+		Event: TypeSearch,
+		Returns: map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":         map[string]any{"type": "string"},
+					"content_type": map[string]any{"type": "string", "enum": []string{"instruction", "playbook"}},
+					"form_type":    map[string]any{"type": "string", "enum": []string{"prompt", "script"}},
+					"description":  map[string]any{"type": "string"},
+					"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"locked":       map[string]any{"type": "boolean"},
+					"path":         map[string]any{"type": "string", "description": "address to load the entry content"},
+					"contents":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				},
+			},
+		},
 		Description: "Search for available programs by name, description, or tag. Returns matching programs with their metadata (name, content_type, description, tags, locked), the root path to load their entry content, and the paths of any sub-contents.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -58,6 +74,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeLoad,
+		Returns:     map[string]any{"type": "string", "description": "the content body (frontmatter stripped)"},
 		Description: "Load a program's content by its path. '{program_name}' loads the program's entry content; '{program_name}/path/to/file.md' loads one of its sub-contents.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -92,6 +109,7 @@ func (w *Worker) registerExtensions() {
 			"a target the directory does not know fails fast with \"unknown worker: <id>\" (the directory worker owns the roster; the program worker asks it). " +
 			"Timing and size: timeout_seconds (default 120) bounds the WHOLE run including every nested call; on expiry the sandbox is killed, in-flight requests are abandoned, and the log collected so far comes back with the error. " +
 			"Result text larger than 20KB is truncated to head + tail. " +
+			"Returns: the script's result text, followed — when the script logged — by a \"--- script log ---\" section (tail-capped). " +
 			"Diagnostics: a script error is reported with the failing line of YOUR source (e.g. \"at script line 3:7: throw new Error(...)\"); " +
 			"use this to execute a whole sequence of tool calls in one shot instead of one reasoning round per call. " +
 			"Provide exactly one of path or source.",

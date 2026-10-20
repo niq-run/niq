@@ -437,7 +437,13 @@ func (w *Worker) handleToolList(evt event.Event) {
 	w.announceIfReady()
 	list := make([]map[string]any, 0, len(info))
 	for _, t := range info {
-		list = append(list, map[string]any{"name": t.Name, "description": t.Description, "schema": t.Schema})
+		entry := map[string]any{"name": t.Name, "description": t.Description, "schema": t.Schema}
+		// The result shape, when the remote server declares one: the caller
+		// needs it to interpret the reply (and a PTC script to parse it).
+		if t.OutputSchema != nil {
+			entry["output_schema"] = t.OutputSchema
+		}
+		list = append(list, entry)
 	}
 	b, _ := json.Marshal(list)
 	w.reply(tc, string(b), "")
@@ -729,11 +735,17 @@ func (w *Worker) setTools(server string, info []toolInfo) {
 			continue
 		}
 		serverName, toolName := server, t.Name
-		w.Register(baseworker.Extension{
+		ext := baseworker.Extension{
 			Event:       evt,
 			Description: firstNonEmpty(t.Description, t.Name),
 			Parameters:  mapToStringSchema(t.Schema),
-		}, func(e event.Event) { w.handleDirectCall(e, serverName, toolName) })
+		}
+		if t.OutputSchema != nil {
+			// Republish the remote tool's declared result shape so peers (and the
+			// directory roster) can see it before calling.
+			ext.Returns = mapToStringSchema(t.OutputSchema)
+		}
+		w.Register(ext, func(e event.Event) { w.handleDirectCall(e, serverName, toolName) })
 		events = append(events, evt)
 	}
 	w.toolEvents[server] = events

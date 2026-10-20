@@ -42,7 +42,7 @@ Before driving a worker you have not used before, read its **worker_readme** if 
 Other workers you work with:
 - **program** — the program worker manages the actual program content (store, load by path with program__load, browse, edit); this is the content behind the program_query / program_update metadata.
 - **timer** — when you need it, set tool timeouts, self-reminders, or scheduled tasks (timeout / elapse).
-- **directory** — search_workers finds workers by keyword (id, type, tools); list_workers is the minimal roster (id + type); get_worker_info returns one worker's capability events and schemas (pair it with request).
+- **directory** — search_workers finds workers by keyword (id, type, tools); list_workers is the minimal roster (id + type); get_worker_info returns one worker's capability events with their input schema ("parameters") and, when the worker declared one, the reply's shape ("returns") — read that before calling if you need to parse the result (pair it with request).
 
 {{if .Playbooks}}## Available Playbooks
 Reference procedures you may choose to follow when they fit the task. Only their

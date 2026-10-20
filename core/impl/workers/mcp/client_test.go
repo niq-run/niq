@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -39,6 +40,11 @@ func newTestMCPServer(t *testing.T, requireAuth string) *httptest.Server {
 		InputSchema: map[string]any{"type": "object", "properties": map[string]any{
 			"text": map[string]any{"type": "string"},
 		}},
+		// structured output: the result shape a caller can plan against, and
+		// what the worker republishes as the capability's Returns.
+		OutputSchema: map[string]any{"type": "object", "properties": map[string]any{
+			"echoed": map[string]any{"type": "string"},
+		}},
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args map[string]any
 		if req.Params != nil {
@@ -46,7 +52,8 @@ func newTestMCPServer(t *testing.T, requireAuth string) *httptest.Server {
 		}
 		text, _ := args["text"].(string)
 		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: "echo: " + text}},
+			Content:           []mcp.Content{&mcp.TextContent{Text: "echo: " + text}},
+			StructuredContent: map[string]any{"echoed": text},
 		}, nil
 	})
 	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
@@ -77,12 +84,19 @@ func TestServerClientListAndCall(t *testing.T) {
 	if len(tools) != 1 || tools[0].Name != "echo" {
 		t.Fatalf("tools = %+v", tools)
 	}
+	// The declared output schema must survive the projection: it becomes the
+	// capability's Returns, which is how an agent (or a PTC script) knows what
+	// shape to expect back.
+	if out, ok := tools[0].OutputSchema.(map[string]any); !ok || out["type"] != "object" {
+		t.Fatalf("OutputSchema = %#v, want the declared schema", tools[0].OutputSchema)
+	}
 	out, err := cl.CallTool(context.Background(), "echo", map[string]any{"text": "hi"})
 	if err != nil {
 		t.Fatalf("call: %v", err)
 	}
-	if out != "echo: hi" {
-		t.Fatalf("call result = %q", out)
+	// Text plus the structured half: the caller parses the JSON tail.
+	if !strings.HasPrefix(out, "echo: hi") || !strings.Contains(out, `"echoed":"hi"`) {
+		t.Fatalf("call result = %q, want the text and its structured content", out)
 	}
 }
 

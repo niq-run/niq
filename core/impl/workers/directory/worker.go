@@ -215,7 +215,14 @@ func (w *DirectoryWorker) registerExtensions() {
 		w.readmeText, w.params)
 
 	w.Register(baseworker.Extension{
-		Event:       TypeListWorkers,
+		Event: TypeListWorkers,
+		Returns: obj(map[string]any{
+			"type": "array",
+			"items": obj(map[string]any{
+				"worker_id": map[string]any{"type": "string"},
+				"type":      map[string]any{"type": "string"},
+			}),
+		}),
 		Description: "List every worker on the bus as a minimal roster: worker_id and type only. It deliberately omits both tool schemas and published events (those are large and belong to get_worker_info) — this is the cheap answer to which workers exist, including peer reason workers and third-party workers that connected directly. Peer reason workers are NOT callable tools (their ready lists events they respond to, not capabilities to invoke) but are reachable as message targets. When you do not know the id, use search_workers; to see one worker's tools/publishes, use get_worker_info.",
 		Parameters:  obj(map[string]any{}),
 	}, func(evt event.Event) {
@@ -224,7 +231,22 @@ func (w *DirectoryWorker) registerExtensions() {
 	})
 
 	w.Register(baseworker.Extension{
-		Event:       TypeGetWorkerInfo,
+		Event: TypeGetWorkerInfo,
+		Returns: obj(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"worker_id": map[string]any{"type": "string"},
+				"type":      map[string]any{"type": "string"},
+				"tools": map[string]any{"type": "array", "description": "each entry: event, desc, parameters (input schema), returns (output schema, when declared)",
+					"items": obj(map[string]any{
+						"event":      map[string]any{"type": "string"},
+						"desc":       map[string]any{"type": "string"},
+						"parameters": map[string]any{"type": "object"},
+						"returns":    map[string]any{"type": "object"},
+					})},
+				"publishes": map[string]any{"type": "array"},
+			},
+		}),
 		Description: "Full details for one worker: its type and the tools it exposes with complete parameter schemas plus published events. Use a worker_id from list_workers or search_workers.",
 		Parameters: obj(map[string]any{
 			"worker": map[string]any{"type": "string",
@@ -237,6 +259,14 @@ func (w *DirectoryWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event: TypeSearchWorkers,
+		Returns: obj(map[string]any{
+			"type": "array",
+			"items": obj(map[string]any{
+				"worker_id": map[string]any{"type": "string"},
+				"type":      map[string]any{"type": "string"},
+				"matches":   map[string]any{"type": "array"},
+			}),
+		}),
 		Description: "Keyword-search the roster by worker id, type, and the tools/events a worker exposes " +
 			"(case-insensitive). Every whitespace-separated term must match somewhere, so " +
 			"\"web search\" narrows more than \"web\". Use it to recall a worker whose exact id you " +

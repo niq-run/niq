@@ -2,6 +2,7 @@ package reason
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/niq-run/niq/core/itfs/event"
@@ -218,5 +219,71 @@ func TestPeerToolDispatchable(t *testing.T) {
 	}
 	if !foundEvt {
 		t.Fatal("expected a remember event to the declaring worker")
+	}
+}
+
+// TestReadyReturnsReachTheToolList verifies a peer's declared reply shape is
+// learned from worker.ready and surfaces in the LLM tool description, so the
+// model knows what a call will return before making it (the basis of PTC: a
+// script is written against an expected output).
+func TestReadyReturnsReachTheToolList(t *testing.T) {
+	w, _ := newTestWorker2()
+
+	evt := event.New(event.TypeWorkerReady, "mcp", map[string]any{
+		"worker_id": "mcp",
+		"type":      "mcp",
+		"watch": []map[string]any{{
+			"event": "search",
+			"desc":  "search things",
+			"parameters": map[string]any{
+				"type": "object",
+			},
+			"returns": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+		}},
+	})
+	w.HandleWorkerReady(evt)
+
+	caps := w.discoveredCapabilities()
+	var found *DiscoveredCapability
+	for i := range caps {
+		if caps[i].Source == "mcp" && caps[i].Event == "search" {
+			found = &caps[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("capability not discovered")
+	}
+	if found.Returns == nil || found.Returns["type"] != "array" {
+		t.Fatalf("Returns = %#v, want the declared schema", found.Returns)
+	}
+
+	var def *llm.ToolDef
+	for _, d := range w.LLMToolDefs() {
+		if d.Name == "mcp__search" {
+			dd := d
+			def = &dd
+		}
+	}
+	if def == nil {
+		t.Fatal("mcp__search missing from the tool list")
+	}
+	if !strings.Contains(def.Description, "Returns (JSON Schema)") || !strings.Contains(def.Description, `"type":"array"`) {
+		t.Fatalf("description = %q, want the returns hint", def.Description)
+	}
+}
+
+// TestReturnsHintIsCapped verifies a huge declared schema cannot bloat every
+// request's tool list.
+func TestReturnsHintIsCapped(t *testing.T) {
+	big := map[string]any{"type": "object", "description": strings.Repeat("x", returnsHintMaxBytes*2)}
+	hint := withReturnsHint("desc", big)
+	if len(hint) > returnsHintMaxBytes+100 {
+		t.Fatalf("hint length %d, want it capped near %d", len(hint), returnsHintMaxBytes)
+	}
+	if withReturnsHint("desc", nil) != "desc" {
+		t.Fatal("no Returns must leave the description untouched")
 	}
 }

@@ -202,7 +202,7 @@ Your tool list holds the directory worker's tools (capability discovery), the %[
 
 **Discover** what other workers offer with the directory worker, called directly as a tool:
 - directory list_workers — the roster of workers;
-- directory get_worker_info { worker: "<id>" } — one worker's capability events, arguments and schemas.
+- directory get_worker_info { worker: "<id>" } — one worker's capability events, each with "parameters" (input schema), "returns" (result shape, when declared) and "desc".
 Discover once up front, then act; avoid re-listing tools you already looked up.
 
 **Execute** by running a JavaScript script with the %[1]s worker's run tool. Two modes:
@@ -210,7 +210,7 @@ Discover once up front, then act; avoid re-listing tools you already looked up.
 - path: store it first (write/upsert) and run it by path to reuse.
 
 The script API (inside the script; the sandbox has no imports, fs or net):
-- await sdk.call(target, event, args) — invoke a capability as a normal request and get its reply TEXT. A tool-level failure comes back as a result, not an exception (bash exiting 3 resolves "Exit code: 3"); only an unknown worker / failed / rejected request throws. Fan out with Promise.all — calls are concurrent.
+- await sdk.call(target, event, args) — invoke a capability as a normal request and get its reply TEXT. Check the target's "returns" in get_worker_info first and write your parse against it (structured results come back as JSON text). A tool-level failure comes back as a result, not an exception (bash exiting 3 resolves "Exit code: 3"); only an unknown worker / failed / rejected request throws. Fan out with Promise.all — calls are concurrent.
 - sdk.result(payload) — string verbatim, other values JSON; last call wins. A top-level return of a payload does the same when sdk.result is never called. With neither, the result is "".
 - sdk.log(text) — comes back to you after the result under "--- script log ---" (tail-capped); use it to trace a long run.
 - sdk.args — the run args object (defaults to {}); read stored scripts' inputs from here.
