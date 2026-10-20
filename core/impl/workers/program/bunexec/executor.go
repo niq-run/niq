@@ -13,15 +13,18 @@
 // ProgramBackend). A remote sandbox (self-hosted or a provider) can be dropped
 // in behind the same interface.
 //
-// Isolation: there is NO OS-level sandbox here. The launcher compiles the
-// script with new Function, which blocks STATIC import syntax, but the process
-// is a normal bun/node process — runtime `await import("node:fs")` and globals
-// like fetch are reachable (verified). The security posture is therefore
-// "application-level contract, not a boundary": a script is expected to reach
-// the world only through sdk.call, and a target allow-list belongs in the proxy
-// (program worker), but a malicious/buggy script is NOT contained. Real
-// containment needs a wrapper command (sandbox-exec / bwrap / container) via
-// Options.Args or a remote execution backend.
+// Trust model: this is an EXECUTION environment, not a security sandbox. It is
+// built to contain ACCIDENTAL misuse — a stray import (static import syntax does
+// not even parse inside new Function), a wrong file, a runaway loop — not a
+// deliberate attack. The process is a normal bun/node process, so a runtime
+// `await import("node:fs")` or `fetch` is reachable, and the script runs as the
+// same OS user as niq. That is a deliberate trade-off: scripts should be as
+// usable as local tools, and the input is the local model's own code.
+//
+// A real isolation boundary is a different design and belongs to a different
+// Executor: a QuickJS sandbox (planned), a wrapper command via Options.Args
+// (sandbox-exec / bwrap / container), or a remote execution backend. The seam
+// exists so that swap costs nothing in the worker, the SDK or the scripts.
 package bunexec
 
 import (

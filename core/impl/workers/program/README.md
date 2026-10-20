@@ -102,12 +102,14 @@ script error is reported with the failing line of the user's own source.
 
 The script body is compiled in memory as an async function body: top-level
 `await` works and static `import` syntax does not parse, so a normal script
-cannot pull in modules. **This is a contract, not a containment boundary**: the
-script runs in a plain `bun run` process, and a runtime `await import("node:fs")`
-or a global like `fetch` is reachable (verified). Containment, when required,
-comes from wrapping the command (`script_executor_args`, e.g. sandbox-exec /
-bwrap / a container) or from a remote execution backend — see the package
-comment in `bunexec`.
+cannot pull in modules. **This is accident containment, not a security
+boundary**: the script runs in a plain `bun run` (or `node`) process, so a
+runtime `await import("node:fs")` or a global like `fetch` is reachable, and it
+runs as the same OS user. That is by design — the goal is to stop a script from
+misbehaving by mistake, not to withstand one that attacks on purpose (scripts
+are the local model's own code). Real isolation is a different Executor:
+QuickJS (planned), a wrapper command via `script_executor_args` (sandbox-exec /
+bwrap / container), or a remote execution backend.
 
 ## Relationship to the reason worker
 
