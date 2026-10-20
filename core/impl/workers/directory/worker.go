@@ -236,7 +236,7 @@ func (w *DirectoryWorker) registerExtensions() {
 			"properties": map[string]any{
 				"worker_id": map[string]any{"type": "string"},
 				"type":      map[string]any{"type": "string"},
-				"tools": map[string]any{"type": "array", "description": "each entry: event, desc, parameters (input schema), returns (output schema, when declared)",
+				"tools": map[string]any{"type": "array", "description": "each entry: event, desc, parameters (request schema), response (reply schema, when declared)",
 					"items": obj(map[string]any{
 						"event":      map[string]any{"type": "string"},
 						"desc":       map[string]any{"type": "string"},
@@ -259,12 +259,12 @@ func (w *DirectoryWorker) registerExtensions() {
 	w.Register(baseworker.Extension{
 		Event: TypeSearchWorkers,
 		Response: obj(map[string]any{
-			"type": "array",
-			"items": obj(map[string]any{
-				"worker_id": map[string]any{"type": "string"},
-				"type":      map[string]any{"type": "string"},
-				"matches":   map[string]any{"type": "array"},
-			}),
+			"type": "object",
+			"properties": map[string]any{
+				"query":   map[string]any{"type": "string"},
+				"total":   map[string]any{"type": "number", "description": "hits before the limit is applied"},
+				"workers": map[string]any{"type": "array", "description": "slim hits: worker_id, type, matched"},
+			},
 		}),
 		Description: "Keyword-search the roster by worker id, type, and the tools/events a worker exposes " +
 			"(case-insensitive). Every whitespace-separated term must match somewhere, so " +

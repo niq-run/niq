@@ -23,7 +23,7 @@
 //                     {type:"call_result", id, value | error}
 //   script -> worker: {type:"call", id, target, event, arguments}
 //                     {type:"log", text}
-//                     {type:"result", payload}
+//                     {type:"result", value}
 //                     {type:"error", message}
 //
 // stdout carries ONLY these protocol lines; diagnostics go to stderr.
@@ -33,7 +33,7 @@ const write = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 
 const pending = new Map();
 let seq = 0;
-let resultText = "";
+let resultValue;
 let resultSet = false;
 
 // ── error location ──
@@ -110,7 +110,9 @@ function makeSdk(args) {
     log: (text) => write({ type: "log", text: String(text) }),
     result: (payload) => {
       resultSet = true;
-      resultText = typeof payload === "string" ? payload : JSON.stringify(payload ?? null);
+      // Kept as-is: the worker decides how to shape the run's reply, so the
+      // script's value must not be flattened to text here.
+      resultValue = payload ?? null;
     },
     // Each call becomes a `call` protocol line; the reply comes back as
     // `call_result` and resolves this promise.
@@ -131,10 +133,10 @@ async function run(msg) {
   const factory = compile(msg.src);
   const ret = await factory(sdk);
   if (!resultSet) {
-    resultText = ret === undefined ? "" : typeof ret === "string" ? ret : JSON.stringify(ret);
+    resultValue = ret === undefined ? "" : ret;
     resultSet = true;
   }
-  write({ type: "result", payload: resultText });
+  write({ type: "result", value: resultValue });
 }
 
 const rl = createInterface({ input: process.stdin });

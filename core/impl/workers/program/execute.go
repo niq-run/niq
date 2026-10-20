@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -218,10 +219,15 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 		}
 		if err != nil {
 			sess.Cancel()
-			w.ReplyFailed(tc.CallerID, tc.CallID, withScriptLog(fmt.Sprintf("run: %v", err), logs), tc.TraceID)
+			// A failed run still returns what it logged: that is where the cause
+			// usually is.
+			w.ReplyFailed(tc.CallerID, tc.CallID, runErrorText(err, logs), tc.TraceID)
 			return
 		}
-		w.ReplyCompleted(tc.CallerID, tc.CallID, withScriptLog(capScriptResult(result), logs), tc.TraceID)
+		// The reply is a structured object, NOT wrapped in "result" (that key is
+		// reserved for non-object replies): "output" is the script's return value
+		// with its type preserved, "log" the lines it emitted.
+		w.ReplyCompleted(tc.CallerID, tc.CallID, runReply(result, logs), tc.TraceID)
 	}()
 }
 
@@ -294,32 +300,33 @@ func (w *Worker) checkTarget(ctx context.Context, target string) error {
 
 // ── reply shaping ──
 //
-// What goes back to the caller: the result, plus (when the script logged) a
-// "--- script log ---" section. Kept next to the run that produces it: this is
-// the only caller, and a reader tracing program.run should not have to open a
-// second file to see what the reply ends up looking like.
+// A run replies with an OBJECT, so it reaches the caller as the payload itself:
+//
+//	{ "output": <the script's return value, any JSON type>,   // always present
+//	  "log":    ["line", …],                                  // omitted when empty
+//	  "log_truncated": <dropped line count> }                 // omitted when 0
+//
+// "result" is deliberately not the field name: it is reserved for non-object
+// replies, and using it would make the whole payload read as that one value.
+//
+// The numbers below keep what the old text convention enforced: a script cannot
+// flood the caller's context with its log, and a huge output does not become an
+// unbounded payload.
 
-// Script-log return policy. A run's sdk.log lines are returned to the CALLER
-// alongside the result, because for a PTC round the caller is the model: seeing
-// its own script's log is what lets it debug a failing run inside the same
-// round instead of asking for a second one. The text is capped — the tail is
-// what explains a failure, and an unbounded log would blow up the reply payload
-// and the caller's context.
 const (
 	scriptLogMaxLines = 100
 	scriptLogMaxBytes = 8 * 1024
 
-	// scriptResultMaxBytes caps the RESULT text handed back to the caller, in the
-	// same spirit (and roughly the same size) as the workspace tools' 20KB
-	// output cap: a run that returns a huge blob must not silently blow up the
-	// caller's context. Head and tail are kept, the middle is elided, so both
-	// the beginning and the ending of the payload stay readable.
-	scriptResultMaxBytes = 20 * 1024
+	// scriptOutputMaxBytes caps the OUTPUT text handed back to the caller, in the
+	// same spirit (and roughly the same size) as the workspace tools' 20KB output
+	// cap. Head and tail are kept, the middle is elided, so both the beginning and
+	// the ending stay readable.
+	scriptOutputMaxBytes = 20 * 1024
 )
 
 // scriptLog collects a run's sdk.log lines for the reply. It is written by the
-// session's log-draining goroutine and read after the session ends, so access
-// is guarded.
+// session's log-draining goroutine and read after the session ends, so access is
+// guarded.
 type scriptLog struct {
 	mu      sync.Mutex
 	lines   []string
@@ -342,60 +349,87 @@ func (l *scriptLog) add(line string) {
 	}
 }
 
-// text renders the collected lines as the reply's log section, or "" when the
-// script logged nothing (so a quiet run's reply is exactly its result).
-func (l *scriptLog) text() string {
+// snapshot returns the retained lines and how many earlier ones were dropped.
+func (l *scriptLog) snapshot() ([]string, int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(l.lines) == 0 {
+		return nil, 0
+	}
+	return append([]string(nil), l.lines...), l.dropped
+}
+
+// text renders the retained lines as a block (used by the failure path, which
+// must stay a plain error string).
+func (l *scriptLog) text() string {
+	lines, dropped := l.snapshot()
+	if len(lines) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	if l.dropped > 0 {
-		// Written in pieces: one WriteString per piece, no throwaway
-		// concatenation (a linter flags the concatenated form).
+	if dropped > 0 {
 		b.WriteString("[")
-		b.WriteString(strconv.Itoa(l.dropped))
+		b.WriteString(strconv.Itoa(dropped))
 		b.WriteString(" earlier line(s) dropped]\n")
 	}
-	b.WriteString(strings.Join(l.lines, "\n"))
+	b.WriteString(strings.Join(lines, "\n"))
 	return b.String()
 }
 
-// withScriptLog appends the run's log section to the reply text. The result
-// stays first and untouched, so a caller that only reads the head is unaffected.
-func withScriptLog(result string, logs *scriptLog) string {
-	text := logs.text()
-	if text == "" {
-		return result
+// runReply builds the structured reply object for a completed run.
+func runReply(output any, logs *scriptLog) map[string]any {
+	payload := map[string]any{"output": capScriptOutput(output)}
+	if lines, dropped := logs.snapshot(); len(lines) > 0 {
+		payload["log"] = lines
+		if dropped > 0 {
+			payload["log_truncated"] = dropped
+		}
 	}
-	const header = "\n\n--- script log ---\n"
-	if result == "" {
-		return strings.TrimPrefix(header, "\n\n") + text
-	}
-	return result + header + text
+	return payload
 }
 
-// capScriptResult keeps a result within scriptResultMaxBytes by eliding its
-// middle. The note states how much was dropped, so the caller can tell a
-// truncated payload from a short one.
-func capScriptResult(result string) string {
-	if len(result) <= scriptResultMaxBytes {
-		return result
+// runErrorText renders a failed run for request.failed (always a string), with
+// the log collected so far appended: a failing script is diagnosed from it.
+func runErrorText(err error, logs *scriptLog) string {
+	text := "run: " + err.Error()
+	if log := logs.text(); log != "" {
+		text += "\n\n--- script log ---\n" + log
 	}
-	head := scriptResultMaxBytes / 2
-	tail := scriptResultMaxBytes - head
+	return text
+}
+
+// capScriptOutput keeps a run's output within scriptOutputMaxBytes. A string
+// output is elided in the middle (the note states how much was dropped); a
+// structured output is measured as JSON and, only when it exceeds the cap,
+// replaced by a truncation note so the reply stays bounded.
+func capScriptOutput(output any) any {
+	s, isString := output.(string)
+	if !isString {
+		b, err := json.Marshal(output)
+		if err != nil {
+			return output
+		}
+		if len(b) <= scriptOutputMaxBytes {
+			return output
+		}
+		return "[structured output of " + strconv.Itoa(len(b)) + " bytes elided: too large for a reply]"
+	}
+	if len(s) <= scriptOutputMaxBytes {
+		return s
+	}
+	head := scriptOutputMaxBytes / 2
+	tail := scriptOutputMaxBytes - head
 	// Cut on rune boundaries so the kept text stays valid UTF-8.
 	headEnd := head
-	for headEnd > 0 && !utf8.RuneStart(result[headEnd]) {
+	for headEnd > 0 && !utf8.RuneStart(s[headEnd]) {
 		headEnd--
 	}
-	tailStart := len(result) - tail
-	for tailStart < len(result) && !utf8.RuneStart(result[tailStart]) {
+	tailStart := len(s) - tail
+	for tailStart < len(s) && !utf8.RuneStart(s[tailStart]) {
 		tailStart++
 	}
 	elided := tailStart - headEnd
-	return result[:headEnd] +
+	return s[:headEnd] +
 		"\n\n[... " + strconv.Itoa(elided) + " bytes elided ...]\n\n" +
-		result[tailStart:]
+		s[tailStart:]
 }

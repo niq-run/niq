@@ -131,7 +131,7 @@ func (e *Executor) Start(ctx context.Context, src string, args map[string]any, c
 		args = map[string]any{}
 	}
 	if err := s.writeLine(map[string]any{"type": "run", "src": src, "args": args}); err != nil {
-		s.finish("", fmt.Errorf("executor: send run: %w", err))
+		s.finish(nil, fmt.Errorf("executor: send run: %w", err))
 		return nil, err
 	}
 	return s, nil
@@ -157,8 +157,8 @@ func (e *Executor) materialize() (string, error) {
 
 // result carries the script's terminal outcome.
 type result struct {
-	text string
-	err  error
+	value any
+	err   error
 }
 
 type session struct {
@@ -175,17 +175,17 @@ type session struct {
 
 func (s *session) Logs() <-chan string { return s.logs }
 
-func (s *session) Result(ctx context.Context) (string, error) {
+func (s *session) Result(ctx context.Context) (any, error) {
 	select {
 	case r := <-s.outcome:
-		return r.text, r.err
+		return r.value, r.err
 	case <-ctx.Done():
-		s.finish("", ctx.Err())
-		return "", ctx.Err()
+		s.finish(nil, ctx.Err())
+		return nil, ctx.Err()
 	}
 }
 
-func (s *session) Cancel() { s.finish("", fmt.Errorf("executor: cancelled")) }
+func (s *session) Cancel() { s.finish(nil, fmt.Errorf("executor: cancelled")) }
 
 // writeLine sends one JSONL protocol message to the launcher.
 func (s *session) writeLine(v any) error {
@@ -221,10 +221,10 @@ func (s *session) readStdout(r io.Reader, call program.ToolCaller) {
 		case "call":
 			go s.handleCall(m, call)
 		case "result":
-			s.finish(str(m["payload"]), nil)
+			s.finish(m["value"], nil)
 			return
 		case "error":
-			s.finish("", fmt.Errorf("script error: %s", str(m["message"])))
+			s.finish(nil, fmt.Errorf("script error: %s", str(m["message"])))
 			return
 		}
 	}
@@ -232,10 +232,10 @@ func (s *session) readStdout(r io.Reader, call program.ToolCaller) {
 	// first: a failed/oversized line is the actual cause, and reporting only
 	// "exited without a result" would hide it.
 	if err := sc.Err(); err != nil {
-		s.finish("", fmt.Errorf("executor: protocol stream: %w", err))
+		s.finish(nil, fmt.Errorf("executor: protocol stream: %w", err))
 		return
 	}
-	s.finish("", fmt.Errorf("executor: launcher exited without a result"))
+	s.finish(nil, fmt.Errorf("executor: launcher exited without a result"))
 }
 
 // handleCall relays one SDK call to the bus via the ToolCaller and writes the
@@ -281,7 +281,7 @@ func isClosed(err error) bool {
 
 // finish ends the session exactly once: kills the process, closes the log
 // stream, and delivers the outcome.
-func (s *session) finish(text string, err error) {
+func (s *session) finish(value any, err error) {
 	s.mu.Lock()
 	if s.done {
 		s.mu.Unlock()
@@ -294,7 +294,7 @@ func (s *session) finish(text string, err error) {
 		_ = s.cmd.Process.Kill()
 	}
 	close(s.logs)
-	s.outcome <- result{text: text, err: err}
+	s.outcome <- result{value: value, err: err}
 	_ = s.cmd.Wait()
 	os.Remove(s.launcher)
 }

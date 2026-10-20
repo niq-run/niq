@@ -47,10 +47,11 @@ type ScriptSession interface {
 	// webui visibility); it need not be fully read for caching.
 	Logs() <-chan string
 
-	// Result blocks until the script calls sdk.result (returning its payload) or
-	// ctx is done (returning ctx.Err()). After it returns, the session's
+	// Result blocks until the script calls sdk.result / returns (yielding that
+	// VALUE, type preserved: a string stays a string, an object stays an object)
+	// or ctx is done (returning ctx.Err()). After it returns, the session's
 	// resources and process are already released.
-	Result(ctx context.Context) (string, error)
+	Result(ctx context.Context) (any, error)
 
 	// Cancel terminates the session: kills the sandbox process and releases
 	// resources.

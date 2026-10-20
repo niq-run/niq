@@ -130,7 +130,7 @@ func (s *replaySession) Logs() <-chan string {
 	close(c)
 	return c
 }
-func (s *replaySession) Result(ctx context.Context) (string, error) {
+func (s *replaySession) Result(ctx context.Context) (any, error) {
 	value, err := s.call(ctx, "ws", "bash", map[string]any{"cmd": "ls"})
 	if err != nil {
 		return "ERR:" + err.Error(), nil
@@ -149,9 +149,9 @@ type replayExecutor struct {
 type blockingSession struct{}
 
 func (blockingSession) Logs() <-chan string { c := make(chan string); close(c); return c }
-func (blockingSession) Result(ctx context.Context) (string, error) {
+func (blockingSession) Result(ctx context.Context) (any, error) {
 	<-ctx.Done()
-	return "", ctx.Err()
+	return nil, ctx.Err()
 }
 func (blockingSession) Cancel() {}
 
@@ -304,7 +304,7 @@ func TestHandleRunRelaysAndReplies(t *testing.T) {
 	waitUntil(t, 2*time.Second, func() bool {
 		for _, e := range ch.snapshot() {
 			if e.Type == event.TypeRequestCompleted && e.RequestId == "c1" {
-				if r, _ := e.Payload["result"].(string); r == "DONE:LS-OUT" {
+				if out, ok := e.Payload["output"].(string); ok && out == "DONE:LS-OUT" {
 					return true
 				}
 			}
@@ -322,7 +322,7 @@ type scriptedSession struct {
 }
 
 func (s *scriptedSession) Logs() <-chan string { return s.logs }
-func (s *scriptedSession) Result(ctx context.Context) (string, error) {
+func (s *scriptedSession) Result(ctx context.Context) (any, error) {
 	for _, l := range s.lines {
 		s.logs <- l
 	}
@@ -340,18 +340,47 @@ func (e scriptedExecutor) Start(context.Context, string, map[string]any, program
 
 // replyResult returns the result text of the first request.completed/failed for
 // the given call id.
-func replyFor(t *testing.T, ch *stubChannel, callID string) (string, bool) {
+// replyEvent returns the terminal reply event for a call id.
+func replyEvent(t *testing.T, ch *stubChannel, callID string) (event.Event, bool) {
 	t.Helper()
 	for _, e := range ch.snapshot() {
-		if e.RequestId != callID {
-			continue
-		}
-		if e.Type == event.TypeRequestCompleted || e.Type == event.TypeRequestFailed {
-			r, _ := e.Payload["result"].(string)
-			return r, e.Type == event.TypeRequestCompleted
+		if e.RequestId == callID &&
+			(e.Type == event.TypeRequestCompleted || e.Type == event.TypeRequestFailed) {
+			return e, true
 		}
 	}
-	return "", false
+	return event.Event{}, false
+}
+
+// replyFor renders the reply's value as its JSON-ish text (object replies are
+// the payload itself; text replies sit under "result").
+func replyFor(t *testing.T, ch *stubChannel, callID string) (string, bool) {
+	t.Helper()
+	e, ok := replyEvent(t, ch, callID)
+	if !ok {
+		return "", false
+	}
+	return event.ReplyText(e.Payload), e.Type == event.TypeRequestCompleted
+}
+
+// runOutput returns the "output" of a completed run reply and its log lines.
+func runOutput(t *testing.T, ch *stubChannel, callID string) (any, []string, bool) {
+	t.Helper()
+	e, ok := replyEvent(t, ch, callID)
+	if !ok || e.Type != event.TypeRequestCompleted {
+		return nil, nil, false
+	}
+	var lines []string
+	if raw, ok := e.Payload["log"].([]any); ok {
+		for _, l := range raw {
+			if s, ok := l.(string); ok {
+				lines = append(lines, s)
+			}
+		}
+	} else if raw, ok := e.Payload["log"].([]string); ok {
+		lines = raw
+	}
+	return e.Payload["output"], lines, true
 }
 
 // TestHandleRunReturnsScriptLog verifies a script's sdk.log lines come back to
@@ -372,12 +401,12 @@ func TestHandleRunReturnsScriptLog(t *testing.T) {
 		return ok
 	}, "program.run reply")
 
-	got, _ := replyFor(t, ch, "call-log")
-	if !strings.HasPrefix(got, "THE-RESULT") {
-		t.Fatalf("reply must lead with the result, got %q", got)
+	out, lines, ok := runOutput(t, ch, "call-log")
+	if !ok || out != "THE-RESULT" {
+		t.Fatalf("output = %#v, want the script's return value", out)
 	}
-	if !strings.Contains(got, "--- script log ---") || !strings.Contains(got, "step 1") || !strings.Contains(got, "step 2") {
-		t.Fatalf("reply must carry the script log, got %q", got)
+	if len(lines) != 2 || lines[0] != "step 1" || lines[1] != "step 2" {
+		t.Fatalf("log = %#v, want the emitted lines", lines)
 	}
 }
 
@@ -397,8 +426,12 @@ func TestHandleRunOmitsEmptyScriptLog(t *testing.T) {
 		_, ok := replyFor(t, ch, "call-quiet")
 		return ok
 	}, "program.run reply")
-	if got, _ := replyFor(t, ch, "call-quiet"); got != "ONLY-RESULT" {
-		t.Fatalf("quiet run reply = %q, want exactly the result", got)
+	out, lines, ok := runOutput(t, ch, "call-quiet")
+	if !ok || out != "ONLY-RESULT" {
+		t.Fatalf("output = %#v, want the script's return value", out)
+	}
+	if len(lines) != 0 {
+		t.Fatalf("log = %#v, want no log field for a silent run", lines)
 	}
 }
 
@@ -504,17 +537,19 @@ func TestHandleRunAcceptsPath(t *testing.T) {
 		_, ok := replyFor(t, ch, "call-path")
 		return ok
 	}, "program.run reply")
-	if got, _ := replyFor(t, ch, "call-path"); !strings.HasPrefix(got, "VIA-PATH") {
-		t.Fatalf("reply = %q, want the program's result", got)
+	if out, _, ok := runOutput(t, ch, "call-path"); !ok || out != "VIA-PATH" {
+		t.Fatalf("output = %#v, want the program's return value", out)
 	}
 }
 
-// TestCapScriptResultKeepsHeadAndTail verifies the result cap elides the middle
-// and says how much it dropped.
-func TestCapScriptResultKeepsHeadAndTail(t *testing.T) {
-	big := strings.Repeat("A", scriptResultMaxBytes) + strings.Repeat("B", scriptResultMaxBytes)
-	got := capScriptResult(big)
-	if len(got) > scriptResultMaxBytes+200 {
+// TestCapScriptOutput verifies the output cap: a long string is elided in the
+// middle with a note, a small one passes through untouched, and an oversized
+// STRUCTURED output degrades to a bounded note (the type cannot be kept without
+// breaking the cap).
+func TestCapScriptOutput(t *testing.T) {
+	big := strings.Repeat("A", scriptOutputMaxBytes) + strings.Repeat("B", scriptOutputMaxBytes)
+	got, _ := capScriptOutput(big).(string)
+	if len(got) > scriptOutputMaxBytes+200 {
 		t.Fatalf("capped length %d exceeds the cap by too much", len(got))
 	}
 	if !strings.HasPrefix(got, "A") || !strings.HasSuffix(got, "B") {
@@ -523,8 +558,15 @@ func TestCapScriptResultKeepsHeadAndTail(t *testing.T) {
 	if !strings.Contains(got, "bytes elided") {
 		t.Fatal("cap must report the elided amount")
 	}
-	if small := capScriptResult("short"); small != "short" {
-		t.Fatalf("small result must pass through, got %q", small)
+	if small, _ := capScriptOutput("short").(string); small != "short" {
+		t.Fatalf("small output must pass through, got %q", small)
+	}
+	obj := map[string]any{"blob": strings.Repeat("x", scriptOutputMaxBytes*2)}
+	if note, ok := capScriptOutput(obj).(string); !ok || !strings.Contains(note, "elided") {
+		t.Fatalf("oversized structured output = %v, want a bounded note", capScriptOutput(obj))
+	}
+	if got := capScriptOutput(map[string]any{"ok": true}); got == nil {
+		t.Fatal("a small structured output must pass through as the value")
 	}
 }
 

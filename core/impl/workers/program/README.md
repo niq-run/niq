@@ -91,16 +91,29 @@ Inside a run the script is handed a minimal `sdk`:
 - `sdk.log(text)` — a log line. Mirrored to the worker log AND returned to the caller
   after the result under a `--- script log ---` header (last 100 lines / 8 KiB,
   with a dropped-lines note), so a failing run is debuggable in the same round.
-- `sdk.result(payload)` — the run's final result: a string verbatim, anything
-  else JSON-encoded; the last call wins, and a top-level `return` is used only
-  when `sdk.result` was never called (neither → the empty string).
+- `sdk.result(payload)` — the run's output, kept as the value it is (string,
+  object, array …); the last call wins, and a top-level `return` is used only when
+  `sdk.result` was never called (neither → the empty string).
 - `sdk.args` — the `program.run` `args` (always an object, defaults to `{}`).
 
-The reply is the result, plus — when the script logged — a `--- script log ---`
-section. The result is capped at 20 KiB (head + tail, with an elided-bytes
-note); `timeout_seconds` (default 120) bounds the whole run including nested
-calls, and on expiry the log collected so far comes back with the error. A
-script error is reported with the failing line of the user's own source.
+The reply of `program.run` is an OBJECT (so it travels as the payload itself):
+
+```json
+{ "output": <the script's return value, any JSON type>,
+  "log": ["line", "…"],
+  "log_truncated": 3 }
+```
+
+`output` keeps the script's type (a string stays a string, an object stays an
+object) and is capped at 20 KiB — a longer string is elided head+tail, an
+oversized structured value degrades to a truncation note. `log` is omitted when
+the script logged nothing, `log_truncated` only when older lines were dropped.
+A failed run replies `request.failed` with the error plus the log collected so
+far, which is where the cause usually is. A script error names the failing line
+of the user's own source.
+
+The old text reply was the result plus — when the script logged — a `--- script log ---`
+section.
 
 The script body is compiled in memory as an async function body: top-level
 `await` works and static `import` syntax does not parse, so a normal script

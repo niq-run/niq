@@ -334,7 +334,7 @@ func (w *Worker) handleServerList(evt event.Event) {
 			"tools":    len(w.tools[sc.Name]),
 		})
 	}
-	w.replyValue(tc, list)
+	w.reply(tc, list, "")
 }
 
 // mcpReadme is the agent-facing usage guide returned by worker.readme: the
@@ -451,7 +451,7 @@ func (w *Worker) handleToolList(evt event.Event) {
 		}
 		list = append(list, entry)
 	}
-	w.replyValue(tc, list)
+	w.reply(tc, list, "")
 }
 
 func (w *Worker) handleToolCall(evt event.Event) {
@@ -599,7 +599,7 @@ func (w *Worker) handleExpose(evt event.Event) {
 		w.mu.Lock()
 		cur := w.cfg.Expose
 		w.mu.Unlock()
-		w.reply(tc, fmt.Sprintf("expose mode: %s", cur), "")
+		w.reply(tc, map[string]any{"mode": cur}, "")
 		return
 	}
 	if !validExpose(mode) {
@@ -607,7 +607,7 @@ func (w *Worker) handleExpose(evt event.Event) {
 		return
 	}
 	w.applyExpose(mode)
-	w.reply(tc, fmt.Sprintf("expose mode set to %s", mode), "")
+	w.reply(tc, map[string]any{"mode": mode}, "")
 }
 
 // applyExpose switches the exposed capability surface and makes the change
@@ -846,18 +846,14 @@ func (w *Worker) sortedServers() []ServerConfig {
 	return out
 }
 
-func (w *Worker) reply(tc baseworker.ToolCall, result, errStr string) {
+// reply answers a tool call: result is a value (a list of servers/tools, an
+// object, or text) and ReplyCompleted decides how it travels.
+func (w *Worker) reply(tc baseworker.ToolCall, result any, errStr string) {
 	if errStr != "" {
 		w.ReplyFailed(tc.CallerID, tc.CallID, errStr, tc.TraceID)
 		return
 	}
 	w.ReplyCompleted(tc.CallerID, tc.CallID, result, tc.TraceID)
-}
-
-// replyValue answers with a structured value (a list of servers/tools) so it
-// travels as real JSON instead of a pre-encoded string.
-func (w *Worker) replyValue(tc baseworker.ToolCall, value any) {
-	w.ReplyCompleted(tc.CallerID, tc.CallID, value, tc.TraceID)
 }
 
 func serverFromArgs(args map[string]any) (ServerConfig, error) {

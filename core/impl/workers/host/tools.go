@@ -101,7 +101,7 @@ func (w *HostWorker) registerExtensions() {
 }
 
 // reply answers a tool invocation with request.completed / request.failed.
-func (w *HostWorker) reply(evt event.Event, toolName, result string, err error) {
+func (w *HostWorker) reply(evt event.Event, toolName string, result any, err error) {
 	if err != nil {
 		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
 		return
@@ -111,7 +111,7 @@ func (w *HostWorker) reply(evt event.Event, toolName, result string, err error) 
 
 // handleSpawn forwards the spawn request to the WorkerService, which
 // dispatches to the registered builder for the requested type.
-func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (string, error) {
+func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 	typ := baseworker.ArgString(tc.Args, "type")
 	if typ == "" {
 		return "", fmt.Errorf("type is required")
@@ -137,10 +137,10 @@ func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (string, error) {
 	}
 	// The builder may derive a default ID (e.g. workspace from path).
 	info, _ := w.engine.WorkerType(id)
-	return fmt.Sprintf(`{"worker_id":%q,"status":"created","type":%q}`, id, info), nil
+	return map[string]any{"worker_id": id, "status": "created", "type": info}, nil
 }
 
-func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (string, error) {
+func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (any, error) {
 	id := baseworker.ArgString(tc.Args, "worker_id")
 	if id == "" {
 		return "", fmt.Errorf("worker_id is required")
@@ -148,10 +148,10 @@ func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (string, error) {
 	if err := w.engine.SuspendWorker(id); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(`{"worker_id":%q,"status":"suspended"}`, id), nil
+	return map[string]any{"worker_id": id, "status": "suspended"}, nil
 }
 
-func (w *HostWorker) handleResume(tc baseworker.ToolCall) (string, error) {
+func (w *HostWorker) handleResume(tc baseworker.ToolCall) (any, error) {
 	id := baseworker.ArgString(tc.Args, "worker_id")
 	if id == "" {
 		return "", fmt.Errorf("worker_id is required")
@@ -159,5 +159,5 @@ func (w *HostWorker) handleResume(tc baseworker.ToolCall) (string, error) {
 	if err := w.engine.ResumeWorker(context.Background(), id); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(`{"worker_id":%q,"status":"running"}`, id), nil
+	return map[string]any{"worker_id": id, "status": "running"}, nil
 }
