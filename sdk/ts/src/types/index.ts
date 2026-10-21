@@ -17,6 +17,7 @@ export type {
   Extension,
   ExtensionHandler,
   ToolCall,
+  SchemaSource,
 } from "./extension.js";
 
 export { EventType } from "./events.js";

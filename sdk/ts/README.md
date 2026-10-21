@@ -60,8 +60,23 @@ const client = new HTTPWorkerClient(readBusEnv());
 
 ### Declaring a tool's schemas
 
-`parameters` (the request) and `response` (the reply) are JSON Schema on the
-wire. Write them with the `s` builders instead of by hand:
+**What the contract accepts.** `parameters` (the request) and `response` (the
+reply) are typed `SchemaSource` (`object`): registration normalizes whatever you
+pass to plain JSON Schema, and that plain schema is what rides `worker.ready`.
+Accepted sources, all verified against the built SDK:
+
+| You pass | Accepted | Why |
+|---|---|---|
+| plain JSON Schema object | ✅ as-is | already the wire form |
+| `s.object({...})` | ✅ as-is | the builders emit JSON Schema |
+| TypeBox `Type.Object({...})` | ✅ as-is | TypeBox *is* JSON Schema |
+| zod 4 `z.object({...})` | ✅ converted | the schema exposes `.toJSONSchema()` |
+| arktype `type({...})` | ✅ converted | exposes `.toJsonSchema()` |
+| valibot / zod 3 | ✅ after converting | no converter method: pass `toJsonSchema(...)` / `zod-to-json-schema` output |
+| valibot / zod 3 **raw** | ❌ throws at registration | their schemas carry library keys (`kind`, `_def`); announcing them would put internals on the wire |
+| a string / number | ❌ compile error | a schema is an object |
+
+Write them with the `s` builders instead of by hand:
 
 ```ts
 import { s } from "@niq.run/worker-sdk";

@@ -22,6 +22,7 @@ export {
   type EventStatus,
   type EventTypeName,
   type Extension,
+  type SchemaSource,
   type ExtensionHandler,
   type Identity,
   type MessageType,
