@@ -8,6 +8,7 @@ import type {
 } from "./types/index.js";
 import { EventType } from "./types/index.js";
 import { createEvent } from "./createEvent.js";
+import { toJsonSchema } from "./schema.js";
 
 /**
  * BaseWorker — the shared base implementation every worker builds on,
@@ -40,9 +41,23 @@ export class BaseWorker {
     this.channel = opts.channel;
   }
 
-  /** Bind an extension to a handler. Safe at any time, including at runtime. */
+  /**
+   * Bind an extension to a handler. Safe at any time, including at runtime.
+   *
+   * Declared schemas are normalized here: `parameters` / `response` may be plain
+   * JSON Schema, or anything that converts to one (zod 4, arktype, …), so the
+   * announced contract — and therefore every peer's tool list — is always plain
+   * JSON Schema.
+   */
   register(ext: Extension, handler: ExtensionHandler): void {
-    this.regs.set(extensionKey(ext), { ext, handler });
+    const normalized: Extension = { ...ext };
+    if (ext.parameters !== undefined) {
+      normalized.parameters = toJsonSchema(ext.parameters, `parameters of ${ext.event}`);
+    }
+    if (ext.response !== undefined) {
+      normalized.response = toJsonSchema(ext.response, `response of ${ext.event}`);
+    }
+    this.regs.set(extensionKey(ext), { ext: normalized, handler });
   }
 
   /**

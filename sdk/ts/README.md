@@ -90,15 +90,32 @@ Both schemas ride `worker.ready`, so peers and the directory worker see them
 — in particular a PTC script, written before anything runs — plan how to parse a
 reply; declare it whenever the reply is structured.
 
-Already using zod (or valibot/arktype)? Skip the builders: `parameters` and
-`response` take any JSON Schema object, and those libraries generate one
-(`z.toJSONSchema(schema, { io: "input" })` in zod 4). Validate the args inside
-the handler with the same schema — nothing on the bus validates for you.
+**Bring your own schema library** — the SDK depends on none, and normalizes
+whatever you pass:
 
-> TypeScript types cannot be reflected at runtime, so there is no "infer the
-> schema from the handler signature" option: a build step would be needed
-> (typedoc/ts-json-schema-generator/typia). Explicit schemas — or a zod
-> one-liner — are the practical route.
+| Library | What you write | Note |
+|---|---|---|
+| **zod 4** | `parameters: z.object({…})` | schemas expose `.toJSONSchema()`; the SDK calls it for you |
+| **arktype** | `parameters: type({…})` | same, via `.toJsonSchema()` |
+| **TypeBox** | `parameters: Type.Object({…})` | TypeBox *is* JSON Schema — passes through untouched |
+| **valibot** | `parameters: toJsonSchema(v.object({…}))` | convert once at registration (`@valibot/to-json-schema`) |
+| plain | `parameters: { type: "object", … }` | a JSON Schema object is used as-is |
+| `s` helpers | `parameters: s.object({…})` | no dependency at all; see above |
+
+Registration normalizes both schemas to plain JSON Schema, so the announced
+contract (and every peer's tool list) is identical whichever route you take. A
+value that is neither a schema nor convertible throws, naming the extension.
+
+Validating args is your call, in the handler — nothing on the bus validates. With
+zod/valibot the schema you already declared does it.
+
+> **Full inference from TypeScript types** (a `handler(args: { text: string })`
+> signature becoming a schema) is only possible at build time, because types are
+> erased at runtime. The mature route is [typia](https://typia.io)
+> (`typia.json.schemas<[Args]>()`, via a ts-patch transformer) or a CLI
+> generator such as `ts-json-schema-generator`. Schema-first libraries
+> (TypeBox, zod) are the usual trade-off: write the schema, derive the TS type
+> from it (`Static<typeof T>`, `z.infer<T>`).
 
 ### Reply shape
 

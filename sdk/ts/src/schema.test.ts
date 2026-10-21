@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { s } from "./schema.js";
+import { s, toJsonSchema } from "./schema.js";
 
 describe("schema builders", () => {
   it("builds an object schema with required by default", () => {
@@ -57,5 +57,50 @@ describe("schema builders", () => {
       required: ["messageId", "ok"],
       description: "send result",
     });
+  });
+});
+
+describe("toJsonSchema", () => {
+  it("passes a JSON Schema through untouched", () => {
+    const schema = s.object({ a: s.string() });
+    expect(toJsonSchema(schema, "parameters")).toBe(schema);
+    expect(toJsonSchema({}, "parameters")).toEqual({});
+  });
+
+  it("converts a schema library object that exposes toJSONSchema", () => {
+    // Stand-in for zod 4 / arktype: the SDK depends on no library, it just uses
+    // the converter the object provides. Note the decoy `type` key: a library
+    // schema can look like a JSON Schema at the top level while its real shape
+    // lives in library-specific keys, so the converter must win.
+    const zodLike = {
+      type: "object",
+      def: { type: "object", shape: { a: { type: "string" } } },
+      toJSONSchema() {
+        return { type: "object", properties: { a: { type: "string" } } };
+      },
+    };
+    expect(toJsonSchema(zodLike, "parameters")).toEqual({
+      type: "object",
+      properties: { a: { type: "string" } },
+    });
+  });
+
+  it("accepts the camelCase converter spelling", () => {
+    const arkLike = {
+      toJsonSchema() {
+        return { type: "array", items: { type: "number" } };
+      },
+    };
+    expect(toJsonSchema(arkLike, "response")).toEqual({
+      type: "array",
+      items: { type: "number" },
+    });
+  });
+
+  it("throws a clear error for something that is not a schema", () => {
+    expect(() => toJsonSchema({ a: 1 }, "parameters of x")).toThrow(
+      /parameters of x: expected a JSON Schema/,
+    );
+    expect(() => toJsonSchema("nope", "response of y")).toThrow(/response of y/);
   });
 });

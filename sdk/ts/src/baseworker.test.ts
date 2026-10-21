@@ -85,7 +85,10 @@ describe("extension registry", () => {
       {
         event: "tool.invoke",
         description: "Echo a message",
-        parameters: { prefix: "..." },
+        parameters: {
+          type: "object",
+          properties: { prefix: { type: "string" } },
+        },
       },
       () => {},
     );
@@ -98,7 +101,10 @@ describe("extension registry", () => {
       {
         event: "tool.invoke",
         desc: "Echo a message",
-        parameters: { prefix: "..." },
+        parameters: {
+          type: "object",
+          properties: { prefix: { type: "string" } },
+        },
       },
     ]);
     expect(w.watchEntries(true)).toHaveLength(2);

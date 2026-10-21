@@ -88,3 +88,59 @@ export const s = {
 export function isOptionalSchema(schema: JsonSchema): boolean {
   return optionalSchemas.has(schema);
 }
+
+/** Keys that make an object recognizably a JSON Schema. */
+const SCHEMA_HINTS = [
+  "type",
+  "properties",
+  "items",
+  "anyOf",
+  "oneOf",
+  "allOf",
+  "$ref",
+  "enum",
+  "const",
+  "additionalProperties",
+];
+
+function looksLikeJsonSchema(v: unknown): v is JsonSchema {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+  const keys = Object.keys(v);
+  // An empty object is the JSON Schema for "anything" (s.any()).
+  return keys.length === 0 || keys.some((k) => SCHEMA_HINTS.includes(k));
+}
+
+/**
+ * Normalizes a declared schema to plain JSON Schema.
+ *
+ * A JSON Schema object passes through untouched, and so does anything that can
+ * produce one — zod v4 (`z.object({…})` has `.toJSONSchema()`), arktype
+ * (`.toJsonSchema()`), or a wrapper you wrote. That is why the SDK depends on no
+ * schema library: bring whichever you already use, and the wire form stays a
+ * plain JSON Schema either way.
+ *
+ * Throws when the value is neither, naming what was expected — silently
+ * announcing a non-schema would poison every peer's tool list.
+ */
+export function toJsonSchema(value: unknown, what: string): JsonSchema {
+  // Converters first: a library schema can look like a JSON Schema at the top
+  // level (a zod object carries `type: "object"`) while its real shape lives in
+  // library-specific keys, so passing it through would announce garbage.
+  const holder = value as { toJSONSchema?: unknown; toJsonSchema?: unknown } | null;
+  for (const fn of [holder?.toJSONSchema, holder?.toJsonSchema]) {
+    if (typeof fn === "function") {
+      const out = fn.call(value);
+      if (looksLikeJsonSchema(out)) return out;
+    }
+  }
+  if (looksLikeJsonSchema(value)) return value;
+  throw new TypeError(
+    `${what}: expected a JSON Schema object or a schema with toJSONSchema() (zod 4, arktype); got ${describe(value)}`,
+  );
+}
+
+function describe(v: unknown): string {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "an array";
+  return typeof v;
+}
