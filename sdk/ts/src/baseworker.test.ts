@@ -226,6 +226,8 @@ describe("announceReady", () => {
     const presence = ch.broadcasts[0];
     expect(presence.type).toBe(EventType.WorkerReady);
     expect(presence.exclude_worker_id).toBe("echo.0");
+    // Presence is live-only: it must not land in the durable event log.
+    expect(presence.transient).toBe(true);
     expect(presence.payload).toEqual({
       type: "echo",
       watch: [{ event: "tool.invoke", desc: "Echo" }],
@@ -238,6 +240,110 @@ describe("announceReady", () => {
     const w = makeWorker(ch);
     await w.announceReady("echo");
     expect("publishes" in ch.broadcasts[0].payload).toBe(false);
+  });
+
+  it("announceReadyTo sends the contract to one target, transiently", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.register({ event: "tool.invoke", description: "Echo" }, () => {});
+    await w.announceReady("echo", [{ event: "echo.done" }]);
+    ch.broadcasts = [];
+
+    await w.announceReadyTo("asker.0");
+
+    expect(ch.broadcasts).toHaveLength(0);
+    expect(ch.sent).toHaveLength(1);
+    const { evt, targets } = ch.sent[0];
+    expect(targets).toEqual(["asker.0"]);
+    expect(evt.type).toBe(EventType.WorkerReady);
+    expect(evt.transient).toBe(true);
+    // Directed presence is not a broadcast, so nothing is excluded.
+    expect(evt.exclude_worker_id).toBeUndefined();
+    expect(evt.payload).toMatchObject({
+      type: "echo",
+      watch: [{ event: "tool.invoke", desc: "Echo" }],
+    });
+  });
+});
+
+describe("worker.discover", () => {
+  const tick = () => new Promise((r) => setImmediate(r));
+
+  it("is answered with a directed worker.ready to the asker", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.register(
+      { event: "tool.invoke", description: "Echo" },
+      () => {},
+    );
+    await w.announceReady("echo", [{ event: "echo.done" }]);
+    ch.broadcasts = [];
+
+    const handled = w.dispatchExtension(
+      makeEvent({ type: EventType.WorkerDiscover, worker_id: "webui-hiw" }),
+    );
+    await tick();
+
+    expect(handled).toBe(true);
+    expect(ch.broadcasts).toHaveLength(0);
+    expect(ch.sent).toHaveLength(1);
+    const { evt, targets } = ch.sent[0];
+    expect(targets).toEqual(["webui-hiw"]);
+    expect(evt.type).toBe(EventType.WorkerReady);
+    expect(evt.transient).toBe(true);
+    expect(evt.payload).toMatchObject({
+      type: "echo",
+      watch: [{ event: "tool.invoke", desc: "Echo" }],
+      publishes: [{ event: "echo.done" }],
+    });
+  });
+
+  it("is not answered for itself", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    await w.announceReady("echo");
+    ch.broadcasts = [];
+
+    expect(
+      w.dispatchExtension(
+        makeEvent({ type: EventType.WorkerDiscover, worker_id: "echo.0" }),
+      ),
+    ).toBe(true);
+    await tick();
+
+    expect(ch.sent).toHaveLength(0);
+  });
+
+  it("is not answered before a contract is announced", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+
+    expect(
+      w.dispatchExtension(
+        makeEvent({ type: EventType.WorkerDiscover, worker_id: "asker.0" }),
+      ),
+    ).toBe(true);
+    await tick();
+
+    expect(ch.sent).toHaveLength(0);
+  });
+
+  it("does not fall through to an extension registered for the event", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    const hits: string[] = [];
+    w.register({ event: EventType.WorkerDiscover }, () => {
+      hits.push("extension");
+    });
+    await w.announceReady("echo");
+
+    w.dispatchExtension(
+      makeEvent({ type: EventType.WorkerDiscover, worker_id: "asker.0" }),
+    );
+    await tick();
+
+    expect(hits).toEqual([]);
+    expect(ch.sent.map((s) => s.evt.type)).toEqual([EventType.WorkerReady]);
   });
 });
 

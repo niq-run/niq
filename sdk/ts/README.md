@@ -164,7 +164,8 @@ const line = replyText(evt.payload);     // string verbatim, else JSON
 `BaseWorker` (mirrors Go `pkg/baseworker`) layers the shared worker plumbing
 on top of a `WorkerSideChannel`: an extension registry (what the worker
 responds to and how), tool-request reply plumbing, and the `worker.ready`
-presence announcement.
+presence announcement. Presence is transient (live-only, never persisted), and
+a `worker.discover` is answered automatically with a directed `worker.ready`.
 
 ```ts
 import { BaseWorker, HTTPWorkerClient, parseToolCall, EventType } from "@niq.run/worker-sdk";
@@ -190,7 +191,9 @@ worker.register(
 );
 
 await worker.channel.connect();
-await worker.announceReady("echo"); // broadcast worker.ready, self excluded
+// Broadcast worker.ready (transient, self excluded) and remember the contract,
+// so a later worker.discover is answered directly — no extra code needed here.
+await worker.announceReady("echo");
 
 for await (const evt of worker.channel.events()) {
   if (!worker.dispatchExtension(evt)) {

@@ -31,6 +31,12 @@ export class BaseWorker {
     { ext: Extension; handler: ExtensionHandler }
   >();
 
+  /** The contract last announced, so a `worker.discover` can be answered. */
+  private announced: {
+    workerType: string;
+    publishes?: Record<string, unknown>[];
+  } | null = null;
+
   constructor(opts: {
     id: string;
     subscriptions?: EventPattern[];
@@ -64,8 +70,20 @@ export class BaseWorker {
    * Route an event to the registered extension matching its event type.
    * Returns whether a handler ran; the first matching registration wins. Async
    * handlers are not awaited.
+   *
+   * `worker.discover` is protocol traffic rather than an extension: it is
+   * answered here with the contract last passed to {@link announceReady} (a
+   * directed, transient `worker.ready` to the asker), mirroring Go's
+   * AnnounceReadyTo. Presence is live-only and never persisted, so a peer that
+   * starts later — or a UI that cannot read presence from history — learns the
+   * worker's tools by asking.
    */
   dispatchExtension(evt: Event): boolean {
+    if (evt.type === EventType.WorkerDiscover) {
+      const asker = evt.worker_id;
+      if (asker && asker !== this.id) void this.announceReadyTo(asker);
+      return true;
+    }
     for (const { ext, handler } of this.regs.values()) {
       if (ext.event !== evt.type) continue;
       void handler(evt);
@@ -108,25 +126,62 @@ export class BaseWorker {
    * contract (SelfOnly left out), self excluded via `exclude_worker_id`.
    * `publishes` is the wire form of the events this worker declares it emits
    * (`worker.ready` "publishes").
+   *
+   * The contract is remembered, so {@link dispatchExtension} can answer a
+   * `worker.discover` with it. The event is transient: presence is delivered
+   * live and never written to the durable event log (mirroring Go).
    */
   async announceReady(
     workerType: string,
     publishes?: Record<string, unknown>[],
   ): Promise<void> {
-    const payload: Record<string, unknown> = {
-      type: workerType,
-      watch: this.watchEntries(false),
-    };
-    if (publishes && publishes.length > 0) {
-      payload["publishes"] = publishes;
-    }
-    const presence = createEvent(EventType.WorkerReady, payload);
+    this.announced = { workerType, publishes };
+    const presence = this.presenceEvent(this.announced);
     presence.exclude_worker_id = this.id;
     try {
       await this.channel.broadcast(presence);
     } catch {
       // Presence announcements are best-effort, mirroring Go.
     }
+  }
+
+  /**
+   * Send this worker's presence directly to one target instead of broadcasting
+   * it — the answer to a `worker.discover`, and the direct equivalent of Go's
+   * AnnounceReadyTo. Omitted arguments reuse the contract last announced with
+   * {@link announceReady}; with no contract announced yet, nothing is sent.
+   */
+  async announceReadyTo(
+    target: string,
+    workerType?: string,
+    publishes?: Record<string, unknown>[],
+  ): Promise<void> {
+    const announced = workerType !== undefined
+      ? { workerType, publishes }
+      : this.announced;
+    if (!announced) return;
+    try {
+      await this.channel.send(this.presenceEvent(announced), target);
+    } catch {
+      // Presence announcements are best-effort, mirroring Go.
+    }
+  }
+
+  /** Render one `worker.ready` event from a declared contract. */
+  private presenceEvent(announced: {
+    workerType: string;
+    publishes?: Record<string, unknown>[];
+  }): Event {
+    const payload: Record<string, unknown> = {
+      type: announced.workerType,
+      watch: this.watchEntries(false),
+    };
+    if (announced.publishes && announced.publishes.length > 0) {
+      payload["publishes"] = announced.publishes;
+    }
+    const presence = createEvent(EventType.WorkerReady, payload);
+    presence.transient = true; // presence: live-only, not durable history
+    return presence;
   }
 
   // ── Tool-serving helpers ──
