@@ -23,7 +23,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "release": "git diff --quiet && git diff --cached --quiet || { echo \"Error: git working tree not clean\" >&2; exit 1; } && npm run test && npm run typecheck && npm run build && npm version --no-git-tag-version && npm publish"
