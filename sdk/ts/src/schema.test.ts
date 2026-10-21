@@ -97,6 +97,29 @@ describe("toJsonSchema", () => {
     });
   });
 
+  it("rejects a library schema that has no converter (valibot, zod 3)", () => {
+    // These carry their own keys (kind/expects, or _def) plus a top-level type;
+    // announcing them as a JSON Schema would put library internals on the wire.
+    const valibotLike = {
+      kind: "schema",
+      type: "object",
+      expects: "Object",
+      entries: { text: { kind: "schema", type: "string" } },
+    };
+    expect(() => toJsonSchema(valibotLike, "parameters of t")).toThrow(
+      /@valibot\/to-json-schema/,
+    );
+    const zod3Like = { _def: { typeName: "ZodObject" }, type: "object" };
+    expect(() => toJsonSchema(zod3Like, "parameters of t")).toThrow(/expected a JSON Schema/);
+  });
+
+  it("accepts spec and vendor extension keys", () => {
+    expect(toJsonSchema({ type: "string", "x-ui": "textarea" }, "p")).toEqual({
+      type: "string",
+      "x-ui": "textarea",
+    });
+  });
+
   it("throws a clear error for something that is not a schema", () => {
     expect(() => toJsonSchema({ a: 1 }, "parameters of x")).toThrow(
       /parameters of x: expected a JSON Schema/,

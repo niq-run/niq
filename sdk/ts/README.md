@@ -104,7 +104,10 @@ whatever you pass:
 
 Registration normalizes both schemas to plain JSON Schema, so the announced
 contract (and every peer's tool list) is identical whichever route you take. A
-value that is neither a schema nor convertible throws, naming the extension.
+value that is neither a schema nor convertible throws, naming the extension —
+**including a library schema with no converter** (valibot, zod 3): those carry
+`type`/`kind` at the top level, and announcing them would put library internals on
+the wire, so they are rejected rather than silently passed through.
 
 Validating args is your call, in the handler — nothing on the bus validates. With
 zod/valibot the schema you already declared does it.

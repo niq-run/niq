@@ -89,25 +89,34 @@ export function isOptionalSchema(schema: JsonSchema): boolean {
   return optionalSchemas.has(schema);
 }
 
-/** Keys that make an object recognizably a JSON Schema. */
-const SCHEMA_HINTS = [
-  "type",
-  "properties",
-  "items",
-  "anyOf",
-  "oneOf",
-  "allOf",
-  "$ref",
-  "enum",
-  "const",
-  "additionalProperties",
-];
+/**
+ * Top-level keys a JSON Schema may carry. A schema is accepted only when it uses
+ * nothing else: a library's schema object can carry `type: "object"` at the top
+ * (valibot does) while its real shape lives in its own keys, and announcing that
+ * would poison every peer's tool list. `$`-prefixed and `x-` extension keys are
+ * allowed, as the spec intends.
+ */
+const JSON_SCHEMA_KEYWORDS = new Set([
+  "$schema", "$id", "$ref", "$defs", "$comment", "$anchor", "$dynamicRef",
+  "definitions", "type", "enum", "const", "properties", "required",
+  "additionalProperties", "patternProperties", "propertyNames", "unevaluatedProperties",
+  "items", "prefixItems", "additionalItems", "contains", "minItems", "maxItems",
+  "uniqueItems", "minContains", "maxContains", "unevaluatedItems",
+  "minLength", "maxLength", "pattern", "format", "contentEncoding", "contentMediaType",
+  "contentSchema", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+  "multipleOf", "minProperties", "maxProperties", "dependentRequired", "dependentSchemas",
+  "dependencies", "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
+  "title", "description", "default", "examples", "deprecated", "readOnly", "writeOnly",
+  "nullable", "discriminator",
+]);
 
 function looksLikeJsonSchema(v: unknown): v is JsonSchema {
   if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
   const keys = Object.keys(v);
   // An empty object is the JSON Schema for "anything" (s.any()).
-  return keys.length === 0 || keys.some((k) => SCHEMA_HINTS.includes(k));
+  return keys.every(
+    (k) => JSON_SCHEMA_KEYWORDS.has(k) || k.startsWith("$") || k.startsWith("x-"),
+  );
 }
 
 /**
@@ -135,7 +144,9 @@ export function toJsonSchema(value: unknown, what: string): JsonSchema {
   }
   if (looksLikeJsonSchema(value)) return value;
   throw new TypeError(
-    `${what}: expected a JSON Schema object or a schema with toJSONSchema() (zod 4, arktype); got ${describe(value)}`,
+    `${what}: expected a JSON Schema object, or a schema exposing toJSONSchema() ` +
+      `(zod 4, arktype convert automatically; valibot needs ` +
+      `toJsonSchema(...) from @valibot/to-json-schema); got ${describe(value)}`,
   );
 }
 
