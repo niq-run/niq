@@ -16,7 +16,21 @@ export interface Extension {
    */
   selfOnly?: boolean;
   description?: string;
+  /**
+   * The request's JSON Schema — what a caller must pass as the event payload.
+   * Build it with `s.object({...})` (see schema.ts) or hand it in.
+   */
   parameters?: Record<string, unknown>;
+  /**
+   * The REPLY's JSON Schema: the shape a caller gets back. Documentation only —
+   * nothing validates it — but it is what lets an agent (in particular a PTC
+   * script, written before anything runs) plan its parse. Declare it whenever the
+   * reply is structured; a prose reply can leave it out.
+   *
+   * It describes the reply VALUE: an object reply is the payload itself, while a
+   * text/number/array reply travels under `result` (see reply.ts).
+   */
+  response?: Record<string, unknown>;
 }
 
 /**

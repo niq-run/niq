@@ -234,3 +234,36 @@ describe("announceReady", () => {
     expect("publishes" in ch.broadcasts[0].payload).toBe(false);
   });
 });
+
+describe("ready contract", () => {
+  it("a registered schema (parameters + response) rides worker.ready", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.register(
+      {
+        event: "echo",
+        description: "Echo a message",
+        parameters: { type: "object", properties: { text: { type: "string" } } },
+        response: { type: "object", properties: { echoed: { type: "string" } } },
+      },
+      () => {},
+    );
+    w.register(
+      { event: "quiet", description: "no schema", selfOnly: true },
+      () => {},
+    );
+
+    const entries = w.watchEntries(false);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]["response"]).toEqual({
+      type: "object",
+      properties: { echoed: { type: "string" } },
+    });
+
+    await w.announceReady("echo");
+    const presence = ch.broadcasts[ch.broadcasts.length - 1];
+    const watch = presence.payload["watch"] as Record<string, unknown>[];
+    expect(watch[0]["response"]).toBeDefined();
+    expect(presence.exclude_worker_id).toBe(w.id);
+  });
+});

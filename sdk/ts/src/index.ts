@@ -5,6 +5,8 @@ export { BaseWorker, parseToolCall, argString, argInt } from "./baseworker.js";
 
 export { replyValue, replyText } from "./reply.js";
 
+export { s, isOptionalSchema, type JsonSchema } from "./schema.js";
+
 export { parseCliArgs, busConnFromArgs, runWorkerApp, BUS_CLI_FLAGS } from "./cli.js";
 export type { ParsedCliArgs } from "./cli.js";
 

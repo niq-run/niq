@@ -58,6 +58,48 @@ import { HTTPWorkerClient, readBusEnv } from "@niq.run/worker-sdk";
 const client = new HTTPWorkerClient(readBusEnv());
 ```
 
+### Declaring a tool's schemas
+
+`parameters` (the request) and `response` (the reply) are JSON Schema on the
+wire. Write them with the `s` builders instead of by hand:
+
+```ts
+import { s } from "@niq.run/worker-sdk";
+
+worker.register(
+  {
+    event: "lark.send",
+    description: "Send a message to a chat",
+    parameters: s.object({
+      target: s.string("chat_id, open_id or user_id"),
+      text: s.string("message body"),
+      file: s.optional(s.string("local path or http(s) URL")),
+      mode: s.optional(s.enumOf(["fast", "deep"])),
+    }),
+    response: s.object({ messageId: s.string(), ok: s.boolean() }),
+  },
+  handler,
+);
+```
+
+Properties are required unless wrapped in `s.optional(...)`; arrays, enums and
+free-form values are `s.array(...)`, `s.enumOf([...])`, `s.any()`.
+
+Both schemas ride `worker.ready`, so peers and the directory worker see them
+(`get_worker_info` → `parameters` / `response`). `response` is what lets an agent
+— in particular a PTC script, written before anything runs — plan how to parse a
+reply; declare it whenever the reply is structured.
+
+Already using zod (or valibot/arktype)? Skip the builders: `parameters` and
+`response` take any JSON Schema object, and those libraries generate one
+(`z.toJSONSchema(schema, { io: "input" })` in zod 4). Validate the args inside
+the handler with the same schema — nothing on the bus validates for you.
+
+> TypeScript types cannot be reflected at runtime, so there is no "infer the
+> schema from the handler signature" option: a build step would be needed
+> (typedoc/ts-json-schema-generator/typia). Explicit schemas — or a zod
+> one-liner — are the practical route.
+
 ### Reply shape
 
 `request.completed` payloads follow one rule (the same as the Go `baseworker`):

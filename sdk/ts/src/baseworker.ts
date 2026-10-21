@@ -80,6 +80,9 @@ export class BaseWorker {
       if (ext.parameters) {
         entry["parameters"] = ext.parameters;
       }
+      if (ext.response) {
+        entry["response"] = ext.response;
+      }
       out.push(entry);
     }
     return out;
