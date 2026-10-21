@@ -118,20 +118,49 @@ export class BaseWorker {
   // request.rejected result, echoing the request's id and propagating the
   // trace ID. Reply errors are ignored, mirroring Go.
 
-  /** Answer a request caller with a request.completed result. */
+  /**
+   * Answer a request caller with a request.completed result.
+   *
+   * A convenience, not the protocol: the bus only requires the payload to be a
+   * JSON object, and a worker may build one by hand. What this does:
+   *
+   *  - an OBJECT reply is the payload — no wrapper, so the event log shows the
+   *    reply itself;
+   *  - anything else (a string, a number, an array) cannot be a payload on its
+   *    own, so it is wrapped as `{ result: value }`.
+   *
+   * `result` and `content` are therefore reserved top-level keys of a reply
+   * payload (the latter for multi-modal blocks). replyObject / replyString say
+   * which shape you mean.
+   */
   async replyCompleted(
     callerID: string,
     callID: string,
-    result: string,
+    result: unknown,
     traceID?: string,
   ): Promise<void> {
-    await this.reply(
-      EventType.RequestCompleted,
-      callerID,
-      callID,
-      { result },
-      traceID,
-    );
+    const payload = isRecord(result) ? result : { result };
+    await this.reply(EventType.RequestCompleted, callerID, callID, payload, traceID);
+  }
+
+  /** Answer with a structured payload: the object IS the payload. */
+  async replyObject(
+    callerID: string,
+    callID: string,
+    payload: Record<string, unknown>,
+    traceID?: string,
+  ): Promise<void> {
+    await this.replyCompleted(callerID, callID, payload, traceID);
+  }
+
+  /** Answer with text: the payload is `{ result: text }`. */
+  async replyString(
+    callerID: string,
+    callID: string,
+    text: string,
+    traceID?: string,
+  ): Promise<void> {
+    await this.replyCompleted(callerID, callID, text, traceID);
   }
 
   /** Answer a request caller with a request.failed error message. */

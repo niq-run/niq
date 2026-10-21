@@ -154,6 +154,22 @@ describe("replies", () => {
     expect(evt.payload).toEqual({ result: "ok" });
   });
 
+  it("an object reply IS the payload; other values wrap as {result}", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    await w.replyCompleted("caller.0", "r1", { mounts: ["/a"], primary: "/a" });
+    await w.replyCompleted("caller.0", "r2", ["a", "b"]);
+    await w.replyCompleted("caller.0", "r3", 42);
+    await w.replyObject("caller.0", "r4", { content: [{ type: "image" }] });
+    await w.replyString("caller.0", "r5", "Exit code: 0");
+
+    expect(ch.sent[0].evt.payload).toEqual({ mounts: ["/a"], primary: "/a" });
+    expect(ch.sent[1].evt.payload).toEqual({ result: ["a", "b"] });
+    expect(ch.sent[2].evt.payload).toEqual({ result: 42 });
+    expect(ch.sent[3].evt.payload).toEqual({ content: [{ type: "image" }] });
+    expect(ch.sent[4].evt.payload).toEqual({ result: "Exit code: 0" });
+  });
+
   it("replyFailed and replyRejected carry error / reason", async () => {
     const ch = new FakeChannel();
     const w = makeWorker(ch);

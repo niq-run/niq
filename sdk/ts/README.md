@@ -58,6 +58,30 @@ import { HTTPWorkerClient, readBusEnv } from "@niq.run/worker-sdk";
 const client = new HTTPWorkerClient(readBusEnv());
 ```
 
+### Reply shape
+
+`request.completed` payloads follow one rule (the same as the Go `baseworker`):
+
+- an **object** reply *is* the payload — no wrapper;
+- anything else (text, a number, an array) is wrapped as `{ result: value }`.
+
+So a tool that returns structured data just passes the object:
+`replyCompleted(caller, callID, { mounts, primary })`; text goes through
+unchanged: `replyCompleted(caller, callID, "Exit code: 0")`. `replyObject(...)`
+and `replyString(...)` are the same calls with the shape made explicit.
+
+`result` and `content` are reserved top-level keys (the latter for multi-modal
+blocks), so a structured reply should pick its own field names.
+
+Reading a peer's reply uses the mirror helpers:
+
+```ts
+import { replyValue, replyText } from "@niq.run/worker-sdk";
+
+const listing = replyValue(evt.payload); // the object itself, or the result value
+const line = replyText(evt.payload);     // string verbatim, else JSON
+```
+
 ### Base worker
 
 `BaseWorker` (mirrors Go `pkg/baseworker`) layers the shared worker plumbing
@@ -84,7 +108,7 @@ worker.register(
   { event: "tool.invoke", keyField: "name", key: "echo", description: "Echo a message" },
   (evt) => {
     const call = parseToolCall(evt);
-    worker.replyCompleted(call.callerID, call.callID, call.name, `echo: ${call.args["text"] ?? ""}`, call.traceID);
+    worker.replyCompleted(call.callerID, call.callID, `echo: ${call.args["text"] ?? ""}`, call.traceID);
   },
 );
 
