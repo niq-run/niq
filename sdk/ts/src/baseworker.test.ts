@@ -99,6 +99,23 @@ describe("extension registry", () => {
     expect(seen).toEqual([mine]);
   });
 
+  it("answers an unhandled request with request.failed", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+
+    const evt = makeEvent({ type: "nope", worker_id: "caller.0", request_id: "r1" });
+    expect(w.dispatchExtension(evt)).toBe(false);
+    await new Promise((r) => setImmediate(r));
+    expect(ch.sent.map((s) => s.evt.type)).toEqual([EventType.RequestFailed]);
+    expect(ch.sent[0].evt.request_id).toBe("r1");
+    expect(ch.sent[0].evt.payload["error"]).toBe("no handler for event nope");
+
+    // A notification is dropped silently: nothing is waiting on it.
+    w.dispatchExtension(makeEvent({ type: "nope", worker_id: "caller.0" }));
+    await new Promise((r) => setImmediate(r));
+    expect(ch.sent).toHaveLength(1);
+  });
+
   it("renders watch entries, omitting internal for peers", () => {
     const w = makeWorker(new FakeChannel());
     w.register(

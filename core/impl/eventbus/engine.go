@@ -200,15 +200,21 @@ func (e *Engine) handleSend(ctx context.Context, req corebus.Request, from strin
 		for _, target := range req.Targets {
 			if !e.publishSendAllowed(from, evt.Type, target) {
 				log.Printf("[eventbus] send: %s denied publish %s to %s", from, evt.Type, target)
+				e.replyUndelivered(ctx, from, target, evt, event.TypeRequestRejected,
+					fmt.Sprintf("publish denied: %s may not send %s to %s", from, evt.Type, target))
 				continue
 			}
 			ch, ok := e.channels[target]
 			if !ok {
 				log.Printf("[eventbus] send: target %s not online (from %s)", target, from)
+				e.replyUndelivered(ctx, from, target, evt, event.TypeRequestFailed,
+					fmt.Sprintf("target is not online: %s", target))
 				continue
 			}
 			if err := ch.Send(ctx, evt); err != nil {
 				log.Printf("[eventbus] send: deliver to %s failed: %v", target, err)
+				e.replyUndelivered(ctx, from, target, evt, event.TypeRequestFailed,
+					fmt.Sprintf("delivery to %s failed: %v", target, err))
 				continue
 			}
 			delivered++
@@ -221,6 +227,42 @@ func (e *Engine) handleSend(ctx context.Context, req corebus.Request, from strin
 			e.persistEvent(ctx, evt)
 		}
 	}
+}
+
+// replyUndelivered answers the sender when a directed request could not be
+// delivered (publish denied, target offline, delivery error). Without it the
+// caller's pending request would hang on a silent drop: the bus logged the
+// failure and nobody was told. Only requests get a reply — a notification (no
+// request id) has nothing waiting on it.
+//
+// The reply is attributed to the intended target (that is the capability the
+// caller asked for) and delivered straight to the sender's channel: it is the
+// bus's own diagnostic, not a new publish, so it neither re-enters the ACL nor
+// loops back into routing.
+func (e *Engine) replyUndelivered(ctx context.Context, from, target string, evt event.Event, typ event.EventType, msg string) {
+	if evt.RequestId == "" {
+		return
+	}
+	payload := map[string]any{"error": msg}
+	if typ == event.TypeRequestRejected {
+		payload = map[string]any{"reason": msg}
+	}
+	reply := event.New(typ, target, payload)
+	reply.RequestId = evt.RequestId
+	reply.TraceID = evt.TraceID
+	reply.TargetWorkerID = from
+
+	ch, ok := e.channels[from]
+	if !ok {
+		log.Printf("[eventbus] cannot report %s for %s: sender %s is offline", typ, evt.RequestId, from)
+		return
+	}
+	if err := ch.Send(ctx, reply); err != nil {
+		log.Printf("[eventbus] report %s for %s to %s failed: %v", typ, evt.RequestId, from, err)
+		return
+	}
+	reply.Recipients = []string{from}
+	e.persistEvent(ctx, reply)
 }
 
 // handleBroadcast routes events to all online workers whose SubscribeAllow

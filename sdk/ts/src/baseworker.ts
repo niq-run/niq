@@ -76,6 +76,10 @@ export class BaseWorker {
    * a request id). The bus stamps the sender's worker id, so a peer cannot pose
    * as the owner.
    *
+   * A request that matches no extension is answered with `request.failed` rather
+   * than dropped, so the caller's pending call cannot wait forever on a worker
+   * that does not serve that event.
+   *
    * `worker.discover` is protocol traffic rather than an extension: it is
    * answered here with the contract last passed to {@link announceReady} (a
    * directed, transient `worker.ready` to the asker), mirroring Go's
@@ -104,6 +108,16 @@ export class BaseWorker {
       }
       void handler(evt);
       return true;
+    }
+    // No registration matched: answer a request so the caller cannot hang on a
+    // silent drop. Notifications have nothing waiting.
+    if (evt.request_id) {
+      void this.replyFailed(
+        evt.worker_id,
+        evt.request_id,
+        `no handler for event ${evt.type}`,
+        evt.trace_id,
+      );
     }
     return false;
   }

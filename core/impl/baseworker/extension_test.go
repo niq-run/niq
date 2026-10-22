@@ -6,6 +6,32 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
+// TestUnknownEventRepliesFailed verifies a request for an event the worker does
+// not serve is answered with request.failed (no silent drop), while a
+// notification is dropped silently.
+func TestUnknownEventRepliesFailed(t *testing.T) {
+	ch := &recordingChannel{}
+	w := NewBaseWorker("w1", ch)
+
+	evt := event.New("nope", "peer", nil)
+	evt.RequestId = "r1"
+	if w.DispatchExtension(evt) {
+		t.Fatal("no handler should have run")
+	}
+	if len(ch.sent) != 1 || ch.sent[0].Type != event.TypeRequestFailed || ch.sent[0].RequestId != "r1" {
+		t.Fatalf("expected request.failed for r1, got %+v", ch.sent)
+	}
+	if msg, _ := ch.sent[0].Payload["error"].(string); msg != "no handler for event nope" {
+		t.Fatalf("error = %q, want the event named", msg)
+	}
+
+	// A notification is dropped silently: nothing is waiting on it.
+	w.DispatchExtension(event.New("nope", "peer", nil))
+	if len(ch.sent) != 1 {
+		t.Fatalf("notification produced a reply: %+v", ch.sent)
+	}
+}
+
 // TestInternalExtensionRefusesForeignSender verifies an Internal extension is
 // self-scoped: a peer's request never reaches the handler and is rejected back,
 // while the owner invokes it normally.

@@ -131,17 +131,23 @@ func (w *BaseWorker) Unregister(events ...event.EventType) {
 // extensions.
 //
 // An Internal extension is self-scoped: a request from any other worker is
-// refused before the handler runs (request.rejected when the event carries a
-// request id, otherwise just logged). The bus stamps the sender's worker id from
-// its credential, so a peer cannot pose as the owner.
+// refused before the handler runs (request.rejected, or just logged when the
+// event is a notification). The bus stamps the sender's worker id from its
+// credential, so a peer cannot pose as the owner.
+//
+// A request that matches no extension is answered with request.failed rather
+// than dropped: the caller's pending call would otherwise wait forever on a
+// worker that simply does not serve that event.
 func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 	if w.extensions == nil {
+		w.replyNoHandler(evt)
 		return false
 	}
 	w.extensions.mu.RLock()
 	reg, ok := w.extensions.regs[extensionKey(Extension{Event: evt.Type})]
 	w.extensions.mu.RUnlock()
 	if !ok {
+		w.replyNoHandler(evt)
 		return false
 	}
 	if reg.ext.Internal && evt.WorkerId != w.id {
@@ -155,6 +161,16 @@ func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 	}
 	reg.handler(evt)
 	return true
+}
+
+// replyNoHandler answers a request for an event this worker does not serve, so
+// the caller's pending call cannot hang on a silent drop. Only requests get a
+// reply — a notification (no request id) has nothing waiting on it.
+func (w *BaseWorker) replyNoHandler(evt event.Event) {
+	if evt.RequestId == "" || w.Channel == nil {
+		return
+	}
+	w.ReplyFailed(evt.WorkerId, evt.RequestId, "no handler for event "+string(evt.Type), evt.TraceID)
 }
 
 // Extensions returns a snapshot of the registered extensions. The
