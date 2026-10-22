@@ -26,18 +26,25 @@ jobs:
           node-version: '20'
           registry-url: https://registry.npmjs.org
 
-      # If a RELEASE_NOTES.md is committed at the repo root, use its contents
-      # as the GitHub Release body instead of goreleaser auto-generating one
-      # from the (possibly huge) commit history since the previous tag.
+      # Release notes: one archived file per release under
+      # app/publish/release-notes, named after the tag. app/publish/RELEASE_NOTES.md
+      # holds the current release's notes; it is used as a fallback only when it
+      # names the tag being released, so a stale copy can never publish the
+      # previous version's notes under a new tag.
       - name: Determine release notes
         id: notes
         run: |
           args="release --clean --config app/publish/.goreleaser.yaml"
-          if [ -f "RELEASE_NOTES.md" ]; then
-            echo "Using RELEASE_NOTES.md as the release body."
-            args="$args --release-notes RELEASE_NOTES.md"
+          notes="app/publish/release-notes/${GITHUB_REF_NAME}.md"
+          current="app/publish/RELEASE_NOTES.md"
+          if [ -f "$notes" ]; then
+            echo "Using $notes as the release body."
+            args="$args --release-notes $notes"
+          elif [ -f "$current" ] && grep -Fq -- "$GITHUB_REF_NAME" "$current"; then
+            echo "Using $current as the release body (it mentions ${GITHUB_REF_NAME})."
+            args="$args --release-notes $current"
           else
-            echo "No RELEASE_NOTES.md found; letting goreleaser generate the changelog."
+            echo "::warning::No release notes for ${GITHUB_REF_NAME}; letting goreleaser generate the changelog."
           fi
           echo "release_args=$args" >> "$GITHUB_OUTPUT"
 
