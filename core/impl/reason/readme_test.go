@@ -7,9 +7,9 @@ import (
 )
 
 // TestReadmeSeedUpdateAndRestore verifies the self-description capability: the
-// config seeds worker.readme, a directed update replaces it, the update is
-// SelfOnly (not peer-announced, still dispatchable), and the value survives a
-// snapshot/restore instead of falling back to the seed.
+// config seeds worker.readme, a directed update replaces it, and the value
+// survives a snapshot/restore instead of falling back to the seed. Both halves
+// are advertised (the update's sender is a bus ACL concern).
 func TestReadmeSeedUpdateAndRestore(t *testing.T) {
 	ch := newTestChannel()
 	w := NewBaseReasonWorker(Config{ID: "r1", Provider: &staticProvider{}, Bus: ch, Readme: "seed text"})
@@ -43,9 +43,10 @@ func TestReadmeSeedUpdateAndRestore(t *testing.T) {
 		t.Fatalf("updated readme = %q, want trimmed text", got)
 	}
 
-	// SelfOnly: hidden from the peer-facing contract, present in the worker's own.
-	if hasWatch(w.WatchEntries(false), TypeReadmeUpdate) {
-		t.Fatal("worker.readme.update must not be announced to peers")
+	// Both halves are advertised: the roster tells peers/HIW that the read and
+	// write capabilities exist; the bus ACL decides who may send the update.
+	if !hasWatch(w.WatchEntries(false), TypeReadmeUpdate) {
+		t.Fatal("worker.readme.update must be announced to peers")
 	}
 	if !hasWatch(w.WatchEntries(true), TypeReadmeUpdate) {
 		t.Fatal("worker.readme.update must be in the worker's own view")

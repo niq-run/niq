@@ -79,7 +79,44 @@ describe("extension registry", () => {
     expect(w.dispatchExtension(makeEvent({ type: "other.event" }))).toBe(false);
   });
 
-  it("renders watch entries, omitting selfOnly for peers", () => {
+  it("refuses an internal extension from a foreign sender", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    const seen: Event[] = [];
+    w.register({ event: "internal.op", internal: true }, (evt) => {
+      seen.push(evt);
+    });
+
+    const peer = makeEvent({ type: "internal.op", worker_id: "peer.0", request_id: "r1" });
+    expect(w.dispatchExtension(peer)).toBe(true);
+    await new Promise((r) => setImmediate(r));
+    expect(seen).toEqual([]);
+    expect(ch.sent.map((s) => s.evt.type)).toEqual([EventType.RequestRejected]);
+
+    // The owner invokes it normally.
+    const mine = makeEvent({ type: "internal.op", worker_id: "echo.0", request_id: "r2" });
+    expect(w.dispatchExtension(mine)).toBe(true);
+    expect(seen).toEqual([mine]);
+  });
+
+  it("answers an unhandled request with request.failed", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+
+    const evt = makeEvent({ type: "nope", worker_id: "caller.0", request_id: "r1" });
+    expect(w.dispatchExtension(evt)).toBe(false);
+    await new Promise((r) => setImmediate(r));
+    expect(ch.sent.map((s) => s.evt.type)).toEqual([EventType.RequestFailed]);
+    expect(ch.sent[0].evt.request_id).toBe("r1");
+    expect(ch.sent[0].evt.payload["error"]).toBe("no handler for event nope");
+
+    // A notification is dropped silently: nothing is waiting on it.
+    w.dispatchExtension(makeEvent({ type: "nope", worker_id: "caller.0" }));
+    await new Promise((r) => setImmediate(r));
+    expect(ch.sent).toHaveLength(1);
+  });
+
+  it("renders watch entries, omitting internal for peers", () => {
     const w = makeWorker(new FakeChannel());
     w.register(
       {
@@ -93,7 +130,7 @@ describe("extension registry", () => {
       () => {},
     );
     w.register(
-      { event: "self.list_workers", selfOnly: true, description: "my view" },
+      { event: "self.list_workers", internal: true, description: "my view" },
       () => {},
     );
 
@@ -216,7 +253,7 @@ describe("announceReady", () => {
       () => {},
     );
     w.register(
-      { event: "self.x", selfOnly: true, description: "hidden" },
+      { event: "self.x", internal: true, description: "hidden" },
       () => {},
     );
 
@@ -361,7 +398,7 @@ describe("ready contract", () => {
       () => {},
     );
     w.register(
-      { event: "quiet", description: "no schema", selfOnly: true },
+      { event: "quiet", description: "no schema", internal: true },
       () => {},
     );
 

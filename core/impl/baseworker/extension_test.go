@@ -6,6 +6,69 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
+// TestUnknownEventRepliesFailed verifies a request for an event the worker does
+// not serve is answered with request.failed (no silent drop), while a
+// notification is dropped silently.
+func TestUnknownEventRepliesFailed(t *testing.T) {
+	ch := &recordingChannel{}
+	w := NewBaseWorker("w1", ch)
+
+	evt := event.New("nope", "peer", nil)
+	evt.RequestId = "r1"
+	if w.DispatchExtension(evt) {
+		t.Fatal("no handler should have run")
+	}
+	if len(ch.sent) != 1 || ch.sent[0].Type != event.TypeRequestFailed || ch.sent[0].RequestId != "r1" {
+		t.Fatalf("expected request.failed for r1, got %+v", ch.sent)
+	}
+	if msg, _ := ch.sent[0].Payload["error"].(string); msg != "no handler for event nope" {
+		t.Fatalf("error = %q, want the event named", msg)
+	}
+
+	// A notification is dropped silently: nothing is waiting on it.
+	w.DispatchExtension(event.New("nope", "peer", nil))
+	if len(ch.sent) != 1 {
+		t.Fatalf("notification produced a reply: %+v", ch.sent)
+	}
+}
+
+// TestInternalExtensionRefusesForeignSender verifies an Internal extension is
+// self-scoped: a peer's request never reaches the handler and is rejected back,
+// while the owner invokes it normally.
+func TestInternalExtensionRefusesForeignSender(t *testing.T) {
+	ch := &recordingChannel{}
+	w := NewBaseWorker("w1", ch)
+	ran := 0
+	w.Register(Extension{Event: "internal.op", Internal: true}, func(event.Event) { ran++ })
+
+	peer := event.New("internal.op", "peer", nil)
+	peer.RequestId = "r1"
+	if !w.DispatchExtension(peer) {
+		t.Fatal("a refusal should count as handled")
+	}
+	if ran != 0 {
+		t.Fatal("internal handler ran for a foreign sender")
+	}
+	if len(ch.sent) != 1 || ch.sent[0].Type != event.TypeRequestRejected || ch.sent[0].RequestId != "r1" {
+		t.Fatalf("expected a request.rejected for r1, got %+v", ch.sent)
+	}
+
+	// A notification (no request id) is refused silently.
+	note := event.New("internal.op", "peer", nil)
+	if !w.DispatchExtension(note) {
+		t.Fatal("a refusal should count as handled")
+	}
+	if len(ch.sent) != 1 {
+		t.Fatalf("a notification refusal must not reply, got %d sends", len(ch.sent))
+	}
+
+	// The owner invokes it normally.
+	mine := event.New("internal.op", "w1", nil)
+	if !w.DispatchExtension(mine) || ran != 1 {
+		t.Fatal("internal handler did not run for its owner")
+	}
+}
+
 // TestUnregisterRemovesExtensions verifies a worker can withdraw capabilities
 // it registered dynamically; unknown events are a no-op.
 func TestUnregisterRemovesExtensions(t *testing.T) {

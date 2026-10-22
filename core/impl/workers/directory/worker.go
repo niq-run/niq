@@ -161,7 +161,7 @@ func (w *DirectoryWorker) process(evt event.Event) {
 }
 
 // rememberReady records (or replaces, since a ready is the whole contract) a
-// worker in the directory. Only peer-facing watch (SelfOnly excluded) is kept.
+// worker in the directory. Only peer-facing watch (Internal excluded) is kept.
 // This worker itself is ignored (no self-directed half here).
 func (w *DirectoryWorker) rememberReady(evt event.Event) {
 	id := evt.WorkerId

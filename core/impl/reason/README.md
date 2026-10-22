@@ -36,9 +36,9 @@ Division between the loop and dispatch:
 | `worker.go` | `BaseReasonWorker` — the generic reasoning body (embeds `baseworker.BaseWorker`) + `Config` + `NewBaseReasonWorker` + lifecycle (`Start`/`Stop`/`Snapshot`/`Restore`/`Messages`) + the event loop (`watch`) + the `tryReason` decision gate + the exported accessors the concrete worker builds on (`Transcript`, `TryReason`, `LLMToolDefs`, ...) |
 | `reason.go` | the reasoning round: prepareReasoning / consumeStream / finishReasoning + the worker's own event-type constants (lifecycle `reason.*` broadcasts + the generated self tools `message` / `request`) + tool dispatch handleToolCalls + `handleContextBudget` (context-window pressure) + tool-call id synthesis |
 | `process.go` | event dispatch `process` + handlers (abort/timeout/tool-result/input) + the event→transcript-input conversion (`DefaultConverter` / `ConvertInputEvent` / `resultOutcome`) |
-| `capability.go` | **capability**, both directions plus its applications. Inbound `worker.ready` / `worker.gone` handling + the `DiscoveredCapability` universe; outbound `BroadcastReady` (two-batch: peers then self) / `BroadcastDiscover` (via `WatchEntries`); resolution over the universe — `toolNameOfCapability` / `capabilityByToolName` / `capabilityBySourceEvent` / `findProvider` / `isRequestCap`; the convention capabilities the mechanism itself invokes — the `invokeCapability` primitive with `invokeContextCompress` (self) / `invokeElapseReminder` (peer) and their names; and applying the universe to the LLM — `ToolListBuilder` / `LLMToolDefs` (what the model sees) |
+| `capability.go` | **capability**, both directions plus its applications. Inbound `worker.ready` / `worker.gone` handling + the `DiscoveredCapability` universe; outbound `BroadcastReady` (two-batch: peers then self) / `BroadcastDiscover` (via `WatchEntries`); resolution over the universe — `toolNameOfCapability` / `capabilityByToolName` / `findProvider` / `isRequestCap`; the convention capabilities the mechanism itself invokes — the `invokeCapability` primitive with `invokeContextCompress` (self) / `invokeElapseReminder` (peer) and their names; and applying the universe to the LLM — `ToolListBuilder` / `LLMToolDefs` (what the model sees) |
 | `provider.go` | provider management, exposed through the extension mechanism: `ProviderSources` / `ProviderInfo` + `registerBaseExtensions` (provider.switch/list/current) + `setActiveProvider` / `resolveContextWindow` |
-| `readme.go` | the worker's self-description: the generic `worker.readme` read capability + the SelfOnly `worker.readme.update` write, seeded from `params.readme`, with runtime updates persisted in the snapshot |
+| `readme.go` | the worker's self-description: the generic `worker.readme` read capability + the advertised `worker.readme.update` write, seeded from `params.readme`, with runtime updates persisted in the snapshot |
 | `llmerror.go` | LLM error policy: context overflow → compression request, rate limit → backoff reminder, 4xx → fail, else retry |
 | `systemprompt.go` | renders the system prompt from programs |
 
@@ -115,7 +115,7 @@ Other events are dispatched by `process`:
 | timer.timeout | park leftover tools (cause=timeout) + schedule | yes |
 | worker.ready/gone | learn/forget the worker's tools | no |
 | request.completed/failed/rejected | resolve or park-late + update transcript | when resolved |
-| capability event (send_message, context.compress, provider.*, ...) | dispatch to the registered extension by event type (own SelfOnly events arrive addressed to self); an async meta op schedules a round when done | no (meta op: when done) |
+| capability event (send_message, context.compress, provider.*, ...) | dispatch to the registered extension by event type (own Internal events arrive addressed to self); an async meta op schedules a round when done | no (meta op: when done) |
 | worker.input | handle per the three input_mode levels (a reminder timer's fire is delivered here too) | depends on level |
 
 ### Tools, extensions and the request-response convention
@@ -149,10 +149,9 @@ what the worker actually became, not what the spawner guessed.
 - `worker.readme` (peer-facing) returns the current text, so the recall flow is:
   list/search the roster (directory), then read the readme of the candidates to
   confirm which worker is the right one.
-- `worker.readme.update { readme }` replaces it. It is **SelfOnly**: only the
-  worker's own tool list advertises it, so peers do not see "update this worker"
-  in the roster — but a directed request still dispatches, since the bus ACL, not
-  the announcement, decides who may write.
+- `worker.readme.update { readme }` replaces it. It is advertised like the
+  read half: the WebUI and authorized peers can discover it in the roster, and
+  the bus ACL — not the announcement — decides who may send the update.
 - The value is durable. An update signals the host to checkpoint; `Snapshot`
   always carries the current text (a pointer, so a deliberate clear survives),
   and `Restore` overrides the config seed. A managed restart is a fresh rebuild

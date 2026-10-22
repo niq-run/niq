@@ -65,7 +65,8 @@ type Worker struct {
 
 // History tool event types — each is a directed tool invocation whose event
 // type IS the tool name (the request-response convention in the bus). Exposed
-// to peers (not SelfOnly): their whole point is cross-worker introspection.
+// to peers (advertised, not Internal): their whole point is cross-worker
+// introspection.
 const (
 	TypeHistoryList event.EventType = "history.list"
 	TypeHistoryGet  event.EventType = "history.get"

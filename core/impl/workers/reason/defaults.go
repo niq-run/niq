@@ -47,9 +47,9 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 
 	w.Register(baseworker.Extension{
 		Event: reasonBase.TypeMessage,
-		// SelfOnly: a worker's own addressed-messaging tool is not something
+		// Internal: a worker's own addressed-messaging tool is not something
 		// peers should be able to call, so it is announced only to itself.
-		SelfOnly:    true,
+		Internal:    true,
 		Response:    baseworker.StringSchema("confirmation: \"message sent to <worker>\"; the target's answer, if any, arrives later as worker.input"),
 		Description: "Send a message to a specific worker on the bus. The message is delivered in append mode: it does not interrupt the target's in-flight reasoning — it is appended as a supplement and the target schedules a fresh round.",
 		Parameters: obj(map[string]any{
@@ -63,15 +63,15 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 
 	w.Register(baseworker.Extension{
 		Event: reasonBase.TypeRequest,
-		// SelfOnly: this is the worker's own directed-call escape hatch — peers
+		// Internal: this is the worker's own directed-call escape hatch — peers
 		// call it here only indirectly (a peer reason invokes its own request).
 		// The actual forwarding is done in handleToolCalls (pkg/reason): the
 		// peer capability event goes out under THIS call's id, so no second
 		// placeholder is needed. This handler is defensive only (normally never
 		// reached).
-		SelfOnly:    true,
+		Internal:    true,
 		Response:    baseworker.ObjectSchema(map[string]any{"result": map[string]any{"type": "string", "description": "the target capability's reply text — its shape is whatever that capability declares as its response"}}),
-		Description: "Invoke a capability on another worker without it being a listed tool: provide target (worker id), event (the capability event type, as shown by get_worker_info), and arguments. The call awaits the worker's request.completed and returns its result.",
+		Description: "Invoke a capability on another worker without it being a listed tool: provide target (worker id), event (the capability event type, as shown by the directory worker's get_worker_info), and arguments. The call awaits the worker's request.completed and returns its result. Not limited to capabilities discovered by this worker — the target may serve events that were never announced here (e.g. a peer reason worker's worker.readme).",
 		Parameters: obj(map[string]any{
 			"target":    map[string]any{"type": "string", "description": "Target worker ID"},
 			"event":     map[string]any{"type": "string", "description": "Capability event type on the target worker"},
@@ -116,10 +116,10 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	*/
 
 	// Program management: query or mutate this worker's instruction/playbook
-	// list. Deliberately NOT SelfOnly — the list is meant to be edited by other
-	// authorized workers (e.g. webui-hiw); bus permissions gate who may send
-	// the directed events. These are ordinary meta-extensions (no transcript
-	// edit), so handleToolCalls dispatches them normally and the
+	// list. Deliberately advertised (not Internal): the list is meant to be
+	// edited by other authorized workers (e.g. webui-hiw); bus permissions gate
+	// who may send the directed events. These are ordinary meta-extensions (no
+	// transcript edit), so handleToolCalls dispatches them normally and the
 	// request.completed reply schedules the next round.
 	w.Register(baseworker.Extension{
 		Event:    TypeProgramQuery,
@@ -179,8 +179,8 @@ const (
 
 // TypeProgramQuery / TypeProgramUpdate are the program-management extensions:
 // read this worker's instruction/playbook list, or add/remove one entry. They
-// are NOT SelfOnly so other authorized workers (e.g. webui-hiw) can manage
-// them; bus permissions control who may address the directed events.
+// are advertised (not Internal) so other authorized workers (e.g. webui-hiw)
+// can manage them; bus permissions control who may address the directed events.
 const (
 	TypeProgramQuery  event.EventType = "program.query"
 	TypeProgramUpdate event.EventType = "program.update"

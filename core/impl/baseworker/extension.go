@@ -23,6 +23,7 @@ package baseworker
 
 import (
 	"context"
+	"log"
 	"sync"
 
 	"github.com/niq-run/niq/core/itfs/event"
@@ -36,12 +37,17 @@ type Extension struct {
 	// Event is the event type the extension responds to — its identity. Any
 	// event type is allowed; invoking the extension means sending this event.
 	Event event.EventType
-	// SelfOnly marks an extension that only the declaring worker itself serves
-	// (e.g. message, request — operations on that worker's own view of the
-	// bus). Such extensions are left out of the peer-facing
-	// worker.ready, so peers never see them as callable tools; the worker
-	// discovers them from its own registry instead.
-	SelfOnly bool
+	// Internal marks an extension that belongs to the worker's OWN view: it is
+	// not advertised in the peer-facing catalogue (worker.ready watch ->
+	// directory -> WebUI / PTC), and a request from any other worker is refused
+	// before the handler runs (a request.rejected when the event carries a
+	// request id). The declaring worker still invokes it normally through the
+	// bus, and the self-directed ready keeps it in its own tool list.
+	//
+	// This is a scope rule, not a general access control: it says the capability
+	// is meaningful only to its owner. Whether another worker may address this
+	// one at all is still the bus ACL's job.
+	Internal bool
 
 	Description string
 	Parameters  map[string]any
@@ -123,18 +129,48 @@ func (w *BaseWorker) Unregister(events ...event.EventType) {
 // event type. Returns whether a handler ran. The handler is looked up under the
 // registry lock but invoked outside it, so a handler may register further
 // extensions.
+//
+// An Internal extension is self-scoped: a request from any other worker is
+// refused before the handler runs (request.rejected, or just logged when the
+// event is a notification). The bus stamps the sender's worker id from its
+// credential, so a peer cannot pose as the owner.
+//
+// A request that matches no extension is answered with request.failed rather
+// than dropped: the caller's pending call would otherwise wait forever on a
+// worker that simply does not serve that event.
 func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 	if w.extensions == nil {
+		w.replyNoHandler(evt)
 		return false
 	}
 	w.extensions.mu.RLock()
-	h := w.extensions.regs[string(evt.Type)+"\x00"].handler
+	reg, ok := w.extensions.regs[extensionKey(Extension{Event: evt.Type})]
 	w.extensions.mu.RUnlock()
-	if h == nil {
+	if !ok {
+		w.replyNoHandler(evt)
 		return false
 	}
-	h(evt)
+	if reg.ext.Internal && evt.WorkerId != w.id {
+		if evt.RequestId != "" && w.Channel != nil {
+			w.ReplyRejected(evt.WorkerId, evt.RequestId,
+				"internal capability: only "+w.id+" may invoke it", evt.TraceID)
+		}
+		log.Printf("[baseworker %s] refused internal capability %s from %s",
+			w.id, evt.Type, evt.WorkerId)
+		return true
+	}
+	reg.handler(evt)
 	return true
+}
+
+// replyNoHandler answers a request for an event this worker does not serve, so
+// the caller's pending call cannot hang on a silent drop. Only requests get a
+// reply — a notification (no request id) has nothing waiting on it.
+func (w *BaseWorker) replyNoHandler(evt event.Event) {
+	if evt.RequestId == "" || w.Channel == nil {
+		return
+	}
+	w.ReplyFailed(evt.WorkerId, evt.RequestId, "no handler for event "+string(evt.Type), evt.TraceID)
 }
 
 // Extensions returns a snapshot of the registered extensions. The
@@ -159,14 +195,15 @@ func (w *BaseWorker) Extensions() []Extension {
 // wire field is literally "watch" — see capability.go in pkg/reason for the
 // naming note.
 //
-// includeSelfOnly controls whether SelfOnly extensions are rendered: a
-// peer-facing broadcast leaves them out (they are not callable by peers), while
-// a worker's own view includes them.
-func (w *BaseWorker) WatchEntries(includeSelfOnly bool) []map[string]any {
+// includeInternal controls whether Internal extensions are rendered: a
+// peer-facing broadcast leaves them out (they are not advertised to peers),
+// while a worker's own view includes them. Visibility only — dispatch is gated
+// by the bus ACL, not by this parameter.
+func (w *BaseWorker) WatchEntries(includeInternal bool) []map[string]any {
 	caps := w.Extensions()
 	out := make([]map[string]any, 0, len(caps))
 	for _, e := range caps {
-		if e.SelfOnly && !includeSelfOnly {
+		if e.Internal && !includeInternal {
 			continue
 		}
 		entry := map[string]any{"event": string(e.Event), "desc": e.Description}
@@ -182,12 +219,12 @@ func (w *BaseWorker) WatchEntries(includeSelfOnly bool) []map[string]any {
 }
 
 // AnnounceReady broadcasts this worker's presence on the bus: the externally
-// callable contract (SelfOnly left out), self excluded. publishes is the wire
+// callable contract (Internal left out), self excluded. publishes is the wire
 // form of the events this worker declares it emits (worker.ready "publishes"),
 // nil if it publishes none. This is the generic announcement every worker uses
 // to tell PEERS what it serves — it is not for self, so there is no
 // self-directed half here. The reason worker additionally sends itself its
-// full contract (including SelfOnly) so it can learn its own capabilities
+// full contract (including Internal) so it can learn its own capabilities
 // through the same discovery pipeline as everyone else; that is its own extra,
 // not part of this helper.
 func (w *BaseWorker) AnnounceReady(workerType string, publishes []map[string]any) {
@@ -211,13 +248,13 @@ func (w *BaseWorker) AnnounceReady(workerType string, publishes []map[string]any
 // total directed sends instead of an O(N²) broadcast re-announcement storm
 // (N workers each re-broadcasting to N subscribers).
 //
-// includeSelfOnly mirrors WatchEntries: false sends the peer-facing contract
-// (SelfOnly left out, for replying to a peer discover); true sends the full
-// contract including SelfOnly (for a worker learning its own capabilities).
-func (w *BaseWorker) AnnounceReadyTo(target, workerType string, publishes []map[string]any, includeSelfOnly bool) {
+// includeInternal mirrors WatchEntries: false sends the peer-facing contract
+// (Internal left out, for replying to a peer discover); true sends the full
+// contract including Internal (for a worker learning its own capabilities).
+func (w *BaseWorker) AnnounceReadyTo(target, workerType string, publishes []map[string]any, includeInternal bool) {
 	payload := map[string]any{
 		"type":  workerType,
-		"watch": w.WatchEntries(includeSelfOnly),
+		"watch": w.WatchEntries(includeInternal),
 	}
 	if len(publishes) > 0 {
 		payload["publishes"] = publishes

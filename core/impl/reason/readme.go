@@ -18,9 +18,9 @@ const TypeReadmeUpdate event.EventType = "worker.readme.update"
 //
 //   - worker.readme — the generic read capability (baseworker), so peers, the
 //     WebUI and the worker itself can recall what it is for.
-//   - worker.readme.update — replace the description. SelfOnly: it is not part
-//     of the peer-facing contract, but a directed request still reaches it (the
-//     bus ACL, not the announcement, gates who may update).
+//   - worker.readme.update — replace the description. Advertised in the
+//     peer-facing catalogue: the WebUI and authorized peers can discover it;
+//     the bus ACL, not the announcement, decides who may actually send it.
 //
 // The value is durable: an update signals the host to checkpoint, so the latest
 // description survives a restart.
@@ -36,10 +36,9 @@ func (w *BaseReasonWorker) registerReadme() {
 
 	w.Register(baseworker.Extension{
 		Event: TypeReadmeUpdate,
-		// SelfOnly: updating your own description is a self-management act, not a
-		// capability peers should see in the roster. A directed request from
-		// another authorized worker still dispatches here.
-		SelfOnly: true,
+		// Advertised: revising a description is a normal meta operation the WebUI
+		// (and an authorized peer) may perform; the bus ACL decides who may send
+		// the event.
 		Response: baseworker.StringSchema("confirmation that the readme was replaced"),
 		Description: "Replace this worker's readme — the short self-description of what it is for. " +
 			"Write it when the worker's role or scope changes, so later recall " +

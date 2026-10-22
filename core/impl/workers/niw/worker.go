@@ -489,8 +489,8 @@ func (w *Worker) deliverToLocalRecipient(ctx context.Context, evt event.Event) {
 // ── Control extensions (niw.recipient.*) — local channel ──
 
 // registerExtensions declares the peer-callable routing controls, mirroring the
-// lark worker's lark.reason.* group. Non-SelfOnly so a control plane / reason
-// peer can discover and call them.
+// lark worker's lark.reason.* group. Advertised (not Internal) so a control
+// plane / reason peer can discover and call them.
 func (w *Worker) registerExtensions() {
 	w.Register(baseworker.Extension{
 		Event:       TypeRecipientSet,
@@ -518,8 +518,8 @@ func (w *Worker) registerExtensions() {
 	}, func(evt event.Event) { w.handleGet(evt) })
 
 	// A-side service controls: actively (re)dial the far side and query the
-	// live bridge status. Non-SelfOnly so a local reason/control peer can
-	// discover and drive the link.
+	// live bridge status. Advertised (not Internal) so a local reason/control
+	// peer can discover and drive the link.
 	w.Register(baseworker.Extension{
 		Event:       TypeDial,
 		Response:    baseworker.StringSchema("connection outcome"),
