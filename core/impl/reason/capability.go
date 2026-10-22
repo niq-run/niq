@@ -178,19 +178,6 @@ func (w *BaseReasonWorker) capabilityByToolName(name string) (DiscoveredCapabili
 	return DiscoveredCapability{}, false
 }
 
-// capabilityBySourceEvent finds a discovered capability addressed as (source
-// worker id, bare event type). It backs the "request" tool: the model names the
-// target worker and the capability event it wants invoked. Refuses peer-reason
-// capabilities (not callable tools to this worker).
-func (w *BaseReasonWorker) capabilityBySourceEvent(source, eventType string) (DiscoveredCapability, bool) {
-	for _, cap := range w.discoveredCapabilities() {
-		if cap.Source == source && string(cap.Event) == eventType && cap.Source != w.ID() {
-			return cap, true
-		}
-	}
-	return DiscoveredCapability{}, false
-}
-
 // isRequestCap reports whether a capability is THIS worker's own "request"
 // tool (a reason worker's directed-call escape hatch). Only the bare name
 // "request" on this reason worker qualifies — a peer reason's request is
@@ -273,7 +260,7 @@ func (w *BaseReasonWorker) invokeElapseReminder(durationMS int64, purpose, reque
 //
 //   - a broadcast to every peer except this worker (ExcludeWorkerID, via
 //     baseworker.AnnounceReady) carrying the externally callable contract,
-//     SelfOnly extensions left out, and
+//     Internal extensions left out, and
 //   - a directed announcement to this worker carrying the full contract.
 //
 // Because the worker is excluded from its own broadcast, it receives exactly
@@ -283,18 +270,18 @@ func (w *BaseReasonWorker) invokeElapseReminder(durationMS int64, purpose, reque
 // Exported for embedding workers and tests.
 func (w *BaseReasonWorker) BroadcastReady() {
 	// First batch: presence to every peer except this worker. Carries the
-	// externally callable contract only — SelfOnly extensions are left out, so
-	// peers never see them as callable tools. This is the generic announce
-	// every worker uses; only the self-directed half below is reason-specific.
+	// externally advertised contract only — Internal extensions are left out, so
+	// peers never see them in the catalogue. This is the generic announce every
+	// worker uses; only the self-directed half below is reason-specific.
 	w.AnnounceReady(w.workerType, nil)
 
-	// Second batch: the full contract (SelfOnly included) sent to itself. This
+	// Second batch: the full contract (Internal included) sent to itself. This
 	// is the self-directed round-trip through discovery — HandleWorkerReady
 	// treats it like any peer's announcement, so this worker's own capabilities
 	// flow through the same unified discovery pipeline as everyone else's.
 	self := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"type": w.workerType,
-		// Full contract, SelfOnly included (this worker's own view).
+		// Full contract, Internal included (this worker's own view).
 		"watch": w.WatchEntries(true),
 	})
 	self.Transient = true // presence: delivered live, not durable history

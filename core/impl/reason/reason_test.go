@@ -189,35 +189,47 @@ func TestPrepareReasoningNeutralParkCause(t *testing.T) {
 	}
 }
 
-// TestRequestToolUnknownTargetFails verifies request to an unknown worker/event
-// resolves as an error in place and is not dispatched.
-func TestRequestToolUnknownTargetFails(t *testing.T) {
-	ch := newTestChannel()
-	prov := &staticProvider{msg: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
-	w := newTestWorker(prov, ch)
-	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "r1", map[string]any{
-		"watch": []map[string]any{{"event": "request"}},
-	}))
+// TestRequestToolMissingTargetFails verifies a malformed generalized call — one
+// without a target or without an event — resolves as an error in place and is
+// not dispatched. (An undiscovered but well-formed target is dispatched: see
+// TestRequestForwardsUndiscoveredCapability.)
+func TestRequestToolMissingTargetFails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"no target", map[string]any{"event": "bash"}},
+		{"no event", map[string]any{"target": "workspace"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := newTestChannel()
+			prov := &staticProvider{msg: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
+			w := newTestWorker(prov, ch)
+			w.HandleWorkerReady(event.New(event.TypeWorkerReady, "r1", map[string]any{
+				"watch": []map[string]any{{"event": "request"}},
+			}))
 
-	args, _ := json.Marshal(map[string]any{"target": "workspace", "event": "bash"})
-	calls := []llm.ContentBlock{
-		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "request", ToolArguments: string(args)},
-	}
-	w.mu.Lock()
-	w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: calls})
-	w.handleToolCalls(context.Background(), calls, "trace1")
+			args, _ := json.Marshal(tc.args)
+			calls := []llm.ContentBlock{
+				{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "request", ToolArguments: string(args)},
+			}
+			w.mu.Lock()
+			w.transcript.Apply(transcript.ToolPlaceholdersPatch{Calls: calls})
+			w.handleToolCalls(context.Background(), calls, "trace1")
 
-	if n := len(ch.eventsOf("bash")); n != 0 {
-		t.Fatalf("expected no dispatch for unknown target/event, got %d", n)
-	}
-	foundErr := false
-	for _, m := range w.transcript.Render() {
-		if m.ToolCallID == "c1" && m.IsError {
-			foundErr = true
-		}
-	}
-	if !foundErr {
-		t.Fatal("transcript should carry an error result for the unknown request target")
+			if n := len(ch.eventsOf("bash")); n != 0 {
+				t.Fatalf("expected no dispatch for a malformed request, got %d", n)
+			}
+			foundErr := false
+			for _, m := range w.transcript.Render() {
+				if m.ToolCallID == "c1" && m.IsError {
+					foundErr = true
+				}
+			}
+			if !foundErr {
+				t.Fatal("transcript should carry an error result for the malformed request")
+			}
+		})
 	}
 }
 

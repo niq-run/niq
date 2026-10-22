@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
 )
@@ -101,8 +102,8 @@ func TestHandleWorkerReadyAndGone(t *testing.T) {
 }
 
 // TestCoreExtensionsRegistered / TestCoreExtensionsExposedToLLM /
-// TestBroadcastReadyExcludesSelfOnly moved to pkg/worker/reason: the
-// send_message / request / context.compress toolkit (and its SelfOnly
+// TestBroadcastReadyExcludesInternal moved to pkg/worker/reason: the
+// send_message / request / context.compress toolkit (and its Internal
 // announcement behavior) lives in the default worker now, not in the shared
 // reason mechanism.
 
@@ -125,6 +126,48 @@ func TestProviderToolsExposedToLLM(t *testing.T) {
 		if !names[want] {
 			t.Fatalf("own tool %s not exposed to the LLM; have %v", want, names)
 		}
+	}
+}
+
+// TestRequestForwardsUndiscoveredCapability verifies the generalized `request`
+// tool is not gated on local discovery: the model learns (target, event) from
+// the directory worker's get_worker_info and the event goes straight out. A peer
+// reason worker's worker.readme is never announced to peers (a peer reason's
+// ready is not surfaced as callable tools), which is exactly what this covers.
+func TestRequestForwardsUndiscoveredCapability(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+
+	// The worker's own `request` escape hatch, plus the self-directed ready that
+	// BroadcastReady sends (full contract, Internal included), so `request` is a
+	// discovered self capability.
+	w.Register(baseworker.Extension{
+		Event:       TypeRequest,
+		Internal:    true,
+		Description: "generalized call",
+	}, func(event.Event) {})
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+		"type":  "reason",
+		"watch": w.WatchEntries(true),
+	}))
+
+	// Nothing announced "oncall" or its worker.readme to this worker.
+	if _, ok := w.capabilityByToolName("oncall__worker_readme"); ok {
+		t.Fatal("precondition: oncall/worker.readme should not be discovered")
+	}
+
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "request",
+			ToolArguments: `{"target":"oncall","event":"worker.readme","arguments":{}}`},
+	}, "trace1")
+
+	evts := ch.eventsOf("worker.readme")
+	if len(evts) != 1 {
+		t.Fatalf("worker.readme was not forwarded: got %d events", len(evts))
+	}
+	if evts[0].RequestId != "c1" {
+		t.Fatalf("request id = %q, want the tool call id c1", evts[0].RequestId)
 	}
 }
 

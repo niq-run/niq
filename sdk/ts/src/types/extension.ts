@@ -29,11 +29,18 @@ export interface Extension {
   /** The event type the extension responds to — its identity. */
   event: string;
   /**
-   * Marks an extension only the declaring worker itself serves (e.g.
-   * send_message, list_workers). Left out of the peer-facing `worker.ready`
-   * announcement, so peers never see it as a callable tool.
+   * Internal marks an extension that belongs to the worker's OWN view: it is
+   * not advertised in the peer-facing `worker.ready` announcement (directory /
+   * WebUI / PTC), and a request from any other worker is refused before the
+   * handler runs (a `request.rejected` when the event carries a request id). The
+   * declaring worker still invokes it normally, and the self-directed ready
+   * keeps it in its own tool list.
+   *
+   * This is a scope rule, not a general access control: it says the capability
+   * is meaningful only to its owner. Whether another worker may address this one
+   * at all is still the bus ACL's job.
    */
-  selfOnly?: boolean;
+  internal?: boolean;
   description?: string;
   /**
    * The request's JSON Schema — what a caller must pass as the event payload.

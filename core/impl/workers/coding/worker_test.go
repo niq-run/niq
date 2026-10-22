@@ -78,7 +78,7 @@ func TestPTCModeExposesDirectoryAndProgramTools(t *testing.T) {
 // must go through program.run) and the focus-excluded self tools.
 func TestPTCModeKeepsMessageButDropsRequestAndFocusTools(t *testing.T) {
 	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: ToolModePTC})
-	// The worker's own full contract (SelfOnly included), as it sends itself.
+	// The worker's own full contract (Internal included), as it sends itself.
 	announce(w, "coder", "reason", "message", "request", "context.compress", "program.query", "program.update")
 	announce(w, "program", "program", "run")
 	announce(w, "directory", "directory", "list_workers", "get_worker_info")

@@ -71,6 +71,11 @@ export class BaseWorker {
    * Returns whether a handler ran; the first matching registration wins. Async
    * handlers are not awaited.
    *
+   * An `internal` extension is self-scoped: a request from any other worker is
+   * refused before the handler runs (a `request.rejected` when the event carries
+   * a request id). The bus stamps the sender's worker id, so a peer cannot pose
+   * as the owner.
+   *
    * `worker.discover` is protocol traffic rather than an extension: it is
    * answered here with the contract last passed to {@link announceReady} (a
    * directed, transient `worker.ready` to the asker), mirroring Go's
@@ -86,6 +91,17 @@ export class BaseWorker {
     }
     for (const { ext, handler } of this.regs.values()) {
       if (ext.event !== evt.type) continue;
+      if (ext.internal && evt.worker_id !== this.id) {
+        if (evt.request_id) {
+          void this.replyRejected(
+            evt.worker_id,
+            evt.request_id,
+            `internal capability: only ${this.id} may invoke it`,
+            evt.trace_id,
+          );
+        }
+        return true;
+      }
       void handler(evt);
       return true;
     }
@@ -99,13 +115,14 @@ export class BaseWorker {
 
   /**
    * Render the registry into the `worker.ready` "watch" wire format.
-   * `includeSelfOnly` controls whether SelfOnly extensions are rendered: a
-   * peer-facing broadcast leaves them out (they are not callable by peers).
+   * `includeInternal` controls whether Internal extensions are rendered: a
+   * peer-facing broadcast leaves them out (they are not advertised to peers;
+   * visibility only — the bus ACL, not this parameter, gates dispatch).
    */
-  watchEntries(includeSelfOnly: boolean): Record<string, unknown>[] {
+  watchEntries(includeInternal: boolean): Record<string, unknown>[] {
     const out: Record<string, unknown>[] = [];
     for (const ext of this.extensions()) {
-      if (ext.selfOnly && !includeSelfOnly) continue;
+      if (ext.internal && !includeInternal) continue;
       const entry: Record<string, unknown> = {
         event: ext.event,
         desc: ext.description,
@@ -123,7 +140,7 @@ export class BaseWorker {
 
   /**
    * Broadcast this worker's presence on the bus: the externally callable
-   * contract (SelfOnly left out), self excluded via `exclude_worker_id`.
+   * contract (Internal left out), self excluded via `exclude_worker_id`.
    * `publishes` is the wire form of the events this worker declares it emits
    * (`worker.ready` "publishes").
    *

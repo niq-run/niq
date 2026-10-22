@@ -652,25 +652,30 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 			if args == nil {
 				args = map[string]any{}
 			}
-			pcap, ok2 := w.capabilityBySourceEvent(target, eventType)
-			if !ok2 {
-				log.Printf("[reason %s] request: unknown capability %s/%s", w.ID(), target, eventType)
+			// A generalized call is NOT gated on local discovery: the model learns
+			// (target, event, arguments) from the directory worker's
+			// get_worker_info and sends the event straight out. Discovery only
+			// decides what is listed as a tool; a capability the target serves but
+			// that was never announced here (a peer reason's worker.readme, a
+			// third-party worker that joined before this one) is still callable.
+			if target == "" || eventType == "" {
+				log.Printf("[reason %s] request: missing target or event", w.ID())
 				unavailable = append(unavailable, fmt.Sprintf("%s(%s/%s)", tc.ToolName, target, eventType))
 				w.transcript.Apply(transcript.ToolResultPatch{
 					CallID: tc.ToolCallID, Name: tc.ToolName,
 					Content: []llm.ContentBlock{{Type: llm.ContentText,
-						Text: fmt.Sprintf("unknown capability %s/%s - not dispatched.", target, eventType)}},
+						Text: "request needs a non-empty target and event."}},
 					IsErr: true,
 				})
 				continue
 			}
-			// Track the request call under its own id so the peer's reply pairs
+			// Track the request call under its own id so the target's reply pairs
 			// with the model's request placeholder; the id is ALSO the RequestId
-			// we send to the peer, so no second placeholder is needed.
-			w.requestTracker.Add(pcap.Source, []llm.ContentBlock{{
+			// we send, so no second placeholder is needed.
+			w.requestTracker.Add(target, []llm.ContentBlock{{
 				Type: llm.ContentToolCall, ToolCallID: tc.ToolCallID, ToolName: tc.ToolName,
 			}})
-			w.invokeCapability(context.Background(), pcap.Event, pcap.Source, args, tc.ToolCallID, traceID)
+			w.invokeCapability(context.Background(), event.EventType(eventType), target, args, tc.ToolCallID, traceID)
 			dispatched++ // a request-routed call is dispatched too (never enters callsByTarget)
 			continue
 		}

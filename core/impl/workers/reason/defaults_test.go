@@ -79,7 +79,7 @@ func TestHandleSendMessageSendsAppendInput(t *testing.T) {
 func TestCoreExtensionsExposedToLLM(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 
-	// The self-directed ready carries the full contract (SelfOnly included).
+	// The self-directed ready carries the full contract (Internal included).
 	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 		"watch":     w.WatchEntries(true),
@@ -118,12 +118,12 @@ func keysOf(m map[string]bool) []string {
 	return ks
 }
 
-// TestBroadcastReadyExcludesSelfOnly verifies the two-part announcement: the
-// presence broadcast excludes this worker and omits SelfOnly extensions,
+// TestBroadcastReadyExcludesInternal verifies the two-part announcement: the
+// presence broadcast excludes this worker and omits Internal extensions,
 // while the directed announcement to itself carries the full contract. The
 // worker therefore receives exactly one self-sourced ready (its complete view),
 // which keeps HandleWorkerReady's whole-source replacement semantics valid.
-func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
+func TestBroadcastReadyExcludesInternal(t *testing.T) {
 	ch := newMockChannel()
 	w := NewWorker(Config{ID: "w1", Bus: ch})
 
@@ -160,13 +160,13 @@ func TestBroadcastReadyExcludesSelfOnly(t *testing.T) {
 		t.Fatal("expected one presence broadcast (self excluded) and one directed announcement")
 	}
 	if watchHasEvent(*presence, "message") {
-		t.Fatal("presence broadcast must not carry the SelfOnly core tools")
+		t.Fatal("presence broadcast must not carry the Internal core tools")
 	}
 	if !watchHasEvent(*presence, "provider.switch") {
-		t.Fatal("presence broadcast must keep non-SelfOnly extensions")
+		t.Fatal("presence broadcast must keep advertised extensions")
 	}
 	if !watchHasEvent(*directed, "message") {
-		t.Fatal("directed announcement must carry the full contract, SelfOnly included")
+		t.Fatal("directed announcement must carry the full contract, Internal included")
 	}
 }
 
