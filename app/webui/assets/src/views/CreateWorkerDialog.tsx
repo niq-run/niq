@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { createWorker } from '../services/api'
-import { type CreateWorkerResult } from '../types'
+import { isReasonFamilyType, type CreateWorkerResult } from '../types'
 
 interface CreateWorkerDialogProps {
   open: boolean
@@ -23,7 +23,7 @@ interface CreateWorkerDialogProps {
 // assembly owns — creating them from the UI is not a thing. timer, directory
 // and history are built-in singletons (one per project), so a second one is
 // never wanted. niw is a bridge worker that dials another niq's bus.
-const MANAGED_TYPES = ['reason', 'workspace', 'program', 'niw', 'mcp'] as const
+const MANAGED_TYPES = ['reason', 'coding', 'workspace', 'program', 'niw', 'mcp'] as const
 
 // parseNiwConfig turns the far-side bus's copyable worker config (KEY=value
 // lines, as rendered by that bus for a created remote worker) into a map.
@@ -52,8 +52,19 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [extType, setExtType] = useState('')
   const [id, setId] = useState('')
   const [instruction, setInstruction] = useState('')
+  const [readme, setReadme] = useState('')
   const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
+  // Provider override details (rare; leave empty to use the global provider.json).
+  const [apiKey, setApiKey] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  // Spawn seeding: goal rides the system prompt (survives compaction), brief
+  // lands as the transcript's first message (working material).
+  const [goal, setGoal] = useState('')
+  const [brief, setBrief] = useState('')
+  // Coding-only: the tool-list policy. "ptc" keeps only the program +
+  // directory workers' tools and drives work through script programs.
+  const [toolMode, setToolMode] = useState('normal')
   const [rootDir, setRootDir] = useState('')
   const [command, setCommand] = useState('')
   const [cwd, setCwd] = useState('')
@@ -142,10 +153,25 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     if (tagList.length > 0) body.tags = tagList
     if (description.trim()) body.description = description.trim()
     if (isManaged) {
-      if (effType === 'reason') {
+      if (isReasonFamilyType(effType)) {
         if (instruction.trim()) body.instruction = instruction.trim()
         if (provider.trim()) body.provider = provider.trim()
         if (model.trim()) body.model = model.trim()
+        if (apiKey.trim()) body.api_key = apiKey.trim()
+        if (baseUrl.trim()) body.base_url = baseUrl.trim()
+        // Spawn seeding has no typed declaration field: it is a param
+        // (context-builder: goal → system prompt, brief → first message).
+        const params: Record<string, unknown> = {}
+        if (goal.trim()) params.goal = goal.trim()
+        if (brief.trim()) params.brief = brief.trim()
+        // Self-description (worker.readme). A param, not display metadata: the
+        // worker can revise it at runtime and other workers read it by recall.
+        if (readme.trim()) params.readme = readme.trim()
+        // Coding's only knob: the tool-list policy. Which peers PTC keeps is
+        // part of the PTC contract (program for invocation, directory for
+        // discovery), not configuration.
+        if (effType === 'coding') params.tool_mode = toolMode
+        if (Object.keys(params).length > 0) body.params = params
       }
       if ((effType === 'workspace' || effType === 'program') && rootDir.trim()) {
         // WorkerConfig takes a mounts array (first entry = primary mount).
@@ -390,11 +416,18 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           <input style={input} value={description} onChange={e => setDescription(e.target.value)} placeholder={t('workers.create.description.placeholder')} />
         </div>
 
-        {isManaged && effType === 'reason' && (
+        {isManaged && isReasonFamilyType(effType) && (
           <>
             <div style={field}>
               <label style={label}>{t('workers.create.instruction')}</label>
               <textarea style={{ ...input, resize: 'vertical', minHeight: 64 }} value={instruction} onChange={e => setInstruction(e.target.value)} />
+            </div>
+            <div style={field}>
+              <label style={label}>{t('workers.create.readme')}</label>
+              <textarea style={{ ...input, resize: 'vertical', minHeight: 48 }} value={readme} onChange={e => setReadme(e.target.value)} placeholder={t('workers.create.readme.placeholder')} />
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                {t('workers.create.readme.hint')}
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ ...field, flex: 1 }}>
@@ -406,6 +439,47 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
                 <input style={input} value={model} onChange={e => setModel(e.target.value)} />
               </div>
             </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ ...field, flex: 1 }}>
+                <label style={label}>{t('workers.create.baseUrl')}</label>
+                <input style={input} value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://…" />
+              </div>
+              <div style={{ ...field, flex: 1 }}>
+                <label style={label}>{t('workers.create.apiKey')}</label>
+                <input style={input} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={t('workers.create.apiKeyPlaceholder')} />
+              </div>
+            </div>
+
+            {/* Spawn seeding: the two knobs that decide what the worker starts
+                with — its standing goal (prompt space) and its handover brief
+                (working material). */}
+            <div style={field}>
+              <label style={label}>{t('workers.create.goal')}</label>
+              <textarea style={{ ...input, resize: 'vertical', minHeight: 48 }} value={goal} onChange={e => setGoal(e.target.value)} placeholder={t('workers.create.goalPlaceholder')} />
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                {t('workers.create.goal.hint')}
+              </div>
+            </div>
+            <div style={field}>
+              <label style={label}>{t('workers.create.brief')}</label>
+              <textarea style={{ ...input, resize: 'vertical', minHeight: 48 }} value={brief} onChange={e => setBrief(e.target.value)} placeholder={t('workers.create.briefPlaceholder')} />
+            </div>
+
+            {effType === 'coding' && (
+              <>
+                <div style={field}>
+                  <label style={label}>{t('workers.create.toolMode')}</label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {(['normal', 'ptc'] as const).map(m => (
+                      <span key={m} style={pill(toolMode === m)} onClick={() => setToolMode(m)}>{m}</span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
+                    {toolMode === 'ptc' ? t('workers.create.toolMode.ptcHint') : t('workers.create.toolMode.normalHint')}
+                  </div>
+                </div>
+              </>
+            )}
           </>
         )}
         {isManaged && (effType === 'workspace' || effType === 'program') && (

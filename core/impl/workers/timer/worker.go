@@ -81,6 +81,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeTimeout,
+		Response:    baseworker.ObjectSchema(map[string]any{"tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"scheduled"}}, "fire_at": map[string]any{"type": "string", "description": "RFC3339, when the timer will fire"}}),
 		Description: "Set a timeout for your pending tool calls. When the timer fires, unresponsive tool calls will be automatically cancelled so you can proceed. If all tool calls complete before the timeout, the timer is cancelled automatically. Call this after issuing tool calls that may take a while.",
 		Parameters: obj(map[string]any{
 			"duration_ms": map[string]any{
@@ -101,6 +102,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeElapse,
+		Response:    baseworker.ObjectSchema(map[string]any{"tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"scheduled"}}, "fire_at": map[string]any{"type": "string", "description": "RFC3339, when the timer will fire"}}),
 		Description: "Set a reminder timer. After the specified duration you are woken with a worker.input carrying the purpose. Unlike the timeout tool, this timer is never automatically cancelled — it always fires. Use this for general-purpose timing and reminders.",
 		Parameters: obj(map[string]any{
 			"duration_ms": map[string]any{
@@ -121,6 +123,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeAt,
+		Response:    baseworker.ObjectSchema(map[string]any{"tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"scheduled"}}, "fire_at": map[string]any{"type": "string", "description": "RFC3339, when the timer will fire"}}),
 		Description: "Set a reminder timer at a specific point in time instead of after a relative delay. When the wall-clock reaches the given time, you are woken with a worker.input carrying the purpose. Use this to schedule reminders/timers at an absolute time (e.g. 17:00 this evening), which survive a worker restart.",
 		Parameters: obj(map[string]any{
 			"fire_at": map[string]any{
@@ -143,6 +146,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeInterval,
+		Response:    baseworker.ObjectSchema(map[string]any{"tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"scheduled"}}, "interval_ms": map[string]any{"type": "number"}, "fire_at": map[string]any{"type": "string", "description": "RFC3339, first fire"}}),
 		Description: "Set a repeating reminder. From the (optional) first fire time, or after interval_ms, the caller is woken with a worker.input every interval_ms until the timer is cancelled. Use this for recurring reminders, unlike the one-shot elapse/at timers.",
 		Parameters: obj(map[string]any{
 			"interval_ms": map[string]any{
@@ -169,6 +173,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeList,
+		Response:    baseworker.ObjectSchema(map[string]any{"timers": baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"timer_id": map[string]any{"type": "string"}, "caller_id": map[string]any{"type": "string"}, "tick_type": map[string]any{"type": "string"}, "purpose": map[string]any{"type": "string"}, "fire_at": map[string]any{"type": "string"}, "duration_ms": map[string]any{"type": "number"}, "interval_ms": map[string]any{"type": "number"}}))}),
 		Description: "List all currently pending timers: id, tick_type, caller, purpose, and when each fires.",
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
@@ -177,6 +182,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeCancelTimer,
+		Response:    baseworker.ObjectSchema(map[string]any{"status": map[string]any{"type": "string", "enum": []string{"cancelled"}}}),
 		Description: "Cancel a pending timer by its timer_id.",
 		Parameters: obj(map[string]any{
 			"timer_id": map[string]any{
@@ -405,12 +411,11 @@ func (w *Worker) handleTickAfter(callID, toolName, callerID string, args map[str
 		ID: callID, CallerID: callerID, TickType: tickType, Purpose: purpose, TraceID: traceID,
 	}, time.Duration(durationMS)*time.Millisecond)
 
-	result, _ := json.Marshal(map[string]any{
+	w.ReplyCompleted(callerID, callID, map[string]any{
 		"tick_type": tickType,
 		"purpose":   purpose,
 		"status":    "scheduled",
-	})
-	w.ReplyCompleted(callerID, callID, string(result), traceID)
+	}, traceID)
 }
 
 // handleInterval schedules a recurring reminder. After an optional first fire
@@ -440,14 +445,13 @@ func (w *Worker) handleInterval(callID, toolName, callerID string, args map[stri
 	w.mu.Unlock()
 	w.NotifyDurableChange()
 
-	result, _ := json.Marshal(map[string]any{
+	w.ReplyCompleted(callerID, callID, map[string]any{
 		"tick_type":   tickType,
 		"purpose":     purpose,
 		"status":      "scheduled",
 		"interval_ms": intervalMS,
 		"fire_at":     first.Format(time.RFC3339),
-	})
-	w.ReplyCompleted(callerID, callID, string(result), traceID)
+	}, traceID)
 }
 
 // parseFireAt reads the absolute trigger time from an "at" argument set. It
@@ -493,13 +497,12 @@ func (w *Worker) handleTickAt(callID, toolName, callerID string, args map[string
 	w.mu.Unlock()
 	w.NotifyDurableChange()
 
-	result, _ := json.Marshal(map[string]any{
+	w.ReplyCompleted(callerID, callID, map[string]any{
 		"tick_type": tickType,
 		"purpose":   purpose,
 		"status":    "scheduled",
 		"fire_at":   fireAt.Format(time.RFC3339),
-	})
-	w.ReplyCompleted(callerID, callID, string(result), traceID)
+	}, traceID)
 }
 
 // listTimers is the wire entry for one pending timer, as returned by the list
@@ -524,8 +527,7 @@ func (w *Worker) handleList(callID, toolName, callerID, traceID string) {
 	}
 	w.mu.Unlock()
 
-	result, _ := json.Marshal(listTimers{Timers: items})
-	w.ReplyCompleted(callerID, callID, string(result), traceID)
+	w.ReplyCompleted(callerID, callID, map[string]any{"timers": items}, traceID)
 }
 
 func (w *Worker) handleCancel(callID, toolName, callerID string, args map[string]any, traceID string) {
@@ -541,7 +543,7 @@ func (w *Worker) handleCancel(callID, toolName, callerID string, args map[string
 
 	if ok {
 		w.NotifyDurableChange()
-		w.ReplyCompleted(callerID, callID, `{"status":"cancelled"}`, traceID)
+		w.ReplyCompleted(callerID, callID, map[string]any{"status": "cancelled"}, traceID)
 	} else {
 		w.ReplyFailed(callerID, callID, "timer not found: "+timerID, traceID)
 	}

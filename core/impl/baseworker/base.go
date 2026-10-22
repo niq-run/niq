@@ -11,6 +11,7 @@ package baseworker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -103,29 +104,70 @@ func ParseToolCall(evt event.Event) ToolCall {
 // ReplyCompleted answers a request caller with a request.completed result,
 // echoing the request's id and propagating the trace ID.
 //
-// result is a neutral, JSON-serializable value. A string becomes the traditional
-// {"result": …} payload; a map[string]any is used as the payload directly so a
-// tool can return a structured multi-modal payload (e.g. the `{content:[…]}`
-// shape the reason worker decodes into llm content blocks); any other value is
-// serialized into a "result" string for lossless forwarding.
+// It is a CONVENIENCE, not the protocol: the bus only requires that a
+// request.completed payload be a JSON object, and a worker is free to build one
+// by hand when its reply does not fit this helper's two shapes. What the helper
+// does:
+//
+//   - an object reply (map[string]any) IS the payload — no wrapper, so the
+//     event log shows the reply itself;
+//   - anything else (a string, a number, a bool, an array) cannot be a payload
+//     on its own, so it is wrapped as {"result": value}.
+//
+// Two keys are therefore reserved at the top level of a reply payload: "result"
+// (a non-object reply) and "content" (multi-modal blocks, which the reason
+// worker decodes into llm content blocks). A structured reply must not use them.
+//
+// ReplyString / ReplyObject are the same call with the shape made explicit.
 func (w *BaseWorker) ReplyCompleted(callerID, callID string, result any, traceID string) {
-	payload := map[string]any{"result": result}
-	if m, ok := result.(map[string]any); ok {
-		payload = m
-	} else if _, ok := result.(string); !ok {
-		payload = map[string]any{"result": fmt.Sprintf("%v", result)}
+	if payload, ok := result.(map[string]any); ok {
+		w.writeCompleted(callerID, callID, payload, traceID)
+		return
 	}
+	w.writeCompleted(callerID, callID, map[string]any{"result": jsonValue(result)}, traceID)
+}
+
+// ReplyString answers with text: the payload is {"result": text}.
+func (w *BaseWorker) ReplyString(callerID, callID, text, traceID string) {
+	w.ReplyCompleted(callerID, callID, text, traceID)
+}
+
+// ReplyObject answers with a structured payload: the map IS the payload. Use it
+// for a reply that is already an object (including the {"content":[…]}
+// multi-modal shape) and for a worker that builds its payload by hand.
+func (w *BaseWorker) ReplyObject(callerID, callID string, payload map[string]any, traceID string) {
+	w.writeCompleted(callerID, callID, payload, traceID)
+}
+
+// writeCompleted emits the request.completed event and logs the reply.
+func (w *BaseWorker) writeCompleted(callerID, callID string, payload map[string]any, traceID string) {
 	ev := event.New(event.TypeRequestCompleted, w.ID(), payload)
 	ev.RequestId = callID
 	ev.TraceID = traceID
-	if s, ok := result.(string); ok {
+	if s, ok := payload["result"].(string); ok {
 		log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s result_len=%d",
 			w.ID(), callerID, callID, len(s))
 	} else {
-		log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s result_type=%T",
-			w.ID(), callerID, callID, result)
+		log.Printf("[baseworker] reply EMIT type=request.completed worker=%s caller=%s request_id=%s payload_keys=%d",
+			w.ID(), callerID, callID, len(payload))
 	}
 	_ = w.Channel.Send(context.Background(), ev, callerID)
+}
+
+// jsonValue keeps a reply value as-is when it is JSON-encodable, and otherwise
+// falls back to its textual form (so an arbitrary struct or error still reaches
+// the caller instead of failing the reply).
+func jsonValue(v any) any {
+	if _, ok := v.(string); ok {
+		return v
+	}
+	if v == nil {
+		return ""
+	}
+	if _, err := json.Marshal(v); err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return v
 }
 
 // ReplyFailed answers a request caller with a request.failed error message,

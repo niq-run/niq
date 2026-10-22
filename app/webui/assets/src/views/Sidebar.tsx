@@ -5,8 +5,9 @@ import { isTalkPartnerType, type WorkerInfo, type ViewMode, type ViewSettings, t
 import WorkerPickerModal from '../components/WorkerPickerModal'
 import WorkerRowMenu from '../components/WorkerRowMenu'
 import ContextMenuSurface from '../components/ContextMenuSurface'
+import PinMark from '../components/PinMark'
 import { useContextMenu, contextMenuElementStyle } from '../hooks/useContextMenu'
-import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned } from '../pinnedWorkers'
+import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned, moveWorkerOrder } from '../pinnedWorkers'
 import pinSvg from '../assets/pin.svg'
 import pinwSvg from '../assets/pinw.svg'
 
@@ -47,6 +48,8 @@ interface SidebarProps {
   // Right-click "mention" action for a talk-partner worker: prefixes the
   // talk input with an @mention for that worker (let handleMention do it).
   onMention?: (id: string) => void
+  // Open a worker's detail panel (right-click → view details on a selector row).
+  onOpenDetail?: (id: string) => void
 }
 
 // Sidebar resize: the draggable width range, persisted in localStorage.
@@ -58,7 +61,7 @@ function loadSidebarWidth(): number {
   return Math.min(Math.max(v, MIN_SIDEBAR_WIDTH), Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.5))
 }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, onClearWorkers, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, onMention }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, onClearWorkers, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, onMention, onOpenDetail }: SidebarProps) {
   const { dark, toggle, colors, inverted, toggleInverted } = useTheme()
   const { lang, setLang, t } = useI18n()
   // Hovered sidebar option (non-toggle, non-checkbox rows) — shows a full-width
@@ -80,6 +83,39 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   }
   // Right-click menu position for the worker under the cursor, or null.
   const [rowMenu, setRowMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  // Drag-and-drop reordering of ANY worker row. dragPinId is the row being
+  // dragged; dropTarget is where it would land (before/after that row).
+  const [dragPinId, setDragPinId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ id: string; before: boolean } | null>(null)
+  const dragPropsFor = (id: string) => {
+    return {
+      draggable: true,
+      onDragStart: (e: React.DragEvent<HTMLDivElement>) => {
+        setDragPinId(id)
+        e.dataTransfer.effectAllowed = 'move'
+        try { e.dataTransfer.setData('text/plain', id) } catch { /* noop */ }
+      },
+      onDragOver: (e: React.DragEvent<HTMLDivElement>) => {
+        if (!dragPinId || dragPinId === id) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        const r = e.currentTarget.getBoundingClientRect()
+        setDropTarget({ id, before: e.clientY < r.top + r.height / 2 })
+      },
+      onDragEnd: () => { setDragPinId(null); setDropTarget(null) },
+      onDrop: (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        const from = dragPinId
+        const target = dropTarget?.id === id ? dropTarget : { id, before: true }
+        setDragPinId(null)
+        setDropTarget(null)
+        if (from && from !== target.id) {
+          moveWorkerOrder(from, target.id, target.before, selectorList.map((x) => x.id))
+          setPrefTick((x) => x + 1)
+        }
+      },
+    }
+  }
   const openRowMenu = (pos: { x: number; y: number }, id: string) => {
     setRowMenu({ id, x: pos.x, y: pos.y })
   }
@@ -325,8 +361,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       shownSelectorWorkers.filter(w => !sleptIds.includes(w.id)),
       w => w.id,
     )
-    const bySelection = (w: WorkerInfo) => selectorSelected.has(w.id) ? 0 : 1
-    return ordered.slice().sort((a, b) => bySelection(a) - bySelection(b))
+    // Selection does NOT reorder rows: the pinned group keeps its persisted
+    // (drag-reorderable) order, and checking a worker must not make it jump.
+    return ordered
   })()
 
   // Footer project menu: opened by clicking the project name in the bottom
@@ -435,6 +472,15 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // its own horizontal padding instead of a negative margin — the list wrapper
   // below is already bled full-width, so the band, the text inset and the
   // list's scrollbar all line up with the rest of the sidebar.
+  // rowStyleWithDrop overlays the drag drop-indicator (a 2px accent line above
+  // or below the hovered row) on a row's base style.
+  const rowStyleWithDrop = (base: CSSProperties, id: string): CSSProperties => {
+    if (dropTarget?.id !== id) return base
+    return dropTarget.before
+      ? { ...base, boxShadow: 'inset 0 2px 0 ' + colors.accent }
+      : { ...base, boxShadow: 'inset 0 -2px 0 ' + colors.accent }
+  }
+
   const workerRowStyle = (id: string): CSSProperties => ({
     background: hoverId === id ? colors.bgLight : 'transparent',
     padding: workerRowPadY + 'px ' + contentPadX + 'px',
@@ -671,7 +717,8 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   onMouseEnter={() => setHoverId('worker:' + w.id)}
                   onMouseLeave={() => setHoverId(null)}
                   onOpenMenu={(pos) => openRowMenu(pos, w.id)}
-                  style={workerRowStyle('worker:' + w.id)}
+                  {...dragPropsFor(w.id)}
+                  style={rowStyleWithDrop(workerRowStyle('worker:' + w.id), w.id)}
                 >
                   <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                   <span
@@ -680,6 +727,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   >
                     {w.id}
                   </span>
+                  {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} />}
                 </ContextMenuSurface>
               )
             }
@@ -691,7 +739,8 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 onMouseEnter={() => setHoverId('worker:' + w.id)}
                 onMouseLeave={() => setHoverId(null)}
                 onOpenMenu={(pos) => openRowMenu(pos, w.id)}
-                style={workerRowStyle('worker:' + w.id)}
+                {...dragPropsFor(w.id)}
+                style={rowStyleWithDrop(workerRowStyle('worker:' + w.id), w.id)}
               >
                 <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: 12, flex: 1, minWidth: 0 }}>
@@ -702,6 +751,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                     {w.id}
                   </span>
                   {w.type ? <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, flexShrink: 0 }}>[{w.type}]</span> : null}
+                  {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} />}
                 </span>
               </ContextMenuSurface>
             )
@@ -779,7 +829,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           above it, so it reads as a distinct region in every mode. */}
       <div style={{ flexShrink: 0, margin: '16px -' + edgePadX + 'px 0', padding: '16px ' + contentPadX + 'px 0', borderTop: '1px solid ' + colors.border, display: 'flex', alignItems: 'center', gap: 12 }}>
         {mode === 'project' && project && (
-          <div style={{ flex: 1, minWidth: 0, position: 'relative', alignSelf: 'stretch', display: 'flex' }}>
+          <div style={{ flex: 1, minWidth: 0, position: 'relative', alignSelf: 'stretch', display: 'flex',
+            // The trigger below draws its own 1px border + 8px horizontal padding,
+            // which would inset the project NAME ~9px past the options' text line
+            // above. Shift the whole block left by exactly that inset so the text
+            // — not the hover outline — lines up with the items above, idle and on
+            // hover alike (the border is always laid out, just transparent at rest).
+            marginLeft: -9 }}>
             <div
               onClick={(e) => {
                 e.stopPropagation()
@@ -889,6 +945,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           slept={sleptIds.includes(rowMenu.id)}
           mentionable={rowMenuMentionable}
           onMention={() => onMention?.(rowMenu.id)}
+          onDetail={onOpenDetail ? () => onOpenDetail(rowMenu.id) : undefined}
           onTogglePin={() => togglePinned(rowMenu.id)}
           onToggleSleep={() => toggleSlept(rowMenu.id)}
           onClose={() => setRowMenu(null)}

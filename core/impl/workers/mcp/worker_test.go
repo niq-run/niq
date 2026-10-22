@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -390,5 +391,54 @@ func TestRemoveSignalsDurableChange(t *testing.T) {
 	}
 	if calls.Load() == 0 {
 		t.Fatal("durable-change signal not delivered")
+	}
+}
+
+// TestReadyToolsCarryOutputSchema verifies MCP structured output is republished
+// as the capability's Response, so peers (and the directory roster) can see the
+// result shape before calling — without it a PTC script cannot be planned.
+func TestReadyToolsCarryOutputSchema(t *testing.T) {
+	w := New(WorkerConfig{ID: "mcp", Bus: channel{}, Expose: ExposeReady})
+	w.mu.Lock()
+	w.setTools("srv", []toolInfo{
+		{Name: "typed", Description: "typed tool", Schema: map[string]any{"type": "object"},
+			OutputSchema: map[string]any{"type": "object", "properties": map[string]any{
+				"ok": map[string]any{"type": "boolean"},
+			}}},
+		{Name: "plain", Description: "no output schema", Schema: map[string]any{"type": "object"}},
+	})
+	w.mu.Unlock()
+
+	byEvent := map[string]map[string]any{}
+	for _, e := range w.WatchEntries(false) {
+		ev, _ := e["event"].(string)
+		byEvent[ev] = e
+	}
+	typed, ok := byEvent[string(toolEventName("srv", "typed"))]
+	if !ok {
+		t.Fatalf("typed tool not exposed; events: %v", byEvent)
+	}
+	ret, ok := typed["response"].(map[string]any)
+	if !ok || ret["type"] != "object" {
+		t.Fatalf("typed.response = %#v, want the declared output schema", typed["response"])
+	}
+	if _, present := byEvent[string(toolEventName("srv", "plain"))]["response"]; present {
+		t.Fatal("a tool without outputSchema must not advertise a response schema")
+	}
+}
+
+// TestRenderResultKeepsStructuredContent verifies a result carrying both text
+// and structuredContent returns both: the structured half is what a caller (or
+// a PTC script) parses, and dropping it silently was the old behavior.
+func TestRenderResultKeepsStructuredContent(t *testing.T) {
+	got := renderResult(&mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: "human summary"}},
+		StructuredContent: map[string]any{"ok": true, "count": 3},
+	})
+	if !strings.Contains(got, "human summary") {
+		t.Fatalf("result = %q, want the text content kept", got)
+	}
+	if !strings.Contains(got, `"ok":true`) || !strings.Contains(got, `"count":3`) {
+		t.Fatalf("result = %q, want the structured content too", got)
 	}
 }

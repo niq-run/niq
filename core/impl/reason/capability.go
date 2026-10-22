@@ -38,6 +38,12 @@ type DiscoveredCapability struct {
 	Event       event.EventType // the extension's own event type (send_message, context.compress, ...)
 	Description string
 	Parameters  map[string]any
+	// Response is the declared shape of the reply (JSON Schema), when the
+	// declaring worker published one — the response half of the request/response
+	// pair. Carried so the model can plan how to parse a result before calling:
+	// essential in PTC mode, where a script's logic depends on the expected
+	// output.
+	Response map[string]any
 }
 
 // discoveredCapabilities returns the unified capability universe: every
@@ -66,7 +72,7 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 	// not treated as callable capabilities — its extensions (context.compress,
 	// program_query, ...) are never surfaced as tools here. Infra workers
 	// (workspace/timer/program/directory...) expose real tools and are kept.
-	if workerID != w.ID() && evt.Payload["type"] == "reason" {
+	if workerID != w.ID() && isReasonFamilyWorkerType(evt.Payload["type"]) {
 		return
 	}
 
@@ -97,6 +103,7 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 		dc := DiscoveredCapability{Source: workerID, Event: event.EventType(typ)}
 		dc.Description, _ = e["desc"].(string)
 		dc.Parameters, _ = e["parameters"].(map[string]any)
+		dc.Response, _ = e["response"].(map[string]any)
 		w.discovered = append(w.discovered, dc)
 	}
 	if len(watch) > 0 {
@@ -279,14 +286,14 @@ func (w *BaseReasonWorker) BroadcastReady() {
 	// externally callable contract only — SelfOnly extensions are left out, so
 	// peers never see them as callable tools. This is the generic announce
 	// every worker uses; only the self-directed half below is reason-specific.
-	w.AnnounceReady("reason", nil)
+	w.AnnounceReady(w.workerType, nil)
 
 	// Second batch: the full contract (SelfOnly included) sent to itself. This
 	// is the self-directed round-trip through discovery — HandleWorkerReady
 	// treats it like any peer's announcement, so this worker's own capabilities
 	// flow through the same unified discovery pipeline as everyone else's.
 	self := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"type": "reason",
+		"type": w.workerType,
 		// Full contract, SelfOnly included (this worker's own view).
 		"watch": w.WatchEntries(true),
 	})
@@ -335,7 +342,7 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 	for _, cap := range caps {
 		defs = append(defs, llm.ToolDef{
 			Name:        toolNameOfCapability(w, cap),
-			Description: cap.Description,
+			Description: withResponseHint(cap.Description, cap.Response),
 			Parameters:  cap.Parameters,
 		})
 	}
@@ -347,9 +354,68 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 	return defs
 }
 
+// responseHintMaxBytes caps the schema text appended to a tool description. The
+// hint is there to tell the model what shape to expect, not to be a full
+// reference: an enormous schema would bloat every request's tool list, and the
+// authoritative copy is the directory worker's get_worker_info.
+const responseHintMaxBytes = 600
+
+// withResponseHint appends the declared reply shape to a tool description, so the
+// model knows what it will get back. Tool definitions have no response-schema
+// field in the function-calling APIs, so the description is where it goes;
+// capabilities that declare nothing keep their description untouched.
+func withResponseHint(desc string, response map[string]any) string {
+	if len(response) == 0 {
+		return desc
+	}
+	// A bare {"type":"string"} says nothing a caller could not assume, and the
+	// hint is paid for in every request's tool list: skip it. A string WITH a
+	// description (an output convention) is worth carrying.
+	if len(response) == 1 && response["type"] == "string" {
+		return desc
+	}
+	b, err := json.Marshal(response)
+	if err != nil {
+		return desc
+	}
+	hint := string(b)
+	if len(hint) > responseHintMaxBytes {
+		hint = hint[:responseHintMaxBytes] + "…"
+	}
+	if desc == "" {
+		return "Response (JSON Schema): " + hint
+	}
+	return desc + "\n\nResponse (JSON Schema): " + hint
+}
+
+// DefaultToolListBuilder is the default ToolListBuilder policy (all discovered
+// capabilities, own and peer, sorted by name for a cache-stable list). Exported
+// so a reason-family worker can compose it over a filtered universe (e.g. keep
+// only self + the program worker) instead of reimplementing the naming/sorting.
+var DefaultToolListBuilder ToolListBuilder = defaultToolListBuilder
+
+// ToolNameOfCapability is the LLM-facing name of a discovered capability (own:
+// event type with dots→underscores; peer: provider__event). Exported so a custom
+// ToolListBuilder can name the defs it emits.
+func ToolNameOfCapability(w *BaseReasonWorker, cap DiscoveredCapability) string {
+	return toolNameOfCapability(w, cap)
+}
+
 // LLMToolDefs builds the LLM tool list via the worker's tool-list builder
 // over the discovered capability universe. Called at the start of every
 // reasoning round.
 func (w *BaseReasonWorker) LLMToolDefs() []llm.ToolDef {
 	return w.toolListBuilder(w, w.discoveredCapabilities())
+}
+
+// isReasonFamilyWorkerType reports whether an announced worker type is a
+// reason-family worker (the generic reason worker or the coding worker). A
+// reason-family worker's ready lists the events IT responds to, not callable
+// capabilities for peers, so the discovery path ignores it as a tool source.
+func isReasonFamilyWorkerType(v any) bool {
+	switch v {
+	case "reason", "coding":
+		return true
+	}
+	return false
 }

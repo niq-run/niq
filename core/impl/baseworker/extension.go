@@ -45,6 +45,24 @@ type Extension struct {
 
 	Description string
 	Parameters  map[string]any
+	// Response describes the SHAPE of the reply (a JSON Schema object), when the
+	// capability has one — the response half of the request/response pair, where
+	// Parameters describes the request. Documentation only: nothing validates a
+	// reply. It exists so an agent can plan how to parse a reply BEFORE calling —
+	// which is what makes a PTC script writable in one shot — and it rides the
+	// advertised contract (WatchEntries -> worker.ready -> the directory roster).
+	//
+	// It describes what the CALLER receives: the value of the reply's "result"
+	// field, which keeps its type (see ReplyCompleted) — a string for a prose
+	// reply, an object/array/number for a structured one. So
+	// {type: object, properties: …} means "result IS an object with these keys".
+	// A reply that is an OBJECT is sent as the payload itself; a non-object reply
+	// (text, number, array) is wrapped as {"result": value}. "content" and
+	// "result" are therefore reserved top-level keys of a reply payload.
+	//
+	// Optional: a capability whose reply is prose leaves this nil. A structured
+	// reply (a JSON list, an object with fixed keys) should declare it.
+	Response map[string]any
 }
 
 // ExtensionHandler executes when the registered event arrives on the bus.
@@ -154,6 +172,9 @@ func (w *BaseWorker) WatchEntries(includeSelfOnly bool) []map[string]any {
 		entry := map[string]any{"event": string(e.Event), "desc": e.Description}
 		if len(e.Parameters) > 0 {
 			entry["parameters"] = e.Parameters
+		}
+		if len(e.Response) > 0 {
+			entry["response"] = e.Response
 		}
 		out = append(out, entry)
 	}

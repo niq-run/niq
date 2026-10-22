@@ -18,7 +18,7 @@ func TestBuildInstructionEmpty(t *testing.T) {
 	if !strings.Contains(s, "around their own focus and context") || !strings.Contains(s, "message") {
 		t.Fatalf("prompt should describe focus and worker collaboration: %q", s)
 	}
-	for _, want := range []string{"context_compress", "program_query / program_update", "provider_switch", "timer", "directory", "get_worker_info"} {
+	for _, want := range []string{"context_compress", "program_query / program_update", "provider_switch", "worker_readme_update", "skill card", "timer", "directory", "search_workers", "get_worker_info"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("prompt should highlight key tools (%q missing): %q", want, s)
 		}

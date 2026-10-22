@@ -15,6 +15,12 @@ type toolInfo struct {
 	Name        string
 	Description string
 	Schema      any
+	// OutputSchema is the remote tool's declared result shape (MCP structured
+	// output). Kept verbatim so it can be republished as the capability's
+	// Response — the reply half of request/response. An agent needs it to know
+	// how to parse a call's result, and in PTC mode a script cannot be written
+	// without it.
+	OutputSchema any
 }
 
 // headersTransport adds request headers on top of a base RoundTripper.
@@ -94,7 +100,12 @@ func (c *serverClient) ListTools(ctx context.Context) ([]toolInfo, error) {
 	}
 	out := make([]toolInfo, 0, len(res.Tools))
 	for _, t := range res.Tools {
-		out = append(out, toolInfo{Name: t.Name, Description: t.Description, Schema: t.InputSchema})
+		out = append(out, toolInfo{
+			Name:         t.Name,
+			Description:  t.Description,
+			Schema:       t.InputSchema,
+			OutputSchema: t.OutputSchema,
+		})
 	}
 	return out, nil
 }
@@ -125,8 +136,15 @@ func renderResult(res *mcp.CallToolResult) string {
 		}
 		sb.WriteString("\n")
 	}
-	if sb.Len() == 0 && res.StructuredContent != nil {
+	// Structured output is appended even when text content is present: the MCP
+	// tools that declare outputSchema routinely return both a human-readable
+	// text block and the same data as structuredContent, and a caller (or a PTC
+	// script planning its parse) needs the structured half.
+	if res.StructuredContent != nil {
 		if b, err := json.Marshal(res.StructuredContent); err == nil {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
 			sb.Write(b)
 		}
 	}

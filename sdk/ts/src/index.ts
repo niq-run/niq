@@ -3,6 +3,10 @@ export type { HTTPWorkerClientOptions } from "./client.js";
 
 export { BaseWorker, parseToolCall, argString, argInt } from "./baseworker.js";
 
+export { replyValue, replyText } from "./reply.js";
+
+export { s, isOptionalSchema, type JsonSchema } from "./schema.js";
+
 export { parseCliArgs, busConnFromArgs, runWorkerApp, BUS_CLI_FLAGS } from "./cli.js";
 export type { ParsedCliArgs } from "./cli.js";
 
@@ -18,6 +22,7 @@ export {
   type EventStatus,
   type EventTypeName,
   type Extension,
+  type SchemaSource,
   type ExtensionHandler,
   type Identity,
   type MessageType,

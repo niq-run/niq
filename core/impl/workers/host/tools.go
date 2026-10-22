@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // The host worker's tools, each its own event type.
@@ -25,6 +25,7 @@ func (w *HostWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeSpawn,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"created"}}, "type": map[string]any{"type": "string"}}),
 		Description: "Create a new worker. Type determines worker kind (reason, workspace, ...). Type-specific arguments (e.g. path, provider, model, programs, events) are passed as top-level properties.",
 		Parameters: obj(map[string]any{
 			"type": map[string]any{
@@ -53,7 +54,7 @@ func (w *HostWorker) registerExtensions() {
 			"tags": map[string]any{
 				"type":        "array",
 				"description": "Optional slash-path labels that group this worker in the WebUI selector (e.g. [\"ops/backup\", \"work\"]). Display metadata only; carried to the declaration so it can be found and filtered-by in the UI. A comma-separated string is also accepted.",
-				"items": map[string]any{"type": "string"},
+				"items":       map[string]any{"type": "string"},
 			},
 			"description": map[string]any{
 				"type":        "string",
@@ -68,6 +69,7 @@ func (w *HostWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeSuspend,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"suspended"}}}),
 		Description: "Suspend a running worker: snapshots its state, stops its goroutine and releases its bus connection. The worker can later be resumed.",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{
@@ -83,6 +85,7 @@ func (w *HostWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeResume,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"running"}}}),
 		Description: "Resume a suspended worker: reconnects its bus channel, restores its snapshot and starts it.",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{
@@ -98,7 +101,7 @@ func (w *HostWorker) registerExtensions() {
 }
 
 // reply answers a tool invocation with request.completed / request.failed.
-func (w *HostWorker) reply(evt event.Event, toolName, result string, err error) {
+func (w *HostWorker) reply(evt event.Event, toolName string, result any, err error) {
 	if err != nil {
 		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
 		return
@@ -108,7 +111,7 @@ func (w *HostWorker) reply(evt event.Event, toolName, result string, err error) 
 
 // handleSpawn forwards the spawn request to the WorkerService, which
 // dispatches to the registered builder for the requested type.
-func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (string, error) {
+func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 	typ := baseworker.ArgString(tc.Args, "type")
 	if typ == "" {
 		return "", fmt.Errorf("type is required")
@@ -134,10 +137,10 @@ func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (string, error) {
 	}
 	// The builder may derive a default ID (e.g. workspace from path).
 	info, _ := w.engine.WorkerType(id)
-	return fmt.Sprintf(`{"worker_id":%q,"status":"created","type":%q}`, id, info), nil
+	return map[string]any{"worker_id": id, "status": "created", "type": info}, nil
 }
 
-func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (string, error) {
+func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (any, error) {
 	id := baseworker.ArgString(tc.Args, "worker_id")
 	if id == "" {
 		return "", fmt.Errorf("worker_id is required")
@@ -145,10 +148,10 @@ func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (string, error) {
 	if err := w.engine.SuspendWorker(id); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(`{"worker_id":%q,"status":"suspended"}`, id), nil
+	return map[string]any{"worker_id": id, "status": "suspended"}, nil
 }
 
-func (w *HostWorker) handleResume(tc baseworker.ToolCall) (string, error) {
+func (w *HostWorker) handleResume(tc baseworker.ToolCall) (any, error) {
 	id := baseworker.ArgString(tc.Args, "worker_id")
 	if id == "" {
 		return "", fmt.Errorf("worker_id is required")
@@ -156,5 +159,5 @@ func (w *HostWorker) handleResume(tc baseworker.ToolCall) (string, error) {
 	if err := w.engine.ResumeWorker(context.Background(), id); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(`{"worker_id":%q,"status":"running"}`, id), nil
+	return map[string]any{"worker_id": id, "status": "running"}, nil
 }

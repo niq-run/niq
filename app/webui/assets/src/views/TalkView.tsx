@@ -3,7 +3,7 @@ import ViewHeader from '../components/ViewHeader'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { isToolResult } from '../components/talk-utils'
-import { isTalkPartnerType, type EventPayload } from '../types'
+import { isReasonFamilyType, isTalkPartnerType, type EventPayload } from '../types'
 import { useChatScroll } from './talk/useChatScroll'
 import TalkRows from './talk/TalkRows'
 import StreamingTail from './talk/StreamingTail'
@@ -54,7 +54,11 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   const bubbleMax = isMobile ? '90%' : '70%'
   // Only reason workers (the conversation partners) get a standalone avatar
   // row; other workers' events carry their worker ID inline in the block title.
-  const isReason = useCallback((wid: string) => workerTypes[wid] === 'reason', [workerTypes])
+  // A reason-FAMILY check: the generic reason worker and the coding reason
+  // worker (and any future reason-family worker) all produce the reason.*
+  // stream and left-side bubbles. Comparing to 'reason' exactly would drop the
+  // others' avatars, so their replies would inherit the previous speaker's.
+  const isReason = useCallback((wid: string) => isReasonFamilyType(workerTypes[wid]), [workerTypes])
   // A talk-partner check (reason / niw / remote-niw) gates single-click avatar
   // mention: any partner's badge can be clicked to @mention it into the input.
   const isPartner = useCallback((wid: string) => isTalkPartnerType(workerTypes[wid]), [workerTypes])
@@ -177,7 +181,16 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   const tFontSize = compactMode ? fontSizes.xs : fontSizes.base
   // Separator between title segments: a left border on each segment (instead
   // of a standalone "|"), so a wrapped line never ends with a dangling bar.
-  const itemSep: CSSProperties = { borderLeft: '1px solid ' + colors.textDimmed, paddingLeft: 8 }
+  // Memoized: this object is a ctx dependency, so a fresh literal every render
+  // would give ctx a new identity each time and silently defeat every row's
+  // memo. The response rows would then re-resolve their quote against the
+  // volatile allEvents on every event — the quote flickering in late (a height
+  // jump right after the reply settles) or away. Its only input is the (stable)
+  // theme colours, so it is stable across renders.
+  const itemSep: CSSProperties = useMemo(
+    () => ({ borderLeft: '1px solid ' + colors.textDimmed, paddingLeft: 8 }),
+    [colors],
+  )
 
   // Shared context handed to every row component. Memoized so its reference is
   // stable across live events (the derived helper closures are useCallback'd),

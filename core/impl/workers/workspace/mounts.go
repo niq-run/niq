@@ -9,13 +9,12 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"os"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // The mount management extensions use their own event types rather than
@@ -43,6 +42,7 @@ type MountManager interface {
 func (w *WorkspaceWorker) registerMountExtensions() {
 	w.Register(baseworker.Extension{
 		Event:       TypeMountAdd,
+		Response:    baseworker.ObjectSchema(map[string]any{"mounts": baseworker.ArraySchema(map[string]any{"type": "string"}), "primary": map[string]any{"type": "string", "description": "the first mount"}, "added": map[string]any{"type": "string", "description": "the mount just added"}}),
 		Description: "Mount an additional directory into the workspace. The path must exist and be a directory. Requests from the workspace's approver apply directly; requests from any other worker wait for the approver's consent (approval.request/approval.decision). Relative tool paths keep resolving against the primary (first) mount; absolute paths inside any mount are accepted.",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"path": map[string]any{"type": "string", "description": "Absolute directory path to mount (~ expansion allowed). Must exist."},
@@ -51,11 +51,13 @@ func (w *WorkspaceWorker) registerMountExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeMountList,
+		Response:    baseworker.ObjectSchema(map[string]any{"mounts": baseworker.ArraySchema(map[string]any{"type": "string"}), "primary": map[string]any{"type": "string", "description": "the first mount"}, "added": map[string]any{"type": "string", "description": "the mount just added"}}),
 		Description: "List the workspace's mounted directories. The first one is the primary mount.",
 	}, w.handleMountList)
 
 	w.Register(baseworker.Extension{
 		Event:       TypeMountRemove,
+		Response:    baseworker.ObjectSchema(map[string]any{"mounts": baseworker.ArraySchema(map[string]any{"type": "string"}), "primary": map[string]any{"type": "string", "description": "the first mount"}, "added": map[string]any{"type": "string", "description": "the mount just added"}}),
 		Description: "Unmount a mounted directory. Relative tool paths resolve against the primary (first) mount, so removing it promotes the next one. The last remaining mount cannot be removed.",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"path": map[string]any{"type": "string", "description": "Mounted directory path to remove (~ expansion allowed)."},
@@ -96,7 +98,7 @@ func (w *WorkspaceWorker) handleMountAdd(evt event.Event) {
 	}
 	log.Printf("[workspace %s] mounted %s", w.ID(), added)
 	w.NotifyDurableChange()
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshotJSON(added, mm), evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshot(added, mm), evt.TraceID)
 }
 
 // requestMountApproval parks a non-approver's mount.add behind the approver's
@@ -109,7 +111,7 @@ func (w *WorkspaceWorker) requestMountApproval(evt event.Event, path string, mou
 	_, existsErr := os.Stat(path)
 	appr := event.New(event.TypeApprovalRequest, w.ID(), jsonSafe(map[string]any{
 		"origin":       evt.WorkerId, // who set this in motion (reason worker / human UI)
-		"requested_by": w.ID(),      // the worker sending this approval request
+		"requested_by": w.ID(),       // the worker sending this approval request
 		"action":       "mount.add",
 		"path":         path,
 		"exists":       existsErr == nil,
@@ -153,7 +155,7 @@ func (w *WorkspaceWorker) handleMountRemove(evt event.Event) {
 				log.Printf("[workspace %s] unmounted %s", w.ID(), path)
 				w.NotifyDurableChange()
 			}
-			w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshotJSON("", mm), evt.TraceID)
+			w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshot("", mm), evt.TraceID)
 			return
 		}
 	}
@@ -171,7 +173,7 @@ func (w *WorkspaceWorker) handleMountList(evt event.Event) {
 		return
 	}
 	// Read-only query: its result is transient, not durable history.
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshotJSON("", mm), evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, mountSnapshot("", mm), evt.TraceID)
 }
 
 // mountManager probes the backend for the MountManager interface.
@@ -186,7 +188,9 @@ func (w *WorkspaceWorker) mountManager() (MountManager, error) {
 // mountSnapshotJSON renders the mount list (plus the just-added path when
 // non-empty) as the reply result. Only string values and []string travel in
 // the snapshot, so marshalling cannot fail.
-func mountSnapshotJSON(added string, mm MountManager) string {
+// mountSnapshot is the reply value of the mount tools: the full mount list plus
+// the primary mount, and (for add) the directory just mounted.
+func mountSnapshot(added string, mm MountManager) map[string]any {
 	mounts := mm.Mounts()
 	snapshot := map[string]any{"mounts": mounts}
 	if added != "" {
@@ -195,6 +199,5 @@ func mountSnapshotJSON(added string, mm MountManager) string {
 	if len(mounts) > 0 {
 		snapshot["primary"] = mounts[0]
 	}
-	b, _ := json.Marshal(snapshot)
-	return string(b)
+	return snapshot
 }

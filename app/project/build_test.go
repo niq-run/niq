@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/niq-run/niq/core/itfs/worker"
 	"github.com/niq-run/niq/core/impl/workers/niw"
+	"github.com/niq-run/niq/core/itfs/worker"
 )
 
 func TestParseMountsParamTildeExpansion(t *testing.T) {

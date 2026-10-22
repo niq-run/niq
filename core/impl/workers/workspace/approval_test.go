@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	backend "github.com/niq-run/niq/core/impl/embedws"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // testTimeout bounds waits on asynchronous tool dispatches in these tests.
@@ -261,7 +261,7 @@ func TestMountAddFromOtherWorkerWaitsForApproval(t *testing.T) {
 	var result struct {
 		Mounts []string `json:"mounts"`
 	}
-	if err := json.Unmarshal([]byte(last.Payload["result"].(string)), &result); err != nil || !mountsContain(result.Mounts, extra) {
+	if err := json.Unmarshal([]byte(event.ReplyText(last.Payload)), &result); err != nil || !mountsContain(result.Mounts, extra) {
 		t.Fatalf("result = %v", last.Payload["result"])
 	}
 }

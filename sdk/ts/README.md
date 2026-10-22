@@ -58,12 +58,114 @@ import { HTTPWorkerClient, readBusEnv } from "@niq.run/worker-sdk";
 const client = new HTTPWorkerClient(readBusEnv());
 ```
 
+### Declaring a tool's schemas
+
+**What the contract accepts.** `parameters` (the request) and `response` (the
+reply) are typed `SchemaSource` (`object`): registration normalizes whatever you
+pass to plain JSON Schema, and that plain schema is what rides `worker.ready`.
+Accepted sources, all verified against the built SDK:
+
+| You pass | Accepted | Why |
+|---|---|---|
+| plain JSON Schema object | ✅ as-is | already the wire form |
+| `s.object({...})` | ✅ as-is | the builders emit JSON Schema |
+| TypeBox `Type.Object({...})` | ✅ as-is | TypeBox *is* JSON Schema |
+| zod 4 `z.object({...})` | ✅ converted | the schema exposes `.toJSONSchema()` |
+| arktype `type({...})` | ✅ converted | exposes `.toJsonSchema()` |
+| valibot / zod 3 | ✅ after converting | no converter method: pass `toJsonSchema(...)` / `zod-to-json-schema` output |
+| valibot / zod 3 **raw** | ❌ throws at registration | their schemas carry library keys (`kind`, `_def`); announcing them would put internals on the wire |
+| a string / number | ❌ compile error | a schema is an object |
+
+Write them with the `s` builders instead of by hand:
+
+```ts
+import { s } from "@niq.run/worker-sdk";
+
+worker.register(
+  {
+    event: "lark.send",
+    description: "Send a message to a chat",
+    parameters: s.object({
+      target: s.string("chat_id, open_id or user_id"),
+      text: s.string("message body"),
+      file: s.optional(s.string("local path or http(s) URL")),
+      mode: s.optional(s.enumOf(["fast", "deep"])),
+    }),
+    response: s.object({ messageId: s.string(), ok: s.boolean() }),
+  },
+  handler,
+);
+```
+
+Properties are required unless wrapped in `s.optional(...)`; arrays, enums and
+free-form values are `s.array(...)`, `s.enumOf([...])`, `s.any()`.
+
+Both schemas ride `worker.ready`, so peers and the directory worker see them
+(`get_worker_info` → `parameters` / `response`). `response` is what lets an agent
+— in particular a PTC script, written before anything runs — plan how to parse a
+reply; declare it whenever the reply is structured.
+
+**Bring your own schema library** — the SDK depends on none, and normalizes
+whatever you pass:
+
+| Library | What you write | Note |
+|---|---|---|
+| **zod 4** | `parameters: z.object({…})` | schemas expose `.toJSONSchema()`; the SDK calls it for you |
+| **arktype** | `parameters: type({…})` | same, via `.toJsonSchema()` |
+| **TypeBox** | `parameters: Type.Object({…})` | TypeBox *is* JSON Schema — passes through untouched |
+| **valibot** | `parameters: toJsonSchema(v.object({…}))` | convert once at registration (`@valibot/to-json-schema`) |
+| plain | `parameters: { type: "object", … }` | a JSON Schema object is used as-is |
+| `s` helpers | `parameters: s.object({…})` | no dependency at all; see above |
+
+Registration normalizes both schemas to plain JSON Schema, so the announced
+contract (and every peer's tool list) is identical whichever route you take. A
+value that is neither a schema nor convertible throws, naming the extension —
+**including a library schema with no converter** (valibot, zod 3): those carry
+`type`/`kind` at the top level, and announcing them would put library internals on
+the wire, so they are rejected rather than silently passed through.
+
+Validating args is your call, in the handler — nothing on the bus validates. With
+zod/valibot the schema you already declared does it.
+
+> **Full inference from TypeScript types** (a `handler(args: { text: string })`
+> signature becoming a schema) is only possible at build time, because types are
+> erased at runtime. The mature route is [typia](https://typia.io)
+> (`typia.json.schemas<[Args]>()`, via a ts-patch transformer) or a CLI
+> generator such as `ts-json-schema-generator`. Schema-first libraries
+> (TypeBox, zod) are the usual trade-off: write the schema, derive the TS type
+> from it (`Static<typeof T>`, `z.infer<T>`).
+
+### Reply shape
+
+`request.completed` payloads follow one rule (the same as the Go `baseworker`):
+
+- an **object** reply *is* the payload — no wrapper;
+- anything else (text, a number, an array) is wrapped as `{ result: value }`.
+
+So a tool that returns structured data just passes the object:
+`replyCompleted(caller, callID, { mounts, primary })`; text goes through
+unchanged: `replyCompleted(caller, callID, "Exit code: 0")`. `replyObject(...)`
+and `replyString(...)` are the same calls with the shape made explicit.
+
+`result` and `content` are reserved top-level keys (the latter for multi-modal
+blocks), so a structured reply should pick its own field names.
+
+Reading a peer's reply uses the mirror helpers:
+
+```ts
+import { replyValue, replyText } from "@niq.run/worker-sdk";
+
+const listing = replyValue(evt.payload); // the object itself, or the result value
+const line = replyText(evt.payload);     // string verbatim, else JSON
+```
+
 ### Base worker
 
 `BaseWorker` (mirrors Go `pkg/baseworker`) layers the shared worker plumbing
 on top of a `WorkerSideChannel`: an extension registry (what the worker
 responds to and how), tool-request reply plumbing, and the `worker.ready`
-presence announcement.
+presence announcement. Presence is transient (live-only, never persisted), and
+a `worker.discover` is answered automatically with a directed `worker.ready`.
 
 ```ts
 import { BaseWorker, HTTPWorkerClient, parseToolCall, EventType } from "@niq.run/worker-sdk";
@@ -84,12 +186,14 @@ worker.register(
   { event: "tool.invoke", keyField: "name", key: "echo", description: "Echo a message" },
   (evt) => {
     const call = parseToolCall(evt);
-    worker.replyCompleted(call.callerID, call.callID, call.name, `echo: ${call.args["text"] ?? ""}`, call.traceID);
+    worker.replyCompleted(call.callerID, call.callID, `echo: ${call.args["text"] ?? ""}`, call.traceID);
   },
 );
 
 await worker.channel.connect();
-await worker.announceReady("echo"); // broadcast worker.ready, self excluded
+// Broadcast worker.ready (transient, self excluded) and remember the contract,
+// so a later worker.discover is answered directly — no extra code needed here.
+await worker.announceReady("echo");
 
 for await (const evt of worker.channel.events()) {
   if (!worker.dispatchExtension(evt)) {

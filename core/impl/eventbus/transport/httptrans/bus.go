@@ -20,8 +20,8 @@ import (
 // channel — without this guard that race killed the whole project process.
 type busSide struct {
 	workerID string
-	toWorker chan event.Event      // SSE goroutine reads from here
-	toBus    chan corebus.Request  // POST /publish writes to here
+	toWorker chan event.Event     // SSE goroutine reads from here
+	toBus    chan corebus.Request // POST /publish writes to here
 
 	mu     sync.Mutex // serializes Send and Close; guards `closed`
 	closed bool

@@ -9,6 +9,13 @@ interface ContextMenuSurfaceProps {
   onClick?: () => void
   onMouseEnter?: () => void
   onMouseLeave?: () => void
+  // Optional HTML5 drag-and-drop wiring (used to reorder pinned rows). Passed
+  // straight through to the surface element.
+  draggable?: boolean
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void
+  onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void
+  onDragEnd?: (e: React.DragEvent<HTMLDivElement>) => void
+  onDrop?: (e: React.DragEvent<HTMLDivElement>) => void
   children: ReactNode
 }
 
@@ -17,7 +24,8 @@ interface ContextMenuSurfaceProps {
 // the gesture wiring (contextmenu + touch hold) plus the anti-text-selection
 // styles are owned here so every call site behaves identically on phones.
 export default function ContextMenuSurface({
-  onOpenMenu, style, className, onClick, onMouseEnter, onMouseLeave, children,
+  onOpenMenu, style, className, onClick, onMouseEnter, onMouseLeave,
+  draggable, onDragStart, onDragOver, onDragEnd, onDrop, children,
 }: ContextMenuSurfaceProps) {
   const handlers = useContextMenu((pos) => onOpenMenu(pos))
   return (
@@ -27,6 +35,11 @@ export default function ContextMenuSurface({
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragEnd={onDragEnd}
+      onDrop={onDrop}
       style={style ? { ...style, ...contextMenuElementStyle } : { ...contextMenuElementStyle }}
     >
       {children}

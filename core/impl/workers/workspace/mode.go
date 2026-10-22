@@ -9,8 +9,8 @@ import (
 	"errors"
 	"log"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // Mode names on the wire (mode.set payload / snapshot).
@@ -31,6 +31,7 @@ var mutatingTools = map[string]bool{"write": true, "edit": true, "bash": true}
 func (w *WorkspaceWorker) registerModeExtension() {
 	w.Register(baseworker.Extension{
 		Event:       TypeModeSet,
+		Response:    baseworker.ObjectSchema(map[string]any{"mode": map[string]any{"type": "string", "enum": []string{"readwrite", "readonly"}}}),
 		Description: "Switch the workspace between readwrite (default) and readonly. In readonly mode write/edit/bash calls are rejected; the tools stay declared.",
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{
 			"mode": map[string]any{"type": "string", "enum": []any{ModeNameReadWrite, ModeNameReadOnly}, "description": "Target mode."},
@@ -62,7 +63,7 @@ func (w *WorkspaceWorker) handleModeSet(evt event.Event) {
 	w.AnnounceReady("workspace", nil)
 	w.NotifyDurableChange()
 	log.Printf("[workspace %s] mode set to %s", w.ID(), modeName)
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, `{"mode":"`+modeName+`"}`, evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, map[string]any{"mode": modeName}, evt.TraceID)
 }
 
 // modeName renders the current mode for the snapshot.

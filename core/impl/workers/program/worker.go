@@ -15,6 +15,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -24,14 +25,20 @@ import (
 
 // Config holds the configuration for a Program Worker.
 type Config struct {
-	ID      string
-	Bus     corebus.WorkerSideChannel
-	Backend program.Backend
-	// Executor runs FormType:script programs (the execution backend). Optional:
-	// when nil, program.run replies "executor not configured" so a worker that
-	// only stores/loads programs works without one.
-	Executor program.ScriptProgramExecutor
+	ID  string
+	Bus corebus.WorkerSideChannel
+	// Backend is the whole program environment: Store (content) + Executor
+	// (how a script program runs). Optional Executor halves are created with
+	// program.Compose.
+	Backend program.ProgramBackend
+	// DirectoryID is the directory worker used to validate a script's call
+	// targets (it owns the fleet roster, so there is no second copy here).
+	// Empty disables target validation; DefaultDirectoryID otherwise.
+	DirectoryID string
 }
+
+// DefaultDirectoryID is the directory worker consulted for target validation.
+const DefaultDirectoryID = "directory"
 
 // Worker is a bus-facing worker that manages Program lifecycle.
 // It subscribes to its tool events and worker.discover, and exposes
@@ -44,16 +51,22 @@ type Config struct {
 // lets the backend resolve them.
 type Worker struct {
 	baseworker.BaseWorker
-	backend  program.Backend
-	executor program.ScriptProgramExecutor
+	backend     program.ProgramBackend
+	directoryID string // directory worker consulted for target validation
 
 	started bool
 	cancel  context.CancelFunc
 
-	mu sync.Mutex // guards started / cancel
+	mu sync.Mutex // guards started / cancel / probeBackoff
 
-	callMu  sync.Mutex                    // guards pending
-	pending map[string]chan callResult    // script tool-call slots, keyed by request id
+	// probeBackoff suppresses directory probes for a while after one came back
+	// indeterminate (no directory worker configured, or it is offline): the
+	// roster lives in the directory worker, so without one there is nothing to
+	// ask, and every script call must not pay a probe timeout.
+	probeBackoff time.Time
+
+	callMu  sync.Mutex                 // guards pending
+	pending map[string]chan callResult // script tool-call slots, keyed by request id
 }
 
 // New creates a Program Worker.
@@ -62,10 +75,14 @@ func New(cfg Config) *Worker {
 	if id == "" {
 		id = "program"
 	}
+	directoryID := cfg.DirectoryID
+	if directoryID == "" {
+		directoryID = DefaultDirectoryID
+	}
 	w := &Worker{
-		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
-		backend:    cfg.Backend,
-		executor:   cfg.Executor,
+		BaseWorker:  baseworker.NewBaseWorker(id, cfg.Bus),
+		backend:     cfg.Backend,
+		directoryID: directoryID,
 	}
 	w.registerExtensions()
 	return w
@@ -121,6 +138,30 @@ func (w *Worker) Stop() error {
 
 func (w *Worker) Snapshot() ([]byte, error)  { return nil, nil }
 func (w *Worker) Restore(state []byte) error { return nil }
+
+// readmeText is the built-in guide the worker.readme call returns (before any
+// declaration-level readme / readme_append customization).
+func (w *Worker) readmeText() string {
+	return "Program worker — manages niq Programs (reusable sources that compile " +
+		"into tool calls) and runs script programs.\n\n" +
+		"A Program has two axes: content_type (instruction = a binding rule; " +
+		"playbook = a procedural how-to) and form_type (prompt = natural language; " +
+		"script = JavaScript interpreted into tool calls). A script program is the " +
+		"script-form counterpart of a playbook.\n\n" +
+		"Tools:\n" +
+		"- search / load / write / edit / upsert / delete — manage Program content. " +
+		"load returns a program's entry content or a sub-content by path.\n" +
+		"- run — execute a FormType:script program in a sandbox. Provide exactly one " +
+		"of path (a stored script program, reused; name still works) or source " +
+		"(inline JavaScript, ad-hoc); optional args (exposed to the script as " +
+		"sdk.args) and timeout_seconds (default 120, covering nested calls). The " +
+		"script may call other workers' tools via its SDK — each call becomes a " +
+		"normal request event, and a tool-level failure comes back as a result, not " +
+		"an exception. The run returns the script's final result, followed (when it " +
+		"logged) by a '--- script log ---' section, so a whole encoded sequence of " +
+		"tool calls runs in one call plus one reply instead of one reasoning round " +
+		"per call. A script error names the failing line of the script itself."
+}
 
 // ── Program lookup ──
 

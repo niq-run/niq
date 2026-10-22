@@ -1,49 +1,66 @@
 package program
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
-// Backend is the storage interface for Program content.
-// Implementations may use the local filesystem, a database, an object store,
-// or any other storage medium. The caller is agnostic to the storage backend.
+// ProgramBackend is the program worker's whole environment: a Store (where
+// Program content lives) plus the Executor that runs its script contents.
 //
-// A Backend is the sole interpreter of Program addresses. Every path argument
-// below is an abstract address in the form "{program name}" for a Program's
-// entry content, or "{program name}/path/to/file.type" for one of its
-// contents. How an address maps onto actual storage is the Backend's own
-// business and is never exposed: a filesystem Backend might keep a Program in
-// a nested directory far from the root, and no caller can tell.
-//
-// The same applies to storage format. The bundled filesystem implementation
-// (pgbackend) stores each content as YAML frontmatter plus a markdown body and
-// reads the body back; another Backend could store metadata in columns. Callers
-// see content, not serialisation.
-type Backend interface {
-	// List enumerates every Program the Backend holds. Each carries its
-	// name, its root path, and the paths of its contents — all abstract
-	// addresses. There is no notion of a directory here; a Backend whose
-	// storage is hierarchical flattens it.
-	List(ctx context.Context) ([]*Program, error)
+// It is ONE value to swap, because environment questions come together — a
+// self-hosted deployment pairs a filesystem Store with a local sandbox, while a
+// remote program service that both stores and runs is a single ProgramBackend.
+// The two halves stay separate interfaces inside it: they vary independently
+// (local store + remote sandbox is a real combination), they carry different
+// trust contracts (trusted IO vs. untrusted code), and a worker test can stub
+// one without faking the other.
+type ProgramBackend interface {
+	Store
+	Executor
+}
 
-	// Read loads the content at path. A Program's root path yields its entry
-	// content; any other path yields that file.
-	Read(ctx context.Context, path string) (string, error)
+// ErrNoExecutor is returned by Start when the environment has a Store but no
+// Executor (a worker that only manages content). It lets program.run answer
+// "executor not configured" instead of panicking on a half-built backend.
+var ErrNoExecutor = errors.New("no script executor configured")
 
-	// Upsert persists a Program's metadata, creating it or replacing an
-	// existing unlocked one. It never touches content: a Program created
-	// this way starts with an empty entry body, and updating metadata leaves
-	// the current body alone. Metadata and content are written by different
-	// calls on purpose — content belongs to Write and Edit.
-	Upsert(ctx context.Context, p *Program) error
+// Compose pairs a Store with an Executor into a ProgramBackend. A nil executor
+// yields a valid backend whose Start reports ErrNoExecutor.
+func Compose(store Store, executor Executor) ProgramBackend {
+	return composed{store: store, executor: executor}
+}
 
-	// Write replaces the content at path outright. At a Program's root path
-	// it replaces the entry body and leaves the metadata alone; at any
-	// deeper path it writes that file. The Program must already exist.
-	Write(ctx context.Context, path, content string) error
+// composed is the generic ProgramBackend: the halves are independent, so the
+// pairing itself carries no behaviour.
+type composed struct {
+	store    Store
+	executor Executor
+}
 
-	// Edit performs an atomic find-and-replace within the content at path.
-	Edit(ctx context.Context, path, oldStr, newStr string) error
+var _ ProgramBackend = composed{}
 
-	// Remove deletes the Program at a root path, or a single content file at
-	// any deeper path.
-	Remove(ctx context.Context, path string) error
+func (c composed) List(ctx context.Context) ([]*Program, error) { return c.store.List(ctx) }
+
+func (c composed) Read(ctx context.Context, path string) (string, error) {
+	return c.store.Read(ctx, path)
+}
+
+func (c composed) Upsert(ctx context.Context, p *Program) error { return c.store.Upsert(ctx, p) }
+
+func (c composed) Write(ctx context.Context, path, content string) error {
+	return c.store.Write(ctx, path, content)
+}
+
+func (c composed) Edit(ctx context.Context, path, oldStr, newStr string) error {
+	return c.store.Edit(ctx, path, oldStr, newStr)
+}
+
+func (c composed) Remove(ctx context.Context, path string) error { return c.store.Remove(ctx, path) }
+
+func (c composed) Start(ctx context.Context, src string, args map[string]any, call ToolCaller) (ScriptSession, error) {
+	if c.executor == nil {
+		return nil, ErrNoExecutor
+	}
+	return c.executor.Start(ctx, src, args, call)
 }

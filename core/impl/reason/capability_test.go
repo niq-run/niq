@@ -2,6 +2,7 @@ package reason
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/niq-run/niq/core/itfs/event"
@@ -218,5 +219,92 @@ func TestPeerToolDispatchable(t *testing.T) {
 	}
 	if !foundEvt {
 		t.Fatal("expected a remember event to the declaring worker")
+	}
+}
+
+// TestReadyResponseReachesTheToolList verifies a peer's declared reply shape is
+// learned from worker.ready and surfaces in the LLM tool description, so the
+// model knows what a call will return before making it (the basis of PTC: a
+// script is written against an expected output).
+func TestReadyResponseReachesTheToolList(t *testing.T) {
+	w, _ := newTestWorker2()
+
+	evt := event.New(event.TypeWorkerReady, "mcp", map[string]any{
+		"worker_id": "mcp",
+		"type":      "mcp",
+		"watch": []map[string]any{{
+			"event": "search",
+			"desc":  "search things",
+			"parameters": map[string]any{
+				"type": "object",
+			},
+			"response": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+		}},
+	})
+	w.HandleWorkerReady(evt)
+
+	caps := w.discoveredCapabilities()
+	var found *DiscoveredCapability
+	for i := range caps {
+		if caps[i].Source == "mcp" && caps[i].Event == "search" {
+			found = &caps[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("capability not discovered")
+	}
+	if found.Response == nil || found.Response["type"] != "array" {
+		t.Fatalf("Response = %#v, want the declared schema", found.Response)
+	}
+
+	var def *llm.ToolDef
+	for _, d := range w.LLMToolDefs() {
+		if d.Name == "mcp__search" {
+			dd := d
+			def = &dd
+		}
+	}
+	if def == nil {
+		t.Fatal("mcp__search missing from the tool list")
+	}
+	if !strings.Contains(def.Description, "Response (JSON Schema)") || !strings.Contains(def.Description, `"type":"array"`) {
+		t.Fatalf("description = %q, want the returns hint", def.Description)
+	}
+}
+
+// TestResponseHintIsCapped verifies a huge declared schema cannot bloat every
+// request's tool list.
+func TestResponseHintIsCapped(t *testing.T) {
+	big := map[string]any{"type": "object", "description": strings.Repeat("x", responseHintMaxBytes*2)}
+	hint := withResponseHint("desc", big)
+	if len(hint) > responseHintMaxBytes+100 {
+		t.Fatalf("hint length %d, want it capped near %d", len(hint), responseHintMaxBytes)
+	}
+	if withResponseHint("desc", nil) != "desc" {
+		t.Fatal("no Response must leave the description untouched")
+	}
+}
+
+// TestOwnCapabilitiesDeclareResponse verifies this worker's own generated tools
+// describe their reply too — the model sees them in every round, and a PTC
+// script may call them through request, so an undeclared reply would be the same
+// blind spot the peer tools just lost.
+func TestOwnCapabilitiesDeclareResponse(t *testing.T) {
+	w, _ := newTestWorker2()
+	want := []event.EventType{TypeProviderCurrent, TypeProviderList, TypeProviderSwitch}
+	have := map[event.EventType]bool{}
+	for _, e := range w.WatchEntries(true) {
+		ev, _ := e["event"].(string)
+		if _, ok := e["response"]; ok {
+			have[event.EventType(ev)] = true
+		}
+	}
+	for _, ev := range want {
+		if !have[ev] {
+			t.Errorf("%s does not declare a response schema", ev)
+		}
 	}
 }

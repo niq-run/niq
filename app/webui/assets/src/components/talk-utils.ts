@@ -228,24 +228,30 @@ export function summaryText(evt: EventPayload): string {
 }
 
 // ── Worker type → color (for the worker-type tag) ──
+//
+// Four groups, not a colour per type: every built-in worker shares one tone,
+// reason and coding each get their own, and every external (third-party) worker
+// shares one. The tag's text already names the type, so colour only has to
+// separate the groups — which keeps the palette calm.
+
+const BUILTIN_TYPES = new Set([
+  'host',
+  'workspace',
+  'timer',
+  'mcp',
+  'directory',
+  'history',
+  'program',
+  'niw',
+  'remote-niw',
+  'hiw',
+])
 
 export function getWorkerTypeColor(type: string, colors: import('../theme').Palette): string {
-  switch (type) {
-    case "reason":
-      return colors.eventType.reason
-    case "timer":
-      return colors.eventType.timer
-    case "hiw":
-      return colors.eventType.hiw
-    case "workspace":
-      return colors.eventType.tool
-    case "host":
-      return colors.eventType.worker
-    case "program":
-      return colors.eventType.worker
-    default:
-      return colors.eventType.default
-  }
+  if (type === 'reason') return colors.typeTag.reason
+  if (type === 'coding') return colors.typeTag.coding
+  if (BUILTIN_TYPES.has(type)) return colors.typeTag.builtin
+  return colors.typeTag.external
 }
 
 // ── Target summary (truncate to 14 chars) ──

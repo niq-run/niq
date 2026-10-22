@@ -108,13 +108,15 @@ func (w *Worker) registerExtensions() {
 			"and call remote tools. Read it first, then drive the concrete events.",
 		w.readmeText, w.cfg.Params)
 	w.Register(baseworker.Extension{
-		Event: EvtServerList,
+		Event:    EvtServerList,
+		Response: baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "url": map[string]any{"type": "string"}, "protocol": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"configured", "connected"}}, "tools": map[string]any{"type": "number", "description": "cached tool count"}})),
 		Description: "List configured MCP servers (name, url, tool count, status). " +
 			"Call this first to discover what remote MCP servers are available.",
 		Parameters: obj(map[string]any{}),
 	}, w.handleServerList)
 	w.Register(baseworker.Extension{
 		Event:       EvtToolList,
+		Response:    baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}, "schema": map[string]any{"type": "object", "description": "the tool's input schema"}, "response": map[string]any{"type": "object", "description": "the tool's declared output schema, when the server declares one"}})),
 		Description: "List the tools exposed by one MCP server (provide server).",
 		Parameters: obj(map[string]any{
 			"server": map[string]any{"type": "string", "description": "server name from mcp.server.list"},
@@ -122,6 +124,7 @@ func (w *Worker) registerExtensions() {
 	}, w.handleToolList)
 	w.Register(baseworker.Extension{
 		Event:       EvtToolCall,
+		Response:    baseworker.StringSchema("the remote tool's content as text; when the server returns structured output, its JSON follows the text"),
 		Description: "Call a tool on a remote MCP server. Provide server, tool, and arguments.",
 		Parameters: obj(map[string]any{
 			"server":    map[string]any{"type": "string"},
@@ -134,6 +137,7 @@ func (w *Worker) registerExtensions() {
 	if !w.cfg.Fixed {
 		w.Register(baseworker.Extension{
 			Event:       EvtServerAdd,
+			Response:    baseworker.StringSchema("confirmation naming the server"),
 			Description: "Add an MCP server at runtime (persisted). Provide name, url, and optional headers/protocol.",
 			Parameters: obj(map[string]any{
 				"name":     map[string]any{"type": "string"},
@@ -144,6 +148,7 @@ func (w *Worker) registerExtensions() {
 		}, w.handleServerAdd)
 		w.Register(baseworker.Extension{
 			Event:       EvtServerRemove,
+			Response:    baseworker.StringSchema("confirmation naming the server"),
 			Description: "Remove an MCP server at runtime (persisted). Provide name.",
 			Parameters: obj(map[string]any{
 				"name": map[string]any{"type": "string"},
@@ -151,6 +156,7 @@ func (w *Worker) registerExtensions() {
 		}, w.handleServerRemove)
 		w.Register(baseworker.Extension{
 			Event:       EvtServerUpdate,
+			Response:    baseworker.StringSchema("confirmation naming the server"),
 			Description: "Update an MCP server's url/headers/protocol at runtime (persisted). Provide name and the fields to change.",
 			Parameters: obj(map[string]any{
 				"name":     map[string]any{"type": "string"},
@@ -160,7 +166,8 @@ func (w *Worker) registerExtensions() {
 			}),
 		}, w.handleServerUpdate)
 		w.Register(baseworker.Extension{
-			Event: EvtExpose,
+			Event:    EvtExpose,
+			Response: baseworker.ObjectSchema(map[string]any{"mode": map[string]any{"type": "string", "enum": []any{ExposeAgentic, ExposeReady}}}),
 			Description: "Get or set the exposure mode. agentic exposes a fixed discovery surface " +
 				"(server.list / tool.list / tool.call); ready additionally flattens every remote tool " +
 				"into its own capability. Omit mode to read the current mode.",
@@ -327,8 +334,7 @@ func (w *Worker) handleServerList(evt event.Event) {
 			"tools":    len(w.tools[sc.Name]),
 		})
 	}
-	b, _ := json.Marshal(list)
-	w.reply(tc, string(b), "")
+	w.reply(tc, list, "")
 }
 
 // mcpReadme is the agent-facing usage guide returned by worker.readme: the
@@ -437,10 +443,15 @@ func (w *Worker) handleToolList(evt event.Event) {
 	w.announceIfReady()
 	list := make([]map[string]any, 0, len(info))
 	for _, t := range info {
-		list = append(list, map[string]any{"name": t.Name, "description": t.Description, "schema": t.Schema})
+		entry := map[string]any{"name": t.Name, "description": t.Description, "schema": t.Schema}
+		// The result shape, when the remote server declares one: the caller
+		// needs it to interpret the reply (and a PTC script to parse it).
+		if t.OutputSchema != nil {
+			entry["response"] = t.OutputSchema
+		}
+		list = append(list, entry)
 	}
-	b, _ := json.Marshal(list)
-	w.reply(tc, string(b), "")
+	w.reply(tc, list, "")
 }
 
 func (w *Worker) handleToolCall(evt event.Event) {
@@ -588,7 +599,7 @@ func (w *Worker) handleExpose(evt event.Event) {
 		w.mu.Lock()
 		cur := w.cfg.Expose
 		w.mu.Unlock()
-		w.reply(tc, fmt.Sprintf("expose mode: %s", cur), "")
+		w.reply(tc, map[string]any{"mode": cur}, "")
 		return
 	}
 	if !validExpose(mode) {
@@ -596,7 +607,7 @@ func (w *Worker) handleExpose(evt event.Event) {
 		return
 	}
 	w.applyExpose(mode)
-	w.reply(tc, fmt.Sprintf("expose mode set to %s", mode), "")
+	w.reply(tc, map[string]any{"mode": mode}, "")
 }
 
 // applyExpose switches the exposed capability surface and makes the change
@@ -729,11 +740,18 @@ func (w *Worker) setTools(server string, info []toolInfo) {
 			continue
 		}
 		serverName, toolName := server, t.Name
-		w.Register(baseworker.Extension{
+		ext := baseworker.Extension{
 			Event:       evt,
 			Description: firstNonEmpty(t.Description, t.Name),
 			Parameters:  mapToStringSchema(t.Schema),
-		}, func(e event.Event) { w.handleDirectCall(e, serverName, toolName) })
+		}
+		if t.OutputSchema != nil {
+			// Republish the remote tool's declared result shape as the capability's
+			// response half, so peers (and the directory roster) can see it before
+			// calling.
+			ext.Response = mapToStringSchema(t.OutputSchema)
+		}
+		w.Register(ext, func(e event.Event) { w.handleDirectCall(e, serverName, toolName) })
 		events = append(events, evt)
 	}
 	w.toolEvents[server] = events
@@ -828,7 +846,9 @@ func (w *Worker) sortedServers() []ServerConfig {
 	return out
 }
 
-func (w *Worker) reply(tc baseworker.ToolCall, result, errStr string) {
+// reply answers a tool call: result is a value (a list of servers/tools, an
+// object, or text) and ReplyCompleted decides how it travels.
+func (w *Worker) reply(tc baseworker.ToolCall, result any, errStr string) {
 	if errStr != "" {
 		w.ReplyFailed(tc.CallerID, tc.CallID, errStr, tc.TraceID)
 		return

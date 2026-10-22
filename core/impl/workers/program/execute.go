@@ -4,12 +4,20 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/itfs/program"
 )
 
 // defaultRunTimeout bounds one script-program session; a runaway (or unfaithful
@@ -18,10 +26,11 @@ import (
 const defaultRunTimeout = 120 * time.Second
 
 // callResult is the outcome of a forwarded tool call: either the
-// request.completed text or the request.failed / rejected reason.
+// request.completed reply value (string or structured JSON) or the
+// request.failed / rejected reason.
 type callResult struct {
-	text string
-	err  string
+	value any
+	err   string
 }
 
 func newCallID() string {
@@ -35,7 +44,21 @@ func newCallID() string {
 // failed / rejected reply (matched by a minted request id). Concurrent-safe —
 // each call gets its own pending slot, so a script may fire many calls in
 // parallel await their results independently.
-func (w *Worker) callTool(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (string, error) {
+func (w *Worker) callTool(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (any, error) {
+	// Fail fast on a target no one can answer: the send would be routed nowhere,
+	// no reply could ever resolve this call, and the script (and the caller's
+	// round) would hang until the run timeout. A typo'd or not-yet-started
+	// worker is the common case, so it deserves an immediate, precise error.
+	if err := w.checkTarget(ctx, target); err != nil {
+		return "", err
+	}
+	return w.relay(ctx, target, eventType, arguments)
+}
+
+// relay performs one request/reply round trip, WITHOUT validating the target.
+// callTool is relay plus the target check; the directory probe uses relay
+// directly so it cannot recurse into itself.
+func (w *Worker) relay(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (any, error) {
 	callID := newCallID()
 	ch := make(chan callResult, 1)
 
@@ -60,11 +83,13 @@ func (w *Worker) callTool(ctx context.Context, target string, eventType event.Ev
 	select {
 	case r := <-ch:
 		if r.err != "" {
-			return "", fmt.Errorf("%s: %s", target, r.err)
+			// Capability-level failure reported by the peer: a typed error, so
+			// checkTarget can tell "answered no" from "never answered".
+			return nil, &remoteError{target: target, reason: r.err}
 		}
-		return r.text, nil
+		return r.value, nil
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
@@ -85,8 +110,7 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 
 	switch evt.Type {
 	case event.TypeRequestCompleted:
-		text, _ := evt.Payload["result"].(string)
-		ch <- callResult{text: text}
+		ch <- callResult{value: replyValue(evt.Payload)}
 	case event.TypeRequestFailed:
 		msg, _ := evt.Payload["error"].(string)
 		ch <- callResult{err: msg}
@@ -99,17 +123,39 @@ func (w *Worker) resolveReply(evt event.Event) bool {
 	return true
 }
 
+// replyValue is the value a script receives for a request.completed reply: the
+// payload itself for an object reply (including the {"content":[…]} multi-modal
+// shape), or its "result" entry for a text/scalar/array reply. Typed rather than
+// encoded: the script gets what the capability declared, so it never has to
+// guess whether to JSON.parse.
+func replyValue(payload map[string]any) any {
+	return event.ReplyValue(payload)
+}
+
 // handleRun serves the program.run tool: it resolves the script source from
 // the backend, hands it to the executor, and relays every script tool call
 // through callTool. It runs on its own goroutine so the worker's event loop
 // stays free to receive the request.* replies those calls await.
 func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
-	name, _ := tc.Args["name"].(string)
+	// path is the unified address vocabulary (load/edit/write/search/delete all
+	// take path); name is the pre-accessor spelling, still accepted.
+	name, _ := tc.Args["path"].(string)
 	if name == "" {
-		w.ReplyFailed(tc.CallerID, tc.CallID, "name is required", tc.TraceID)
+		name, _ = tc.Args["name"].(string)
+	}
+	source, _ := tc.Args["source"].(string)
+
+	// Two modes: run a stored script program by name (reuse), or run inline
+	// source directly (ad-hoc / transient, nothing persisted). Exactly one.
+	switch {
+	case name == "" && source == "":
+		w.ReplyFailed(tc.CallerID, tc.CallID, "provide either path (a stored script program) or source (inline script)", tc.TraceID)
+		return
+	case name != "" && source != "":
+		w.ReplyFailed(tc.CallerID, tc.CallID, "provide only one of path or source, not both", tc.TraceID)
 		return
 	}
-	if w.executor == nil {
+	if w.backend == nil {
 		w.ReplyFailed(tc.CallerID, tc.CallID, "executor not configured", tc.TraceID)
 		return
 	}
@@ -127,21 +173,37 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 		runCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
-		src, err := w.backend.Read(ctx, name)
-		if err != nil {
-			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("load %s: %v", name, err), tc.TraceID)
-			return
+		src := source
+		if src == "" {
+			loaded, err := w.backend.Read(ctx, name)
+			if err != nil {
+				w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("load %s: %v", name, err), tc.TraceID)
+				return
+			}
+			src = loaded
 		}
 
-		sess, err := w.executor.Start(runCtx, src, args, w.callTool)
+		sess, err := w.backend.Start(runCtx, src, args, w.callTool)
+		if errors.Is(err, program.ErrNoExecutor) {
+			// A store-only environment: the worker manages content but cannot run
+			// a script. Say that, rather than surfacing a start failure.
+			w.ReplyFailed(tc.CallerID, tc.CallID, "executor not configured", tc.TraceID)
+			return
+		}
 		if err != nil {
 			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("start: %v", err), tc.TraceID)
 			return
 		}
-		// Forward the script's sdk.log lines to this worker's log so a run is
-		// observable (a future pass streams them to the webui / caller too).
+		// Drain the script's sdk.log lines: mirrored into this worker's log (so a
+		// run is observable server-side) AND collected for the reply, so the
+		// caller sees them without a second round. The session closes the stream
+		// when it ends, so the drain finishes on its own.
+		logs := &scriptLog{}
+		drained := make(chan struct{})
 		go func() {
+			defer close(drained)
 			for line := range sess.Logs() {
+				logs.add(line)
 				log.Printf("[program %s] script: %s", w.ID(), line)
 			}
 		}()
@@ -149,11 +211,225 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 		// Result returns when the script finishes or the session ctx is done
 		// (timeout / cancel); the executor tears the sandbox down either way.
 		result, err := sess.Result(runCtx)
+		// Give the drain a moment to consume the tail; the channel is already
+		// closed by now, so this only covers the goroutine's hand-off.
+		select {
+		case <-drained:
+		case <-time.After(500 * time.Millisecond):
+		}
 		if err != nil {
 			sess.Cancel()
-			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("run: %v", err), tc.TraceID)
+			// A failed run still returns what it logged: that is where the cause
+			// usually is.
+			w.ReplyFailed(tc.CallerID, tc.CallID, runErrorText(err, logs), tc.TraceID)
 			return
 		}
-		w.ReplyCompleted(tc.CallerID, tc.CallID, result, tc.TraceID)
+		// The reply is a structured object, NOT wrapped in "result" (that key is
+		// reserved for non-object replies): "output" is the script's return value
+		// with its type preserved, "log" the lines it emitted.
+		w.ReplyCompleted(tc.CallerID, tc.CallID, runReply(result, logs), tc.TraceID)
 	}()
+}
+
+// ── target validation (via the directory worker) ──
+
+// directoryProbeWait bounds the roster probe. In-process it answers in
+// microseconds; the bound only matters when the directory is slow or absent.
+const directoryProbeWait = time.Second
+
+// probeBackoffWindow is how long a failed probe suppresses further probes, so a
+// project without a directory worker does not pay the probe timeout on every
+// script call.
+const probeBackoffWindow = 30 * time.Second
+
+// remoteError is a capability-level failure reported by a peer
+// (request.failed / rejected), as opposed to a transport or timeout problem.
+// It lets callers tell "the peer answered: no" from "the peer did not answer".
+type remoteError struct {
+	target string
+	reason string
+}
+
+func (e *remoteError) Error() string { return e.target + ": " + e.reason }
+
+// checkTarget rejects a call to a worker the fleet does not know.
+//
+// The roster is NOT tracked here: the directory worker already owns it (it
+// collects worker.ready / worker.gone for the whole fleet), so the program
+// worker asks it on demand instead of keeping a second copy that could drift.
+// Only a definitive "no such worker" fails the call — an unreachable directory
+// means "cannot tell", which must not block a call that may well work.
+func (w *Worker) checkTarget(ctx context.Context, target string) error {
+	// An empty target cannot be routed anywhere; say so instead of sending a
+	// request that would wait for the run timeout.
+	if target == "" {
+		return fmt.Errorf("call requires a target worker id")
+	}
+	if target == w.ID() || target == w.directoryID || w.directoryID == "" {
+		return nil
+	}
+	// A recent probe came back indeterminate: skip probing for a while.
+	w.mu.Lock()
+	backedOff := time.Now().Before(w.probeBackoff)
+	w.mu.Unlock()
+	if backedOff {
+		return nil
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, directoryProbeWait)
+	defer cancel()
+	_, err := w.relay(probeCtx, w.directoryID, directory.TypeGetWorkerInfo, map[string]any{"worker": target})
+	if err == nil {
+		return nil
+	}
+	var re *remoteError
+	if errors.As(err, &re) {
+		// The directory answered: it does not know this worker.
+		return fmt.Errorf("unknown worker: %s", target)
+	}
+	// Timeout / transport / ctx cancelled: we cannot tell. Remember it so the
+	// next calls are not delayed, and let them through — the run timeout still
+	// bounds a genuinely dead target.
+	w.mu.Lock()
+	w.probeBackoff = time.Now().Add(probeBackoffWindow)
+	w.mu.Unlock()
+	log.Printf("[program %s] directory probe for %q indeterminate (%v) - target checks paused for %s",
+		w.ID(), target, err, probeBackoffWindow)
+	return nil
+}
+
+// ── reply shaping ──
+//
+// A run replies with an OBJECT, so it reaches the caller as the payload itself:
+//
+//	{ "output": <the script's return value, any JSON type>,   // always present
+//	  "log":    ["line", …],                                  // omitted when empty
+//	  "log_truncated": <dropped line count> }                 // omitted when 0
+//
+// "result" is deliberately not the field name: it is reserved for non-object
+// replies, and using it would make the whole payload read as that one value.
+//
+// The numbers below keep what the old text convention enforced: a script cannot
+// flood the caller's context with its log, and a huge output does not become an
+// unbounded payload.
+
+const (
+	scriptLogMaxLines = 100
+	scriptLogMaxBytes = 8 * 1024
+
+	// scriptOutputMaxBytes caps the OUTPUT text handed back to the caller, in the
+	// same spirit (and roughly the same size) as the workspace tools' 20KB output
+	// cap. Head and tail are kept, the middle is elided, so both the beginning and
+	// the ending stay readable.
+	scriptOutputMaxBytes = 20 * 1024
+)
+
+// scriptLog collects a run's sdk.log lines for the reply. It is written by the
+// session's log-draining goroutine and read after the session ends, so access is
+// guarded.
+type scriptLog struct {
+	mu      sync.Mutex
+	lines   []string
+	bytes   int
+	dropped int
+}
+
+// add appends one log line, dropping the OLDEST lines once the caps are hit so
+// the retained window is the end of the run.
+func (l *scriptLog) add(line string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	line = strings.TrimRight(line, "\n")
+	l.lines = append(l.lines, line)
+	l.bytes += len(line) + 1
+	for len(l.lines) > scriptLogMaxLines || (l.bytes > scriptLogMaxBytes && len(l.lines) > 1) {
+		l.bytes -= len(l.lines[0]) + 1
+		l.lines = l.lines[1:]
+		l.dropped++
+	}
+}
+
+// snapshot returns the retained lines and how many earlier ones were dropped.
+func (l *scriptLog) snapshot() ([]string, int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.lines) == 0 {
+		return nil, 0
+	}
+	return append([]string(nil), l.lines...), l.dropped
+}
+
+// text renders the retained lines as a block (used by the failure path, which
+// must stay a plain error string).
+func (l *scriptLog) text() string {
+	lines, dropped := l.snapshot()
+	if len(lines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	if dropped > 0 {
+		b.WriteString("[")
+		b.WriteString(strconv.Itoa(dropped))
+		b.WriteString(" earlier line(s) dropped]\n")
+	}
+	b.WriteString(strings.Join(lines, "\n"))
+	return b.String()
+}
+
+// runReply builds the structured reply object for a completed run.
+func runReply(output any, logs *scriptLog) map[string]any {
+	payload := map[string]any{"output": capScriptOutput(output)}
+	if lines, dropped := logs.snapshot(); len(lines) > 0 {
+		payload["log"] = lines
+		if dropped > 0 {
+			payload["log_truncated"] = dropped
+		}
+	}
+	return payload
+}
+
+// runErrorText renders a failed run for request.failed (always a string), with
+// the log collected so far appended: a failing script is diagnosed from it.
+func runErrorText(err error, logs *scriptLog) string {
+	text := "run: " + err.Error()
+	if log := logs.text(); log != "" {
+		text += "\n\n--- script log ---\n" + log
+	}
+	return text
+}
+
+// capScriptOutput keeps a run's output within scriptOutputMaxBytes. A string
+// output is elided in the middle (the note states how much was dropped); a
+// structured output is measured as JSON and, only when it exceeds the cap,
+// replaced by a truncation note so the reply stays bounded.
+func capScriptOutput(output any) any {
+	s, isString := output.(string)
+	if !isString {
+		b, err := json.Marshal(output)
+		if err != nil {
+			return output
+		}
+		if len(b) <= scriptOutputMaxBytes {
+			return output
+		}
+		return "[structured output of " + strconv.Itoa(len(b)) + " bytes elided: too large for a reply]"
+	}
+	if len(s) <= scriptOutputMaxBytes {
+		return s
+	}
+	head := scriptOutputMaxBytes / 2
+	tail := scriptOutputMaxBytes - head
+	// Cut on rune boundaries so the kept text stays valid UTF-8.
+	headEnd := head
+	for headEnd > 0 && !utf8.RuneStart(s[headEnd]) {
+		headEnd--
+	}
+	tailStart := len(s) - tail
+	for tailStart < len(s) && !utf8.RuneStart(s[tailStart]) {
+		tailStart++
+	}
+	elided := tailStart - headEnd
+	return s[:headEnd] +
+		"\n\n[... " + strconv.Itoa(elided) + " bytes elided ...]\n\n" +
+		s[tailStart:]
 }

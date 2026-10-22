@@ -2,13 +2,12 @@ package program
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 
+	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/program"
-	"github.com/niq-run/niq/core/impl/baseworker"
 )
 
 // The program worker's tools, each its own event type.
@@ -27,8 +26,30 @@ const (
 func (w *Worker) registerExtensions() {
 	ctx := context.Background()
 
+	// Self-description: the generic worker.readme read capability, so peers, the
+	// WebUI and the worker itself can recall what this worker is for.
+	w.RegisterReadme(
+		"Read this worker's readme: what the program worker is for (managing and running Programs).",
+		w.readmeText, nil)
+
 	w.Register(baseworker.Extension{
-		Event:       TypeSearch,
+		Event: TypeSearch,
+		Response: map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":         map[string]any{"type": "string"},
+					"content_type": map[string]any{"type": "string", "enum": []string{"instruction", "playbook"}},
+					"form_type":    map[string]any{"type": "string", "enum": []string{"prompt", "script"}},
+					"description":  map[string]any{"type": "string"},
+					"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"locked":       map[string]any{"type": "boolean"},
+					"path":         map[string]any{"type": "string", "description": "address to load the entry content"},
+					"contents":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				},
+			},
+		},
 		Description: "Search for available programs by name, description, or tag. Returns matching programs with their metadata (name, content_type, description, tags, locked), the root path to load their entry content, and the paths of any sub-contents.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -52,6 +73,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeLoad,
+		Response:    map[string]any{"type": "string", "description": "the content body (frontmatter stripped)"},
 		Description: "Load a program's content by its path. '{program_name}' loads the program's entry content; '{program_name}/path/to/file.md' loads one of its sub-contents.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -69,16 +91,57 @@ func (w *Worker) registerExtensions() {
 	})
 
 	w.Register(baseworker.Extension{
-		Event:       TypeRun,
-		Description: "Run a FormType:script program in the sandbox: loads the script content, executes it via the configured executor, and returns its final result. The script may call other tools via the SDK; those become normal request events.",
+		Event: TypeRun,
+		Response: baseworker.ObjectSchema(map[string]any{
+			"output":        map[string]any{"description": "the script's return value (sdk.result or a top-level return), any JSON type"},
+			"log":           baseworker.ArraySchema(map[string]any{"type": "string"}),
+			"log_truncated": map[string]any{"type": "number", "description": "how many earlier log lines were dropped"},
+		}),
+		Description: "Run a fresh, stateless JAVASCRIPT snippet in an isolated sandbox and return its result. Two modes, exactly one: " +
+			"path = run a stored script program (path is its entry content, e.g. \"ptc-report\"; find candidates with program__search, read source with program__load), " +
+			"or source = run inline code (ad-hoc, nothing persisted). " +
+			"The only API you are given is `sdk` — do not import modules or touch the filesystem/network directly; reach the world through sdk.call (direct access is outside the contract and unsupported): " +
+			"(1) await sdk.call(target, event, args) sends a normal request to another worker and resolves with its reply VALUE — a string for a prose reply, a real JS object/array for a structured one (no JSON.parse needed; JSON.stringify it if you need text). " +
+			"A TOOL-LEVEL failure is an ordinary result, not an exception (e.g. bash exiting 3 resolves to \"Exit code: 3\"), so parse the text instead of wrapping everything in try/catch; " +
+			"only a CAPABILITY-level failure rejects (unknown worker, request.failed / rejected). " +
+			"Calls run concurrently — `await Promise.all([...])` fans out; keep fan-out modest. " +
+			"(2) sdk.result(payload) sets the run output as the value it is (string, object, array …); the LAST call wins. " +
+			"A top-level `return payload` does the same and is used only when sdk.result was never called; with neither, the output is an empty string. " +
+			"(3) sdk.log(text) is echoed back to the caller AFTER the result under a \"--- script log ---\" header (last 100 lines / 8KB, older lines dropped) — use it for progress and diagnosis. " +
+			"(4) sdk.args is the run's args object (never undefined, defaults to {}); a stored script should read its inputs from it. " +
+			"Discovering peers: this worker's own tool list need not contain other workers' tools, so look them up with the directory worker (list_workers / get_worker_info) and call them from the script; " +
+			"a target the directory does not know fails fast with \"unknown worker: <id>\" (the directory worker owns the roster; the program worker asks it). " +
+			"Timing and size: timeout_seconds (default 120) bounds the WHOLE run including every nested call; on expiry the sandbox is killed, in-flight requests are abandoned, and the log collected so far comes back with the error. " +
+			"Result text larger than 20KB is truncated to head + tail. " +
+			"Reply: an OBJECT {output, log?} — output is the script's return value with its type kept (string, object, array …), log holds the sdk.log lines (tail-capped, with log_truncated when older lines were dropped). " +
+			"Diagnostics: a script error is reported with the failing line of YOUR source (e.g. \"at script line 3:7: throw new Error(...)\"); " +
+			"use this to execute a whole sequence of tool calls in one shot instead of one reasoning round per call. " +
+			"Provide exactly one of path or source.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "Script program name (the entry content is the script source)."},
-				"args": map[string]any{"type": "object", "description": "Optional invocation arguments exposed to the script (sdk.args)."},
-				"timeout_seconds": map[string]any{"type": "number", "description": "Optional per-run timeout in seconds (default 120); the sandbox is killed when it elapses."},
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Mode A (reuse): content path of a stored script program — its name for the entry content (e.g. \"ptc-report\"), or name/sub.md for a sub-content. Its entry content is the JavaScript executed in the sandbox. Provide this OR source, not both.",
+				},
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Deprecated alias of path; prefer path (the same address the load/edit/write/search/delete tools take).",
+				},
+				"source": map[string]any{
+					"type":        "string",
+					"description": "Mode B (ad-hoc): the JavaScript source to run directly, nothing persisted. The body is async (top-level await works) and may use sdk.call/log/result/args; e.g. `const r = await sdk.call(\"workspace\", \"bash\", { command: \"ls\" }); sdk.result(r);`. Provide this OR path, not both.",
+				},
+				"args": map[string]any{
+					"type":        "object",
+					"description": "Optional arguments object handed to the script as sdk.args (always an object; defaults to {}). Must be JSON-serializable. A stored script should read its inputs from here rather than hard-coding them.",
+				},
+				"timeout_seconds": map[string]any{
+					"type":        "number",
+					"description": "Optional wall-clock limit for the whole run in seconds (default 120), covering every nested call. On expiry the sandbox is killed, in-flight requests are abandoned, and the log collected so far is returned with the timeout error.",
+				},
 			},
-			"required": []any{"name"},
+			"required": []any{},
 		},
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
@@ -87,6 +150,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeEdit,
+		Response:    baseworker.StringSchema("confirmation"),
 		Description: "Edit a program's content with an atomic find-and-replace. Cannot edit locked programs.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -113,6 +177,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeUpsert,
+		Response:    baseworker.StringSchema("confirmation"),
 		Description: "Create a program, or update an existing one's metadata (content_type, description, tags). Omit a field to leave it as it is; only 'name' is required when updating. This never touches content — write content with the write tool, change it in place with edit. Cannot modify locked programs.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -145,6 +210,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeWrite,
+		Response:    baseworker.StringSchema("confirmation"),
 		Description: "Replace a program's content outright. '{program_name}' replaces the entry content; '{program_name}/rules/go.md' replaces a sub-content (creating the file if absent). The program must exist — create it with upsert first. For small in-place changes prefer edit. Cannot write to locked programs.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -167,6 +233,7 @@ func (w *Worker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeDelete,
+		Response:    baseworker.StringSchema("confirmation"),
 		Description: "Delete a program and all its contents, or a single content file. Cannot delete locked programs.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -232,13 +299,7 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 		results[i] = item
 	}
 
-	b, err := json.Marshal(results)
-	if err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("marshal error: %v", err), tc.TraceID)
-		return
-	}
-
-	w.ReplyCompleted(tc.CallerID, tc.CallID, string(b), tc.TraceID)
+	w.ReplyCompleted(tc.CallerID, tc.CallID, results, tc.TraceID)
 	log.Printf("[program] search query=%q ct=%q → %d results", query, ctStr, len(results))
 }
 

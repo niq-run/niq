@@ -16,9 +16,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	backend "github.com/niq-run/niq/core/impl/embedws"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // pendingApproval is a parked operation awaiting the approver's decision.
@@ -184,7 +184,7 @@ func (w *WorkspaceWorker) handleApprovalDecision(ctx context.Context, evt event.
 		go w.dispatchHandler(ctx, pending.toolCall())
 		return
 	}
-	w.ReplyCompleted(pending.CallerID, pending.CallID, mountSnapshotJSON("", mm), pending.TraceID)
+	w.ReplyCompleted(pending.CallerID, pending.CallID, mountSnapshot("", mm), pending.TraceID)
 }
 
 // parkedApprovals snapshots the pending set for Snapshot.

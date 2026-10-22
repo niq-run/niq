@@ -7,17 +7,17 @@ import (
 
 func TestArgStrings(t *testing.T) {
 	args := map[string]any{
-		"tags":      []any{"ops/backup", " work "},
-		"strs":      []string{"a", "b"},
-		"csv":       "  alpha , beta ,,gamma ",
-		"single":    "only",
+		"tags":       []any{"ops/backup", " work "},
+		"strs":       []string{"a", "b"},
+		"csv":        "  alpha , beta ,,gamma ",
+		"single":     "only",
 		"emptyComma": ", ,",
-		"emptyStr":  "   ",
-		"num":       float64(5),
+		"emptyStr":   "   ",
+		"num":        float64(5),
 	}
 	for _, tc := range []struct {
-		key   string
-		want  []string
+		key  string
+		want []string
 	}{
 		{"tags", []string{"ops/backup", "work"}},
 		{"strs", []string{"a", "b"}},

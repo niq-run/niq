@@ -14,7 +14,6 @@
 package reason
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -77,6 +76,7 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeProviderSwitch,
+		Response:    baseworker.StringSchema("confirmation naming the provider and model now in effect"),
 		Description: "Switch active LLM provider/model.",
 		Parameters: obj(map[string]any{
 			"provider": map[string]any{"type": "string", "description": "Provider name"},
@@ -88,6 +88,7 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeProviderList,
+		Response:    baseworker.ObjectSchema(map[string]any{"providers": baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "default": map[string]any{"type": "string"}, "models": baseworker.ArraySchema(map[string]any{"type": "string"})})), "current": baseworker.ObjectSchema(map[string]any{"provider": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}})}),
 		Description: "List available providers and the current selection.",
 	}, func(evt event.Event) {
 		w.handleStatusQuery(evt)
@@ -95,10 +96,15 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeProviderCurrent,
+		Response:    baseworker.ObjectSchema(map[string]any{"provider": map[string]any{"type": "string"}, "model": map[string]any{"type": "string"}}),
 		Description: "Current provider/model.",
 	}, func(evt event.Event) {
 		w.handleStatusQuery(evt)
 	})
+
+	// Self-description (worker.readme + worker.readme.update): every reason-family
+	// worker can be asked what it is for and can revise that answer.
+	w.registerReadme()
 }
 
 // setActiveProvider switches this worker's active LLM provider. It must be
@@ -215,13 +221,8 @@ func (w *BaseReasonWorker) handleStatusQuery(evt event.Event) {
 			fmt.Sprintf("unknown provider query event: %q", evt.Type), evt.TraceID)
 		return
 	}
-	b, err := json.Marshal(snapshot)
-	if err != nil {
-		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
-		return
-	}
 	// Read-only query: its result is transient, not durable history.
-	w.ReplyCompleted(evt.WorkerId, evt.RequestId, string(b), evt.TraceID)
+	w.ReplyCompleted(evt.WorkerId, evt.RequestId, snapshot, evt.TraceID)
 	log.Printf("[reason %s] provider query %s", w.ID(), evt.Type)
 }
 

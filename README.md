@@ -35,6 +35,12 @@ git clone https://github.com/niq-run/niq
 cd niq && make build   # → ./bin/niq
 ```
 
+**Runtime: node** (or any JS runtime you point the executor at). The program
+worker runs script programs (PTC) through a local `node` process, so a machine
+without node can manage programs but cannot execute them. `install.sh` warns when
+node is missing; the runtime is configurable per project via the program worker's
+`script_executor_args` (e.g. `["bun", "run"]`).
+
 ## Quick start
 
 niq has two layers: a **control plane**, and **projects** — each project is an isolated agent instance with its own event bus, worker set and WebUI on its own ports.

@@ -47,6 +47,16 @@ export interface Palette {
     timer: string
     default: string
   }
+  // Worker-type tag colours: one shared by every built-in worker, one for
+  // reason workers, one for coding workers, and one shared by every external
+  // (third-party) worker. The tag text names the type; colour only separates
+  // these groups.
+  typeTag: {
+    builtin: string
+    reason: string
+    coding: string
+    external: string
+  }
   // Worker / target labels
   workerId: string
   eventRowBorder: string
@@ -86,6 +96,12 @@ const dark: Palette = {
     timer: '#00bcd4',
     default: '#e0e0e0',
   },
+  typeTag: {
+    builtin: '#8fa9d1',
+    reason: '#c896d4',
+    coding: '#67b953',
+    external: '#c4a26e',
+  },
   workerId: '#1f7c22',
   eventRowBorder: '#383838',
   eventRowTime: '#707070',
@@ -122,6 +138,12 @@ const light: Palette = {
     hiw: '#2e7d32',
     timer: '#00838f',
     default: '#1a1a1a',
+  },
+  typeTag: {
+    builtin: '#375c92',
+    reason: '#863a99',
+    coding: '#336627',
+    external: '#73562b',
   },
   workerId: '#1b5e20',
   eventRowBorder: '#d0d0d0',
