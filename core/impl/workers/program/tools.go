@@ -97,10 +97,14 @@ func (w *Worker) registerExtensions() {
 			"log":           baseworker.ArraySchema(map[string]any{"type": "string"}),
 			"log_truncated": map[string]any{"type": "number", "description": "how many earlier log lines were dropped"},
 		}),
-		Description: "Run a fresh, stateless JAVASCRIPT snippet in an isolated sandbox and return its result. Two modes, exactly one: " +
+		Description: "Run a fresh, stateless JAVASCRIPT snippet in a separate, short-lived subprocess and return its result. Two modes, exactly one: " +
 			"path = run a stored script program (path is its entry content, e.g. \"ptc-report\"; find candidates with program__search, read source with program__load), " +
 			"or source = run inline code (ad-hoc, nothing persisted). " +
-			"The only API you are given is `sdk` — do not import modules or touch the filesystem/network directly; reach the world through sdk.call (direct access is outside the contract and unsupported): " +
+			"The only API you are given is `sdk`; reach the world through sdk.call. Sandbox contract — the script must not reach the host directly: " +
+			"no imports of any kind (`import`, `export`, dynamic `import(...)`, `require`) — there is no module resolution and no package dependencies, only the JavaScript language builtins (JSON, Math, Date, Promise, …); " +
+			"no filesystem, process or network APIs (`fs` / `node:fs` / `fs/promises`, `child_process`, `process` env/argv/exit, `fetch` / `XMLHttpRequest` / sockets, `Deno` / `Bun` globals). " +
+			"Anything that needs files, a shell, environment variables or the network goes through another worker via sdk.call (e.g. the workspace worker's bash). " +
+			"Direct access is outside the contract and unsupported — it is not portable across executors, and an executor may run the script without those globals. " +
 			"(1) await sdk.call(target, event, args) sends a normal request to another worker and resolves with its reply VALUE — a string for a prose reply, a real JS object/array for a structured one (no JSON.parse needed; JSON.stringify it if you need text). " +
 			"A TOOL-LEVEL failure is an ordinary result, not an exception (e.g. bash exiting 3 resolves to \"Exit code: 3\"), so parse the text instead of wrapping everything in try/catch; " +
 			"only a CAPABILITY-level failure rejects (unknown worker, request.failed / rejected). " +
@@ -130,7 +134,7 @@ func (w *Worker) registerExtensions() {
 				},
 				"source": map[string]any{
 					"type":        "string",
-					"description": "Mode B (ad-hoc): the JavaScript source to run directly, nothing persisted. The body is async (top-level await works) and may use sdk.call/log/result/args; e.g. `const r = await sdk.call(\"workspace\", \"bash\", { command: \"ls\" }); sdk.result(r);`. Provide this OR path, not both.",
+					"description": "Mode B (ad-hoc): the JavaScript source to run directly, nothing persisted. The body is async (top-level await works) and may use sdk.call/log/result/args; e.g. `const r = await sdk.call(\"workspace\", \"bash\", { command: \"ls\" }); sdk.result(r);`. Runs under the sandbox contract: no imports, no fs/process/network access. Provide this OR path, not both.",
 				},
 				"args": map[string]any{
 					"type":        "object",

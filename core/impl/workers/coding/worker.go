@@ -209,7 +209,7 @@ Discover once up front, then act; avoid re-listing tools you already looked up.
 - source: pass the script inline for a one-off;
 - path: store it first (write/upsert) and run it by path to reuse.
 
-The script API (inside the script; the sandbox has no imports, fs or net):
+The script API (inside the script; the sandbox has no imports — no require/import/dynamic import() — and no filesystem, process or network access; only the JavaScript builtins plus sdk):
 - await sdk.call(target, event, args) — invoke a capability as a normal request and get its reply VALUE: a string for prose, a real JS object/array for a structured reply (check the target's "response" in get_worker_info and read the fields directly — no JSON.parse). A tool-level failure comes back as a result, not an exception (bash exiting 3 resolves "Exit code: 3"); only an unknown worker / failed / rejected request throws. Fan out with Promise.all — calls are concurrent.
 - sdk.result(payload) — string verbatim, other values JSON; last call wins. A top-level return of a payload does the same when sdk.result is never called. With neither, the result is "".
 - sdk.log(text) — comes back to you after the result under "--- script log ---" (tail-capped); use it to trace a long run.

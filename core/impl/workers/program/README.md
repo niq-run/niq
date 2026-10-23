@@ -77,6 +77,15 @@ Related, outside this package:
 
 ## The script SDK
 
+A script runs in a separate, short-lived subprocess and may only reach the
+world through `sdk`. **Sandbox contract:** no imports of any kind (`import`,
+`export`, dynamic `import(...)`, `require`) — there is no module resolution and
+no package dependencies, only the JavaScript language builtins — and no
+filesystem, process or network APIs (`fs`, `child_process`, `process`,
+`fetch`, sockets, `Deno`/`Bun` globals). Anything that needs files, a shell,
+environment variables or the network goes through another worker via
+`sdk.call` (e.g. the workspace worker's `bash`).
+
 Inside a run the script is handed a minimal `sdk`:
 
 - `sdk.call(target, event, args)` — a normal request to another worker; resolves with the
