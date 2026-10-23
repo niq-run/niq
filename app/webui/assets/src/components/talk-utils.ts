@@ -165,7 +165,15 @@ export function toolContent(evt: EventPayload, formatted: boolean): string {
       return result
     }
     if (result) return format(result)
-    return ''
+
+    // No "result" wrapper: the payload IS the reply (the bus rule for object
+    // replies). program.run answers { output, log? }, workspace.readImg answers
+    // { content: [...] } — without this fallback the talk view showed the
+    // arguments and an empty result.
+    const payload = evt.payload
+    if (!payload || Object.keys(payload).length === 0) return ''
+    if (Array.isArray(payload.content)) return formatContentBlocks(payload.content, formatted)
+    return format(payload)
   }
   if (evt.type === 'request.failed') {
     const err = evt.payload?.error
@@ -182,6 +190,27 @@ export function toolContent(evt: EventPayload, formatted: boolean): string {
   const args = evt.payload
   if (!args || Object.keys(args).length === 0) return ''
   return format(args)
+}
+
+// formatContentBlocks renders a multi-modal reply without dumping base64: text
+// blocks are joined, other blocks are summarized (the full payload is still in
+// the event log).
+function formatContentBlocks(blocks: any[], formatted: boolean): string {
+  const parts: string[] = []
+  for (const b of blocks) {
+    const blk = b as { type?: string; text?: string; mime?: string; data?: string; name?: string; path?: string }
+    if (blk?.type === 'text' && typeof blk.text === 'string') {
+      parts.push(blk.text)
+    } else if (blk?.type === 'image') {
+      const bytes = typeof blk.data === 'string' ? Math.floor((blk.data.length * 3) / 4) : 0
+      parts.push(`[image ${blk.mime || 'image'}${bytes ? `, ~${bytes} bytes` : ''}]`)
+    } else if (blk?.type === 'file') {
+      parts.push(`[file ${blk.name || blk.path || ''}]`.trim())
+    } else {
+      parts.push(JSON.stringify(blk))
+    }
+  }
+  return parts.join(formatted ? '\n\n' : '\n')
 }
 
 // ── Event type → color ──
