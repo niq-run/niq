@@ -22,6 +22,11 @@ const TypeReadmeUpdate event.EventType = "worker.readme.update"
 //     peer-facing catalogue: the WebUI and authorized peers can discover it;
 //     the bus ACL, not the announcement, decides who may actually send it.
 //
+// The readme is IDENTITY, not policy: who the worker is and what it is for.
+// Rules, procedures and standing instructions belong to programs (instruction /
+// playbook content on the program worker), so the descriptions say so — otherwise
+// a worker drifts into writing its rulebook into the one free-text field it owns.
+//
 // The value is durable: an update signals the host to checkpoint, so the latest
 // description survives a restart.
 func (w *BaseReasonWorker) registerReadme() {
@@ -30,8 +35,9 @@ func (w *BaseReasonWorker) registerReadme() {
 	}
 
 	w.RegisterReadme(
-		"Read this worker's readme: a short description of what it is for. "+
-			"Use it to recall a worker's purpose before delegating to it.",
+		"Read this worker's readme: its identity card — a short, first-person statement of who it is "+
+			"and what it is for. Use it to recall a worker's purpose before delegating to it. "+
+			"It is not a rulebook: instructions, policies and step-by-step procedures live in programs.",
 		w.ReadmeLocked, nil)
 
 	w.Register(baseworker.Extension{
@@ -40,9 +46,12 @@ func (w *BaseReasonWorker) registerReadme() {
 		// (and an authorized peer) may perform; the bus ACL decides who may send
 		// the event.
 		Response: baseworker.StringSchema("confirmation that the readme was replaced"),
-		Description: "Replace this worker's readme — the short self-description of what it is for. " +
-			"Write it when the worker's role or scope changes, so later recall " +
-			"(list/search, then read the readme) finds an accurate description.",
+		Description: "Replace this worker's readme — its identity card: who it is and what it is for, " +
+			"in a few first-person sentences. Write it when the worker's role or scope changes materially. " +
+			"Rules, policies, standing instructions and step-by-step procedures do NOT belong here: " +
+			"author them as programs (instruction / playbook) through the program worker's content tools " +
+			"(program__write / program__edit / program__upsert). The readme answers \"what is this worker\"; " +
+			"programs answer \"what must it do and how\".",
 		Parameters: obj(map[string]any{
 			"readme": map[string]any{"type": "string",
 				"description": "New description text. An empty string clears it."},

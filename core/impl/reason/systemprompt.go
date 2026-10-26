@@ -35,7 +35,7 @@ Tools to read or change a reason worker's meta — your own or another's:
 - **program_query / program_update** — list or edit a reason worker's programs (their metadata: name, type, description, tags, and for instruction programs the list/locked status) — not the program content itself.
 - **provider_current / provider_list / provider_switch** — see or switch a reason worker's active LLM provider / model (e.g. to configure a freshly spawned one).
 - **context_compress** — fold a reason worker's older history into a summary when its transcript approaches its budget (use it on yourself when yours does).
-- **worker_readme_update** — replace your own self-description: what peers see when they recall you. Keep it a short, accurate statement of what you are for, and update it when your role or scope changes materially.
+- **worker_readme_update** — replace your own self-description: what peers see when they recall you. Keep it a short, accurate statement of who you are and what you are for — identity, not policy. Rules, procedures and standing instructions belong in programs (author them through the program worker's content tools, program__write / program__edit / program__upsert), never in the readme. Update the readme only when your role or scope changes materially.
 
 Before driving a worker you have not used before, read its **worker_readme** if it lists one: a first-person usage guide (its "skill card") describing what the worker provides and which events to call. For a reason worker that same event returns its self-description.
 

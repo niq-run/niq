@@ -9,6 +9,7 @@ import ProjectsView from './views/ProjectsView'
 import TemplatesView from './views/TemplatesView'
 import ProvidersView from './views/ProvidersView'
 import ProgramsView from './views/ProgramsView'
+import McpView from './views/McpView'
 import ViewHeader from './components/ViewHeader'
 import ApprovalsView from './views/ApprovalsView'
 import TalkInput from './components/TalkInput'
@@ -466,9 +467,13 @@ export default function App() {
   // worker.* lifecycle is always hidden (except input/abort); delta partials
   // are hidden unless streaming is on, because the live stream needs them to
   // render in-flight thinking/text while history never does.
-  const talkExclude: string[] = streamingMode ? [] : ['reason.thinking_delta', 'reason.text_delta', 'request.progressed']
-  const talkExcludePrefix = ['worker.']
-  const talkKeep = ['worker.input', 'worker.abort']
+  	const talkExclude: string[] = streamingMode ? [] : ['reason.thinking_delta', 'reason.text_delta', 'request.progressed']
+  	const talkExcludePrefix = ['worker.']
+  	// worker.ready rides along even though the whole worker.* family is hidden:
+  	// the worker detail derives its "supported events" from it (and from the
+  	// on-demand worker.discover reply, which IS a worker.ready). The timeline
+  	// still hides it — relevantEvents drops worker.* except input/abort.
+  	const talkKeep = ['worker.input', 'worker.abort', 'worker.ready']
 
   useEffect(() => {
     // No project → no event stream.
@@ -1175,18 +1180,27 @@ export default function App() {
   // watch history to read), ask that worker on demand with a *directed*
   // worker.discover. It re-announces its worker.ready, which rides the SSE
   // back and populates workerWatch[id] — one worker, on demand, no broadcast.
-  const discoverAskedRef = useRef<Set<string>>(new Set())
+  //
+  // The ask is retried (throttled) while the detail is open and the watch is
+  // still unknown: the reply is a live transient event, so one sent while the
+  // stream was still connecting would otherwise be lost forever. The talk view
+  // now keeps worker.ready on its scoped stream for exactly this reason.
+  const discoverAskedRef = useRef<Map<string, number>>(new Map())
   useEffect(() => {
     const id = detailOverlayId || selectedWorkerId
     if (!id) {
       discoverAskedRef.current.clear()
       return
     }
-    if (workerWatch[id]?.length) return // already know its capabilities
-    if (discoverAskedRef.current.has(id)) return
-    discoverAskedRef.current.add(id)
+    if (workerWatch[id]?.length) {
+      discoverAskedRef.current.delete(id) // learned it: a later open asks again
+      return
+    }
     const w = workers.find(x => x.id === id)
     if (w && w.online === false) return // offline: don't spam
+    const last = discoverAskedRef.current.get(id) ?? 0
+    if (Date.now() - last < 2500) return
+    discoverAskedRef.current.set(id, Date.now())
     sendWorkerEvent(id, 'worker.discover', {}).catch(() => {})
   }, [detailOverlayId, selectedWorkerId, workerWatch, workers])
 
@@ -1255,6 +1269,7 @@ export default function App() {
                 : view === 'talk' ? t('nav.talk')
                 : view === 'events' ? t('nav.events')
                 : view === 'approvals' ? t('nav.approvals')
+                : view === 'mcp' ? t('nav.mcp')
                 : view === 'programs' ? t('sidebar.programs')
                 : t('nav.workers')}
             </strong>
@@ -1356,6 +1371,14 @@ export default function App() {
         ) : view === 'approvals' ? (
           <div key="approvals" className="fade-in" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <ApprovalsView approvals={approvals} onDecide={handleDecide} isMobile={isMobile} />
+          </div>
+        ) : view === 'mcp' ? (
+          <div key="mcp" className="fade-in" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <McpView
+              workers={workers}
+              isMobile={isMobile}
+              onRefresh={refreshWorkers}
+            />
           </div>
         ) : view === 'workers' ? (
           <div key="workers" className="fade-in" style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
