@@ -262,7 +262,10 @@ func (w *Worker) Restore(state []byte) error {
 // ── Publishing ──
 
 // SendInput publishes a user message to the bus as a worker.input event.
-// If target is non-empty, the message is directed to that worker.
+// targets lists every worker the message is addressed to: a multi-target send,
+// so each one receives the same event. An empty targets list broadcasts, which
+// the webui input no longer does (it requires at least one @) but other callers
+// may.
 // mode controls input handling ("interrupt" | "schedule" | "append"). The
 // legacy "default" and the empty string are emitted without an input_mode
 // field, which the reason worker now treats as append (its default stance).
@@ -272,7 +275,7 @@ func (w *Worker) Restore(state []byte) error {
 // that array, so there is no separate top-level text field. The bus treats it
 // as an ordinary payload object and only the reason input converter
 // interprets the shape.
-func (w *Worker) SendInput(ctx context.Context, content []map[string]any, target string, mode string) error {
+func (w *Worker) SendInput(ctx context.Context, content []map[string]any, targets []string, mode string) error {
 	payload := map[string]any{}
 	if len(content) > 0 {
 		payload["content"] = content
@@ -282,8 +285,8 @@ func (w *Worker) SendInput(ctx context.Context, content []map[string]any, target
 	}
 	evt := event.New(event.TypeWorkerInput, w.ID(), payload)
 	evt.TraceID = evt.ID
-	if target != "" {
-		return w.Channel.Send(context.Background(), evt, target)
+	if len(targets) > 0 {
+		return w.Channel.Send(context.Background(), evt, targets...)
 	}
 	return w.Channel.Broadcast(context.Background(), evt)
 }

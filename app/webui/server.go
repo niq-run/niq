@@ -923,15 +923,32 @@ const inputMaxBytes = 32 << 20
 func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, inputMaxBytes)
 	var body struct {
-		Content   []map[string]any `json:"content"`
-		Target    string           `json:"target,omitempty"`
-		InputMode string           `json:"input_mode,omitempty"`
+		Content []map[string]any `json:"content"`
+		// Targets addresses the message to one or more workers (the input's
+		// @mentions). Target is the pre-multi-target single spelling still sent
+		// by older clients / scripts.
+		Targets   []string `json:"targets,omitempty"`
+		Target    string   `json:"target,omitempty"`
+		InputMode string   `json:"input_mode,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.hiw.SendInput(r.Context(), body.Content, body.Target, body.InputMode); err != nil {
+	targets := body.Targets
+	if len(targets) == 0 && body.Target != "" {
+		targets = []string{body.Target}
+	}
+	// The input is always addressed to specific workers, so an empty target list
+	// is a client bug (or a client/server build mismatch). It must NOT fall
+	// through to a broadcast: that would deliver the message to every worker
+	// subscribed to worker.input, turning a bug into “I only @-ed one worker but
+	// everyone got it”.
+	if len(targets) == 0 {
+		http.Error(w, "input requires at least one target", http.StatusBadRequest)
+		return
+	}
+	if err := s.hiw.SendInput(r.Context(), body.Content, targets, body.InputMode); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -9,15 +9,21 @@ import (
 
 // stubChannel satisfies corebus.WorkerSideChannel for handler tests.
 type stubChannel struct {
-	sent []event.Event
+	sent       []event.Event
+	targets    [][]string
+	broadcasts []event.Event
 }
 
 func (s *stubChannel) ID() string { return "stub" }
 func (s *stubChannel) Send(ctx context.Context, evt event.Event, targets ...string) error {
 	s.sent = append(s.sent, evt)
+	s.targets = append(s.targets, append([]string(nil), targets...))
 	return nil
 }
-func (s *stubChannel) Broadcast(ctx context.Context, evt event.Event) error { return nil }
+func (s *stubChannel) Broadcast(ctx context.Context, evt event.Event) error {
+	s.broadcasts = append(s.broadcasts, evt)
+	return nil
+}
 func (s *stubChannel) Receive(ctx context.Context) (<-chan event.Event, error) {
 	return make(chan event.Event), nil
 }
@@ -102,6 +108,45 @@ func TestSendEventCarriesRequestId(t *testing.T) {
 	}
 	if evt.TraceID != evt.ID {
 		t.Fatalf("TraceID = %q, want %q", evt.TraceID, evt.ID)
+	}
+}
+
+func TestSendInputMultipleTargets(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "webui-hiw", Bus: ch})
+	content := []map[string]any{{"type": "text", "text": "@a @b please sync"}}
+
+	if err := w.SendInput(context.Background(), content, []string{"a", "b"}, "append"); err != nil {
+		t.Fatalf("SendInput: %v", err)
+	}
+	// One event, addressed to both workers: the bus copies it per target. The
+	// recipients' own copies share the event id, so the UI pairs them up.
+	if len(ch.sent) != 1 {
+		t.Fatalf("sent %d events, want 1", len(ch.sent))
+	}
+	if got := ch.targets[0]; len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("targets = %v, want [a b]", got)
+	}
+	if len(ch.broadcasts) != 0 {
+		t.Fatalf("broadcast %d times, want 0 for an addressed send", len(ch.broadcasts))
+	}
+	evt := ch.sent[0]
+	if evt.Type != event.TypeWorkerInput || evt.WorkerId != "webui-hiw" {
+		t.Fatalf("event = %+v", evt)
+	}
+	if mode := evt.Payload["input_mode"]; mode != "append" {
+		t.Fatalf("input_mode = %v, want append", mode)
+	}
+}
+
+func TestSendInputWithoutTargetsBroadcasts(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "webui-hiw", Bus: ch})
+	if err := w.SendInput(context.Background(), []map[string]any{{"type": "text", "text": "hi"}}, nil, ""); err != nil {
+		t.Fatalf("SendInput: %v", err)
+	}
+	if len(ch.sent) != 0 || len(ch.broadcasts) != 1 {
+		t.Fatalf("sent=%d broadcasts=%d, want 0/1", len(ch.sent), len(ch.broadcasts))
 	}
 }
 
