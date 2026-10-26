@@ -96,9 +96,10 @@ type Config struct {
 
 	SeedMessages []llm.Message
 
-	// Readme is this worker's own description of what it is for. It is the seed
-	// of the worker's readme (worker.readme); runtime updates by the worker
-	// itself live in its snapshot and override this value on restore.
+	// Readme is this worker's own description — what it is responsible for and
+	// what it has recently been working on. It is the seed of the worker's
+	// readme (worker.readme); runtime updates by the worker itself live in its
+	// snapshot and override this value on restore.
 	Readme string
 
 	// WorkerType is the type label this worker announces in its presence

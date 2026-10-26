@@ -55,9 +55,10 @@ type Config struct {
 	// fresh worker.
 	SeedMessages []llm.Message
 
-	// Readme is the worker's own description of what it is for: the seed of
-	// worker.readme. Runtime updates by the worker itself are persisted in its
-	// snapshot and override this value on restore.
+	// Readme is the worker's own description — what it is responsible for and
+	// what it has recently been working on: the seed of worker.readme. Runtime
+	// updates by the worker itself are persisted in its snapshot and override
+	// this value on restore.
 	Readme string
 }
 

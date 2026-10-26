@@ -305,8 +305,9 @@ worker.ready and forgets it on worker.gone; it has no lifecycle authority.
 1. search_workers { query } — recall a worker by what it does when you do not
    know its id (or list_workers for the whole roster).
 2. get_worker_info { worker } — inspect a candidate before calling or messaging it.
-3. worker.readme on a candidate reason worker — read its own description to
-   confirm it is the one you remember.
+3. worker.readme on a candidate reason worker — read its own description (what
+   it is responsible for and what it has recently been working on) to confirm it
+   is the one you remember, and whether it is already busy with this work.
 
 ## Notes
 
