@@ -49,9 +49,10 @@ interface TalkViewProps {
 export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, onAddFilter, onFocusWorker, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange }: TalkViewProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
-  // Left-side bubbles are wider on phones (90%) and keep the original 70% on
-  // desktop.
-  const bubbleMax = isMobile ? '90%' : '70%'
+  // Bubbles fill the whole column on phones: a 90% cap plus the scroll area's
+  // side padding left barely two thirds of the screen for text, which wrapped
+  // every few words. Desktop keeps the original 70%.
+  const bubbleMax = isMobile ? '100%' : '70%'
   // Only reason workers (the conversation partners) get a standalone avatar
   // row; other workers' events carry their worker ID inline in the block title.
   // A reason-FAMILY check: the generic reason worker and the coding reason
@@ -248,6 +249,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       {/* Relative wrapper hosts the floating scroll-to-bottom button just
           above the input box (the input is the next sibling in App's column). */}
       <div style={{ flex: 1, position: 'relative', display: 'flex', minHeight: 0, minWidth: 0 }}>
+        {/* Phone gutters shrink to 12px (desktop keeps 24px) so the full-width
+            bubbles really span the screen instead of losing width twice. */}
         <div
           ref={scrollRef}
           onScroll={handleScroll}
@@ -266,7 +269,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
               setOpenToolId(null)
             }
           }}
-          style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '0 24px 60px', overflowAnchor: 'none' }}
+          style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '0 12px 60px' : '0 24px 60px', overflowAnchor: 'none' }}
         >
           <TalkRows
             relevantEvents={relevantEvents}
