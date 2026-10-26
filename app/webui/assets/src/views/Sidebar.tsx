@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
-import { isTalkPartnerType, type WorkerInfo, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
+import { isTalkPartnerType, type WorkerInfo, type WorkerDetailTab, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 import WorkerPickerModal from '../components/WorkerPickerModal'
 import WorkerRowMenu from '../components/WorkerRowMenu'
 import ContextMenuSurface from '../components/ContextMenuSurface'
@@ -49,7 +49,9 @@ interface SidebarProps {
   // talk input with an @mention for that worker (let handleMention do it).
   onMention?: (id: string) => void
   // Open a worker's detail panel (right-click → view details on a selector row).
-  onOpenDetail?: (id: string) => void
+  // Open a worker's detail panel, optionally landing on a tab (the row menu's
+  // Readme entry deep links that way).
+  onOpenDetail?: (id: string, tab?: WorkerDetailTab) => void
 }
 
 // Sidebar resize: the draggable width range, persisted in localStorage.
@@ -934,6 +936,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           selected={selectorSelected}
           onToggle={(id) => { if (view === 'talk') onToggleWorker(id); else onToggleFilterWorker(id) }}
           onMention={onMention}
+          onOpenDetail={onOpenDetail}
           onClose={() => setShowWorkerPicker(false)}
           isMobile={isMobile}
         />
@@ -947,6 +950,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           mentionable={rowMenuMentionable}
           onMention={() => onMention?.(rowMenu.id)}
           onDetail={onOpenDetail ? () => onOpenDetail(rowMenu.id) : undefined}
+          onReadme={onOpenDetail ? () => onOpenDetail(rowMenu.id, 'readme') : undefined}
           onTogglePin={() => togglePinned(rowMenu.id)}
           onToggleSleep={() => toggleSlept(rowMenu.id)}
           onClose={() => setRowMenu(null)}

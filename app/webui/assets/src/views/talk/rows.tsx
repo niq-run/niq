@@ -2,7 +2,7 @@
 // WorkerBadge (speaker label) and the RowCtx carrying the colors/l10n/lookups/
 // callbacks they read. TalkView computes the cheap per-row facts (alignment +
 // whether to show the avatar) and hands each event to the matching row.
-import { memo } from 'react'
+import { memo, Fragment } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fontSizes } from '../../theme'
@@ -17,6 +17,7 @@ import {
 } from '../../components/talk-utils'
 import type { EventPayload } from '../../types'
 import WorkerBadge from './WorkerBadge'
+import MentionTarget from './MentionTarget'
 import type { RowCtx } from './RowCtx'
 
 // ── Row rendering ──
@@ -50,6 +51,12 @@ function InputRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
   const { reminder, content } = splitSystemReminder(parsed.text)
   const rawMode = (evt.payload?.input_mode as string) || 'append'
   const modeKey = rawMode === 'interrupt' ? 'interrupt' : rawMode === 'schedule' ? 'schedule' : 'append'
+  // Recipients: the single target the pre-multi-target bus stamped, or (for a
+  // multi-target send) the full recipient list the engine recorded. An event
+  // with neither is a legacy broadcast.
+  const targets = evt.target_worker_id
+    ? [evt.target_worker_id]
+    : (evt.recipients ?? [])
   return (
     <div key={evt.id} data-evt-id={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
@@ -69,17 +76,19 @@ function InputRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
         }}
       >
         <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap' }}>
-          {evt.target_worker_id ? (
+          {targets.length > 0 ? (
             <>
               <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold' }}>{ctx.displayName(evt.worker_id)}</span>
               <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>@</span>
-              <span
-                onClick={(e) => { e.stopPropagation(); ctx.onAddFilter?.(evt.target_worker_id!) }}
-                title={ctx.onAddFilter ? t('talk.addFilter.tooltip') : undefined}
-                style={{ fontSize: fontSizes.sm, color: colors.accent, cursor: ctx.onAddFilter ? 'pointer' : undefined, textDecoration: ctx.onAddFilter ? 'underline dotted' : undefined, textUnderlineOffset: 3 }}
-              >
-                {ctx.displayName(evt.target_worker_id)}
-              </span>
+              {/* Every addressee, so a multi-worker send reads at a glance.
+                  Click = mention (same as a sender badge); right-click =
+                  the worker menu. */}
+              {targets.map((id, i) => (
+                <Fragment key={id}>
+                  {i > 0 && <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>,</span>}
+                  <MentionTarget id={id} ctx={ctx} />
+                </Fragment>
+              ))}
             </>
           ) : (
             <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold' }}>{t('talk.broadcast')}</span>
@@ -112,17 +121,43 @@ function InputRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
 
 function AbortRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alignRight: boolean; showBadge: boolean; ctx: RowCtx }) {
   const { colors, t } = ctx
+  // An abort is a human-originated message to one worker ("stop what you are
+  // doing"), so it reads like a message: the same sender @ addressee header, in
+  // the same bubble, with a lifecycle line saying what it did below it.
+  const target = evt.target_worker_id
   return (
-    <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
-        <WorkerBadge id={evt.worker_id} show={true} humanId={ctx.humanId} isReason={ctx.isReason} isPartner={ctx.isPartner} onMention={ctx.onMention} onOpenDetail={ctx.onOpenDetail} displayName={ctx.displayName} />
-      </div>
-      <div style={{ maxWidth: ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', background: colors.bgLight, border: '1px solid ' + colors.border, padding: '8px 12px', fontSize: fontSizes.sm, color: colors.textDim }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {evt.target_worker_id && <span style={{ color: colors.textDimmed }}>to: {ctx.displayName(evt.target_worker_id)}</span>}
+    <div key={evt.id} data-evt-id={evt.id} style={{ marginBottom: ctx.compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
+      <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
+      <div
+        style={{
+          maxWidth: ctx.bubbleMax,
+          display: alignRight ? 'inline-block' : undefined,
+          textAlign: 'left',
+          boxSizing: 'border-box',
+          background: colors.bgLight,
+          border: '1px solid ' + colors.border,
+          padding: ctx.tPad,
+          fontSize: ctx.tFontSize,
+          lineHeight: 1.5,
+          color: colors.textDim,
+        }}
+      >
+        <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold' }}>{ctx.displayName(evt.worker_id)}</span>
+          {target && (
+            <>
+              <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>@</span>
+              <MentionTarget id={target} ctx={ctx} />
+            </>
+          )}
           <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
         </div>
-        <div style={{ color: colors.text, fontSize: fontSizes.sm, marginTop: 4 }}>worker.abort</div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} title={t('talk.abort.hint')}>
+          <span style={{ width: 8, height: 8, borderRadius: 4, background: colors.textDim, flexShrink: 0, opacity: 0.5 }} />
+          {/* The instruction itself reads at message-body weight: this bubble is
+              what the sender put in, not a system annotation about it. */}
+          <span style={{ color: colors.text, fontSize: ctx.tFontSize }}>{t('talk.abort')}</span>
+        </div>
       </div>
     </div>
   )

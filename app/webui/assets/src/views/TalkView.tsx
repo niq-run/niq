@@ -3,7 +3,7 @@ import ViewHeader from '../components/ViewHeader'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { isToolResult } from '../components/talk-utils'
-import { isReasonFamilyType, isTalkPartnerType, type EventPayload } from '../types'
+import { isReasonFamilyType, isTalkPartnerType, type EventPayload, type WorkerDetailTab } from '../types'
 import { useChatScroll } from './talk/useChatScroll'
 import TalkRows from './talk/TalkRows'
 import StreamingTail from './talk/StreamingTail'
@@ -17,8 +17,8 @@ interface TalkViewProps {
   onTraceClick: (traceId: string) => void
   onLoadMore?: () => void
   onMention?: (workerId: string) => void
-  // Right-clicking a worker badge opens its detail page.
-  onOpenDetail?: (workerId: string) => void
+  // Right-clicking a worker badge opens its detail page (optionally on a tab).
+  onOpenDetail?: (workerId: string, tab?: WorkerDetailTab) => void
   // Talk-avatar context-menu actions: add a worker to the watched set, or focus
   // it as the only watched worker.
   onAddFilter?: (workerId: string) => void

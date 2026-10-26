@@ -5,6 +5,7 @@ import { useTheme, fontSizes } from '../../theme'
 import { useI18n } from '../../i18n'
 import WorkerBadgeMenu from '../../components/WorkerBadgeMenu'
 import { useContextMenu, contextMenuElementStyle } from '../../hooks/useContextMenu'
+import type { WorkerDetailTab } from '../../types'
 
 export default function WorkerBadge({ id, show, humanId, isReason, isPartner, onMention, onOpenDetail, onAddFilter, onFocusWorker, displayName, small }: {
   id: string
@@ -15,7 +16,7 @@ export default function WorkerBadge({ id, show, humanId, isReason, isPartner, on
   // mention. Falls back to isReason when absent (older callers).
   isPartner?: (id: string) => boolean
   onMention?: (id: string) => void
-  onOpenDetail?: (id: string) => void
+  onOpenDetail?: (id: string, tab?: WorkerDetailTab) => void
   onAddFilter?: (id: string) => void
   onFocusWorker?: (id: string) => void
   displayName: (id?: string) => string
@@ -65,7 +66,9 @@ export default function WorkerBadge({ id, show, humanId, isReason, isPartner, on
           y={menu.y}
           workerId={id}
           onDetail={onOpenDetail ? () => onOpenDetail(id) : () => {}}
+          onReadme={onOpenDetail ? () => onOpenDetail(id, 'readme') : undefined}
           onFocus={onFocusWorker ? () => onFocusWorker(id) : () => {}}
+          onAddFilter={onAddFilter ? () => onAddFilter(id) : undefined}
           onClose={() => setMenu(null)}
         />
       )}

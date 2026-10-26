@@ -1,9 +1,10 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import PickerDropdown, { type PickerOption } from './PickerDropdown'
 import { uploadFile } from '../services/api'
 import { isTalkPartnerType, type StagedAttachment, type WorkerInfo } from '../types'
+import { mentionsIn, leadingMentions } from './talk-utils'
 
 // Attachment limits: images ride inline as base64, files go through
 // /api/upload and only their path enters the input.
@@ -72,9 +73,6 @@ interface TalkInputProps {
   workers: WorkerInfo[]
   archived: Set<string>
   mentionKey: number
-  mentionTarget: string
-  onClearMentionTarget: () => void
-  onSelectTarget: (id: string) => void
   isMobile: boolean
   // Attachments staged for the next send: pasted/picked images (inline
   // base64) and uploaded files (referenced by path).
@@ -88,15 +86,17 @@ interface TalkInputProps {
   onFocus?: () => void
 }
 
-export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, mentionTarget, onClearMentionTarget, onSelectTarget, isMobile, attachments, onAttachmentsChange, onFocus }: TalkInputProps) {
+export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, isMobile, attachments, onAttachmentsChange, onFocus }: TalkInputProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // The @mention picker is the only picker the input opens: it addresses the
+  // message to one or more workers. There is no "target"/broadcast mode — a
+  // send always needs at least one recipient.
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [pickerMode, setPickerMode] = useState<'mention' | 'target'>('target')
-  // Live query for the worker picker's search box (seeded from the @token in
-  // mention mode); used to filter the dropdown in both mention and target mode.
+  // Live query for the worker picker's search box (seeded from the @token being
+  // typed); used to filter the dropdown.
   const [pickerQuery, setPickerQuery] = useState('')
   const [mentionIndex, setMentionIndex] = useState(0)
   const [modeOpen, setModeOpen] = useState(false)
@@ -257,7 +257,6 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     const atMatch = beforeCursor.match(/@([\w.-]*)$/)
     if (atMatch) {
       setPickerOpen(true)
-      setPickerMode('mention')
       setPickerQuery(atMatch[1].toLowerCase())
       setMentionIndex(0)
     } else {
@@ -265,31 +264,64 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     }
   }
 
-  const selectMention = (id: string) => {
+  // mentioned is the @-addressed workers present in the input, in
+  // first-appearance order. They are the message's recipients, so the chip can
+  // show exactly who will receive it and the picker can check them off.
+  const isPartnerId = useCallback((id: string) => partners.some(w => w.id === id), [partners])
+  const mentioned = useMemo(() => mentionsIn(input, isPartnerId), [input, isPartnerId])
+
+  // A send with nobody addressed is refused, and saying why needs somewhere
+  // visible: the Send button can carry a hover tooltip, but Enter has no hover,
+  // so the refusal also flashes a strip next to the recipient chip.
+  const [noTargetHint, setNoTargetHint] = useState(false)
+  const noTargetTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(noTargetTimer.current), [])
+  const flashNoTarget = useCallback(() => {
+    setNoTargetHint(true)
+    window.clearTimeout(noTargetTimer.current)
+    noTargetTimer.current = window.setTimeout(() => setNoTargetHint(false), 2600)
+  }, [])
+  // Adding an addressee answers the hint, so it goes away at once.
+  useEffect(() => {
+    if (mentioned.length > 0) setNoTargetHint(false)
+  }, [mentioned.length])
+
+  // insertMention puts "@id " at the caret. A trailing "@query" being typed is
+  // replaced by the pick; otherwise (chip pick on an already-complete token) it
+  // simply inserts at the caret, so picks accumulate into a multi-mention.
+  const insertMention = (id: string) => {
     const cursorPos = textareaRef.current?.selectionStart ?? input.length
     const beforeCursor = input.slice(0, cursorPos)
     const afterCursor = input.slice(cursorPos)
     const atMatch = beforeCursor.match(/^(.*)@[\w.-]*$/)
-    if (atMatch) {
-      const newVal = atMatch[1] + '@' + id + ' ' + afterCursor
-      onInputChange(newVal)
-      // Move cursor after the inserted mention
-      requestAnimationFrame(() => {
-        const ta = textareaRef.current
-        if (ta) {
-          const pos = atMatch[1].length + id.length + 2
-          ta.setSelectionRange(pos, pos)
-          ta.focus()
-        }
-      })
-    }
+    const head = atMatch ? atMatch[1] : beforeCursor
+    // Keep one space between existing text and the inserted mention.
+    const sep = head && !/\s$/.test(head) ? ' ' : ''
+    const prefix = head + sep + '@' + id + ' '
+    onInputChange(prefix + afterCursor)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (ta) {
+        ta.setSelectionRange(prefix.length, prefix.length)
+        ta.focus()
+      }
+    })
   }
 
-  // Commit a picker selection: in mention mode insert @id into the input, in
-  // target mode set the persistent target. Either way close the picker.
-  const commitPicker = (id: string) => {
-    if (pickerMode === 'mention') selectMention(id)
-    else onSelectTarget(id)
+  // removeMention takes one addressee back out (the picker row toggles). The id
+  // charset is [\w.-], so `.` is the only regex-special character to escape.
+  const removeMention = (id: string) => {
+    const token = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const next = input.replace(new RegExp('(^|\\s)@' + token + '(?![\\w.-])\\s?', 'g'), '$1')
+    onInputChange(next.trimStart())
+  }
+
+  // Commit a picker selection. Enter commits without toggling (choosing a row
+  // should never take a mention away); a click toggles, so the picker doubles
+  // as a multi-select editor.
+  const commitPicker = (id: string, toggle = true) => {
+    if (toggle && mentioned.includes(id)) removeMention(id)
+    else if (!mentioned.includes(id)) insertMention(id)
     setPickerOpen(false)
     setPickerQuery('')
   }
@@ -298,13 +330,6 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     // IME composition: keys (esp. Enter to confirm pinyin) must not trigger
     // send or mention navigation while composing.
     const composing = e.nativeEvent.isComposing || e.keyCode === 229
-
-    // Backspace/Delete on an empty input clears the persisted @ target.
-    if (!composing && input === '' && (e.key === 'Backspace' || e.key === 'Delete') && mentionTarget) {
-      e.preventDefault()
-      onClearMentionTarget()
-      return
-    }
 
     if (pickerOpen && !composing) {
       // Use the same pickable set the dropdown renders (archived/suspended reason
@@ -328,7 +353,12 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
       if (e.key === 'Enter' || e.key === 'Tab') {
         if (list.length > 0) {
           e.preventDefault()
-          commitPicker(list[mentionIndex].id)
+          // Commit the highlighted row, clamped into the list: the options
+          // narrow as the query grows, and a highlight left over from a longer
+          // list must still land on a real row (that is why Enter used to look
+          // like it did nothing).
+          const idx = Math.min(Math.max(mentionIndex, 0), list.length - 1)
+          commitPicker(list[idx].id, false)
           return
         }
       }
@@ -339,20 +369,16 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     }
     if (e.key === 'Enter' && !e.shiftKey && !composing) {
       e.preventDefault()
+      // Nothing addressed means nothing to send: say so instead of swallowing
+      // the keystroke. (An addressed but empty draft is just a no-op.)
+      if (mentioned.length === 0) {
+        flashNoTarget()
+        return
+      }
+      if (!canSend) return
       onSend()
     }
   }
-
-  // Parse current @mention target for display. Matches an @mention at any
-  // position (not only at the start), showing the most recent one. Worker ids
-  // may contain `-`, `.`, `_`, so the token is /[\w.-]/.
-  const currentTarget = useMemo(() => {
-    const matches = [...input.matchAll(/@([\w.-]+)/g)]
-    if (matches.length === 0) return null
-    const last = matches[matches.length - 1]
-    const w = partners.find(r => r.id === last[1])
-    return w ? w.id : null
-  }, [input, partners])
 
   // Close the picker on a click outside.
   useEffect(() => {
@@ -375,12 +401,15 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const pickableShown = pickableWorkers.filter(w =>
     pickerQuery.trim() === '' || w.id.toLowerCase().includes(pickerQuery.trim().toLowerCase()))
 
-  // Build the picker's grouped option list. Reason workers are grouped by
-  // their primary (first) tag's top-level path segment — a slash tag nests
-  // visually via indentation, so "ops/backup" and "ops/analytics" sit under
-  // an "ops" header at the right depth. Workers without tags fall into a
-  // trailing "other" group. Group headers are inert; they never consume the
-  // keyboard-active slot, so navigation stays on the worker rows only.
+  // Build the picker's option list. While searching it is one flat list with
+  // the best hit first: an exact id match outranks a prefix hit, which outranks
+  // a substring hit, so spelling a worker's name puts it on top — where the
+  // default highlight (and Enter) lands. With no query, reason workers are
+  // grouped by their primary (first) tag's top-level path segment — a slash tag
+  // nests visually via indentation, so "ops/backup" and "ops/analytics" sit
+  // under an "ops" header at the right depth — and workers without tags fall
+  // into a trailing "other" group. Group headers are inert; they never consume
+  // the keyboard-active slot, so navigation stays on the worker rows only.
   const pickerGroup = useMemo(() => {
     const opts: PickerOption[] = []
     const workers: WorkerInfo[] = []
@@ -391,47 +420,73 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         lastGroup = g
       }
     }
-    const tagged = pickableShown.filter(w => (w.tags?.length ?? 0) > 0)
-      .slice().sort((a, b) => a.tags![0].localeCompare(b.tags![0]))
-    const untagged = pickableShown.filter(w => !w.tags?.length)
-    for (const w of tagged) {
-      const primary = w.tags![0]
-      const segs = primary.split('/')
-      emitGroup(segs[0])
-      const indent = Math.min(segs.length - 1, 3)
-      const secondary = w.description || primary
-      opts.push({
-        id: w.id,
-        label: w.id,
-        sublabel: w.type,
-        indent,
-        hint: secondary,
-        description: secondary,
-      })
-      workers.push(w)
-    }
-    if (untagged.length) {
-      emitGroup(t('picker.group.untagged'))
-      for (const w of untagged) {
-        opts.push({ id: w.id, label: w.id, sublabel: w.type, description: w.description })
+    const query = pickerQuery.trim().toLowerCase()
+    if (query) {
+      const rank = (w: WorkerInfo) => {
+        const id = w.id.toLowerCase()
+        return id === query ? 0 : id.startsWith(query) ? 1 : 2
+      }
+      // Stable ranking: equal ranks keep the workers' natural order, so the list
+      // does not shuffle while the query grows.
+      pickableShown
+        .map((w, i) => ({ w, i }))
+        .sort((a, b) => rank(a.w) - rank(b.w) || a.i - b.i)
+        .forEach(({ w }) => {
+          const secondary = w.description || w.tags?.[0]
+          opts.push({ id: w.id, label: w.id, sublabel: w.type, hint: secondary, description: secondary })
+          workers.push(w)
+        })
+    } else {
+      const tagged = pickableShown.filter(w => (w.tags?.length ?? 0) > 0)
+        .slice().sort((a, b) => a.tags![0].localeCompare(b.tags![0]))
+      const untagged = pickableShown.filter(w => !w.tags?.length)
+      for (const w of tagged) {
+        const primary = w.tags![0]
+        const segs = primary.split('/')
+        emitGroup(segs[0])
+        const indent = Math.min(segs.length - 1, 3)
+        const secondary = w.description || primary
+        opts.push({
+          id: w.id,
+          label: w.id,
+          sublabel: w.type,
+          indent,
+          hint: secondary,
+          description: secondary,
+        })
         workers.push(w)
+      }
+      if (untagged.length) {
+        emitGroup(t('picker.group.untagged'))
+        for (const w of untagged) {
+          opts.push({ id: w.id, label: w.id, sublabel: w.type, description: w.description })
+          workers.push(w)
+        }
       }
     }
     // The highlighted worker row's index within the option list (group
-    // headers don't count for keyboard navigation).
+    // headers don't count for keyboard navigation). The index is clamped into
+    // the list: it can go stale when the query narrows the options, and the
+    // highlight must stay on a real row — the same row Enter would take.
     let activeOptionIndex = -1
-    if (workers[mentionIndex]) {
-      activeOptionIndex = opts.findIndex(o => !o.isGroup && o.id === workers[mentionIndex].id)
+    if (workers.length > 0) {
+      const idx = Math.min(Math.max(mentionIndex, 0), workers.length - 1)
+      activeOptionIndex = opts.findIndex(o => !o.isGroup && o.id === workers[idx].id)
     }
     return { opts, workers, activeOptionIndex }
-  }, [pickableShown, mentionIndex, t])
+  }, [pickableShown, pickerQuery, mentionIndex, t])
   const pickList = pickerGroup.opts
 
-  // Persistent target: a specific reason worker, or '' (broadcast).
-  const persistentTarget = mentionTarget && partners.some(r => r.id === mentionTarget) ? mentionTarget : ''
-  // The single visible target: an immediate @ in the input takes priority, then
-  // the persistent target, otherwise broadcast.
-  const shownTarget = currentTarget || persistentTarget
+  // A message needs at least one addressee: the @mentions are the recipients
+  // and there is no broadcast path any more. It also needs some content — the
+  // sidebar prefills the addressing prefix, so a bare "@worker " is an empty
+  // draft, not a message.
+  const body = leadingMentions(input).rest.trim()
+  const canSend = mentioned.length > 0 && (body !== '' || attachments.length > 0)
+  // Chip label: the addressees, or a prompt to pick one.
+  const targetsLabel = mentioned.length > 0
+    ? mentioned.map(id => '@' + id).join(', ')
+    : t('talk.input.noTarget')
 
   // Input-mode selector options. Descriptions condensed from pkg/reason:
   //   schedule  = level 1 (only when idle; least intrusive)
@@ -454,28 +509,50 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const targetChip = (
     <div style={{ position: 'relative', display: 'flex', minWidth: 0, ...(isMobile ? { flexShrink: 1 } : { marginRight: 'auto' }) }}>
         <span
-          onClick={(e) => { e.stopPropagation(); setPickerMode('target'); setPickerQuery(''); setMentionIndex(0); setPickerOpen(v => !v) }}
-          title={shownTarget ? t('talk.input.target.tooltip', { target: shownTarget }) : t('talk.input.broadcast.tooltip')}
+          onClick={(e) => { e.stopPropagation(); setPickerQuery(''); setMentionIndex(0); setPickerOpen(v => !v) }}
+          title={mentioned.length > 0
+            ? t('talk.input.targets.tooltip', { targets: targetsLabel })
+            : t('talk.input.noTarget.tooltip')}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: actionFont, lineHeight: '20px',
-            color: shownTarget ? colors.accent : colors.textDimmed,
-            border: '1px solid ' + (shownTarget ? colors.accentBorder : colors.border),
+            color: mentioned.length > 0 ? colors.accent : colors.textDimmed,
+            border: '1px solid ' + (mentioned.length > 0 ? colors.accentBorder : colors.border),
             borderRadius: 2, padding: '4px 10px', cursor: 'pointer', userSelect: 'none',
           }}
         >
-          {/* Wrap the label so a long worker id truncates instead of widening
-              the chip past the mobile button row. */}
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: isMobile ? '10ch' : undefined }}>
-            {shownTarget ? shownTarget : t('talk.input.broadcast')}
+          {/* Wrap the label so long / multiple worker ids truncate instead of
+              widening the chip past the mobile button row. */}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: isMobile ? '14ch' : undefined }}>
+            {targetsLabel}
           </span>
         </span>
+
+        {/* Refusal strip, glued to the chip's right edge: the chip itself says
+            "no worker", this says what to do about it. A muted amber (the
+            palette's warn tone) reads as attention, not as an error. */}
+        {noTargetHint && (
+          <span
+            style={{
+              display: 'inline-flex', alignItems: 'center',
+              marginLeft: 6, minWidth: 0, flexShrink: 1,
+              fontSize: actionFont, lineHeight: '20px',
+              color: colors.warn,
+              border: '1px solid ' + colors.warn, borderRadius: 2,
+              padding: '4px 10px', userSelect: 'none',
+            }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {t('talk.input.noTarget.hint')}
+            </span>
+          </span>
+        )}
 
         {pickerOpen && (
           <div style={{ position: 'absolute', left: 0, bottom: '100%', marginBottom: 4, zIndex: 100 }}>
             <PickerDropdown
-              header={pickerMode === 'mention' ? t('picker.mention') : t('picker.target')}
+              header={t('picker.mention')}
               options={pickList}
-              selectedId={pickerMode === 'target' ? (shownTarget || undefined) : undefined}
+              selectedIds={mentioned}
               activeIndex={pickerGroup.activeOptionIndex}
               onSelect={commitPicker}
               width={isMobile ? 480 : 240}
@@ -487,21 +564,6 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
               searchValue={pickerQuery}
               onSearchValueChange={setPickerQuery}
               searchPlaceholder={t('workerPicker.search')}
-              footer={{
-                label: t('picker.broadcast'),
-                checked: !shownTarget,
-                onChoose: () => {
-                  if (pickerMode === 'mention') {
-                    // Cancelling an in-progress @mention: strip the trailing
-                    // "@word" so nothing is left in the text. Same charset as
-                    // the other mention parsers: /[\w.-]/.
-                    onInputChange(input.replace(/@[\w.-]*$/, ''))
-                  } else {
-                    onClearMentionTarget()
-                  }
-                  setPickerOpen(false)
-                },
-              }}
             />
           </div>
         )}
@@ -680,16 +742,25 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             </div>
           )}
         </div>
+        {/* Send needs a recipient and some content. It stays clickable while
+            unready — pressing it explains what is missing (a dead button would
+            silently swallow the press), and the tooltip says so on hover. */}
         <button
-          onClick={onSend}
-          className="btn-send"
+          onClick={() => {
+            if (mentioned.length === 0) { flashNoTarget(); return }
+            if (!canSend) return
+            onSend()
+          }}
+          aria-disabled={!canSend}
+          title={canSend ? undefined : mentioned.length === 0 ? t('talk.input.send.blocked') : undefined}
+          className={canSend ? 'btn-send' : undefined}
           style={{
             background: 'none',
-            color: colors.text,
+            color: canSend ? colors.text : colors.textDimmed,
             border: '1px solid ' + colors.border,
             padding: '4px 10px',
             borderRadius: 4,
-            cursor: 'pointer',
+            cursor: canSend ? 'pointer' : 'default',
             fontSize: actionFont,
             lineHeight: '20px',
           }}

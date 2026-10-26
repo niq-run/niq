@@ -38,6 +38,11 @@ export interface Palette {
   toolRequested: string
   toolCompleted: string
   toolFailed: string
+  // Warning / "needs your attention" tone (inline hints). Deliberately a muted
+  // amber rather than a bright yellow: the palette is desaturated throughout, so
+  // this reads as a quiet nudge instead of an alarm. Tuned per theme to stay
+  // legible (≈5:1) on each background.
+  warn: string
   // Event type colors
   eventType: {
     tool: string
@@ -88,6 +93,7 @@ const dark: Palette = {
   toolRequested: '#c88a3a',
   toolCompleted: '#5a8a5a',
   toolFailed: '#f44336',
+  warn: '#a08a52',
   eventType: {
     tool: '#ff9800',
     reason: '#8f7393',
@@ -131,6 +137,7 @@ const light: Palette = {
   toolRequested: '#c88a3a',
   toolCompleted: '#5a8a5a',
   toolFailed: '#f44336',
+  warn: '#7f6c36',
   eventType: {
     tool: '#e65100',
     reason: '#7b1fa2',

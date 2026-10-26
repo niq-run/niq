@@ -2,6 +2,60 @@
 
 import type { EventPayload } from '../types'
 
+// ── Input addressing (@mentions) ──
+
+// resolveMentionId resolves a raw @token to a known worker id, dropping the
+// sentence punctuation that rides along in prose: "@ops." is the worker ops
+// followed by a period. Ids use [\w.-], so `.` is the only character that can
+// be either id or punctuation; a token that resolves as-is is never trimmed.
+export function resolveMentionId(raw: string, isKnown: (id: string) => boolean): string | null {
+  let id = raw
+  while (id !== '' && !isKnown(id) && id.endsWith('.')) id = id.slice(0, -1)
+  return isKnown(id) ? id : null
+}
+
+// mentionsIn lists the workers @-mentioned in a message, in first-appearance
+// order and de-duplicated. Unresolved/@-in-prose tokens do not count, and an @
+// glued to a word (an email like a@b.c) is prose, not addressing.
+export function mentionsIn(text: string, isKnown: (id: string) => boolean): string[] {
+  const out: string[] = []
+  for (const m of text.matchAll(/(?<![\w.-])@([\w.-]+)/g)) {
+    const id = resolveMentionId(m[1], isKnown)
+    if (id && !out.includes(id)) out.push(id)
+  }
+  return out
+}
+
+// leadingMentions splits the addressing prefix off a message: the run of
+// @-tokens at its head, plus the body that follows. This is structural — it
+// takes any @token, without consulting the worker list — so an addressing
+// prefix can be rewritten before the workers have loaded.
+export function leadingMentions(text: string): { ids: string[]; rest: string } {
+  const ids: string[] = []
+  let rest = text
+  for (;;) {
+    const m = rest.match(/^\s*@([\w.-]+)(?:[ \t]+|$)/)
+    if (!m) break
+    ids.push(m[1])
+    rest = rest.slice(m[0].length)
+  }
+  return { ids, rest }
+}
+
+// mentionsPrefix renders an addressing prefix for a set of recipients:
+// "@a @b " (empty string for none).
+export function mentionsPrefix(ids: string[]): string {
+  return ids.length ? ids.map(id => '@' + id).join(' ') + ' ' : ''
+}
+
+// sameIds compares two id lists as sets: the sidebar's order is click order,
+// the text's order is what the user typed.
+export function sameIds(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const set = new Set(a)
+  return b.every(id => set.has(id))
+}
+
 // ── Content extraction ──
 
 /**

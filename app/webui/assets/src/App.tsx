@@ -11,6 +11,7 @@ import ProvidersView from './views/ProvidersView'
 import ProgramsView from './views/ProgramsView'
 import McpView from './views/McpView'
 import ViewHeader from './components/ViewHeader'
+import { leadingMentions, mentionsIn, mentionsPrefix, sameIds } from './components/talk-utils'
 import ApprovalsView from './views/ApprovalsView'
 import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
@@ -20,7 +21,7 @@ import { usePolling } from './hooks/usePolling'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
-import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type InputContent, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerInfo } from './types'
+import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type InputContent, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerDetailTab, type WorkerInfo } from './types'
 
 // How many history events the WebUI pages back per /api/events/before call
 // (both the initial watermark backfill and the load-more pagination).
@@ -136,13 +137,32 @@ function stampNow(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
+// addressedInput splits a message into its recipients — every @-mentioned
+// worker, in first-appearance order — and the body handed to them. Only the
+// leading run of @tokens is stripped from the body: mid-sentence mentions stay
+// as text.
+function addressedInput(text: string, isKnown: (id: string) => boolean): { targets: string[]; body: string } {
+  return { targets: mentionsIn(text, isKnown), body: leadingMentions(text).rest.trim() }
+}
+
 // composeInput builds the structured worker.input "content" array: the
 // reminder and message text as a leading text block, then each staged
 // attachment as its own image/file block. This replaces the legacy
 // <attachment> text envelope this UI used to send.
-function composeInput(text: string, attachments: StagedAttachment[]): InputContent[] {
+//
+// When several workers are addressed, the reminder carries one extra line
+// saying so. Each target gets the same event, so without it a recipient would
+// assume it is the only one being asked; the note tells the model that the
+// others were addressed too and that their replies arrive separately. It rides
+// in the same block as the timestamp (the UI extracts only the first) and is
+// model-facing, so it stays in English regardless of the UI language.
+function composeInput(text: string, attachments: StagedAttachment[], targets: string[]): InputContent[] {
   const content: InputContent[] = []
-  const reminder = `<system-reminder>${stampNow()}</system-reminder>`
+  const note = [stampNow()]
+  if (targets.length > 1) {
+    note.push(`This message was addressed to ${targets.length} workers: ${targets.map(id => '@' + id).join(', ')}.\nEach of them received this same message; their replies arrive separately.`)
+  }
+  const reminder = `<system-reminder>\n${note.join('\n')}\n</system-reminder>`
   const body = text.trim()
   content.push({ type: 'text', text: [reminder, body].filter(Boolean).join('\n\n') })
   for (const a of attachments) {
@@ -184,6 +204,13 @@ export default function App() {
   })
   const [attachments, setAttachments] = useState<StagedAttachment[]>([])
   const [sending, setSending] = useState(false)
+  // Sidebar selection → input addressing. Checking workers in the selector is
+  // the quick way to address a message, so the input's leading @-prefix follows
+  // that selection. autoMentionsRef is what we last wrote; once the input's
+  // mentions differ from it the user has taken over by hand, and their edits win
+  // for the rest of the draft (the next send starts from the selection again).
+  const autoMentionsRef = useRef<string[]>([])
+  const manualMentionsRef = useRef(false)
   // Set while the live event stream is down / auto-reconnecting, so we can
   // surface a visible "grab the logs" banner instead of silently missing new
   // messages.
@@ -208,6 +235,9 @@ export default function App() {
   // Worker shown in an in-place detail overlay (opened from the talk view by
   // right-clicking a badge), without navigating to the workers view.
   const [detailOverlayId, setDetailOverlayId] = useState<string | null>(null)
+  // Tab the overlay should open on (null = its default). Set beside the id so a
+  // deep link ("Readme") and a plain open are the same state transition.
+  const [detailOverlayTab, setDetailOverlayTab] = useState<WorkerDetailTab | null>(null)
   const [detailWidth, setDetailWidth] = useState<number>(detailDefaultWidth)
   const detailDraggedRef = useRef(false)
   const [deliveries, setDeliveries] = useState<Record<string, string[]>>({})
@@ -759,15 +789,65 @@ export default function App() {
     fetchApprovals().then(r => setApprovals(r.approvals ?? [])).catch(() => {})
   }, [])
 
+  // A talk partner by id — the workers a message can be addressed to.
+  const isPartnerId = useCallback((id: string) => {
+    const w = workers.find(x => x.id === id)
+    return !!w && isTalkPartnerType(w.type)
+  }, [workers])
+
+  // Keep the input's addressing prefix in step with the sidebar selection, as
+  // long as the user has not addressed the message by hand. Only a real change
+  // of selection rewrites the text, so a background workers poll never disturbs
+  // what is being typed.
+  useEffect(() => {
+    if (manualMentionsRef.current) return
+    const ids = [...talkWorkers].filter(isPartnerId)
+    if (sameIds(ids, autoMentionsRef.current)) return
+    autoMentionsRef.current = ids
+    setInput(prev => mentionsPrefix(ids) + leadingMentions(prev).rest)
+  }, [talkWorkers, isPartnerId])
+
+  // Every input edit funnels through here so hand-written addressing can be
+  // spotted: as soon as the mentions stop matching what the sidebar wrote, the
+  // sync above leaves the text alone.
+  const handleInputChange = useCallback((v: string) => {
+    if (!sameIds(mentionsIn(v, isPartnerId), autoMentionsRef.current)) {
+      manualMentionsRef.current = true
+    }
+    setInput(v)
+  }, [isPartnerId])
+
+  // A fleet with exactly one addressable worker has no choice to make, so that
+  // worker is selected by default: the talk scope and the input's @-prefix both
+  // follow it without a click. One-shot — a deliberate de-selection afterwards
+  // is respected.
+  const autoSelectedRef = useRef(false)
+  useEffect(() => {
+    if (autoSelectedRef.current) return
+    const partners = workers.filter(w => isTalkPartnerType(w.type))
+    if (partners.length !== 1) return
+    autoSelectedRef.current = true
+    if (talkWorkers.size > 0) return
+    const next = new Set([partners[0].id])
+    setTalkWorkers(next)
+    writeTalkWorkersToUrl(next)
+    setMentionTarget(partners[0].id)
+  }, [workers, talkWorkers])
+
   // ── Callbacks ──
   // Which reason worker the input is currently aimed at — drives the per-worker
-  // input mode. The @ target wins, else the first selected talk worker.
+  // input mode. The @mentions being typed win (that is who the message goes
+  // to), then the last explicit choice (sidebar / last send), then the first
+  // selected talk worker.
   const activeWorker = useMemo(() => {
     const reasons = workers.filter(w => isTalkPartnerType(w.type))
-    if (mentionTarget && reasons.some(r => r.id === mentionTarget)) return mentionTarget
-    const sel = [...talkWorkers].filter(id => reasons.some(r => r.id === id))
+    const isReason = (id: string) => reasons.some(r => r.id === id)
+    const addressed = mentionsIn(input, isReason)
+    if (addressed.length > 0) return addressed[0]
+    if (mentionTarget && isReason(mentionTarget)) return mentionTarget
+    const sel = [...talkWorkers].filter(isReason)
     return sel.length ? sel[0] : ''
-  }, [mentionTarget, talkWorkers, workers])
+  }, [input, mentionTarget, talkWorkers, workers])
   const currentInputMode = inputModes[activeWorker] || DEFAULT_INPUT_MODE
 
   // Persist a per-worker mode change under the active worker.
@@ -780,58 +860,53 @@ export default function App() {
   }, [activeWorker])
 
   const sendMessage = useCallback(() => {
-    if (!input.trim() || sending) return
+    if (sending) return
+    // Recipients are the workers @-mentioned in the text — one or several. A
+    // send that addresses nobody used to broadcast to every talk partner; that
+    // path is gone, so with no recipient the message is simply not sent.
+    const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
+    const { targets: msgTargets, body: msgText } = addressedInput(input, id => reasonWorkers.some(r => r.id === id))
+    // The sidebar prefills the addressing prefix, so a draft can be nothing but
+    // "@a " — that is not a message either.
+    if (msgTargets.length === 0 || (!msgText && attachments.length === 0)) return
     setSending(true)
     // Returning to the live bottom: bump the signal TalkView listens for.
     setSendPulse(p => p + 1)
-    // Parse @mention for targeting a specific worker.
-    let msgTarget = ''
-    let msgText = input
-    const mentionMatch = input.match(/^@(\S+)\s+(.*)$/s)
-    if (mentionMatch) {
-      const mentioned = mentionMatch[1]
-      const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
-      if (reasonWorkers.some(r => r.id === mentioned)) {
-        msgTarget = mentioned
-        msgText = mentionMatch[2]
-        setMentionTarget(mentioned) // persist the @ target for the next message
-      }
-    }
-    if (!msgTarget) {
-      // No @mention: reuse the persisted target if still valid; otherwise the
-      // first selected reason worker, or broadcast.
-      const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
-      if (mentionTarget && reasonWorkers.some(r => r.id === mentionTarget)) {
-        msgTarget = mentionTarget
-      } else {
-        const selectedReasons = [...talkWorkers].filter(id => reasonWorkers.some(r => r.id === id))
-        msgTarget = selectedReasons.length > 0 ? selectedReasons[0] : ''
-      }
-    }
+    // Keep the per-worker input mode (and the abort fallback) anchored on the
+    // first addressee.
+    setMentionTarget(msgTargets[0])
     lastSendRef.current = { t: Date.now(), text: msgText.slice(0, 80) }
-    sendInput(composeInput(msgText, attachments), msgTarget, currentInputMode).then(() => {
-      setInput('')
+    sendInput(composeInput(msgText, attachments, msgTargets), msgTargets, currentInputMode).then(() => {
+      // The next draft starts from the sidebar selection again.
+      const ids = [...talkWorkers].filter(isPartnerId)
+      manualMentionsRef.current = false
+      autoMentionsRef.current = ids
+      setInput(mentionsPrefix(ids))
       setAttachments([])
       setSending(false)
     }).catch(() => {
       setSending(false)
     })
-  }, [input, view, talkWorkers, currentInputMode, sending, workers, mentionTarget, activeWorker, attachments])
+  }, [input, currentInputMode, sending, workers, attachments, talkWorkers, isPartnerId])
 
   const handleAbort = useCallback(() => {
     const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
     const isReason = (id: string) => reasonWorkers.some(r => r.id === id)
-    // Abort the worker the input is currently @-targeted at, falling back to a
-    // selected reason worker, then the first reason worker.
-    let target = isReason(mentionTarget) ? mentionTarget : ''
-    if (!target) {
-      const selected = [...talkWorkers].find(isReason)
-      target = selected ?? (reasonWorkers.length > 0 ? reasonWorkers[0].id : '')
+    // Stop what the input is addressing: every worker @-mentioned there. That
+    // is the same set a send would go to, so Stop no longer stops some other
+    // worker than the one being talked to. With no @ in the draft (e.g. right
+    // after a send cleared it) fall back to the last addressee, then a selected
+    // worker, then the first reason worker.
+    const addressed = mentionsIn(input, isReason)
+    let targets = addressed
+    if (targets.length === 0) {
+      const fallback = isReason(mentionTarget)
+        ? mentionTarget
+        : ([...talkWorkers].find(isReason) ?? reasonWorkers[0]?.id ?? '')
+      targets = fallback ? [fallback] : []
     }
-    if (target) {
-      abortWorker(target)
-    }
-  }, [workers, mentionTarget, talkWorkers])
+    for (const id of targets) abortWorker(id)
+  }, [workers, mentionTarget, talkWorkers, input])
 
   // Sidebar worker selector (talk view): multi-select toggle. On each selection
   // change we keep the talk (mention) target aligned with the selection boundary
@@ -899,8 +974,10 @@ export default function App() {
   // Open a worker's detail page directly (e.g. right-click on a talk badge):
   // select it and switch to the workers view, which renders the detail panel.
   // Open a worker's detail page as an in-place overlay (e.g. right-click on a
-  // talk badge), without navigating away from the current view.
-  const openWorkerDetail = useCallback((id: string) => {
+  // talk badge), without navigating away from the current view. An optional tab
+  // lands directly on it — the badge menu's Readme entry uses that.
+  const openWorkerDetail = useCallback((id: string, tab?: WorkerDetailTab) => {
+    setDetailOverlayTab(tab ?? null)
     setDetailOverlayId(id)
   }, [])
 
@@ -926,10 +1003,12 @@ export default function App() {
     setView('events')
   }, [])
 
-  // Mentioning a worker from a talk badge prefixes the input and pins the
-  // target. Kept stable (useCallback) so the memoized talk rows don't re-render
+  // Mentioning a worker from a talk badge appends @id to the input. That is a
+  // hand edit of the addressing, so it also takes the input out of the sidebar's
+  // keeping. Kept stable (useCallback) so the memoized talk rows don't re-render
   // on every event.
   const handleMention = useCallback((id: string) => {
+    manualMentionsRef.current = true
     setInput(prev => prev + '@' + id + ' ')
     setMentionTarget(id)
     setMentionKey(k => k + 1)
@@ -1352,16 +1431,13 @@ export default function App() {
               talkPartner={''}
               input={input}
               inputMode={currentInputMode}
-              onInputChange={setInput}
+              onInputChange={handleInputChange}
               onSend={sendMessage}
               onAbort={handleAbort}
               onModeChange={handleInputModeChange}
               workers={workers}
               archived={archived}
               mentionKey={mentionKey}
-              mentionTarget={mentionTarget}
-              onClearMentionTarget={() => setMentionTarget('')}
-              onSelectTarget={(id) => setMentionTarget(id)}
               isMobile={isMobile}
               attachments={attachments}
               onAttachmentsChange={setAttachments}
@@ -1548,6 +1624,11 @@ export default function App() {
               style={{ width: 'min(780px, 100%)', height: 'min(86vh, 660px)', display: 'flex', flexDirection: 'column', background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.25)', overflow: 'hidden' }}
             >
               <WorkerDetail
+                // Keyed by the requested tab: asking for another tab while the
+                // panel is already open must remount, since the tab is local
+                // state initialized on mount.
+                key={w.id + ':' + (detailOverlayTab ?? 'info')}
+                initialTab={detailOverlayTab ?? undefined}
                 worker={w}
                 allWorkers={workers}
                 watch={workerWatch[w.id] ?? []}

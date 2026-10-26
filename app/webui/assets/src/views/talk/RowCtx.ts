@@ -5,7 +5,7 @@
 import type { CSSProperties } from 'react'
 import type { Palette } from '../../theme'
 import type { StringKey } from '../../i18n'
-import type { EventPayload } from '../../types'
+import type { EventPayload, WorkerDetailTab } from '../../types'
 
 export interface RowCtx {
   dark: boolean
@@ -32,7 +32,9 @@ export interface RowCtx {
   openToolId: string | null
   toggleTool: (key: string) => void
   onMention?: (id: string) => void
-  onOpenDetail?: (id: string) => void
+  // Opens the worker's detail panel, optionally landing on a tab (the Readme
+  // menu entry deep links that way).
+  onOpenDetail?: (id: string, tab?: WorkerDetailTab) => void
   onAddFilter?: (id: string) => void
   onFocusWorker?: (id: string) => void
   onTraceClick: (traceId: string) => void
