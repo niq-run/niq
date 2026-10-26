@@ -154,6 +154,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     approvals: t('nav.approvals'),
     events: t('nav.events'),
     workers: t('nav.workers'),
+    mcp: t('nav.mcp'),
     programs: t('sidebar.programs'),
   }
 
@@ -631,7 +632,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           the worker list there) and in the programs view (program browsing
           needs no worker filter). Its separator is hidden too, so switching to
           those views doesn't leave a stray line. */}
-      {view !== 'workers' && view !== 'programs' && (
+      {view !== 'workers' && view !== 'programs' && view !== 'mcp' && (
         <>
           <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
           <strong style={{ display: 'block', color: colors.text, fontSize: fontSizes.xl, marginBottom: 8 }}>{t('sidebar.workerSelector')}</strong>

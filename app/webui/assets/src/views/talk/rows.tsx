@@ -55,7 +55,7 @@ function InputRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
       <div
         style={{
-          maxWidth: alignRight ? '70%' : ctx.bubbleMax,
+          maxWidth: ctx.bubbleMax,
           minWidth: 0,
           display: 'inline-block',
           textAlign: 'left',
@@ -117,7 +117,7 @@ function AbortRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, justifyContent: alignRight ? 'flex-end' : 'flex-start' }}>
         <WorkerBadge id={evt.worker_id} show={true} humanId={ctx.humanId} isReason={ctx.isReason} isPartner={ctx.isPartner} onMention={ctx.onMention} onOpenDetail={ctx.onOpenDetail} displayName={ctx.displayName} />
       </div>
-      <div style={{ maxWidth: alignRight ? '70%' : ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', background: colors.bgLight, border: '1px solid ' + colors.border, padding: '8px 12px', fontSize: fontSizes.sm, color: colors.textDim }}>
+      <div style={{ maxWidth: ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', background: colors.bgLight, border: '1px solid ' + colors.border, padding: '8px 12px', fontSize: fontSizes.sm, color: colors.textDim }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {evt.target_worker_id && <span style={{ color: colors.textDimmed }}>to: {ctx.displayName(evt.target_worker_id)}</span>}
           <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
@@ -206,7 +206,7 @@ function TimeoutRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; al
   return (
     <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
-      <div style={{ maxWidth: alignRight ? '70%' : ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', background: colors.bgLight, border: '1px solid ' + colors.border, padding: '8px 12px', fontSize: fontSizes.sm, color: colors.textDim }}>
+      <div style={{ maxWidth: ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', background: colors.bgLight, border: '1px solid ' + colors.border, padding: '8px 12px', fontSize: fontSizes.sm, color: colors.textDim }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ color: colors.text }}>{t('talk.timeout')}</span>
           {evt.target_worker_id && <span style={{ color: colors.textDimmed }}>to: {ctx.displayName(evt.target_worker_id)}</span>}
@@ -226,7 +226,7 @@ function ApprovalRowImpl({ evt, alignRight, showBadge, decision, ctx }: { evt: E
   return (
     <div key={evt.id} data-evt-id={evt.id} style={{ marginTop: 16, marginBottom: ctx.compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
-      <div className={!isExpanded ? 'block-card' : undefined} style={{ maxWidth: alignRight ? '70%' : ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', border: '1px solid ' + colors.accent, padding: ctx.compactMode ? '4px 8px' : '6px 12px', fontSize: ctx.compactMode ? fontSizes.xs : fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
+      <div className={!isExpanded ? 'block-card' : undefined} style={{ maxWidth: ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', border: '1px solid ' + colors.accent, padding: ctx.compactMode ? '4px 8px' : '6px 12px', fontSize: ctx.compactMode ? fontSizes.xs : fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
         <div onClick={() => ctx.toggleExpanded(evt.id)} style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0, opacity: 0.5 }} />
           <span style={{ color: colors.text, fontWeight: 600 }}>{t('talk.approval.title')}</span>
@@ -288,7 +288,7 @@ function ToolRowImpl({ evt, alignRight, showBadge, resultEvt, partial, ctx }: { 
       <div
         className={!isExpanded ? 'block-card' : undefined}
         style={{
-          maxWidth: alignRight ? '70%' : ctx.bubbleMax,
+          maxWidth: ctx.bubbleMax,
           display: alignRight ? 'inline-block' : undefined,
           textAlign: 'left',
           boxSizing: 'border-box',

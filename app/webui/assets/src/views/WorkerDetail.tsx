@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { isReasonFamilyType, type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry } from '../types'
+import { isReasonFamilyType, type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry, type EventPayload } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
 import SendEventForm from '../components/SendEventForm'
 import SelectDropdown from '../components/SelectDropdown'
 import DetailRow from '../components/DetailRow'
 import CollapsibleCode from '../components/CollapsibleCode'
-import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, updateWorkerAllow, updateWorkerMeta, updateWorkerParams } from '../services/api'
+import { makeMdComponents } from '../components/MarkdownComponents'
+import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, sendWorkerEvent, fetchEventsByRequest, updateWorkerAllow, updateWorkerMeta, updateWorkerParams } from '../services/api'
 
 interface WorkerDetailProps {
   worker: WorkerInfo
@@ -40,7 +43,8 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
   // Display metadata (tags / description) inline editing.
   const [editingMeta, setEditingMeta] = useState(false)
   const [metaNote, setMetaNote] = useState('')
-  const [tab, setTab] = useState<'info' | 'actions' | 'events' | 'perms'>('info')
+  // Tabs: Info / Readme / Send Event / Permissions.
+  const [tab, setTab] = useState<'info' | 'readme' | 'events' | 'perms'>('info')
   const [draftTags, setDraftTags] = useState('')
   const [draftDesc, setDraftDesc] = useState('')
   const [draftParams, setDraftParams] = useState('')
@@ -201,7 +205,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
         {/* Top tabs: Info / Actions / Events / Permissions. Each tab shows only
             its own card(s); the rest are hidden via display. */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-          {([['info', t('wd.tab.info')], ['events', t('wd.sendEvent')], ['perms', t('wd.permissions')]] as const).map(([k, label]) => (
+          {([['info', t('wd.tab.info')], ['readme', t('wd.tab.readme')], ['events', t('wd.sendEvent')], ['perms', t('wd.permissions')]] as const).map(([k, label]) => (
             <span
               key={k}
               onClick={() => setTab(k)}
@@ -502,6 +506,19 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 				      </div>
           </div>
 
+					{/* Readme — the worker's own self-description, asked over the bus
+							 (worker.readme). Mounted only while its tab is open so the query does
+							 not fire for every selection. A worker whose announced watch does
+							 not list worker.readme is reported as such without a round trip
+							 (an unresolved watch still tries: the answer is quick). */}
+					{tab === 'readme' && (
+						<ReadmeSection
+							key={worker.id}
+							workerId={worker.id}
+							supported={watch.length === 0 || watch.some((w) => w.event === 'worker.readme')}
+						/>
+					)}
+
 					{/* Send the worker an event from its announced watch contract —
 						 drive its behaviour/state from the UI. */}
 					<div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: tab === 'events' ? undefined : 'none' }}>
@@ -522,6 +539,97 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 					{worker.type === 'workspace' && tab === 'events' && <MountsSection key={worker.id} workerId={worker.id} />}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ReadmeSection shows the worker's own self-description: it asks the worker over
+// the bus (worker.readme) and renders the text. Mounted by its tab, so the query
+// fires when the human opens the tab rather than on every worker selection.
+function ReadmeSection({ workerId, supported }: { workerId: string; supported: boolean }) {
+  const { colors, dark } = useTheme()
+  const { t } = useI18n()
+  const [text, setText] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [nonce, setNonce] = useState(0) // refresh trigger
+
+  useEffect(() => {
+    if (!supported) return
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    setText('')
+
+    // Same ask-reply path the "send event" form uses: publish worker.readme as
+    // HIW, then poll the request id until the worker's reply lands.
+    const load = async () => {
+      try {
+        const reqId = await sendWorkerEvent(workerId, 'worker.readme', {})
+        if (!reqId) throw new Error('no request id')
+        for (let i = 0; i < 20 && !cancelled; i++) {
+          await new Promise((r) => setTimeout(r, 250))
+          const evts = await fetchEventsByRequest(reqId).catch(() => [] as EventPayload[])
+          const reply = evts.find((e) =>
+            e.type === 'request.completed' || e.type === 'request.failed' || e.type === 'request.rejected')
+          if (!reply) continue
+          const p = reply.payload ?? {}
+          if (reply.type === 'request.completed') {
+            setText(typeof p.result === 'string' ? p.result : JSON.stringify(p))
+          } else {
+            setError(String(p.error ?? p.reason ?? 'readme failed'))
+          }
+          if (!cancelled) setLoading(false)
+          return
+        }
+        if (!cancelled) {
+          setError('no reply from ' + workerId)
+          setLoading(false)
+        }
+      } catch (e) {
+        if (cancelled) return
+        setError((e as Error)?.message || 'failed to read readme')
+        setLoading(false)
+      }
+    }
+    void load()
+
+    return () => {
+      cancelled = true
+    }
+  }, [workerId, supported, nonce])
+
+  return (
+    <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+        <span style={{ color: colors.detailLabel, fontSize: fontSizes.sm, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          {t('wd.readme.label')}
+        </span>
+        {supported && (
+          <span
+            onClick={() => setNonce((n) => n + 1)}
+            className="btn-hover"
+            style={{ marginLeft: 'auto', cursor: 'pointer', color: colors.accent, fontSize: fontSizes.sm, border: '1px solid ' + colors.border, borderRadius: 2, padding: '2px 8px', userSelect: 'none' }}
+          >
+            {t('wd.readme.refresh')}
+          </span>
+        )}
+      </div>
+      {!supported ? (
+        <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.readme.unsupported')}</div>
+      ) : loading ? (
+        <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('app.loading')}</div>
+      ) : error ? (
+        <div style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</div>
+      ) : text ? (
+        <div className="md-content" style={{ color: colors.text, fontSize: fontSizes.base, lineHeight: 1.6 }}>
+          <Markdown remarkPlugins={[remarkGfm]} components={makeMdComponents(dark, colors)}>
+            {text}
+          </Markdown>
+        </div>
+      ) : (
+        <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.readme.empty')}</div>
+      )}
     </div>
   )
 }

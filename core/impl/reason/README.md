@@ -146,6 +146,13 @@ is for. It is seeded from `params.readme` at creation and then owned by the
 worker — the point is that after weeks of drifting, the description still says
 what the worker actually became, not what the spawner guessed.
 
+The readme is **identity, not policy**. It answers "what is this worker"; rules,
+policies, standing instructions and step-by-step procedures answer "what must it
+do and how", and belong to **programs** (instruction / playbook content on the
+program worker). A worker that writes its rulebook into the readme has put it
+where the reasoning loop never reads it as a rule: the tool description and the
+system prompt both say so to keep that drift out.
+
 - `worker.readme` (peer-facing) returns the current text, so the recall flow is:
   list/search the roster (directory), then read the readme of the candidates to
   confirm which worker is the right one.

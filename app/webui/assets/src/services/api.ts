@@ -538,3 +538,90 @@ export async function fetchEventsByRequest(requestId: string): Promise<EventPayl
   const res = await fetch(p(`/api/events/by-request/${encodeURIComponent(requestId)}`))
   return res.json()
 }
+
+// AskResult is one answered worker event: the reply's value when the worker
+// completed it, or the rejection message when it failed.
+export interface AskResult {
+  ok: boolean
+  // result is the reply's value — a string stays text, an object reply IS the
+  // payload, anything else rides payload.result (see event.ReplyValue).
+  result?: unknown
+  text?: string
+  error?: string
+}
+
+// askWorker drives a worker over the bus the way a human does: publish an
+// event it watches as HIW (sendWorkerEvent), then poll the by-request index
+// until its request.completed / request.failed answer is persisted. This is the
+// same path the worker detail's readme uses; no worker needs a bespoke HTTP
+// endpoint for the UI to query it.
+async function askWorker(
+  id: string,
+  type: string,
+  payload: Record<string, unknown>,
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<AskResult> {
+  const reqId = await sendWorkerEvent(id, type, payload)
+  if (!reqId) throw new Error('no request id for ' + type)
+  const timeoutMs = opts.timeoutMs ?? 15000
+  const intervalMs = opts.intervalMs ?? 250
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs))
+    const evts = await fetchEventsByRequest(reqId).catch(() => [] as EventPayload[])
+    const reply = evts.find(
+      (e) => e.type === 'request.completed' || e.type === 'request.failed' || e.type === 'request.rejected',
+    )
+    if (!reply) continue
+    const body = reply.payload ?? {}
+    if (reply.type === 'request.completed') {
+      const result = 'result' in body ? body.result : body
+      return { ok: true, result, text: typeof result === 'string' ? result : JSON.stringify(result) }
+    }
+    return { ok: false, error: String(body.error ?? body.reason ?? type + ' rejected') }
+  }
+  throw new Error(type + ' timed out after ' + Math.round(timeoutMs / 1000) + 's')
+}
+
+// ── MCP ──
+//
+// An mcp worker's whole surface is ordinary bus events (mcp.server.list /
+// mcp.server.add / mcp.server.update / mcp.server.remove / mcp.tool.list /
+// mcp.expose), so the UI manages it through the generic ask path above.
+// Mutations connect to the remote server before replying, hence the longer
+// timeout than a pure read.
+
+export function mcpListServers(id: string): Promise<AskResult> {
+  return askWorker(id, 'mcp.server.list', {})
+}
+
+export function mcpListTools(id: string, server: string): Promise<AskResult> {
+  return askWorker(id, 'mcp.tool.list', { server })
+}
+
+export function mcpAddServer(
+  id: string,
+  body: { name: string; url: string; protocol?: string; headers?: Record<string, string> },
+): Promise<AskResult> {
+  return askWorker(id, 'mcp.server.add', body, { timeoutMs: 30000 })
+}
+
+export function mcpUpdateServer(
+  id: string,
+  body: { name: string; url?: string; protocol?: string; headers?: Record<string, string> },
+): Promise<AskResult> {
+  return askWorker(id, 'mcp.server.update', body, { timeoutMs: 30000 })
+}
+
+export function mcpRemoveServer(id: string, name: string): Promise<AskResult> {
+  return askWorker(id, 'mcp.server.remove', { name }, { timeoutMs: 30000 })
+}
+
+// mcpReadExpose reads the live exposure mode; mcpSetExpose switches it.
+export function mcpReadExpose(id: string): Promise<AskResult> {
+  return askWorker(id, 'mcp.expose', {})
+}
+
+export function mcpSetExpose(id: string, mode: string): Promise<AskResult> {
+  return askWorker(id, 'mcp.expose', { mode }, { timeoutMs: 30000 })
+}

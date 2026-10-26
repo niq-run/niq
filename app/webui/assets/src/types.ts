@@ -165,7 +165,28 @@ export interface ApprovalListResult {
   approvals: ApprovalEntry[]
 }
 
-export type ViewMode = 'talk' | 'events' | 'approvals' | 'workers' | 'programs'
+export type ViewMode = 'talk' | 'events' | 'approvals' | 'workers' | 'mcp' | 'programs'
+
+// McpServerInfo is one remote MCP server as mcp.server.list reports it. An mcp
+// worker is an ordinary worker; a single one can front several servers.
+export interface McpServerInfo {
+  name: string
+  url: string
+  protocol?: string
+  // "connected" (a live session) | "configured" (not connected yet)
+  status?: string
+  // Cached tool count; agentic mode only fills it once the tool list is read.
+  tools?: number
+}
+
+// McpToolInfo is one tool as mcp.tool.list reports it: name, description and
+// the JSON-schema of its arguments ("response" is the optional result schema).
+export interface McpToolInfo {
+  name: string
+  description?: string
+  schema?: unknown
+  response?: unknown
+}
 
 // StagedAttachment is one attachment composed in the talk input. Images ride
 // inline as base64; files are uploaded first and referenced by path. On send
