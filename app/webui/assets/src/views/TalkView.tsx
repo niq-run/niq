@@ -122,7 +122,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // Filter events by selected workers.
   const relevantEvents = useMemo(() => {
     return events.filter(evt => {
-      if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort') return false
+      if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort' && evt.type !== 'worker.help') return false
       // Delta / partial events are never rendered as standalone rows. When
       // streaming mode is on they're consumed to build the streaming UI;
       // when off they're dropped entirely — the terminal events (reason.*,

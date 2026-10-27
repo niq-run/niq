@@ -57,8 +57,9 @@ export const en = {
   'sidebar.lang.tooltip': 'switch language',
   'sidebar.resize.tooltip': 'drag to resize, double-click to reset',
   'sidebar.close': 'close',
-  'sidebar.logo.tooltip': 'right-click to invert colours',
-  'sidebar.logo.pattern.tooltip': 'pin pattern — click to swap colours',
+  'sidebar.logo.tooltip': 'click to toggle the project name',
+  'sidebar.logo.pattern.tooltip': 'pin pattern — click to swap colours; right-click flips the logo',
+  'sidebar.logo.pattern.tooltipProject': 'pin pattern — click to swap colours',
 
   // ── Theme + language toggles ──
   'theme.light': 'light',
@@ -437,6 +438,7 @@ export const en = {
   'projects.empty': 'No projects yet. Create one from a template, e.g. {cmd}.',
   'projects.running': 'running',
   'projects.stopped': 'stopped',
+  'projects.statusUnknown': 'status unavailable — restart/stop still work',
   'projects.noProvider': 'No usable model provider configured (api_key empty) — set one up first.',
   'projects.goConfigure': 'Configure providers',
   'projects.createAnyway': 'create anyway',

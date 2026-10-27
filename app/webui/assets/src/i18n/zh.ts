@@ -58,8 +58,9 @@ export const zh: Record<StringKey, string> = {
   'sidebar.lang.tooltip': '切换语言',
   'sidebar.resize.tooltip': '拖动调整宽度，双击重置',
   'sidebar.close': '关闭',
-  'sidebar.logo.tooltip': '右键反转配色',
-  'sidebar.logo.pattern.tooltip': '别针图案 — 点击切换配色',
+  'sidebar.logo.tooltip': '点击切换项目名',
+  'sidebar.logo.pattern.tooltip': '别针图形 — 点击切换配色；右键翻转字标',
+  'sidebar.logo.pattern.tooltipProject': '别针图形 — 点击切换配色',
 
   // ── 主题与语言切换 ──
   'theme.light': '浅色',
@@ -427,6 +428,7 @@ export const zh: Record<StringKey, string> = {
   'projects.empty': '还没有项目。从模板创建一个，例如 {cmd}。',
   'projects.running': '运行中',
   'projects.stopped': '已停止',
+  'projects.statusUnknown': '状态未知 — 仍可重启/停止',
   'projects.noProvider': '未检测到可用的模型供应商（api_key 为空），请先完成配置。',
   'projects.goConfigure': '去配置模型供应商',
   'projects.createAnyway': '仍要创建',

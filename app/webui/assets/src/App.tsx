@@ -483,16 +483,17 @@ export default function App() {
   // would have dropped client-side. Moving it into the request params keeps them
   // off both the SSE tail and the history pages, so pagination counts only real
   // conversation rows and a fresh talk view isn't dominated by hidden noise.
-  // worker.* lifecycle is always hidden (except input/abort); delta partials
-  // are hidden unless streaming is on, because the live stream needs them to
-  // render in-flight thinking/text while history never does.
+  // worker.* lifecycle is always hidden; delta partials are hidden unless
+  // streaming is on, because the live stream needs them to render in-flight
+  // thinking/text while history never does.
   	const talkExclude: string[] = streamingMode ? [] : ['reason.thinking_delta', 'reason.text_delta', 'request.progressed']
   	const talkExcludePrefix = ['worker.']
   	// worker.ready rides along even though the whole worker.* family is hidden:
   	// the worker detail derives its "supported events" from it (and from the
-  	// on-demand worker.discover reply, which IS a worker.ready). The timeline
-  	// still hides it — relevantEvents drops worker.* except input/abort.
-  	const talkKeep = ['worker.input', 'worker.abort', 'worker.ready']
+  	// on-demand worker.discover reply, which IS a worker.ready). worker.help is a
+  	// callable capability like any tool event, so its invocation and reply render
+  	// as a normal card. The timeline still hides the rest of worker.*.
+  	const talkKeep = ['worker.input', 'worker.abort', 'worker.ready', 'worker.help']
 
   useEffect(() => {
     // No project → no event stream.
