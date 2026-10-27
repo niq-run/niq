@@ -160,6 +160,28 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     programs: t('sidebar.programs'),
   }
 
+  // The nav's first section is two groups: what you read (the agent's views) and
+  // what the project is made of (its workers, MCP servers and programs), in that
+  // reading order.
+  const PROJECT_VIEW_MODES: ViewMode[] = ['talk', 'events', 'approvals']
+  const PROJECT_RESOURCE_MODES: ViewMode[] = ['workers', 'mcp', 'programs']
+
+  // One navigable view row. Shared by both groups so they cannot drift apart.
+  const navRow = (v: ViewMode) => (
+    <div
+      key={v}
+      onClick={() => { setView(v); onNavigate() }}
+      onMouseEnter={() => setHoverId('view:' + v)}
+      onMouseLeave={() => setHoverId(null)}
+      style={{ ...hoverStyle('view:' + v), cursor: 'pointer', color: view === v ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
+    >
+      <span style={{ flex: 1 }}>{VIEW_LABELS[v]}{view === v ? ' \u25C9' : ''}</span>
+      {v === 'approvals' && pendingApprovals > 0 && (
+        <span style={{ border: '1px solid ' + colors.accent, color: colors.accent, borderRadius: 2, minWidth: 14, textAlign: 'center', padding: '0 3px', fontSize: 10, lineHeight: '13px', userSelect: 'none' }}>{pendingApprovals}</span>
+      )}
+    </div>
+  )
+
   // ── Logo drag: the logo can be dragged sideways and springs back. Dragging
   // it all the way right toggles a mirror flip that plays out while the logo
   // slides back to its resting position.
@@ -611,24 +633,14 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           flex column + gap reproduces the sidebar's original item spacing. */}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`, display: 'flex', flexDirection: 'column', gap: optGap }}>
 
-      {/* View selector — the three agent views; absent in control mode (no
-          project is attached, so talk/events/workers are unavailable) */}
+      {/* View selector — two groups: the agent views, then the project's own
+          resources. Absent in control mode (no project is attached, so talk /
+          events / workers are unavailable). */}
       {mode === 'project' && (<>
-      <strong style={{ marginTop: 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.views')}</strong>
-      {(Object.keys(VIEW_LABELS) as ViewMode[]).map((v) => (
-        <div
-          key={v}
-          onClick={() => { setView(v); onNavigate() }}
-          onMouseEnter={() => setHoverId('view:' + v)}
-          onMouseLeave={() => setHoverId(null)}
-          style={{ ...hoverStyle('view:' + v), cursor: 'pointer', color: view === v ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
-        >
-          <span style={{ flex: 1 }}>{VIEW_LABELS[v]}{view === v ? ' \u25C9' : ''}</span>
-          {v === 'approvals' && pendingApprovals > 0 && (
-            <span style={{ border: '1px solid ' + colors.accent, color: colors.accent, borderRadius: 2, minWidth: 14, textAlign: 'center', padding: '0 3px', fontSize: 10, lineHeight: '13px', userSelect: 'none' }}>{pendingApprovals}</span>
-          )}
-        </div>
-      ))}
+      <strong style={{ marginTop: 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.projectViews')}</strong>
+      {PROJECT_VIEW_MODES.map(navRow)}
+      <strong style={{ marginTop: 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.projectResources')}</strong>
+      {PROJECT_RESOURCE_MODES.map(navRow)}
 
       {/* Worker selector list — hidden in the workers view (the main area IS
           the worker list there) and in the programs view (program browsing
