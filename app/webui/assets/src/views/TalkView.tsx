@@ -218,12 +218,25 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     <ViewHeader
       title={t('nav.talk')}
       right={
-        <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
-          {t('talk.watching')} <strong style={{ color: colors.textDim }}>{
-            talkWorkers.size > 0
-              ? `[${[...talkWorkers].join(', ')}]`
-              : t('events.allWorkers')
-          }</strong>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 4, fontSize: fontSizes.sm, color: colors.textMuted }}>
+          {t('talk.watching')}
+          {talkWorkers.size > 0 ? (
+            // One token per watched worker, matching how recipients are drawn
+            // (a comma-joined string hides how many there are at a glance).
+            [...talkWorkers].map(id => (
+              <span
+                key={id}
+                style={{
+                  background: colors.bgChip, borderRadius: 2, padding: '0 6px',
+                  lineHeight: '18px', color: colors.accent, whiteSpace: 'nowrap',
+                }}
+              >
+                {id}
+              </span>
+            ))
+          ) : (
+            <strong style={{ color: colors.textDim }}>{t('events.allWorkers')}</strong>
+          )}
         </span>
       }
     />

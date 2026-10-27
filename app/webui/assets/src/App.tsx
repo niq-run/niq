@@ -11,7 +11,7 @@ import ProvidersView from './views/ProvidersView'
 import ProgramsView from './views/ProgramsView'
 import McpView from './views/McpView'
 import ViewHeader from './components/ViewHeader'
-import { leadingMentions, mentionsIn } from './components/talk-utils'
+import { leadingMentions, mentionsIn, mergeTargets } from './components/talk-utils'
 import ApprovalsView from './views/ApprovalsView'
 import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
@@ -145,14 +145,14 @@ function stampNow(): string {
 // When several workers are addressed, the reminder carries one extra line
 // saying so. Each target gets the same event, so without it a recipient would
 // assume it is the only one being asked; the note tells the model that the
-// others were addressed too and that their replies arrive separately. It rides
-// in the same block as the timestamp (the UI extracts only the first) and is
-// model-facing, so it stays in English regardless of the UI language.
+// others were addressed too. It rides in the same block as the timestamp (the UI
+// extracts only the first) and is model-facing, so it stays in English
+// regardless of the UI language.
 function composeInput(text: string, attachments: StagedAttachment[], targets: string[]): InputContent[] {
   const content: InputContent[] = []
   const note = [stampNow()]
   if (targets.length > 1) {
-    note.push(`This message was addressed to ${targets.length} workers: ${targets.map(id => '@' + id).join(', ')}.\nEach of them received this same message; their replies arrive separately.`)
+    note.push(`This message was addressed to ${targets.length} workers: ${targets.map(id => '@' + id).join(', ')}.\nEach of them received this same message.`)
   }
   const reminder = `<system-reminder>\n${note.join('\n')}\n</system-reminder>`
   const body = text.trim()
@@ -780,11 +780,21 @@ export default function App() {
     return !!w && isTalkPartnerType(w.type)
   }, [workers])
 
-  // Default recipients: the workers checked in the sidebar selector. They are
-  // who a message goes to when its text names nobody — but they are NOT written
-  // into the input: the box only ever holds what the user typed (an @mention
-  // included, once they type one).
+  // The message's target set — who the next send goes to. It is its own state:
+  // the worker selector seeds it (one-way) whenever that selection changes, and
+  // the input's recipient picker edits it. Picking a recipient here must NOT
+  // reach back into the selector — they are different things (the selector is
+  // the conversation you are watching, the target is who this message is for).
+  const [targets, setTargets] = useState<string[]>([])
+
+  // Default recipients: the workers checked in the sidebar selector.
   const defaultTargets = useMemo(() => [...talkWorkers].filter(isPartnerId), [talkWorkers, isPartnerId])
+  // Seed/reset the target set once per selection change. Keyed by the joined ids
+  // so a background workers poll (which recreates the array) is not a change.
+  const selectionKey = defaultTargets.join(',')
+  useEffect(() => {
+    setTargets(defaultTargets)
+  }, [selectionKey])
 
   // A fleet with exactly one addressable worker has no choice to make, so that
   // worker is selected by default: the talk scope and the input's @-prefix both
@@ -830,13 +840,13 @@ export default function App() {
 
   const sendMessage = useCallback(() => {
     if (sending) return
-    // Recipients: the workers the text @-mentions, or — when it names nobody —
-    // the sidebar selection. A send that resolves to neither is refused: with
-    // no addressee there is nowhere for it to go (no broadcast path).
+    // Recipients: the target set plus whatever the text @-mentions — typing
+    // appends (de-duplicated), it does not replace the set. A send that still
+    // resolves to nobody is refused: with no addressee there is nowhere for it
+    // to go (no broadcast path).
     const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
     const isKnown = (id: string) => reasonWorkers.some(r => r.id === id)
-    const typed = mentionsIn(input, isKnown)
-    const msgTargets = typed.length > 0 ? typed : defaultTargets
+    const msgTargets = mergeTargets(targets, mentionsIn(input, isKnown))
     const msgText = leadingMentions(input).rest.trim()
     if (msgTargets.length === 0 || (!msgText && attachments.length === 0)) return
     setSending(true)
@@ -854,35 +864,35 @@ export default function App() {
     }).catch(() => {
       setSending(false)
     })
-  }, [input, currentInputMode, sending, workers, attachments, defaultTargets])
+  }, [input, currentInputMode, sending, workers, attachments, targets])
 
   const handleAbort = useCallback(() => {
     const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
     const isReason = (id: string) => reasonWorkers.some(r => r.id === id)
-    // Stop what the input is addressing: every worker @-mentioned there. That
-    // is the same set a send would go to, so Stop no longer stops some other
-    // worker than the one being talked to. With no @ in the draft (e.g. right
-    // after a send cleared it) fall back to the last addressee, then a selected
-    // worker, then the first reason worker.
-    const addressed = mentionsIn(input, isReason)
-    let targets = addressed
-    if (targets.length === 0) {
+    // Stop what the input is addressing: the same recipient set a send would go
+    // to — the target set plus whatever the draft @-mentions. With neither,
+    // fall back to the last addressee, then a selected worker, then the first
+    // reason worker.
+    const addressed = mergeTargets(targets, mentionsIn(input, isReason))
+    let stopTargets = addressed
+    if (stopTargets.length === 0) {
       const fallback = isReason(mentionTarget)
         ? mentionTarget
         : ([...talkWorkers].find(isReason) ?? reasonWorkers[0]?.id ?? '')
-      targets = fallback ? [fallback] : []
+      stopTargets = fallback ? [fallback] : []
     }
-    for (const id of targets) abortWorker(id)
-  }, [workers, mentionTarget, talkWorkers, input])
+    for (const id of stopTargets) abortWorker(id)
+  }, [workers, mentionTarget, talkWorkers, input, targets])
 
-  // Sidebar worker selector (talk view): multi-select toggle. On each selection
-  // change we keep the talk (mention) target aligned with the selection boundary
-  // cases the toggle can produce:
-  //   * single selection      -> target = that single worker
-  //   * empty selection       -> clear the target (no worker is watched; a stale
-  //                              target would silently keep routing sends/aborts)
-  //   * multi-selection       -> leave a manual target alone (it may point at a
-  //                              worker outside the watched set by design)
+  // Sidebar worker selector (talk view): multi-select toggle. This also keeps
+  // `mentionTarget` — the worker the input-mode selector and the abort fallback
+  // are anchored on (NOT the message's target set: that is `targets`, seeded
+  // separately from this selection) — sensible across the boundary cases:
+  //   * single selection -> mentionTarget = that single worker
+  //   * empty selection  -> clear it (a stale value would keep steering the
+  //                         input mode / abort at a worker nobody watches)
+  //   * multi-selection  -> leave a manual value alone (it may point outside the
+  //                         watched set by design)
   // The critical detail: when a deselect changes a pair {A,B} into the single B,
   // the toggled id is the *removed* A — so the target must be the worker actually
   // left in the set, i.e. next's sole element, not the toggled id.
@@ -1403,7 +1413,8 @@ export default function App() {
               workers={workers}
               archived={archived}
               mentionKey={mentionKey}
-              defaultTargets={defaultTargets}
+              targets={targets}
+              onTargetsChange={setTargets}
               isMobile={isMobile}
               attachments={attachments}
               onAttachmentsChange={setAttachments}

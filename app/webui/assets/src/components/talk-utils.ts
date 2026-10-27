@@ -26,6 +26,18 @@ export function mentionsIn(text: string, isKnown: (id: string) => boolean): stri
   return out
 }
 
+// mergeTargets unions two recipient lists, keeping first-seen order and
+// dropping duplicates. Typing an @mention appends to the recipient set rather
+// than replacing it, so a draft can add to the sidebar selection without
+// silently dropping it.
+export function mergeTargets(base: string[], extra: string[]): string[] {
+  const out = [...base]
+  for (const id of extra) {
+    if (!out.includes(id)) out.push(id)
+  }
+  return out
+}
+
 // leadingMentions splits the addressing prefix off a message: the run of
 // @-tokens at its head, plus the body that follows. This is structural — it
 // takes any @token, without consulting the worker list — so a body can be

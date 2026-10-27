@@ -4,7 +4,7 @@ import { useI18n } from '../i18n'
 import PickerDropdown, { type PickerOption } from './PickerDropdown'
 import { uploadFile } from '../services/api'
 import { isTalkPartnerType, type StagedAttachment, type WorkerInfo } from '../types'
-import { mentionsIn, leadingMentions } from './talk-utils'
+import { mentionsIn, leadingMentions, mergeTargets } from './talk-utils'
 
 // Attachment limits: images ride inline as base64, files go through
 // /api/upload and only their path enters the input.
@@ -73,9 +73,10 @@ interface TalkInputProps {
   workers: WorkerInfo[]
   archived: Set<string>
   mentionKey: number
-  // Default recipients: the workers checked in the sidebar selector. Used when
-  // the draft @-mentions nobody. They are never written into the input text.
-  defaultTargets: string[]
+  // The message's target set (its own state, owned by App): the worker selector
+  // seeds it, the recipient picker edits it. Never written into the draft.
+  targets: string[]
+  onTargetsChange: (next: string[]) => void
   isMobile: boolean
   // Attachments staged for the next send: pasted/picked images (inline
   // base64) and uploaded files (referenced by path).
@@ -89,7 +90,7 @@ interface TalkInputProps {
   onFocus?: () => void
 }
 
-export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, defaultTargets, isMobile, attachments, onAttachmentsChange, onFocus }: TalkInputProps) {
+export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, targets, onTargetsChange, isMobile, attachments, onAttachmentsChange, onFocus }: TalkInputProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -97,6 +98,14 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   // The @mention picker is the only picker the input opens: it addresses the
   // message to one or more workers. There is no "target"/broadcast mode — a
   // send always needs at least one recipient.
+  // Which list the open picker edits:
+  //   'text'   — the @token being typed; a pick rewrites the draft (that is how
+  //              a typed mention is completed).
+  //   'target' — opened from the recipient chip; a pick edits the recipient set
+  //              (the same set the sidebar checkboxes drive) and leaves the
+  //              draft alone, so choosing who to address never puts text in the
+  //              box.
+  const [pickerFor, setPickerFor] = useState<'text' | 'target'>('text')
   const [pickerOpen, setPickerOpen] = useState(false)
   // Live query for the worker picker's search box (seeded from the @token being
   // typed); used to filter the dropdown.
@@ -259,6 +268,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     const beforeCursor = val.slice(0, cursorPos)
     const atMatch = beforeCursor.match(/@([\w.-]*)$/)
     if (atMatch) {
+      setPickerFor('text')
       setPickerOpen(true)
       setPickerQuery(atMatch[1].toLowerCase())
       setMentionIndex(0)
@@ -272,6 +282,15 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   // show exactly who will receive it and the picker can check them off.
   const isPartnerId = useCallback((id: string) => partners.some(w => w.id === id), [partners])
   const mentioned = useMemo(() => mentionsIn(input, isPartnerId), [input, isPartnerId])
+
+  // Recipients: the target set plus whatever the draft @-mentions. Typing an @
+  // appends to the set (de-duplicated) instead of replacing it, so the chip
+  // always shows the full set the message will go to.
+  const typedTargets = mentioned
+  const recipients = mergeTargets(targets, typedTargets)
+  // What the picker's checkmarks reflect: a typed mention being completed, or
+  // the recipient set the chip edits (target set plus typed mentions).
+  const checkedTargets = pickerFor === 'target' ? recipients : typedTargets
 
   // A send with nobody addressed is refused, and saying why needs somewhere
   // visible: the Send button can carry a hover tooltip, but Enter has no hover,
@@ -315,12 +334,35 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     onInputChange(next.trimStart())
   }
 
-  // Commit a picker selection. Enter commits without toggling (choosing a row
-  // should never take a mention away); a click toggles, so the picker doubles
-  // as a multi-select editor.
+  // Removing a recipient takes it out of every place it lives — the target set
+  // and the draft — so one uncheck really drops it (a worker can be both in the
+  // target set and @-typed into the draft).
+  const removeTarget = (id: string) => {
+    if (targets.includes(id)) onTargetsChange(targets.filter(x => x !== id))
+    if (mentioned.includes(id)) removeMention(id)
+  }
+
+  // Adding one extends the target set only — it does not touch the sidebar
+  // selector's range, which is a different thing (what you are watching).
+  const addTarget = (id: string) => {
+    if (!targets.includes(id)) onTargetsChange([...targets, id])
+  }
+
+  // Commit a picker selection. Completing a typed mention rewrites the draft;
+  // picking a recipient edits the target set instead. Enter commits without
+  // toggling, a click toggles.
   const commitPicker = (id: string, toggle = true) => {
-    if (toggle && mentioned.includes(id)) removeMention(id)
-    else if (!mentioned.includes(id)) insertMention(id)
+    if (pickerFor === 'target') {
+      if (checkedTargets.includes(id)) {
+        if (toggle) removeTarget(id)
+      } else {
+        addTarget(id)
+      }
+    } else if (toggle && mentioned.includes(id)) {
+      removeMention(id)
+    } else if (!mentioned.includes(id)) {
+      insertMention(id)
+    }
     setPickerOpen(false)
     setPickerQuery('')
   }
@@ -370,7 +412,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
       e.preventDefault()
       // Nothing addressed means nothing to send: say so instead of swallowing
       // the keystroke. (An addressed but empty draft is just a no-op.)
-      if (targets.length === 0) {
+      if (recipients.length === 0) {
         flashNoTarget()
         return
       }
@@ -436,9 +478,35 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           workers.push(w)
         })
     } else {
-      const tagged = pickableShown.filter(w => (w.tags?.length ?? 0) > 0)
+      // In the recipient picker the workers already addressed come first, under
+      // a "selected" header (in the chip's order, so the two line up) — unchecking
+      // one should not mean hunting for it among the tag groups below.
+      const picked = pickerFor === 'target'
+        ? checkedTargets
+            .map(id => pickableShown.find(w => w.id === id))
+            .filter((w): w is WorkerInfo => !!w)
+        : []
+      if (picked.length > 0) {
+        emitGroup(t('picker.group.selected'))
+        for (const w of picked) {
+          const primary = w.tags?.[0]
+          const secondary = w.description || primary
+          opts.push({
+            id: w.id,
+            label: w.id,
+            sublabel: w.type,
+            indent: primary ? Math.min(primary.split('/').length - 1, 3) : undefined,
+            hint: secondary,
+            description: secondary,
+          })
+          workers.push(w)
+        }
+      }
+      const pickedIds = new Set(picked.map(w => w.id))
+      const rest = pickableShown.filter(w => !pickedIds.has(w.id))
+      const tagged = rest.filter(w => (w.tags?.length ?? 0) > 0)
         .slice().sort((a, b) => a.tags![0].localeCompare(b.tags![0]))
-      const untagged = pickableShown.filter(w => !w.tags?.length)
+      const untagged = rest.filter(w => !w.tags?.length)
       for (const w of tagged) {
         const primary = w.tags![0]
         const segs = primary.split('/')
@@ -473,26 +541,26 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
       activeOptionIndex = opts.findIndex(o => !o.isGroup && o.id === workers[idx].id)
     }
     return { opts, workers, activeOptionIndex }
-  }, [pickableShown, pickerQuery, mentionIndex, t])
+  }, [pickableShown, pickerQuery, mentionIndex, pickerFor, checkedTargets, t])
   const pickList = pickerGroup.opts
 
-  // Recipients: an @mention in the draft wins (that is explicit addressing);
-  // otherwise the sidebar selection is the default — shown in the chip, but
-  // never written into the text. With neither there is nobody to send to.
-  const typedTargets = mentioned
-  const targets = typedTargets.length > 0 ? typedTargets : defaultTargets
-  const usingDefault = typedTargets.length === 0 && defaultTargets.length > 0
+  // Recipients: the target set plus whatever the draft @-mentions.
   const body = leadingMentions(input).rest.trim()
-  const canSend = targets.length > 0 && (body !== '' || attachments.length > 0)
-  // Chip label: who will receive it, or a prompt to pick someone.
-  const targetsLabel = targets.length > 0
-    ? targets.map(id => '@' + id).join(', ')
+  const canSend = recipients.length > 0 && (body !== '' || attachments.length > 0)
+  // Chip content: one token per recipient, capped so a big selection cannot
+  // stretch the action row (the overflow becomes "+N"). The tooltip always
+  // carries the full list.
+  const maxTokens = isMobile ? 1 : 2
+  const shownTargets = recipients.slice(0, maxTokens)
+  const hiddenTargets = recipients.length - shownTargets.length
+  const targetsLabel = recipients.length > 0
+    ? recipients.map(id => '@' + id).join(' · ')
     : t('talk.input.noTarget')
   // A recipient appearing (typed @, or a worker checked in the sidebar) answers
   // the refusal hint, so it goes away at once.
   useEffect(() => {
-    if (targets.length > 0) setNoTargetHint(false)
-  }, [targets.length])
+    if (recipients.length > 0) setNoTargetHint(false)
+  }, [recipients.length])
 
   // Input-mode selector options. Descriptions condensed from pkg/reason:
   //   schedule  = level 1 (only when idle; least intrusive)
@@ -515,21 +583,50 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const targetChip = (
     <div style={{ position: 'relative', display: 'flex', minWidth: 0, ...(isMobile ? { flexShrink: 1 } : { marginRight: 'auto' }) }}>
         <span
-          onClick={(e) => { e.stopPropagation(); setPickerQuery(''); setMentionIndex(0); setPickerOpen(v => !v) }}
-          title={targets.length > 0
-            ? t(usingDefault ? 'talk.input.defaultTargets.tooltip' : 'talk.input.targets.tooltip', { targets: targetsLabel })
+          onClick={(e) => {
+            e.stopPropagation()
+            // The chip shows the whole recipient set, so the picker edits that
+            // set — the draft is only touched to drop a typed mention.
+            setPickerFor('target')
+            setPickerQuery('')
+            setMentionIndex(0)
+            setPickerOpen(v => !v)
+          }}
+          title={recipients.length > 0
+            ? t('talk.input.targets.tooltip', { targets: targetsLabel })
             : t('talk.input.noTarget.tooltip')}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: actionFont, lineHeight: '20px',
-            color: targets.length > 0 ? colors.accent : colors.textDimmed,
-            border: '1px solid ' + (targets.length > 0 ? colors.accentBorder : colors.border),
+            color: recipients.length > 0 ? colors.accent : colors.textDimmed,
+            border: '1px solid ' + (recipients.length > 0 ? colors.accentBorder : colors.border),
             borderRadius: 2, padding: '4px 10px', cursor: 'pointer', userSelect: 'none',
           }}
         >
-          {/* Wrap the label so long / multiple worker ids truncate instead of
-              widening the chip past the mobile button row. */}
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: isMobile ? '14ch' : undefined }}>
-            {targetsLabel}
+          {/* Recipients as tokens rather than a comma-separated string. The
+              group clips (never wraps) so the mobile button row keeps its
+              height; the tooltip lists every recipient. */}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0, overflow: 'hidden' }}>
+            {recipients.length === 0 ? (
+              <span style={{ whiteSpace: 'nowrap' }}>{t('talk.input.noTarget')}</span>
+            ) : (
+              <>
+                {shownTargets.map(id => (
+                  <span
+                    key={id}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 1,
+                      background: colors.bgChip, borderRadius: 2, padding: '0 6px',
+                      lineHeight: '18px', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    <span style={{ color: colors.textDimmed }}>@</span>{id}
+                  </span>
+                ))}
+                {hiddenTargets > 0 && (
+                  <span style={{ color: colors.textDimmed, whiteSpace: 'nowrap' }}>+{hiddenTargets}</span>
+                )}
+              </>
+            )}
           </span>
         </span>
 
@@ -556,9 +653,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         {pickerOpen && (
           <div style={{ position: 'absolute', left: 0, bottom: '100%', marginBottom: 4, zIndex: 100 }}>
             <PickerDropdown
-              header={t('picker.mention')}
+              header={pickerFor === 'target' ? t('picker.targets') : t('picker.mention')}
               options={pickList}
-              selectedIds={mentioned}
+              selectedIds={checkedTargets}
               activeIndex={pickerGroup.activeOptionIndex}
               onSelect={commitPicker}
               width={isMobile ? 480 : 240}
@@ -753,12 +850,12 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             silently swallow the press), and the tooltip says so on hover. */}
         <button
           onClick={() => {
-            if (targets.length === 0) { flashNoTarget(); return }
+            if (recipients.length === 0) { flashNoTarget(); return }
             if (!canSend) return
             onSend()
           }}
           aria-disabled={!canSend}
-          title={canSend ? undefined : targets.length === 0 ? t('talk.input.send.blocked') : undefined}
+          title={canSend ? undefined : recipients.length === 0 ? t('talk.input.send.blocked') : undefined}
           className={canSend ? 'btn-send' : undefined}
           style={{
             background: 'none',

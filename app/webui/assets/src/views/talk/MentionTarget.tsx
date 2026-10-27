@@ -35,12 +35,19 @@ export default function MentionTarget({ id, ctx }: { id: string; ctx: RowCtx }) 
       title={mentionable ? t('badge.mention.tip') : undefined}
       className={mentionable ? 'badge-mention' : undefined}
       style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 1,
         fontSize: fontSizes.sm,
         color: colors.accent,
         cursor: mentionable ? 'pointer' : (hasMenu ? 'context-menu' : 'default'),
+        whiteSpace: 'nowrap',
         ...contextMenuElementStyle,
       }}
     >
+      {/* Just "@name" — a message header should read as text, not as a row of
+          boxed tokens. */}
+      <span style={{ color: colors.textDimmed }}>@</span>
       {displayName(id)}
       {menu && (
         <WorkerBadgeMenu

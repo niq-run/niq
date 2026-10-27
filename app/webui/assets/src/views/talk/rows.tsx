@@ -2,7 +2,7 @@
 // WorkerBadge (speaker label) and the RowCtx carrying the colors/l10n/lookups/
 // callbacks they read. TalkView computes the cheap per-row facts (alignment +
 // whether to show the avatar) and hands each event to the matching row.
-import { memo, Fragment } from 'react'
+import { memo } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { fontSizes } from '../../theme'
@@ -75,19 +75,15 @@ function InputRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
           boxSizing: 'border-box',
         }}
       >
-        <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap', rowGap: 4 }}>
           {targets.length > 0 ? (
             <>
               <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold' }}>{ctx.displayName(evt.worker_id)}</span>
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>@</span>
-              {/* Every addressee, so a multi-worker send reads at a glance.
-                  Click = mention (same as a sender badge); right-click =
-                  the worker menu. */}
-              {targets.map((id, i) => (
-                <Fragment key={id}>
-                  {i > 0 && <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>,</span>}
-                  <MentionTarget id={id} ctx={ctx} />
-                </Fragment>
+              {/* One "@name" per addressee — plain text, no boxes. Click =
+                  mention (same as a sender badge); right-click = the worker
+                  menu. */}
+              {targets.map(id => (
+                <MentionTarget key={id} id={id} ctx={ctx} />
               ))}
             </>
           ) : (
@@ -142,14 +138,9 @@ function AbortRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
           color: colors.textDim,
         }}
       >
-        <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6, justifyContent: alignRight ? 'flex-end' : 'flex-start', flexWrap: 'wrap', rowGap: 4 }}>
           <span style={{ fontSize: fontSizes.sm, color: colors.accent, fontWeight: 'bold' }}>{ctx.displayName(evt.worker_id)}</span>
-          {target && (
-            <>
-              <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>@</span>
-              <MentionTarget id={target} ctx={ctx} />
-            </>
-          )}
+          {target && <MentionTarget id={target} ctx={ctx} />}
           <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
         </div>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} title={t('talk.abort.hint')}>
