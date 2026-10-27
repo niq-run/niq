@@ -19,9 +19,12 @@ interface EventDetailProps {
   canGoBack?: boolean;
   onBack?: () => void;
   onFindPair?: () => void;
+  // Filter the event stream down to this trace (the caller sets the filter and
+  // switches to the events view).
+  onTraceClick?: (traceId: string) => void;
 }
 
-export default function EventDetail({ evt, deliveries, onClose, canGoBack, onBack, onFindPair }: EventDetailProps) {
+export default function EventDetail({ evt, deliveries, onClose, canGoBack, onBack, onFindPair, onTraceClick }: EventDetailProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   const time = formatTime(evt.timestamp)
@@ -125,7 +128,13 @@ export default function EventDetail({ evt, deliveries, onClose, canGoBack, onBac
         <div style={{ padding: "10px 12px", background: colors.detailBg, borderRadius: 6, fontSize: fontSizes.base }}>
           <div style={{ display: "flex", flexDirection: "column" }}>
             <DetailRow label={t('detail.id')} value={evt.id} colors={colors} />
-            <DetailRow label={t('detail.traceId')} value={evt.trace_id || t('detail.none')} colors={colors} />
+            <DetailRow
+              label={t('detail.traceId')}
+              value={evt.trace_id || t('detail.none')}
+              colors={colors}
+              onClick={onTraceClick && evt.trace_id ? () => onTraceClick(evt.trace_id) : undefined}
+              title={onTraceClick && evt.trace_id ? t('detail.trace.tooltip') : undefined}
+            />
             {evt.request_id && (
               <DetailRow label={t('detail.requestId')} value={evt.request_id} colors={colors} />
             )}
