@@ -561,7 +561,8 @@ export const en = {
   // ── Event detail ──
   'detail.close.tooltip': 'close',
   'detail.id': 'ID',
-  'detail.traceId': 'TraceID',
+  'detail.traceId': 'trace',
+  'detail.trace.tooltip': 'show only the events in this trace',
   'detail.requestId': 'RequestID',
   'detail.back': 'Back',
   'detail.back.tooltip': 'return to the previous event',

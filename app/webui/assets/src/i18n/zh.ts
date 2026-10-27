@@ -550,6 +550,7 @@ export const zh: Record<StringKey, string> = {
   'detail.close.tooltip': '关闭',
   'detail.id': 'ID',
   'detail.traceId': '调用链 ID',
+  'detail.trace.tooltip': '只看这条调用链下的事件',
   'detail.requestId': '请求 ID',
   'detail.back': '返回',
   'detail.back.tooltip': '返回上一个事件',

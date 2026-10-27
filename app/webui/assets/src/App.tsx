@@ -224,6 +224,10 @@ export default function App() {
   // deep link ("Readme") and a plain open are the same state transition.
   const [detailOverlayTab, setDetailOverlayTab] = useState<WorkerDetailTab | null>(null)
   const [detailWidth, setDetailWidth] = useState<number>(detailDefaultWidth)
+  // Worker detail drawer: the same wide default the program drawer uses ('80%' of
+  // the container, which also follows window resizes). A readme is prose and
+  // benefits from the room; dragging snaps it to a pixel width.
+  const [workerDetailWidth, setWorkerDetailWidth] = useState<number | string>('80%')
   const detailDraggedRef = useRef(false)
   const [deliveries, setDeliveries] = useState<Record<string, string[]>>({})
   // Selected talk worker(s), restored from the URL (?talk=id1,id2) so a refresh
@@ -1465,7 +1469,7 @@ export default function App() {
                   					/>
                   				</MobileDetailPanel>
                   			  ) : (
-				                <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
+				                <ResizablePanel width={workerDetailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={setWorkerDetailWidth}>
 				                  <WorkerDetail
 				                    worker={selectedWorker}
 				                    allWorkers={workers}
@@ -1578,11 +1582,11 @@ export default function App() {
             {detailEvt && view === 'events' && (
               isMobile ? (
                 <MobileDetailPanel>
-                  <EventDetail evt={detailEvt} deliveries={deliveries} canGoBack={detailStack.length > 0} onBack={handleDetailBack} onFindPair={handleFindRequestPair} onClose={() => { setSelectedEventId(null); setDetailEvt(null) }} />
+                  <EventDetail evt={detailEvt} deliveries={deliveries} canGoBack={detailStack.length > 0} onBack={handleDetailBack} onFindPair={handleFindRequestPair} onTraceClick={handleTraceClick} onClose={() => { setSelectedEventId(null); setDetailEvt(null) }} />
                 </MobileDetailPanel>
               ) : (
                 <ResizablePanel width={detailWidth} minWidth={DETAIL_MIN_WIDTH} onWidthChange={handlePanelResize}>
-                  <EventDetail evt={detailEvt} deliveries={deliveries} canGoBack={detailStack.length > 0} onBack={handleDetailBack} onFindPair={handleFindRequestPair} onClose={() => { setSelectedEventId(null); setDetailEvt(null) }} />
+                  <EventDetail evt={detailEvt} deliveries={deliveries} canGoBack={detailStack.length > 0} onBack={handleDetailBack} onFindPair={handleFindRequestPair} onTraceClick={handleTraceClick} onClose={() => { setSelectedEventId(null); setDetailEvt(null) }} />
                 </ResizablePanel>
               )
             )}
