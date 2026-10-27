@@ -17,20 +17,16 @@ export interface PickerOption {
   indent?: number
 }
 
-export interface PickerFooter {
-  label: string
-  checked: boolean
-  onChoose: () => void
-}
-
 interface PickerDropdownProps {
   header: string
   options: PickerOption[]
   selectedId?: string
+  // selectedIds checks off several rows at once (the multi-worker mention
+  // picker); selectedId stays the single-selection spelling.
+  selectedIds?: string[]
   activeIndex?: number
   onSelect: (id: string) => void
   onActivate?: (index: number) => void
-  footer?: PickerFooter
   width?: number
   // Optional live search: when both are provided the dropdown renders a search
   // box under the header. The caller owns the query state and passes the already
@@ -51,10 +47,10 @@ export default function PickerDropdown({
   header,
   options,
   selectedId,
+  selectedIds,
   activeIndex,
   onSelect,
   onActivate,
-  footer,
   width = 240,
   searchValue,
   onSearchValueChange,
@@ -90,15 +86,6 @@ export default function PickerDropdown({
         {text.slice(end)}
       </>
     )
-  }
-
-  const rowBase: React.CSSProperties = {
-    padding: '7px 12px',
-    cursor: 'pointer',
-    fontSize: fontSizes.base,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
   }
 
   // Rows rely on the CSS :hover for their hover background. We must NOT paint
@@ -187,7 +174,7 @@ export default function PickerDropdown({
         </div>
       )}
       {options.map((opt, i) => {
-        const selected = selectedId !== undefined && selectedId === opt.id
+        const selected = selectedIds ? selectedIds.includes(opt.id) : (selectedId !== undefined && selectedId === opt.id)
         const active = activeIndex === i
         // Group headers are inert structural rows: no selection, no hover
         // affordance, no check column.
@@ -285,22 +272,6 @@ export default function PickerDropdown({
           </div>
         )
       })}
-      {footer && (
-        <div
-          className="picker-row"
-          onClick={footer.onChoose}
-          style={{
-            ...rowBase,
-            color: colors.textDimmed,
-            borderTop: '1px solid ' + colors.border,
-            fontStyle: 'italic',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{footer.label}</span>
-          {footer.checked && <span style={{ marginLeft: 'auto', color: colors.accent }}>✓</span>}
-        </div>
-      )}
     </div>
     </>
   )

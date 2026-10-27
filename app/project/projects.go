@@ -79,11 +79,8 @@ func CreateProject(id, templateName string, template *TemplateConfig) (*Project,
 		return nil, err
 	}
 	if templateName != "" {
-		src := TemplateProgramsDir(TemplatesDir(), templateName)
-		if _, err := os.Stat(src); err == nil {
-			if err := CopyDir(src, ProjectProgramsDir(id)); err != nil {
-				return nil, fmt.Errorf("project: copy template programs: %w", err)
-			}
+		if _, err := CopyTemplatePrograms(TemplatesDir(), templateName, ProjectProgramsDir(id)); err != nil {
+			return nil, fmt.Errorf("project: copy template programs: %w", err)
 		}
 	}
 	return p, nil

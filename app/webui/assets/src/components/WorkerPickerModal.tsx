@@ -2,7 +2,7 @@ import { useState, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { isTalkPartnerType, type WorkerInfo } from '../types'
+import { isTalkPartnerType, type WorkerInfo, type WorkerDetailTab } from '../types'
 import TagFilterDropdown from './TagFilterDropdown'
 import WorkerRowMenu from './WorkerRowMenu'
 import PinMark from './PinMark'
@@ -21,6 +21,9 @@ interface WorkerPickerModalProps {
   // Optional right-click "mention" action: prefixes the talk input with an
   // @mention for the worker (let App's handleMention do it).
   onMention?: (id: string) => void
+  // Optional right-click view entries (details / readme), matching the sidebar
+  // row menu and the talk badge menu.
+  onOpenDetail?: (id: string, tab?: WorkerDetailTab) => void
 }
 
 // A row in the modal's grouped list.
@@ -29,7 +32,7 @@ interface Row { kind: 'group' | 'worker'; key: string; group: string; indent?: n
 // WorkerPickerModal is the expanded worker selector: a centered dialog with a
 // search box, tag-grouped rows (slash tags nest by depth) and per-row toggle.
 // It is where you pick when the sidebar's inline checklist gets crowded.
-export default function WorkerPickerModal({ title, workers, selected, onToggle, onClose, isMobile, onMention }: WorkerPickerModalProps) {
+export default function WorkerPickerModal({ title, workers, selected, onToggle, onClose, isMobile, onMention, onOpenDetail }: WorkerPickerModalProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const [query, setQuery] = useState('')
@@ -375,6 +378,8 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
           slept={sleptIds.includes(menu.id)}
           mentionable={menuMentionable}
           onMention={() => onMention?.(menu.id)}
+          onDetail={onOpenDetail ? () => onOpenDetail(menu.id) : undefined}
+          onReadme={onOpenDetail ? () => onOpenDetail(menu.id, 'readme') : undefined}
           onTogglePin={() => togglePinned(menu.id)}
           onToggleSleep={() => toggleSlept(menu.id)}
           onClose={() => setMenu(null)}

@@ -1,5 +1,6 @@
 // Package host provides the HostWorker — the bus-facing worker that exposes
-// spawn/suspend/resume tools for managing other workers' lifecycles.
+// spawn/suspend/resume tools for managing other workers' lifecycles, plus the
+// generic worker.readme and worker.help capabilities.
 //
 // HostWorker is deliberately thin: it handles the bus protocol (tool
 // invocation events, replies) and forwards lifecycle operations to
@@ -30,6 +31,9 @@ type Config struct {
 	ID     string
 	Bus    corebus.WorkerSideChannel // data-plane client
 	Engine *workerhost.WorkerService
+	// Params is the declaration's construction params, read only for the
+	// optional readme/readme_append guide customization (see RegisterReadme).
+	Params map[string]any
 }
 
 // HostWorker is a bus-facing worker that manages other worker lifecycles.
@@ -39,6 +43,7 @@ type Config struct {
 type HostWorker struct {
 	baseworker.BaseWorker
 	engine  *workerhost.WorkerService
+	params  map[string]any
 	started bool
 	cancel  context.CancelFunc
 	mu      sync.Mutex
@@ -53,8 +58,11 @@ func New(cfg Config) *HostWorker {
 	w := &HostWorker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		engine:     cfg.Engine,
+		params:     cfg.Params,
 	}
 	w.registerExtensions()
+	w.registerReadme()
+	w.registerHelp()
 	return w
 }
 

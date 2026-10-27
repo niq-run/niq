@@ -15,6 +15,13 @@ export const EventType = {
   WorkerDiscover: "worker.discover",
   WorkerInput: "worker.input",
   WorkerAbort: "worker.abort",
+  /** Ask a worker to describe itself: its own usage guide (mirrors worker.readme). */
+  WorkerReadme: "worker.readme",
+  /**
+   * Ask a worker for help on ONE of the events it serves, like a CLI's `-h`.
+   * `event_name` selects the event; `params` may select a more specific guide.
+   */
+  WorkerHelp: "worker.help",
 
   // Worker meta invocation channels. Some extensions still register these
   // (their op/subject payloads discriminate); reason's own meta capabilities

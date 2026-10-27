@@ -12,17 +12,22 @@ interface WorkerRowMenuProps {
   // onMention prefixes the input with an @mention for that worker.
   mentionable?: boolean
   onMention?: () => void
-  // Open the worker's detail panel (right-click → view details).
+  // Open the worker's detail panel (right-click → view details), optionally
+  // landing on a tab.
   onDetail?: () => void
+  // Deep-links the detail panel's Readme tab (same entry the talk badge menu has).
+  onReadme?: () => void
   onTogglePin: () => void
   onToggleSleep: () => void
   onClose: () => void
 }
 
 // A small context menu anchored at the right-click position, offering 提及
-// (mention) for a talk partner, plus 置顶 (pin) and 休眠 (sleep) for a worker
-// row. Closes on outside click / Escape.
-export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMention, onDetail, onTogglePin, onToggleSleep, onClose }: WorkerRowMenuProps) {
+// (mention) for a talk partner, 查看详情 / 查看自述, plus 置顶 (pin) and 休眠
+// (sleep) for a worker row. The view entries read exactly like the talk badge
+// menu's, so right-clicking the same worker means the same thing in both places.
+// Closes on outside click / Escape.
+export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMention, onDetail, onReadme, onTogglePin, onToggleSleep, onClose }: WorkerRowMenuProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
@@ -51,7 +56,9 @@ export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMent
       onClick={(e) => e.stopPropagation()}
       style={{
         position: 'fixed', left: Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : x) - 140),
-        top: Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : y) - 70),
+        // Up to five rows (mention / details / readme / pin / sleep); keep the
+        // panel inside the viewport when the click lands near the bottom.
+        top: Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : y) - 150),
         zIndex: 300, background: colors.bgLight, border: '1px solid ' + colors.border,
         borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.18)', padding: '3px 0',
       }}
@@ -63,7 +70,12 @@ export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMent
       )}
       {onDetail && (
         <div className="btn-hover" style={item} onClick={() => { onDetail(); onClose() }}>
-          {t('picker.detail')}
+          {t('badge.menu.detail')}
+        </div>
+      )}
+      {onReadme && (
+        <div className="btn-hover" style={item} onClick={() => { onReadme(); onClose() }}>
+          {t('badge.menu.readme')}
         </div>
       )}
       <div className="btn-hover" style={item} onClick={() => { onTogglePin(); onClose() }}>

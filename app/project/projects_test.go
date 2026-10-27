@@ -1,6 +1,7 @@
 package project
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 )
 
 func setupProjectsRoot(t *testing.T) string {
@@ -331,5 +333,69 @@ func TestLinkProjectRejectsInvalid(t *testing.T) {
 	}
 	if _, err := LinkProject(f); err == nil {
 		t.Fatal("expected error linking a file")
+	}
+}
+
+// TestCreateProjectSeedsBuiltinPrograms verifies a project created from the
+// built-in default template gets the template's programs/ resources (the
+// using-niq playbook) in its own programs/ dir, so program.load can address them.
+func TestCreateProjectSeedsBuiltinPrograms(t *testing.T) {
+	setupProjectsRoot(t)
+	def, err := LoadPreset("default")
+	if err != nil {
+		t.Fatalf("LoadPreset(default): %v", err)
+	}
+	if _, err := CreateProject("alpha", "default", def); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(ProjectProgramsDir("alpha"), "using-niq", "PROGRAM.md"))
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("built-in playbook not seeded into project: %v", err)
+	}
+}
+
+// TestBuiltinPlaybookIsLoadable verifies the seeded built-in playbook is
+// addressable through the program worker's store: the entry loads as
+// "using-niq", and the cheatsheet is listed and loads as
+// "using-niq/CHEATSHEET.md" (what program.load takes).
+func TestBuiltinPlaybookIsLoadable(t *testing.T) {
+	setupProjectsRoot(t)
+	def, err := LoadPreset("default")
+	if err != nil {
+		t.Fatalf("LoadPreset(default): %v", err)
+	}
+	if _, err := CreateProject("alpha", "default", def); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	be := pgbackend.New(ProjectProgramsDir("alpha"))
+	progs, err := be.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var guide, cheat string
+	for _, p := range progs {
+		if p.Name != "using-niq" {
+			continue
+		}
+		if p.Meta.ContentType != "playbook" {
+			t.Fatalf("using-niq content_type = %q, want playbook", p.Meta.ContentType)
+		}
+		for _, c := range p.Contents {
+			if c.Path == "using-niq/CHEATSHEET.md" {
+				cheat = c.Path
+			}
+		}
+		guide = p.Path
+	}
+	if guide != "using-niq" || cheat == "" {
+		t.Fatalf("programs = %+v, want using-niq with a CHEATSHEET.md sub-content", progs)
+	}
+
+	for _, addr := range []string{guide, cheat} {
+		body, err := be.Read(context.Background(), addr)
+		if err != nil || len(body) == 0 {
+			t.Fatalf("Read(%q) = %d bytes, err %v", addr, len(body), err)
+		}
 	}
 }

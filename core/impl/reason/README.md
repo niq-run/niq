@@ -141,21 +141,26 @@ same `context.compress` event.
 
 ### Self-description (readme)
 
-Every reason worker carries a readme: a short, first-person statement of what it
-is for. It is seeded from `params.readme` at creation and then owned by the
-worker — the point is that after weeks of drifting, the description still says
-what the worker actually became, not what the spawner guessed.
+Every reason worker carries a readme in two parts: **what it is responsible for**
+(its scope and what it is for) and **what it has recently been working on** (its
+current focus, the last piece of work it carried, what a peer handing it more
+work should know). It is seeded from `params.readme` at creation and then owned
+by the worker — the point is that after weeks of drifting, the description still
+says what the worker actually became and where it currently is, not what the
+spawner guessed.
 
-The readme is **identity, not policy**. It answers "what is this worker"; rules,
-policies, standing instructions and step-by-step procedures answer "what must it
-do and how", and belong to **programs** (instruction / playbook content on the
-program worker). A worker that writes its rulebook into the readme has put it
-where the reasoning loop never reads it as a rule: the tool description and the
-system prompt both say so to keep that drift out.
+The first part is **identity, not policy**. It answers "what is this worker";
+rules, policies, standing instructions and step-by-step procedures answer "what
+must it do and how", and belong to **programs** (instruction / playbook content
+on the program worker). A worker that writes its rulebook into the readme has put
+it where the reasoning loop never reads it as a rule: the tool description and
+the system prompt both say so to keep that drift out. The second part is a short
+status line, refreshed when the focus moves on — it is not a work log, and it
+must not turn into one.
 
 - `worker.readme` (peer-facing) returns the current text, so the recall flow is:
   list/search the roster (directory), then read the readme of the candidates to
-  confirm which worker is the right one.
+  confirm which worker is the right one — and what it is busy with right now.
 - `worker.readme.update { readme }` replaces it. It is advertised like the
   read half: the WebUI and authorized peers can discover it in the roster, and
   the bus ACL — not the announcement — decides who may send the update.

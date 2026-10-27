@@ -22,10 +22,11 @@ const TypeReadmeUpdate event.EventType = "worker.readme.update"
 //     peer-facing catalogue: the WebUI and authorized peers can discover it;
 //     the bus ACL, not the announcement, decides who may actually send it.
 //
-// The readme is IDENTITY, not policy: who the worker is and what it is for.
-// Rules, procedures and standing instructions belong to programs (instruction /
-// playbook content on the program worker), so the descriptions say so — otherwise
-// a worker drifts into writing its rulebook into the one free-text field it owns.
+// The readme is IDENTITY plus CURRENT FOCUS, not policy: who the worker is, what
+// it is for, and what it has recently been working on. Rules, procedures and
+// standing instructions belong to programs (instruction / playbook content on
+// the program worker), so the descriptions say so — otherwise a worker drifts
+// into writing its rulebook into the one free-text field it owns.
 //
 // The value is durable: an update signals the host to checkpoint, so the latest
 // description survives a restart.
@@ -35,8 +36,9 @@ func (w *BaseReasonWorker) registerReadme() {
 	}
 
 	w.RegisterReadme(
-		"Read this worker's readme: its identity card — a short, first-person statement of who it is "+
-			"and what it is for. Use it to recall a worker's purpose before delegating to it. "+
+		"Read this worker's readme: a short, first-person statement of what it is responsible for "+
+			"and what it has been working on lately. Use it to recall a worker's purpose and its current "+
+			"focus before delegating to it, so the work you hand over lands where the worker already is. "+
 			"It is not a rulebook: instructions, policies and step-by-step procedures live in programs.",
 		w.ReadmeLocked, nil)
 
@@ -46,15 +48,20 @@ func (w *BaseReasonWorker) registerReadme() {
 		// (and an authorized peer) may perform; the bus ACL decides who may send
 		// the event.
 		Response: baseworker.StringSchema("confirmation that the readme was replaced"),
-		Description: "Replace this worker's readme — its identity card: who it is and what it is for, " +
-			"in a few first-person sentences. Write it when the worker's role or scope changes materially. " +
+		Description: "Replace this worker's readme. Write it first person and short, in two parts: " +
+			"(1) what this worker is responsible for — its scope, what it is for; " +
+			"(2) what it has recently been working on — its current focus, the last piece of work it " +
+			"carried, and anything a peer handing it new work should know. " +
+			"Refresh part (2) when the focus moves on to different work; change part (1) only when the " +
+			"role or scope changes materially. " +
 			"Rules, policies, standing instructions and step-by-step procedures do NOT belong here: " +
 			"author them as programs (instruction / playbook) through the program worker's content tools " +
-			"(program__write / program__edit / program__upsert). The readme answers \"what is this worker\"; " +
-			"programs answer \"what must it do and how\".",
+			"(program__write / program__edit / program__upsert). The readme answers \"what is this worker " +
+			"and what is it doing right now\"; programs answer \"what must it do and how\".",
 		Parameters: obj(map[string]any{
 			"readme": map[string]any{"type": "string",
-				"description": "New description text. An empty string clears it."},
+				"description": "New readme text: what this worker is responsible for, then what it has " +
+					"recently been working on. An empty string clears it."},
 		}),
 	}, w.handleReadmeUpdate)
 }

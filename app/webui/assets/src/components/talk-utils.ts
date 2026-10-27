@@ -2,6 +2,58 @@
 
 import type { EventPayload } from '../types'
 
+// ── Input addressing (@mentions) ──
+
+// resolveMentionId resolves a raw @token to a known worker id, dropping the
+// sentence punctuation that rides along in prose: "@ops." is the worker ops
+// followed by a period. Ids use [\w.-], so `.` is the only character that can
+// be either id or punctuation; a token that resolves as-is is never trimmed.
+export function resolveMentionId(raw: string, isKnown: (id: string) => boolean): string | null {
+  let id = raw
+  while (id !== '' && !isKnown(id) && id.endsWith('.')) id = id.slice(0, -1)
+  return isKnown(id) ? id : null
+}
+
+// mentionsIn lists the workers @-mentioned in a message, in first-appearance
+// order and de-duplicated. Unresolved/@-in-prose tokens do not count, and an @
+// glued to a word (an email like a@b.c) is prose, not addressing.
+export function mentionsIn(text: string, isKnown: (id: string) => boolean): string[] {
+  const out: string[] = []
+  for (const m of text.matchAll(/(?<![\w.-])@([\w.-]+)/g)) {
+    const id = resolveMentionId(m[1], isKnown)
+    if (id && !out.includes(id)) out.push(id)
+  }
+  return out
+}
+
+// mergeTargets unions two recipient lists, keeping first-seen order and
+// dropping duplicates. Typing an @mention appends to the recipient set rather
+// than replacing it, so a draft can add to the sidebar selection without
+// silently dropping it.
+export function mergeTargets(base: string[], extra: string[]): string[] {
+  const out = [...base]
+  for (const id of extra) {
+    if (!out.includes(id)) out.push(id)
+  }
+  return out
+}
+
+// leadingMentions splits the addressing prefix off a message: the run of
+// @-tokens at its head, plus the body that follows. This is structural — it
+// takes any @token, without consulting the worker list — so a body can be
+// recovered before the workers have loaded.
+export function leadingMentions(text: string): { ids: string[]; rest: string } {
+  const ids: string[] = []
+  let rest = text
+  for (;;) {
+    const m = rest.match(/^\s*@([\w.-]+)(?:[ \t]+|$)/)
+    if (!m) break
+    ids.push(m[1])
+    rest = rest.slice(m[0].length)
+  }
+  return { ids, rest }
+}
+
 // ── Content extraction ──
 
 /**
@@ -214,14 +266,39 @@ function formatContentBlocks(blocks: any[], formatted: boolean): string {
 }
 
 // ── Event type → color ──
+//
+// Colour encodes outcome, not family, so the stream can be scanned for what
+// finished and what broke:
+//
+//   reason.*            → purple  (checked first: reasoning stays purple even
+//                                  when it is interrupted)
+//   *.failed / .rejected / .error → red
+//   *.completed / .done / .succeeded → green
+//   request.* / tool.* / *.request / *.call → yellow  (a call in flight)
+//   everything else     → grey    (lifecycle / infrastructure)
+//
+// Failure and completion match the suffix, so they also cover worker-specific
+// families (e.g. mcp.tool.call.failed), and are tested before the request rule
+// so request.completed / request.failed land in green / red, not yellow.
+
+const FAILED_SUFFIXES = ['.failed', '.rejected', '.error', '.errored']
+const COMPLETED_SUFFIXES = ['.completed', '.done', '.succeeded', '.success', '.finished']
+
+function endsWithAny(type: string, suffixes: string[]): boolean {
+  return suffixes.some(s => type.endsWith(s))
+}
 
 export function getTypeColor(type: string, colors: import('../theme').Palette): string {
-  if (type.startsWith('tool.') || type.startsWith('request.')) return colors.eventType.tool
   if (type.startsWith('reason.')) return colors.eventType.reason
-  if (type.startsWith('worker.')) return colors.eventType.worker
-  if (type.startsWith('hiw.')) return colors.eventType.hiw
-  if (type.startsWith('timer.')) return colors.eventType.timer
-  return colors.eventType.default
+  if (endsWithAny(type, FAILED_SUFFIXES)) return colors.eventType.failed
+  if (endsWithAny(type, COMPLETED_SUFFIXES)) return colors.eventType.completed
+  if (
+    type.startsWith('request.') ||
+    type.startsWith('tool.') ||
+    type.endsWith('.request') ||
+    type.endsWith('.call')
+  ) return colors.eventType.request
+  return colors.eventType.other
 }
 
 // ── Event summary text ──

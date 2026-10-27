@@ -87,6 +87,30 @@ func SeedTemplates(dir string) error {
 	return nil
 }
 
+// CopyTemplatePrograms copies a template's programs/ resources into dst. The
+// on-disk copy wins when it exists (the user-edited template is authoritative),
+// falling back to the embedded built-in before seeding — the same precedence
+// LoadTemplate applies to template.json. An absent programs/ dir is a no-op (false).
+func CopyTemplatePrograms(dir, name, dst string) (bool, error) {
+	if dir != "" {
+		src := TemplateProgramsDir(dir, name)
+		if _, err := os.Stat(src); err == nil {
+			return true, CopyDir(src, dst)
+		}
+	}
+	if name == "" {
+		return false, nil
+	}
+	sub, err := fs.Sub(presetFS, "preset/"+name+"/programs")
+	if err != nil {
+		return false, nil // the built-in carries no programs/ either
+	}
+	if _, err := fs.Stat(sub, "."); err != nil {
+		return false, nil
+	}
+	return true, os.CopyFS(dst, sub)
+}
+
 // TemplateDir returns the on-disk directory of a template under the templates
 // dir.
 func TemplateDir(dir, name string) string {

@@ -202,6 +202,34 @@ for await (const evt of worker.channel.events()) {
 }
 ```
 
+#### Meta capabilities (`worker.readme` / `worker.help`)
+
+`registerReadme` and `registerHelp` add the two generic self-description
+capabilities. Both are ordinary extensions, so they ride `worker.ready` and are
+reached through the normal request/reply path:
+
+```ts
+// worker.readme — this worker's own guide. A declaration may replace it with
+// `readme`, extend it with `readme_append`, and interpolate `{{key}}` from
+// params.
+worker.registerReadme(
+  "Read this worker's usage guide: what it does and how to call it.",
+  () => "# echo\n\nEchoes the text you send.",
+  { name: "echo" },
+);
+
+// worker.help — per-event help, like a CLI's -h. Without custom guides every
+// registered event gets a guide rendered from its declared schemas. A guide
+// returns null/undefined to fall back to that generic guide.
+worker.registerHelp({
+  echo: (params) => (params["mode"] === "fast" ? "# fast echo" : undefined),
+});
+```
+
+Callers send `{ event_name: "echo" }` and may add `{ params: { … } }` to pick a
+more specific guide; omitting `event_name` lists every served event. Mirrors
+Go's `BaseWorker.RegisterReadme` / `RegisterHelp`.
+
 ### CLI helpers (writing a worker `start` entrypoint)
 
 Out-of-process workers ship a `src/start.ts` (compiled to the package `bin`) to

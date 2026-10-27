@@ -271,3 +271,7 @@ export interface ProjectStartResult {
   webui_port?: number
   bus_port?: number
 }
+
+// WorkerDetailTab names one tab of the worker detail panel. Deep links (e.g.
+// the talk badge's "Readme" menu entry) also use it to open a specific tab.
+export type WorkerDetailTab = 'info' | 'readme' | 'events' | 'perms'

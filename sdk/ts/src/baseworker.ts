@@ -8,7 +8,10 @@ import type {
 } from "./types/index.js";
 import { EventType } from "./types/index.js";
 import { createEvent } from "./createEvent.js";
-import { toJsonSchema } from "./schema.js";
+import { eventHelp, helpIndex, visibleEventNames } from "./help.js";
+import type { HelpFunc } from "./help.js";
+import { readmeText } from "./readme.js";
+import { s, toJsonSchema } from "./schema.js";
 
 /**
  * BaseWorker — the shared base implementation every worker builds on,
@@ -64,6 +67,144 @@ export class BaseWorker {
       normalized.response = toJsonSchema(ext.response, `response of ${ext.event}`);
     }
     this.regs.set(extensionKey(ext), { ext: normalized, handler });
+  }
+
+  /**
+   * Register the generic `worker.readme` capability: a directed worker.readme
+   * call is answered with this worker's own guide.
+   *
+   * `text` runs per request so the guide can include live state. `params` is the
+   * declaration's construction params, read for two optional keys that let a
+   * declaration customize the guide without touching the worker's code:
+   *
+   *   readme         replaces the built-in guide
+   *   readme_append  is appended after it
+   *
+   * Both render `{{key}}` placeholders from params (see readme.ts). Mirrors Go's
+   * `BaseWorker.RegisterReadme`.
+   */
+  registerReadme(
+    description: string,
+    text: () => string,
+    params?: Record<string, unknown>,
+  ): void {
+    this.register(
+      {
+        event: EventType.WorkerReadme,
+        response: s.string("the worker's self-description (its readme text)"),
+        description,
+        parameters: s.object({}),
+      },
+      (evt) => {
+        const tc = parseToolCall(evt);
+        if (!tc.callID) return;
+        void this.replyCompleted(
+          tc.callerID,
+          tc.callID,
+          readmeText(text, params),
+          tc.traceID,
+        );
+      },
+    );
+  }
+
+  /**
+   * Register the generic `worker.help` capability: a directed worker.help call
+   * is answered with help for ONE of this worker's events.
+   *
+   * The request shape is:
+   *
+   *   { event_name: "spawn", params: { worker: "reason" } }
+   *
+   * `event_name` names an event this worker serves; `params` is an optional
+   * selector a `HelpFunc` may use. Omitting `event_name` returns an index of
+   * every served event.
+   *
+   * `guides` is keyed by event and may be omitted — without one, every event
+   * still gets a generic guide rendered from its declared description,
+   * parameters and response. A guide wins only when it returns a string; a
+   * selector it does not recognize falls back to the generic guide. The map is
+   * read-only after registration; call `registerHelp` again to replace it.
+   *
+   * Mirrors Go's `BaseWorker.RegisterHelp`.
+   */
+  registerHelp(guides?: Record<string, HelpFunc>): void {
+    this.register(
+      {
+        event: EventType.WorkerHelp,
+        response: s.string("the requested help text (markdown)"),
+        description:
+          "Read help for one of this worker's events, like a CLI's -h. Pass " +
+          "event_name to explain that event; params may select a more specific " +
+          'guide (e.g. { worker: "reason" } for spawn). Omit event_name to list ' +
+          "every event this worker serves.",
+        parameters: s.object({
+          event_name: s.optional(
+            s.string("Event to explain (e.g. spawn). Empty lists all served events."),
+          ),
+          params: s.optional(
+            s.object(
+              {},
+              'Optional selector for an event-specific guide, e.g. { worker: "reason" }.',
+            ),
+          ),
+        }),
+      },
+      (evt) => {
+        const tc = parseToolCall(evt);
+        if (!tc.callID) return;
+        try {
+          const text = this.helpText(evt, tc.args, guides);
+          void this.replyCompleted(tc.callerID, tc.callID, text, tc.traceID);
+        } catch (err) {
+          void this.replyFailed(
+            tc.callerID,
+            tc.callID,
+            errorMessage(err),
+            tc.traceID,
+          );
+        }
+      },
+    );
+  }
+
+  /**
+   * Select the guide for one worker.help request. Internal extensions are only
+   * visible to their owner, mirroring dispatchExtension's scope rule. Throws for
+   * an event the worker does not serve (answered as request.failed).
+   */
+  private helpText(
+    evt: Event,
+    args: Record<string, unknown>,
+    guides?: Record<string, HelpFunc>,
+  ): string {
+    const includeInternal = evt.worker_id === this.id;
+    const exts = this.extensions();
+    const name = argString(args, "event_name").trim();
+    const rawParams = args["params"];
+    const params: Record<string, unknown> = isRecord(rawParams) ? rawParams : {};
+
+    if (name === "") return helpIndex(this.id, exts, includeInternal);
+
+    for (const ext of exts) {
+      if (ext.event !== name) continue;
+      if (ext.internal && !includeInternal) {
+        throw new Error(
+          `worker.help: ${this.id} does not expose event ${JSON.stringify(name)}`,
+        );
+      }
+      const guide = guides?.[ext.event];
+      if (typeof guide === "function") {
+        const text = guide(params);
+        if (text !== null && text !== undefined) return text;
+      }
+      return eventHelp(ext, Object.keys(params).length > 0);
+    }
+
+    throw new Error(
+      `worker.help: ${this.id} does not serve event ${JSON.stringify(name)}; ` +
+        `served events: ${visibleEventNames(exts, includeInternal).join(", ")}`,
+    );
   }
 
   /**
@@ -368,6 +509,10 @@ export function argInt(
 // collide. Internal-only; never surfaced on the wire.
 function extensionKey(ext: Extension): string {
   return `${ext.event}\x00`;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

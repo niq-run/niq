@@ -96,7 +96,7 @@ func (p *PublishSpec) UnmarshalJSON(b []byte) error {
 
 // WorkerConfig describes a single worker instance declaration.
 type WorkerConfig struct {
-	Type          string             `json:"type"` // reason / workspace / host / timer / hiw / program
+	Type          string             `json:"type"` // reason / coding / workspace / host / timer / hiw / niw / program / history / directory / mcp
 	ID            string             `json:"id"`
 	Instruction   string             `json:"instruction,omitempty"`
 	Provider      string             `json:"provider,omitempty"`

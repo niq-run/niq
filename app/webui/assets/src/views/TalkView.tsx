@@ -3,7 +3,7 @@ import ViewHeader from '../components/ViewHeader'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { isToolResult } from '../components/talk-utils'
-import { isReasonFamilyType, isTalkPartnerType, type EventPayload } from '../types'
+import { isReasonFamilyType, isTalkPartnerType, type EventPayload, type WorkerDetailTab } from '../types'
 import { useChatScroll } from './talk/useChatScroll'
 import TalkRows from './talk/TalkRows'
 import StreamingTail from './talk/StreamingTail'
@@ -17,8 +17,8 @@ interface TalkViewProps {
   onTraceClick: (traceId: string) => void
   onLoadMore?: () => void
   onMention?: (workerId: string) => void
-  // Right-clicking a worker badge opens its detail page.
-  onOpenDetail?: (workerId: string) => void
+  // Right-clicking a worker badge opens its detail page (optionally on a tab).
+  onOpenDetail?: (workerId: string, tab?: WorkerDetailTab) => void
   // Talk-avatar context-menu actions: add a worker to the watched set, or focus
   // it as the only watched worker.
   onAddFilter?: (workerId: string) => void
@@ -218,12 +218,25 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     <ViewHeader
       title={t('nav.talk')}
       right={
-        <span style={{ fontSize: fontSizes.sm, color: colors.textMuted }}>
-          {t('talk.watching')} <strong style={{ color: colors.textDim }}>{
-            talkWorkers.size > 0
-              ? `[${[...talkWorkers].join(', ')}]`
-              : t('events.allWorkers')
-          }</strong>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 4, fontSize: fontSizes.sm, color: colors.textMuted }}>
+          {t('talk.watching')}
+          {talkWorkers.size > 0 ? (
+            // One token per watched worker, matching how recipients are drawn
+            // (a comma-joined string hides how many there are at a glance).
+            [...talkWorkers].map(id => (
+              <span
+                key={id}
+                style={{
+                  background: colors.bgChip, borderRadius: 2, padding: '0 6px',
+                  lineHeight: '18px', color: colors.accent, whiteSpace: 'nowrap',
+                }}
+              >
+                {id}
+              </span>
+            ))
+          ) : (
+            <strong style={{ color: colors.textDim }}>{t('events.allWorkers')}</strong>
+          )}
         </span>
       }
     />

@@ -3,7 +3,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { isReasonFamilyType, type WorkerInfo, type ProviderOption, type ProviderSelection, type WatchEntry, type EventPayload } from '../types'
+import { isReasonFamilyType, type WorkerInfo, type WorkerDetailTab, type ProviderOption, type ProviderSelection, type WatchEntry, type EventPayload } from '../types'
 import { getWorkerTypeColor } from '../components/talk-utils'
 import SendEventForm from '../components/SendEventForm'
 import SelectDropdown from '../components/SelectDropdown'
@@ -27,9 +27,13 @@ interface WorkerDetailProps {
   onRefresh?: () => void
   // Event-bus port, used to render a remote worker's connect configuration.
   busPort?: number
+  // Tab to open on mount. Deep links (the talk badge's Readme entry) use it to
+  // land directly on a tab; the caller keys the panel by this so a second
+  // request for another tab remounts instead of being ignored by useState.
+  initialTab?: WorkerDetailTab
 }
 
-export default function WorkerDetail({ worker, allWorkers, watch, onClose, archived, onToggleArchived, onDeleted, onRefresh, busPort }: WorkerDetailProps) {
+export default function WorkerDetail({ worker, allWorkers, watch, onClose, archived, onToggleArchived, onDeleted, onRefresh, busPort, initialTab }: WorkerDetailProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const suspended = worker.managed && worker.state === 'suspended'
@@ -44,7 +48,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
   const [editingMeta, setEditingMeta] = useState(false)
   const [metaNote, setMetaNote] = useState('')
   // Tabs: Info / Readme / Send Event / Permissions.
-  const [tab, setTab] = useState<'info' | 'readme' | 'events' | 'perms'>('info')
+  const [tab, setTab] = useState<WorkerDetailTab>(initialTab ?? 'info')
   const [draftTags, setDraftTags] = useState('')
   const [draftDesc, setDraftDesc] = useState('')
   const [draftParams, setDraftParams] = useState('')

@@ -38,14 +38,28 @@ export interface Palette {
   toolRequested: string
   toolCompleted: string
   toolFailed: string
-  // Event type colors
+  // Warning / "needs your attention" tone (inline hints). Deliberately a muted
+  // amber rather than a bright yellow: the palette is desaturated throughout, so
+  // this reads as a quiet nudge instead of an alarm. Tuned per theme to stay
+  // legible (≈5:1) on each background.
+  warn: string
+  // Event-type tag colours encode *outcome*, not family, so the stream can be
+  // scanned for what finished and what broke. Same recipe as the worker-type
+  // tags below — same saturation, lightness tuned per hue so every tag lands
+  // at a common contrast against the row background — and the tag itself is
+  // the colour at 12% (background) / 33% (border) over the row background.
+  //
+  //   completed → green    request.completed, *.done, *.succeeded
+  //   failed    → red      *.failed, *.rejected, *.error
+  //   reason    → purple   reason.* (always purple, even when it fails)
+  //   request   → yellow   request.*, tool.*, *.request, *.call
+  //   other     → grey     lifecycle / infrastructure / everything else
   eventType: {
-    tool: string
+    completed: string
+    failed: string
     reason: string
-    worker: string
-    hiw: string
-    timer: string
-    default: string
+    request: string
+    other: string
   }
   // Worker-type tag colours: one shared by every built-in worker, one for
   // reason workers, one for coding workers, and one shared by every external
@@ -88,13 +102,13 @@ const dark: Palette = {
   toolRequested: '#c88a3a',
   toolCompleted: '#5a8a5a',
   toolFailed: '#f44336',
+  warn: '#a08a52',
   eventType: {
-    tool: '#ff9800',
-    reason: '#8f7393',
-    worker: '#2196f3',
-    hiw: '#4caf50',
-    timer: '#00bcd4',
-    default: '#e0e0e0',
+    completed: '#4bbb70',  // green      (hue 140)
+    failed: '#ea8c89',     // salmon red (hue   2)
+    reason: '#a99fd8',     // periwinkle (hue 250)
+    request: '#c5a239',    // gold       (hue  45)
+    other: '#9da2ab',      // slate      (hue 220)
   },
   typeTag: {
     builtin: '#8fa9d1',
@@ -131,13 +145,13 @@ const light: Palette = {
   toolRequested: '#c88a3a',
   toolCompleted: '#5a8a5a',
   toolFailed: '#f44336',
+  warn: '#7f6c36',
   eventType: {
-    tool: '#e65100',
-    reason: '#7b1fa2',
-    worker: '#1565c0',
-    hiw: '#2e7d32',
-    timer: '#00838f',
-    default: '#1a1a1a',
+    completed: '#27673c',  // green      (hue 140)
+    failed: '#af241f',     // red        (hue   2)
+    reason: '#5b48ba',     // periwinkle (hue 250)
+    request: '#6c591f',    // gold       (hue  45)
+    other: '#575c66',      // slate      (hue 220)
   },
   typeTag: {
     builtin: '#375c92',

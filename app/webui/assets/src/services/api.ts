@@ -235,12 +235,22 @@ export async function restartProject(id: string): Promise<ProjectStartResult> {
   return res.json()
 }
 
-export async function sendInput(content: InputContent[], target: string, inputMode: string): Promise<void> {
-  await fetch(p('/api/input'), {
+// sendInput posts a user message addressed to one or more workers. The bus
+// delivers the same event to every target, so each addressed worker receives
+// its own copy.
+//
+// `target` (the primary addressee) rides along for servers that predate
+// multi-target input: they ignore `targets`, and without `target` they would
+// treat the send as unaddressed and broadcast it to every worker.
+export async function sendInput(content: InputContent[], targets: string[], inputMode: string): Promise<void> {
+  const res = await fetch(p('/api/input'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, target, input_mode: inputMode }),
+    body: JSON.stringify({ content, targets, target: targets[0] ?? '', input_mode: inputMode }),
   })
+  // Throw so a refused send keeps the draft: the caller clears the input on
+  // success, and a silently-swallowed failure would look like a sent message.
+  if (!res.ok) throw new Error((await res.text()).trim() || 'send failed: ' + res.status)
 }
 
 // UploadedFile is what POST /api/upload returns: the file's absolute path in

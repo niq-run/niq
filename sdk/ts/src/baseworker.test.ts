@@ -416,3 +416,152 @@ describe("ready contract", () => {
     expect(presence.exclude_worker_id).toBe(w.id);
   });
 });
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+describe("worker.readme", () => {
+  it("answers with the declaration-customized guide", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.registerReadme("guide", () => "builtin", {
+      readme: "hello {{name}}",
+      name: "mcp",
+    });
+
+    const evt = makeEvent({ type: EventType.WorkerReadme, request_id: "r1" });
+    expect(w.dispatchExtension(evt)).toBe(true);
+    await tick();
+
+    expect(ch.sent).toHaveLength(1);
+    expect(ch.sent[0].evt.type).toBe(EventType.RequestCompleted);
+    expect(ch.sent[0].evt.request_id).toBe("r1");
+    expect(ch.sent[0].evt.payload["result"]).toBe("hello mcp");
+  });
+
+  it("appends, joins lists, and leaves unknown placeholders and JSON braces alone", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.registerReadme("guide", () => 'call { "x": 1 } and {{known}}', {
+      readme_append: "extra {{tools}}",
+      known: "yes",
+      tools: ["a", "b"],
+    });
+
+    w.dispatchExtension(makeEvent({ type: EventType.WorkerReadme, request_id: "r1" }));
+    await tick();
+
+    expect(ch.sent[0].evt.payload["result"]).toBe(
+      'call { "x": 1 } and yes\nextra a, b',
+    );
+  });
+});
+
+describe("worker.help", () => {
+  const helpEvent = (
+    payload: Record<string, unknown>,
+    workerID = "caller.0",
+  ): Event =>
+    makeEvent({
+      type: EventType.WorkerHelp,
+      worker_id: workerID,
+      request_id: "r1",
+      payload,
+    });
+
+  it("lists served events when event_name is omitted", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.register({ event: "spawn", description: "Create a new worker." }, () => {});
+    w.registerHelp();
+
+    w.dispatchExtension(helpEvent({}));
+    await tick();
+
+    const text = ch.sent[0].evt.payload["result"] as string;
+    expect(text).toContain("# echo.0 — help");
+    expect(text).toContain("`spawn`");
+    expect(text).toContain("Create a new worker.");
+    expect(text).toContain("`worker.help`");
+  });
+
+  it("renders the generic contract for a named event", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.register(
+      {
+        event: "spawn",
+        description: "Create a new worker.",
+        parameters: { type: "object", properties: { type: { type: "string" } } },
+        response: { type: "string" },
+      },
+      () => {},
+    );
+    w.registerHelp();
+
+    w.dispatchExtension(helpEvent({ event_name: "spawn" }));
+    await tick();
+
+    const text = ch.sent[0].evt.payload["result"] as string;
+    expect(text).toContain("# spawn");
+    expect(text).toContain("Create a new worker.");
+    expect(text).toContain("## Arguments");
+    expect(text).toContain('"type": "string"');
+    expect(text).toContain("## Reply");
+  });
+
+  it("selects a custom guide by params, and falls back when unmatched", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.register({ event: "spawn", description: "Create a new worker." }, () => {});
+    w.registerHelp({
+      spawn: (params) =>
+        params["worker"] === "reason" ? "# Spawn a reason worker" : undefined,
+    });
+
+    w.dispatchExtension(
+      helpEvent({ event_name: "spawn", params: { worker: "reason" } }),
+    );
+    await tick();
+    expect(ch.sent[0].evt.payload["result"]).toBe("# Spawn a reason worker");
+
+    w.dispatchExtension(
+      helpEvent({ event_name: "spawn", params: { worker: "timer" } }),
+    );
+    await tick();
+    const fallback = ch.sent[1].evt.payload["result"] as string;
+    expect(fallback).toContain("# spawn");
+    expect(fallback).toContain("No event-specific guide matched");
+  });
+
+  it("fails an unknown event, naming what the worker serves", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.register({ event: "spawn" }, () => {});
+    w.registerHelp();
+
+    w.dispatchExtension(helpEvent({ event_name: "nope" }));
+    await tick();
+
+    expect(ch.sent[0].evt.type).toBe(EventType.RequestFailed);
+    const error = ch.sent[0].evt.payload["error"] as string;
+    expect(error).toContain('does not serve event "nope"');
+    expect(error).toContain("spawn");
+  });
+
+  it("hides internal capabilities from peers but shows them to the owner", async () => {
+    const ch = new FakeChannel();
+    const w = makeWorker(ch);
+    w.register({ event: "my.op", internal: true }, () => {});
+    w.registerHelp();
+
+    w.dispatchExtension(helpEvent({}));
+    await tick();
+    const peerIndex = ch.sent[0].evt.payload["result"] as string;
+    expect(peerIndex).not.toContain("my.op");
+
+    w.dispatchExtension(helpEvent({}, w.id));
+    await tick();
+    const ownerIndex = ch.sent[1].evt.payload["result"] as string;
+    expect(ownerIndex).toContain("my.op");
+  });
+});
