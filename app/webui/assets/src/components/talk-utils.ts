@@ -28,8 +28,8 @@ export function mentionsIn(text: string, isKnown: (id: string) => boolean): stri
 
 // leadingMentions splits the addressing prefix off a message: the run of
 // @-tokens at its head, plus the body that follows. This is structural — it
-// takes any @token, without consulting the worker list — so an addressing
-// prefix can be rewritten before the workers have loaded.
+// takes any @token, without consulting the worker list — so a body can be
+// recovered before the workers have loaded.
 export function leadingMentions(text: string): { ids: string[]; rest: string } {
   const ids: string[] = []
   let rest = text
@@ -40,20 +40,6 @@ export function leadingMentions(text: string): { ids: string[]; rest: string } {
     rest = rest.slice(m[0].length)
   }
   return { ids, rest }
-}
-
-// mentionsPrefix renders an addressing prefix for a set of recipients:
-// "@a @b " (empty string for none).
-export function mentionsPrefix(ids: string[]): string {
-  return ids.length ? ids.map(id => '@' + id).join(' ') + ' ' : ''
-}
-
-// sameIds compares two id lists as sets: the sidebar's order is click order,
-// the text's order is what the user typed.
-export function sameIds(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false
-  const set = new Set(a)
-  return b.every(id => set.has(id))
 }
 
 // ── Content extraction ──

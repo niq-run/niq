@@ -73,6 +73,9 @@ interface TalkInputProps {
   workers: WorkerInfo[]
   archived: Set<string>
   mentionKey: number
+  // Default recipients: the workers checked in the sidebar selector. Used when
+  // the draft @-mentions nobody. They are never written into the input text.
+  defaultTargets: string[]
   isMobile: boolean
   // Attachments staged for the next send: pasted/picked images (inline
   // base64) and uploaded files (referenced by path).
@@ -86,7 +89,7 @@ interface TalkInputProps {
   onFocus?: () => void
 }
 
-export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, isMobile, attachments, onAttachmentsChange, onFocus }: TalkInputProps) {
+export default function TalkInput({ talkPartner, input, inputMode, onInputChange, onSend, onAbort, onModeChange, workers, archived, mentionKey, defaultTargets, isMobile, attachments, onAttachmentsChange, onFocus }: TalkInputProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -281,10 +284,6 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     window.clearTimeout(noTargetTimer.current)
     noTargetTimer.current = window.setTimeout(() => setNoTargetHint(false), 2600)
   }, [])
-  // Adding an addressee answers the hint, so it goes away at once.
-  useEffect(() => {
-    if (mentioned.length > 0) setNoTargetHint(false)
-  }, [mentioned.length])
 
   // insertMention puts "@id " at the caret. A trailing "@query" being typed is
   // replaced by the pick; otherwise (chip pick on an already-complete token) it
@@ -371,7 +370,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
       e.preventDefault()
       // Nothing addressed means nothing to send: say so instead of swallowing
       // the keystroke. (An addressed but empty draft is just a no-op.)
-      if (mentioned.length === 0) {
+      if (targets.length === 0) {
         flashNoTarget()
         return
       }
@@ -477,16 +476,23 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   }, [pickableShown, pickerQuery, mentionIndex, t])
   const pickList = pickerGroup.opts
 
-  // A message needs at least one addressee: the @mentions are the recipients
-  // and there is no broadcast path any more. It also needs some content — the
-  // sidebar prefills the addressing prefix, so a bare "@worker " is an empty
-  // draft, not a message.
+  // Recipients: an @mention in the draft wins (that is explicit addressing);
+  // otherwise the sidebar selection is the default — shown in the chip, but
+  // never written into the text. With neither there is nobody to send to.
+  const typedTargets = mentioned
+  const targets = typedTargets.length > 0 ? typedTargets : defaultTargets
+  const usingDefault = typedTargets.length === 0 && defaultTargets.length > 0
   const body = leadingMentions(input).rest.trim()
-  const canSend = mentioned.length > 0 && (body !== '' || attachments.length > 0)
-  // Chip label: the addressees, or a prompt to pick one.
-  const targetsLabel = mentioned.length > 0
-    ? mentioned.map(id => '@' + id).join(', ')
+  const canSend = targets.length > 0 && (body !== '' || attachments.length > 0)
+  // Chip label: who will receive it, or a prompt to pick someone.
+  const targetsLabel = targets.length > 0
+    ? targets.map(id => '@' + id).join(', ')
     : t('talk.input.noTarget')
+  // A recipient appearing (typed @, or a worker checked in the sidebar) answers
+  // the refusal hint, so it goes away at once.
+  useEffect(() => {
+    if (targets.length > 0) setNoTargetHint(false)
+  }, [targets.length])
 
   // Input-mode selector options. Descriptions condensed from pkg/reason:
   //   schedule  = level 1 (only when idle; least intrusive)
@@ -510,13 +516,13 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     <div style={{ position: 'relative', display: 'flex', minWidth: 0, ...(isMobile ? { flexShrink: 1 } : { marginRight: 'auto' }) }}>
         <span
           onClick={(e) => { e.stopPropagation(); setPickerQuery(''); setMentionIndex(0); setPickerOpen(v => !v) }}
-          title={mentioned.length > 0
-            ? t('talk.input.targets.tooltip', { targets: targetsLabel })
+          title={targets.length > 0
+            ? t(usingDefault ? 'talk.input.defaultTargets.tooltip' : 'talk.input.targets.tooltip', { targets: targetsLabel })
             : t('talk.input.noTarget.tooltip')}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: actionFont, lineHeight: '20px',
-            color: mentioned.length > 0 ? colors.accent : colors.textDimmed,
-            border: '1px solid ' + (mentioned.length > 0 ? colors.accentBorder : colors.border),
+            color: targets.length > 0 ? colors.accent : colors.textDimmed,
+            border: '1px solid ' + (targets.length > 0 ? colors.accentBorder : colors.border),
             borderRadius: 2, padding: '4px 10px', cursor: 'pointer', userSelect: 'none',
           }}
         >
@@ -747,12 +753,12 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
             silently swallow the press), and the tooltip says so on hover. */}
         <button
           onClick={() => {
-            if (mentioned.length === 0) { flashNoTarget(); return }
+            if (targets.length === 0) { flashNoTarget(); return }
             if (!canSend) return
             onSend()
           }}
           aria-disabled={!canSend}
-          title={canSend ? undefined : mentioned.length === 0 ? t('talk.input.send.blocked') : undefined}
+          title={canSend ? undefined : targets.length === 0 ? t('talk.input.send.blocked') : undefined}
           className={canSend ? 'btn-send' : undefined}
           style={{
             background: 'none',

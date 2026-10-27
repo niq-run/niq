@@ -11,7 +11,7 @@ import ProvidersView from './views/ProvidersView'
 import ProgramsView from './views/ProgramsView'
 import McpView from './views/McpView'
 import ViewHeader from './components/ViewHeader'
-import { leadingMentions, mentionsIn, mentionsPrefix, sameIds } from './components/talk-utils'
+import { leadingMentions, mentionsIn } from './components/talk-utils'
 import ApprovalsView from './views/ApprovalsView'
 import TalkInput from './components/TalkInput'
 import ResizablePanel from './components/ResizablePanel'
@@ -137,14 +137,6 @@ function stampNow(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
-// addressedInput splits a message into its recipients — every @-mentioned
-// worker, in first-appearance order — and the body handed to them. Only the
-// leading run of @tokens is stripped from the body: mid-sentence mentions stay
-// as text.
-function addressedInput(text: string, isKnown: (id: string) => boolean): { targets: string[]; body: string } {
-  return { targets: mentionsIn(text, isKnown), body: leadingMentions(text).rest.trim() }
-}
-
 // composeInput builds the structured worker.input "content" array: the
 // reminder and message text as a leading text block, then each staged
 // attachment as its own image/file block. This replaces the legacy
@@ -204,13 +196,6 @@ export default function App() {
   })
   const [attachments, setAttachments] = useState<StagedAttachment[]>([])
   const [sending, setSending] = useState(false)
-  // Sidebar selection → input addressing. Checking workers in the selector is
-  // the quick way to address a message, so the input's leading @-prefix follows
-  // that selection. autoMentionsRef is what we last wrote; once the input's
-  // mentions differ from it the user has taken over by hand, and their edits win
-  // for the rest of the draft (the next send starts from the selection again).
-  const autoMentionsRef = useRef<string[]>([])
-  const manualMentionsRef = useRef(false)
   // Set while the live event stream is down / auto-reconnecting, so we can
   // surface a visible "grab the logs" banner instead of silently missing new
   // messages.
@@ -795,27 +780,11 @@ export default function App() {
     return !!w && isTalkPartnerType(w.type)
   }, [workers])
 
-  // Keep the input's addressing prefix in step with the sidebar selection, as
-  // long as the user has not addressed the message by hand. Only a real change
-  // of selection rewrites the text, so a background workers poll never disturbs
-  // what is being typed.
-  useEffect(() => {
-    if (manualMentionsRef.current) return
-    const ids = [...talkWorkers].filter(isPartnerId)
-    if (sameIds(ids, autoMentionsRef.current)) return
-    autoMentionsRef.current = ids
-    setInput(prev => mentionsPrefix(ids) + leadingMentions(prev).rest)
-  }, [talkWorkers, isPartnerId])
-
-  // Every input edit funnels through here so hand-written addressing can be
-  // spotted: as soon as the mentions stop matching what the sidebar wrote, the
-  // sync above leaves the text alone.
-  const handleInputChange = useCallback((v: string) => {
-    if (!sameIds(mentionsIn(v, isPartnerId), autoMentionsRef.current)) {
-      manualMentionsRef.current = true
-    }
-    setInput(v)
-  }, [isPartnerId])
+  // Default recipients: the workers checked in the sidebar selector. They are
+  // who a message goes to when its text names nobody — but they are NOT written
+  // into the input: the box only ever holds what the user typed (an @mention
+  // included, once they type one).
+  const defaultTargets = useMemo(() => [...talkWorkers].filter(isPartnerId), [talkWorkers, isPartnerId])
 
   // A fleet with exactly one addressable worker has no choice to make, so that
   // worker is selected by default: the talk scope and the input's @-prefix both
@@ -861,13 +830,14 @@ export default function App() {
 
   const sendMessage = useCallback(() => {
     if (sending) return
-    // Recipients are the workers @-mentioned in the text — one or several. A
-    // send that addresses nobody used to broadcast to every talk partner; that
-    // path is gone, so with no recipient the message is simply not sent.
+    // Recipients: the workers the text @-mentions, or — when it names nobody —
+    // the sidebar selection. A send that resolves to neither is refused: with
+    // no addressee there is nowhere for it to go (no broadcast path).
     const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
-    const { targets: msgTargets, body: msgText } = addressedInput(input, id => reasonWorkers.some(r => r.id === id))
-    // The sidebar prefills the addressing prefix, so a draft can be nothing but
-    // "@a " — that is not a message either.
+    const isKnown = (id: string) => reasonWorkers.some(r => r.id === id)
+    const typed = mentionsIn(input, isKnown)
+    const msgTargets = typed.length > 0 ? typed : defaultTargets
+    const msgText = leadingMentions(input).rest.trim()
     if (msgTargets.length === 0 || (!msgText && attachments.length === 0)) return
     setSending(true)
     // Returning to the live bottom: bump the signal TalkView listens for.
@@ -877,17 +847,14 @@ export default function App() {
     setMentionTarget(msgTargets[0])
     lastSendRef.current = { t: Date.now(), text: msgText.slice(0, 80) }
     sendInput(composeInput(msgText, attachments, msgTargets), msgTargets, currentInputMode).then(() => {
-      // The next draft starts from the sidebar selection again.
-      const ids = [...talkWorkers].filter(isPartnerId)
-      manualMentionsRef.current = false
-      autoMentionsRef.current = ids
-      setInput(mentionsPrefix(ids))
+      // The draft is cleared; the sidebar selection stays the default recipient.
+      setInput('')
       setAttachments([])
       setSending(false)
     }).catch(() => {
       setSending(false)
     })
-  }, [input, currentInputMode, sending, workers, attachments, talkWorkers, isPartnerId])
+  }, [input, currentInputMode, sending, workers, attachments, defaultTargets])
 
   const handleAbort = useCallback(() => {
     const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
@@ -1003,12 +970,10 @@ export default function App() {
     setView('events')
   }, [])
 
-  // Mentioning a worker from a talk badge appends @id to the input. That is a
-  // hand edit of the addressing, so it also takes the input out of the sidebar's
-  // keeping. Kept stable (useCallback) so the memoized talk rows don't re-render
-  // on every event.
+  // Mentioning a worker from a talk badge appends @id to the input — an explicit
+  // mention, so it does show up in the text. Kept stable (useCallback) so the
+  // memoized talk rows don't re-render on every event.
   const handleMention = useCallback((id: string) => {
-    manualMentionsRef.current = true
     setInput(prev => prev + '@' + id + ' ')
     setMentionTarget(id)
     setMentionKey(k => k + 1)
@@ -1431,13 +1396,14 @@ export default function App() {
               talkPartner={''}
               input={input}
               inputMode={currentInputMode}
-              onInputChange={handleInputChange}
+              onInputChange={setInput}
               onSend={sendMessage}
               onAbort={handleAbort}
               onModeChange={handleInputModeChange}
               workers={workers}
               archived={archived}
               mentionKey={mentionKey}
+              defaultTargets={defaultTargets}
               isMobile={isMobile}
               attachments={attachments}
               onAttachmentsChange={setAttachments}

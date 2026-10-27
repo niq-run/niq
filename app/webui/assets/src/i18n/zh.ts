@@ -168,6 +168,7 @@ export const zh: Record<StringKey, string> = {
   'talk.input.noTarget.hint': '还没有收件人 — 先 @ 一个 worker',
   'talk.input.send.blocked': '请先指定收件人：输入 @，或点击左侧的收件人按钮',
   'talk.input.targets.tooltip': '收件人：{targets} — 点击增删 worker',
+  'talk.input.defaultTargets.tooltip': '收件人：{targets}（来自侧边栏选择）— 在输入框 @ 可以改成别的 worker',
   'picker.mention': '提及',
   'picker.header.mode': '模式',
   'picker.group.untagged': '其他',
