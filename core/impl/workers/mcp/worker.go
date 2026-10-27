@@ -176,6 +176,8 @@ func (w *Worker) registerExtensions() {
 			}),
 		}, w.handleExpose)
 	}
+
+	w.registerHelp()
 }
 
 // ── ManagedWorker lifecycle ──
@@ -771,7 +773,7 @@ func (w *Worker) unregisterToolEvents(server string) {
 // allowed to overwrite one.
 func reservedEvent(evt event.EventType) bool {
 	switch evt {
-	case EvtServerList, EvtServerAdd, EvtServerRemove, EvtServerUpdate, EvtToolList, EvtToolCall, EvtExpose, event.TypeWorkerReadme:
+	case EvtServerList, EvtServerAdd, EvtServerRemove, EvtServerUpdate, EvtToolList, EvtToolCall, EvtExpose, event.TypeWorkerReadme, event.TypeWorkerHelp:
 		return true
 	}
 	return false
