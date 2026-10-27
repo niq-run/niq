@@ -857,7 +857,11 @@ export default function App() {
     setMentionTarget(msgTargets[0])
     lastSendRef.current = { t: Date.now(), text: msgText.slice(0, 80) }
     sendInput(composeInput(msgText, attachments, msgTargets), msgTargets, currentInputMode).then(() => {
-      // The draft is cleared; the sidebar selection stays the default recipient.
+      // Keep addressing the same set for the next message: whatever this send
+      // resolved to — the target set plus any @-mentions typed into the draft —
+      // becomes the target set. Clearing the draft must not clear who you are
+      // talking to.
+      setTargets(msgTargets)
       setInput('')
       setAttachments([])
       setSending(false)
