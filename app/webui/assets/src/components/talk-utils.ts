@@ -266,14 +266,39 @@ function formatContentBlocks(blocks: any[], formatted: boolean): string {
 }
 
 // ── Event type → color ──
+//
+// Colour encodes outcome, not family, so the stream can be scanned for what
+// finished and what broke:
+//
+//   reason.*            → purple  (checked first: reasoning stays purple even
+//                                  when it is interrupted)
+//   *.failed / .rejected / .error → red
+//   *.completed / .done / .succeeded → green
+//   request.* / tool.* / *.request / *.call → yellow  (a call in flight)
+//   everything else     → grey    (lifecycle / infrastructure)
+//
+// Failure and completion match the suffix, so they also cover worker-specific
+// families (e.g. mcp.tool.call.failed), and are tested before the request rule
+// so request.completed / request.failed land in green / red, not yellow.
+
+const FAILED_SUFFIXES = ['.failed', '.rejected', '.error', '.errored']
+const COMPLETED_SUFFIXES = ['.completed', '.done', '.succeeded', '.success', '.finished']
+
+function endsWithAny(type: string, suffixes: string[]): boolean {
+  return suffixes.some(s => type.endsWith(s))
+}
 
 export function getTypeColor(type: string, colors: import('../theme').Palette): string {
-  if (type.startsWith('tool.') || type.startsWith('request.')) return colors.eventType.tool
   if (type.startsWith('reason.')) return colors.eventType.reason
-  if (type.startsWith('worker.')) return colors.eventType.worker
-  if (type.startsWith('hiw.')) return colors.eventType.hiw
-  if (type.startsWith('timer.')) return colors.eventType.timer
-  return colors.eventType.default
+  if (endsWithAny(type, FAILED_SUFFIXES)) return colors.eventType.failed
+  if (endsWithAny(type, COMPLETED_SUFFIXES)) return colors.eventType.completed
+  if (
+    type.startsWith('request.') ||
+    type.startsWith('tool.') ||
+    type.endsWith('.request') ||
+    type.endsWith('.call')
+  ) return colors.eventType.request
+  return colors.eventType.other
 }
 
 // ── Event summary text ──
