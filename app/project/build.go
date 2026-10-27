@@ -448,7 +448,7 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 		},
 		subAllowFromParams(p, []string{"worker.discover"}))
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
-		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerSvc})
+		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerSvc, Params: p})
 	}
 	cfg.ID = id
 	cfg.Type = "host"

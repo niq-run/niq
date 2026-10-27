@@ -86,6 +86,7 @@ func New(cfg Config) *Worker {
 		cancelCh:   make(chan struct{}),
 	}
 	w.SetOnDurableChange(cfg.OnDurableChange)
+	w.registerReadme()
 	return w
 }
 
@@ -117,11 +118,15 @@ func (w *Worker) Start(ctx context.Context) error {
 				if !ok {
 					return
 				}
-				// HIW reacts to nothing except the approval requests
-				// addressed to it; everything else is drained (the swarm's
-				// EventLog handles streaming).
-				if evt.Type == event.TypeApprovalRequest {
+				// HIW reacts to approval requests addressed to it; any other event
+				// is offered to the extension registry only when this worker
+				// actually serves it (worker.readme). Responses and directed
+				// presence are drained, never answered.
+				switch evt.Type {
+				case event.TypeApprovalRequest:
 					w.recordApprovalRequest(evt)
+				default:
+					w.dispatchRegistered(evt)
 				}
 			case <-ch:
 				return
@@ -145,6 +150,21 @@ func (w *Worker) Stop() error {
 	close(w.cancelCh)
 	w.started = false
 	return nil
+}
+
+// dispatchRegistered offers an event to the extension registry only when this
+// worker registered that event type. HIW receives directed traffic it does not
+// serve — most importantly request.completed / request.failed responses to the
+// events it publishes on the human's behalf. Passing those to
+// DispatchExtension would answer a RESPONSE with request.failed, so unknown
+// traffic is drained exactly as before.
+func (w *Worker) dispatchRegistered(evt event.Event) bool {
+	for _, ext := range w.Extensions() {
+		if ext.Event == evt.Type {
+			return w.DispatchExtension(evt)
+		}
+	}
+	return false
 }
 
 // ── Approval state ──
@@ -316,6 +336,7 @@ func (w *Worker) publishReady() {
 	ready := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
 		"worker_id": w.ID(),
 		"type":      "hiw",
+		"watch":     w.WatchEntries(false),
 		"publishes": []map[string]any{
 			{"type": "worker.input", "description": "User input event"},
 			{"type": string(event.TypeApprovalDecision), "description": "Approval decision on a received approval.request"},

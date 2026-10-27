@@ -322,6 +322,7 @@ func (w *WorkspaceWorker) registerExtensions() {
 
 	w.registerMountExtensions()
 	w.registerModeExtension()
+	w.registerReadme()
 }
 
 // dispatchHandler serves a tool call through the registered handler map.

@@ -29,6 +29,12 @@ const (
 	// worker; the reply is the usual request.completed. It is the generic
 	// "skill card" every worker may serve.
 	TypeWorkerReadme EventType = "worker.readme"
+	// TypeWorkerHelp asks a worker for help on ONE of the events it serves,
+	// like a CLI's `-h`: event_name selects the event and params selects a
+	// more specific guide (e.g. {"worker": "reason"} for spawn). The reply is
+	// the help text via request.completed. Any worker may serve it; the
+	// reusable implementation lives in baseworker.RegisterHelp.
+	TypeWorkerHelp EventType = "worker.help"
 
 	// The request-response pairing convention: any invocation of a capability
 	// is answered with one of these, echoing the Event.RequestId of the

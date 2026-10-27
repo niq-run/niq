@@ -539,6 +539,8 @@ func (w *Worker) registerExtensions() {
 		Response:    baseworker.ObjectSchema(map[string]any{"connected": map[string]any{"type": "boolean"}, "remote_url": map[string]any{"type": "string"}, "remote_worker_id": map[string]any{"type": "string"}, "remote_cred_set": map[string]any{"type": "boolean"}, "local_recipient": map[string]any{"type": "string"}, "remote_recipient": map[string]any{"type": "string"}}),
 		Description: "Return the current bridge status: connected, remote target, and recipient bindings.",
 	}, func(evt event.Event) { w.handleStatus(evt) })
+
+	w.registerReadme()
 }
 
 func (w *Worker) handleLocalSet(evt event.Event) {

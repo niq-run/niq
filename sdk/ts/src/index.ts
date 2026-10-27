@@ -2,6 +2,7 @@ export { HTTPWorkerClient } from "./client.js";
 export type { HTTPWorkerClientOptions } from "./client.js";
 
 export { BaseWorker, parseToolCall, argString, argInt } from "./baseworker.js";
+export type { HelpFunc } from "./help.js";
 
 export { replyValue, replyText } from "./reply.js";
 
