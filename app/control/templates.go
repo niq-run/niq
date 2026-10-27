@@ -75,6 +75,12 @@ func (c *Control) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 				stdhttp.Error(w, err.Error(), 500)
 				return
 			}
+			// The built-in's programs/ travel along, so cloning it is a
+			// whole-template clone and not just a JSON file.
+			if _, err := project.CopyTemplatePrograms(project.TemplatesDir(), body.CopyFrom, destDir); err != nil {
+				stdhttp.Error(w, "copy programs: "+err.Error(), 500)
+				return
+			}
 			w.WriteHeader(stdhttp.StatusCreated)
 			return
 		}

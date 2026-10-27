@@ -203,3 +203,59 @@ func TestDeclFromSpawnCarriesMeta(t *testing.T) {
 		t.Fatalf("display metadata leaked into params: %+v", decl.Params)
 	}
 }
+
+// TestDefaultPresetShipsUsingNiqPlaybook verifies the built-in default template
+// seeds the reason worker with the using-niq playbook, and that it survives
+// the template → params → builder roundtrip (params["programs"], as parsePrograms
+// reads it). The content itself lives in the template's programs/ directory, so the
+// playbook's path is loadable by the program worker (program.load).
+func TestDefaultPresetShipsUsingNiqPlaybook(t *testing.T) {
+	def, err := LoadPreset("default")
+	if err != nil {
+		t.Fatalf("LoadPreset(default): %v", err)
+	}
+	var niq *WorkerConfig
+	for i := range def.Workers {
+		if def.Workers[i].ID == "niq" && def.Workers[i].Type == "reason" {
+			niq = &def.Workers[i]
+		}
+	}
+	if niq == nil {
+		t.Fatal("default preset has no reason worker niq")
+	}
+	var guide *ProgramSpec
+	for i := range niq.Programs {
+		if niq.Programs[i].Name == "using-niq" {
+			guide = &niq.Programs[i]
+		}
+	}
+	if guide == nil {
+		t.Fatalf("niq programs = %+v, want a using-niq entry", niq.Programs)
+	}
+	if guide.ContentType != "playbook" {
+		t.Fatalf("using-niq content_type = %q, want playbook", guide.ContentType)
+	}
+	if guide.Description == "" {
+		t.Fatal("using-niq playbook has no description (the system prompt lists it)")
+	}
+
+	// The builder input: the typed Programs field lowers into params and
+	// parsePrograms reads it back as a playbook.
+	progs := parsePrograms(workerConfigParams(*niq), "niq")
+	var seen bool
+	for _, p := range progs {
+		if p.Name == "using-niq" && p.ContentType == "playbook" && p.Description == guide.Description {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("parsePrograms = %+v, want the using-niq playbook", progs)
+	}
+
+	// The playbook content must live in the template's programs/ dir, which is
+	// what program.load addresses by path.
+	raw, err := presetFS.ReadFile("preset/default/programs/using-niq/PROGRAM.md")
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("embedded using-niq PROGRAM.md: %v", err)
+	}
+}
