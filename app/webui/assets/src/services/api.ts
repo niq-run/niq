@@ -292,20 +292,40 @@ export async function resumeWorker(id: string): Promise<void> {
 }
 
 // startWorker / stopWorker / restartWorker control an external (unmanaged)
-// worker process launched by the project supervisor.
+// worker process launched by the project supervisor — and, for a managed
+// worker, a rebuild from its declaration. The server answers as soon as the
+// supervisor/host accepted the request, but a rebuild that blocks mid-flight
+// would otherwise leave the UI's button spinning forever; bound it so the
+// caller always resolves and can report "requested, still in progress".
+const LIFECYCLE_TIMEOUT_MS = 30000
+
+async function workerLifecycleOp(id: string, op: 'start' | 'stop' | 'restart'): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/${op}`), {
+      method: 'POST',
+      signal: AbortSignal.timeout(LIFECYCLE_TIMEOUT_MS),
+    })
+  } catch (e) {
+    const name = (e as Error)?.name
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      throw new Error(op + ' is taking longer than expected — check the worker\'s state')
+    }
+    throw e
+  }
+  if (!res.ok) throw new Error((await res.text()).trim() || op + ' failed: ' + res.status)
+}
+
 export async function startWorker(id: string): Promise<void> {
-  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/start`), { method: 'POST' })
-  if (!res.ok) throw new Error((await res.text()).trim() || 'start failed: ' + res.status)
+  await workerLifecycleOp(id, 'start')
 }
 
 export async function stopWorker(id: string): Promise<void> {
-  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/stop`), { method: 'POST' })
-  if (!res.ok) throw new Error((await res.text()).trim() || 'stop failed: ' + res.status)
+  await workerLifecycleOp(id, 'stop')
 }
 
 export async function restartWorker(id: string): Promise<void> {
-  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/restart`), { method: 'POST' })
-  if (!res.ok) throw new Error((await res.text()).trim() || 'restart failed: ' + res.status)
+  await workerLifecycleOp(id, 'restart')
 }
 
 // deleteWorker permanently removes a worker: stops it, revokes its identity,

@@ -10,6 +10,7 @@ import SelectDropdown from '../components/SelectDropdown'
 import DetailRow from '../components/DetailRow'
 import CollapsibleCode from '../components/CollapsibleCode'
 import { makeMdComponents } from '../components/MarkdownComponents'
+import { PublishAllowRows, SubscribeAllowRows, type PublishRow, type SubscribeRow } from '../components/AllowEditors'
 import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, sendWorkerEvent, fetchEventsByRequest, updateWorkerAllow, updateWorkerMeta, updateWorkerParams } from '../services/api'
 
 interface WorkerDetailProps {
@@ -60,10 +61,25 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
   const [editingPub, setEditingPub] = useState(false)
   const [pubNote, setPubNote] = useState('')
   const [umBusy, setUmBusy] = useState('')
+  // umNote + umKind are one status line: the action in progress, or its result.
+  // The kind picks the colour (dim while working, green when done, red on
+  // failure) so the state is readable at a glance.
   const [umNote, setUmNote] = useState('')
+  const [umKind, setUmKind] = useState<'' | 'busy' | 'done' | 'error'>('')
   const [confirmDel, setConfirmDel] = useState(false)
   const [delBusy, setDelBusy] = useState(false)
   const [configNote, setConfigNote] = useState('')
+
+  // The action note (start/stop/restart feedback) states where the operation
+  // stands: "restarting…" while the request is in flight, then a lasting
+  // "restarted" result. Nothing clears on a timer — a hint that vanishes is
+  // worse than one that stays — and the note is reset when the selected worker
+  // changes so one worker's result never describes another.
+  useEffect(() => {
+    setUmNote('')
+    setUmKind('')
+    setUmBusy('')
+  }, [worker.id])
 
   const doDelete = async () => {
     setDelBusy(true)
@@ -71,6 +87,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
       await deleteWorker(worker.id)
       onDeleted(worker.id)
     } catch (e) {
+      setUmKind('error')
       setUmNote((e as Error)?.message || 'delete failed')
       setConfirmDel(false)
     } finally {
@@ -113,14 +130,22 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 
   const unmanagedAction = async (op: 'start' | 'stop' | 'restart') => {
     setUmBusy(op)
-    setUmNote('')
+    // In-flight state, mirrored in the note line so the progress is explicit
+    // even when the button label alone is easy to miss.
+    setUmKind('busy')
+    setUmNote({ start: t('wd.starting'), stop: t('wd.stopping'), restart: t('wd.restarting') }[op])
     try {
       if (op === 'start') await startWorker(worker.id)
       else if (op === 'stop') await stopWorker(worker.id)
       else await restartWorker(worker.id)
-      setUmNote({ start: t('wd.starting'), stop: t('wd.stopping'), restart: t('wd.restarting') }[op])
+      // Done: replace the in-progress text with a result that stays until the
+      // next action (or another worker is selected), so the outcome is never
+      // ambiguous.
+      setUmKind('done')
+      setUmNote({ start: t('wd.actionDone.start'), stop: t('wd.actionDone.stop'), restart: t('wd.actionDone.restart') }[op])
       onRefresh?.()
     } catch (e) {
+      setUmKind('error')
       setUmNote((e as Error)?.message || op + ' failed')
     } finally {
       setUmBusy('')
@@ -163,6 +188,13 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
     background: typeColor + '1f',
     border: '1px solid ' + typeColor + '55',
   }
+
+  // The action status line: dim while the request is in flight, green once it
+  // succeeded, red on failure. Rendered from every branch of the actions card.
+  const umNoteColor = umKind === 'done' ? colors.toolCompleted : umKind === 'error' ? colors.toolFailed : colors.textDimmed
+  const umNoteLine = umNote ? (
+    <div style={{ fontSize: fontSizes.sm, color: umNoteColor, marginTop: 6, lineHeight: 1.5 }}>{umNote}</div>
+  ) : null
 
   return (
     <div style={{ flex: 1, width: '100%', minWidth: 0, overflowY: 'auto', fontSize: fontSizes.base, background: colors.bg }}>
@@ -364,9 +396,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                 >
                   {umBusy === 'start' ? t('wd.starting') : t('wd.start')}
                 </span>
-                {umNote && (
-                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{umNote}</div>
-                )}
+                {umNoteLine}
               </div>
             ) : worker.managed ? (
               <>
@@ -396,9 +426,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                     </span>
                   </div>
                   <div style={{ fontSize: fontSizes.xs, color: colors.detailLabel, marginTop: 6, lineHeight: 1.4 }}>{t('wd.managedRestart.desc')}</div>
-                  {umNote && (
-                    <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{umNote}</div>
-                  )}
+                  {umNoteLine}
                 </div>
                 <div>
                   <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 6, lineHeight: 1.5 }}>
@@ -440,7 +468,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                     : t('wd.unmanaged.start.desc')}
                 </div>
                 {worker.unmanaged_state === 'running' ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <span
                       onClick={() => unmanagedAction('stop')}
                       className="btn-hover"
@@ -465,9 +493,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                     {umBusy === 'start' ? t('wd.starting') : t('wd.start')}
                   </span>
                 )}
-                {umNote && (
-                  <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>{umNote}</div>
-                )}
+                {umNoteLine}
               </div>
 			        ) : (
 			        	<span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.notManaged')}</span>
@@ -1008,38 +1034,25 @@ function MountsSection({ workerId }: { workerId: string }) {
   )
 }
 
-// SubscribeAllowEditor renders the SubscribeAllow list in the same row layout
-// as the editor: one row per pattern, each with a type field and an optional
-// source field. In readOnly mode it shows the worker's current list with the
-// fields disabled; in edit mode it drafts a replacement and saves it against
-// the bus registry. Saving replaces the whole list; the worker list polls and
-// refreshes the read-only view after the round trip.
+// SubscribeAllowEditor renders the worker's subscribe grants. It shares the row
+// editor used by the create form (built-in event-type picker, source dropdown,
+// and the "pick a worker's published events" helper); this wrapper owns the
+// draft, the save round trip to the bus registry, and the read-only view.
 function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDone }: { worker: WorkerInfo; allWorkers?: WorkerInfo[]; readOnly?: boolean; onDone?: (note: string) => void }) {
   const { colors } = useTheme()
   const { t } = useI18n()
-  const [draft, setDraft] = useState<{ type: string; source: string }[]>(() =>
-    (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source || '' })),
+  const [draft, setDraft] = useState<SubscribeRow[]>(() =>
+    (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source || '*' })),
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   // Read-only view tracks the worker prop directly (the draft would go stale
-  // as the list polls); edit mode drafts on its own state.
-  const rows = readOnly
-    ? (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source || '' }))
+  // as the list polls); edit mode drafts on its own state. An omitted source is
+  // normalized to the canonical "any source" wildcard.
+  const rows: SubscribeRow[] = readOnly
+    ? (worker.subscribe_allow || []).map((p) => ({ type: p.type, source: p.source || '*' }))
     : draft
-
-  const inputStyle: React.CSSProperties = {
-    flex: 1,
-    minWidth: 0,
-    padding: '5px 8px',
-    fontSize: fontSizes.sm,
-    background: colors.bgLight,
-    color: colors.text,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-    opacity: readOnly ? 0.75 : 1,
-  }
 
   const save = async () => {
     const valid = draft.filter((r) => r.type.trim() !== '')
@@ -1051,9 +1064,7 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
     setError('')
     try {
       await updateWorkerAllow(worker.id, {
-        subscribe_allow: valid.map((r) =>
-          r.source.trim() ? { type: r.type.trim(), source: r.source.trim() } : { type: r.type.trim() },
-        ),
+        subscribe_allow: valid.map((r) => ({ type: r.type.trim(), source: r.source || '*' })),
       })
       onDone?.(t('wd.saved'))
     } catch (e) {
@@ -1065,50 +1076,9 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
 
   return (
     <div style={{ marginTop: 6 }}>
-      {rows.map((r, i) => (
-        <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-          <input
-            value={r.type}
-            placeholder={readOnly ? undefined : t('wd.subPlaceholder')}
-            disabled={readOnly}
-            onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], type: e.target.value }; setDraft(n) }}
-            style={inputStyle}
-          />
-          <select
-            value={r.source}
-            disabled={readOnly}
-            onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], source: e.target.value }; setDraft(n) }}
-            style={{ ...inputStyle, flex: '0 1 170px', appearance: 'none' }}
-          >
-            <option value="" style={{ background: colors.bgLight, color: colors.text }}>{t('wd.anySource')}</option>
-            {r.source !== '' && !allWorkers.some((w) => w.id === r.source) && (
-              <option value={r.source} style={{ background: colors.bgLight, color: colors.text }}>{r.source}</option>
-            )}
-            {allWorkers.map((w) => (
-              <option key={w.id} value={w.id} style={{ background: colors.bgLight, color: colors.text }}>{w.id}</option>
-            ))}
-          </select>
-          {!readOnly && (
-            <span
-              onClick={() => setDraft(draft.filter((_, j) => j !== i))}
-              className="btn-hover"
-              title={t('wd.remove')}
-              style={{ cursor: 'pointer', color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none', padding: '0 4px' }}
-            >
-              {'\u2715'}
-            </span>
-          )}
-        </div>
-      ))}
+      <SubscribeAllowRows rows={rows} onChange={setDraft} allWorkers={allWorkers} disabled={readOnly} />
       {!readOnly && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
-          <span
-            onClick={() => setDraft([...draft, { type: '', source: '' }])}
-            className="btn-hover"
-            style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
-          >
-            {t('wd.add')}
-          </span>
           <span
             onClick={save}
             className="btn-hover"
@@ -1119,25 +1089,20 @@ function SubscribeAllowEditor({ worker, allWorkers = [], readOnly = false, onDon
           {error && <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</span>}
         </div>
       )}
-      {rows.length === 0 && (
-        <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 8, lineHeight: 1.5 }}>
-          {t('wd.noSubscriptions')}
-        </div>
-      )}
     </div>
   )
 }
 
 // PublishAllowEditor edits/views the worker's publish grants. Symmetric to
 // SubscribeAllowEditor: each row is an event type plus an optional target
-// restriction. An empty target means "any target" (*) — a broadcast/Directed
-// to any worker.
+// restriction. An empty target means "any target" (*) — a broadcast or a
+// directed send to any worker.
 function PublishAllowEditor({ worker, allWorkers = [], readOnly = false, onDone }: { worker: WorkerInfo; allWorkers?: WorkerInfo[]; readOnly?: boolean; onDone?: (note: string) => void }) {
   const { colors } = useTheme()
   const { t } = useI18n()
-  const toDraft = () =>
+  const toDraft = (): PublishRow[] =>
     (worker.publish_allow || []).map((p) => ({ type: p.type, target: p.target === '*' || !p.target ? '' : p.target }))
-  const [draft, setDraft] = useState<{ type: string; target: string }[]>(toDraft)
+  const [draft, setDraft] = useState<PublishRow[]>(toDraft)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const prevReadOnly = useRef(readOnly)
@@ -1150,21 +1115,9 @@ function PublishAllowEditor({ worker, allWorkers = [], readOnly = false, onDone 
     prevReadOnly.current = readOnly
   }, [readOnly, worker])
 
-  const rows = readOnly
+  const rows: PublishRow[] = readOnly
     ? (worker.publish_allow || []).map((p) => ({ type: p.type, target: p.target === '*' || !p.target ? '' : p.target }))
     : draft
-
-  const inputStyle: React.CSSProperties = {
-    flex: 1,
-    minWidth: 0,
-    padding: '5px 8px',
-    fontSize: fontSizes.sm,
-    background: colors.bgLight,
-    color: colors.text,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-    opacity: readOnly ? 0.75 : 1,
-  }
 
   const save = async () => {
     const valid = draft.filter((r) => r.type.trim() !== '')
@@ -1188,50 +1141,9 @@ function PublishAllowEditor({ worker, allWorkers = [], readOnly = false, onDone 
 
   return (
     <div style={{ marginTop: 6 }}>
-      {rows.map((r, i) => (
-        <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-          <input
-            value={r.type}
-            placeholder={readOnly ? undefined : t('wd.pubPlaceholder')}
-            disabled={readOnly}
-            onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], type: e.target.value }; setDraft(n) }}
-            style={inputStyle}
-          />
-          <select
-            value={r.target}
-            disabled={readOnly}
-            onChange={(e) => { const n = [...draft]; n[i] = { ...n[i], target: e.target.value }; setDraft(n) }}
-            style={{ ...inputStyle, flex: '0 1 170px', appearance: 'none' }}
-          >
-            <option value="" style={{ background: colors.bgLight, color: colors.text }}>{t('wd.anyTarget')}</option>
-            {r.target !== '' && !allWorkers.some((w) => w.id === r.target) && (
-              <option value={r.target} style={{ background: colors.bgLight, color: colors.text }}>{r.target}</option>
-            )}
-            {allWorkers.map((w) => (
-              <option key={w.id} value={w.id} style={{ background: colors.bgLight, color: colors.text }}>{w.id}</option>
-            ))}
-          </select>
-          {!readOnly && (
-            <span
-              onClick={() => setDraft(draft.filter((_, j) => j !== i))}
-              className="btn-hover"
-              title={t('wd.remove')}
-              style={{ cursor: 'pointer', color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none', padding: '0 4px' }}
-            >
-              {'\u2715'}
-            </span>
-          )}
-        </div>
-      ))}
+      <PublishAllowRows rows={rows} onChange={setDraft} allWorkers={allWorkers} disabled={readOnly} />
       {!readOnly && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
-          <span
-            onClick={() => setDraft([...draft, { type: '', target: '' }])}
-            className="btn-hover"
-            style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
-          >
-            {t('wd.add')}
-          </span>
           <span
             onClick={save}
             className="btn-hover"
@@ -1242,13 +1154,6 @@ function PublishAllowEditor({ worker, allWorkers = [], readOnly = false, onDone 
           {error && <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</span>}
         </div>
       )}
-      {rows.length === 0 && (
-        <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginTop: 8, lineHeight: 1.5 }}>
-          {t('wd.noPublish')}
-        </div>
-      )}
     </div>
   )
 }
-
-

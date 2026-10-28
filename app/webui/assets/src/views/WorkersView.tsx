@@ -26,7 +26,8 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
   // ── Search + filter (mirrors the sidebar's worker picker modal): free-text
   // search, a multi-select tag filter and an online/offline status filter. The
   // filtered set drives the table below.
-  // ── Filter: three dropdowns (type, tag, online status) drive the table.
+  // ── Filter: free-text search plus three dropdowns (type, tag, online status).
+  const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
   const [tagFilter, setTagFilter] = useState('')
   // Default to ONLINE: the worker list is an at-a-glance roster of who is
@@ -45,11 +46,15 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
     return [...set].sort()
   }, [workers])
 
-  // Type / tag / online-status filters combine with AND.
+  // Type / tag / online-status filters combine with AND; the free-text query
+  // matches the id, type, description or any tag.
+  const query = search.trim().toLowerCase()
   const filtered = workers.filter(w =>
     (typeFilter === '' || w.type === typeFilter) &&
     (tagFilter === '' || (w.tags || []).includes(tagFilter)) &&
-    (onlineFilter === '' || (onlineFilter === 'online' ? w.online !== false : w.online === false))
+    (onlineFilter === '' || (onlineFilter === 'online' ? w.online !== false : w.online === false)) &&
+    (query === '' || [w.id, w.type, w.description, ...(w.tags || [])]
+      .some(v => (v || '').toLowerCase().includes(query)))
   )
 
   // Single-line cells with ellipsis (same as the events table), with a taller
@@ -131,6 +136,12 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
           the table scrolls. */}
       {workers.length > 0 && (
         <div style={{ flexShrink: 0, display: 'flex', gap: 16, padding: isMobile ? '4px 24px 8px' : '10px 24px 8px', flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid ' + colors.border }}>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('worker.filter.search')}
+            style={{ flex: '1 1 200px', minWidth: 160, maxWidth: 320, boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '4px 9px', color: colors.text, fontSize: fontSizes.sm, outline: 'none' }}
+          />
           <FilterField label={t('worker.filter.type')} colors={colors}>
             <SelectDropdown value={typeFilter} options={availableTypes} placeholder={t('worker.filter.all')} onChange={setTypeFilter} />
           </FilterField>
@@ -259,6 +270,7 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
           onRefresh?.()
         }}
         busPort={busPort}
+        workers={workers}
       />
       </div>
     </div>

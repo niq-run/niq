@@ -99,8 +99,9 @@ func TestHandleUpdateAllow(t *testing.T) {
 	}
 	if len(idt.SubscribeAllow) != 2 ||
 		idt.SubscribeAllow[0].Type != "request.completed" || idt.SubscribeAllow[0].SourceID != "timer" ||
-		idt.SubscribeAllow[1].Type != "worker.ready" || idt.SubscribeAllow[1].SourceID != "" {
-		t.Fatalf("subscribe_allow = %+v, want [request.completed@timer, worker.ready]", idt.SubscribeAllow)
+		// An omitted source is stored as the canonical any-source wildcard.
+		idt.SubscribeAllow[1].Type != "worker.ready" || idt.SubscribeAllow[1].SourceID != "*" {
+		t.Fatalf("subscribe_allow = %+v, want [request.completed@timer, worker.ready@*]", idt.SubscribeAllow)
 	}
 	if len(idt.PublishAllow) != 1 || idt.PublishAllow[0].Type != "*" {
 		t.Fatalf("publish_allow clobbered = %+v, want [*]", idt.PublishAllow)

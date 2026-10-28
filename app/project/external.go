@@ -361,11 +361,11 @@ func buildRemoteIdentity(spec *WorkerConfig) corebus.Identity {
 		// broadcast-driven peers.
 		if spec.Type == "remote-niw" {
 			subAllow = []event.EventPattern{
-				{Type: event.TypeWorkerInput},
-				{Type: "worker.discover"},
+				event.NewPattern(event.TypeWorkerInput),
+				event.NewPattern("worker.discover"),
 			}
 		} else {
-			subAllow = []event.EventPattern{{Type: "*"}}
+			subAllow = []event.EventPattern{event.NewPattern("*")}
 		}
 	}
 	pubAllow := make([]event.PublishPattern, 0, len(spec.Publish))

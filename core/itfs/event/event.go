@@ -75,7 +75,9 @@ type EventPattern struct {
 	// Supports exact match, "*" (any), and "Prefix.*" (prefix) wildcards.
 	Type EventType `json:"type"`
 	// SourceID optionally restricts the subscription to events published by
-	// this source worker. Empty means "any source".
+	// this source worker. An absent source ("") and the canonical wildcard
+	// ("*") both mean "any source"; "" stays accepted so older configs and
+	// registry entries that simply omit the field keep working.
 	SourceID string `json:"source,omitempty"`
 }
 
@@ -102,6 +104,12 @@ func (p *EventPattern) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// UnrestrictedSource reports whether this subscription accepts events from any
+// source: an omitted source ("") and the canonical wildcard ("*") both do.
+func (p EventPattern) UnrestrictedSource() bool {
+	return p.SourceID == "" || p.SourceID == "*"
+}
+
 // Matches reports whether a fully-routed event satisfies this subscription.
 // Event.WorkerId is set by the bus to the sender, so source matching is
 // authoritative regardless of who forwarded the event.
@@ -109,15 +117,16 @@ func (p EventPattern) Matches(evt Event) bool {
 	if !PatternMatches(string(p.Type), evt.Type) {
 		return false
 	}
-	if p.SourceID != "" && evt.WorkerId != p.SourceID {
+	if !p.UnrestrictedSource() && evt.WorkerId != p.SourceID {
 		return false
 	}
 	return true
 }
 
-// NewPattern is a convenience constructor for a type-only subscription.
+// NewPattern is a convenience constructor for an any-source subscription (the
+// canonical spelling of "no source restriction" is SourceID "*").
 func NewPattern(typ EventType) EventPattern {
-	return EventPattern{Type: typ}
+	return EventPattern{Type: typ, SourceID: "*"}
 }
 
 // PublishPattern is a publish grant: an event type a worker may publish,

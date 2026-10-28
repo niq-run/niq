@@ -110,14 +110,18 @@ func TestSubscriptionSpecParsing(t *testing.T) {
 	}
 
 	// Round-trip through workerConfigParams → subscriptionPatterns must yield
-	// the same EventPatterns, source included.
+	// the same EventPatterns, with an omitted source normalized to the
+	// canonical "any source" wildcard ("*").
 	p := workerConfigParams(cfg.Workers[0])
 	patterns := subscriptionPatterns(p["subscriptions"])
 	if len(patterns) != 2 {
 		t.Fatalf("patterns = %+v, want 2", patterns)
 	}
-	if patterns[0].Type != "worker.discover" || patterns[0].SourceID != "" {
-		t.Fatalf("pattern[0] = %+v, want worker.discover", patterns[0])
+	if patterns[0].Type != "worker.discover" || !patterns[0].UnrestrictedSource() {
+		t.Fatalf("pattern[0] = %+v, want worker.discover from any source", patterns[0])
+	}
+	if patterns[0].SourceID != "*" {
+		t.Fatalf("pattern[0].SourceID = %q, want the canonical %q", patterns[0].SourceID, "*")
 	}
 	if patterns[1].Type != "request.completed" || patterns[1].SourceID != "timer" {
 		t.Fatalf("pattern[1] = %+v, want request.completed/timer", patterns[1])

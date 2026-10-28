@@ -43,6 +43,10 @@ func TestEventPatternMatches(t *testing.T) {
 		{"source-match", EventPattern{Type: "pr.ready", SourceID: "gh"}, "pr.ready", "gh", true},
 		{"source-miss", EventPattern{Type: "pr.ready", SourceID: "gh"}, "pr.ready", "gitlab", false},
 		{"source-wildcard", EventPattern{Type: "*", SourceID: "gh"}, "pr.ready", "gh", true},
+		// An omitted source and the canonical "*" both mean "any source".
+		{"any-source-empty", EventPattern{Type: "pr.ready", SourceID: ""}, "pr.ready", "anyone", true},
+		{"any-source-star", EventPattern{Type: "pr.ready", SourceID: "*"}, "pr.ready", "anyone", true},
+		{"any-source-star-no-source", EventPattern{Type: "pr.ready", SourceID: "*"}, "pr.ready", "", true},
 	}
 	for _, c := range cases {
 		evt := Event{Type: EventType(c.typ), WorkerId: c.source}

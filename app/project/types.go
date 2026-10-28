@@ -36,8 +36,13 @@ type SubscriptionSpec struct {
 }
 
 // ToPattern converts the spec into the bus-level EventPattern it stands for.
+// An omitted source is the canonical "any source" wildcard.
 func (s SubscriptionSpec) ToPattern() event.EventPattern {
-	return event.EventPattern{Type: s.Type, SourceID: s.Source}
+	src := s.Source
+	if src == "" {
+		src = "*"
+	}
+	return event.EventPattern{Type: s.Type, SourceID: src}
 }
 
 // UnmarshalJSON accepts a bare type string or a {"type","source"} object, so
