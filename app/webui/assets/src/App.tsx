@@ -28,11 +28,12 @@ import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type Contex
 const HISTORY_PAGE = 100
 
 // Events the talk view keeps even though the worker.* family is hidden: the
-// conversation-bearing kinds plus the callable meta capabilities (worker.help).
-// worker.ready rides along so the worker detail can derive its watch contract.
-// ONE list for the live stream and both history queries — a keep override that
-// only covers the stream makes a row appear live and vanish on refresh.
-const TALK_KEEP = ['worker.input', 'worker.abort', 'worker.ready', 'worker.help']
+// conversation-bearing kinds plus the callable meta capabilities (worker.help,
+// worker.readme). worker.ready rides along so the worker detail can derive its
+// watch contract. ONE list for the live stream and both history queries — a
+// keep override that only covers the stream makes a row appear live and vanish
+// on refresh.
+const TALK_KEEP = ['worker.input', 'worker.abort', 'worker.ready', 'worker.help', 'worker.readme']
 
 // Thresholds for the talk/events list trim. Rather than trimming to a tiny
 // window on every event (which made the pinned bottom visibly bounce as rows

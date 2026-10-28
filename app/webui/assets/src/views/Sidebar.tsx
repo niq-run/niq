@@ -764,10 +764,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                   <span
                     title={w.id}
-                    style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0, transition: 'color 0.12s' }}
+                    style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
                   >
                     {w.id}
                   </span>
+                  {onOpenDetail && hoverId === 'worker:' + w.id && (
+                    <ReadmeIcon colors={colors} label={t('badge.menu.readme')} onClick={() => onOpenDetail(w.id, 'readme')} />
+                  )}
                   {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} />}
                 </ContextMenuSurface>
               )
@@ -785,11 +788,16 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               >
                 <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: 12, flex: 1, minWidth: 0 }}>
-                  <span
-                    title={w.id}
-                    style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
-                  >
-                    {w.id}
+                  <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, flexShrink: 1, minWidth: 0 }}>
+                    <span
+                      title={w.id}
+                      style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
+                    >
+                      {w.id}
+                    </span>
+                    {onOpenDetail && hoverId === 'worker:' + w.id && (
+                      <ReadmeIcon colors={colors} label={t('badge.menu.readme')} onClick={() => onOpenDetail(w.id, 'readme')} />
+                    )}
                   </span>
                   {w.type ? <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, flexShrink: 0 }}>[{w.type}]</span> : null}
                   {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} />}
@@ -1026,6 +1034,29 @@ function LogoWordmark() {
       <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>i</span>
       <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>p</span>
     </>
+  )
+}
+
+// A small "i" affordance for the worker selector: hovering a row reveals it,
+// and clicking opens that worker's readme directly (the same destination as the
+// row menu's Readme entry).
+function ReadmeIcon({ colors, label, onClick }: { colors: Palette; label: string; onClick: () => void }) {
+  return (
+    <span
+      role="button"
+      aria-label={label}
+      title={label}
+      draggable={false}
+      onClick={(e) => { e.stopPropagation(); onClick() }}
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+        border: '1px solid ' + colors.border, color: colors.textDim,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 10, fontStyle: 'italic', fontWeight: 600, lineHeight: 1,
+        cursor: 'pointer', userSelect: 'none',
+      }}
+    >i</span>
   )
 }
 
