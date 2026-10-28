@@ -362,7 +362,15 @@ export default function McpWorkerPanel({
     try {
       const r = await mcpListTools(worker.id, name)
       if (!r.ok) throw new Error(r.error || 'mcp.tool.list failed')
-      setToolsByServer((prev) => ({ ...prev, [name]: Array.isArray(r.result) ? (r.result as McpToolInfo[]) : [] }))
+      const tools = Array.isArray(r.result) ? (r.result as McpToolInfo[]) : []
+      setToolsByServer((prev) => ({ ...prev, [name]: tools }))
+      // A successful tools/list means the worker has a live MCP session for
+      // this server. The server list is only a snapshot fetched on open or
+      // refresh, so fold that fact back into it: otherwise the status text
+      // stays "configured" after a tool list that clearly worked.
+      setServers((prev) => prev.map((s) => (
+        s.name === name ? { ...s, status: 'connected', tools: tools.length } : s
+      )))
     } catch (e) {
       setToolsErr((prev) => ({ ...prev, [name]: errText(e) }))
     } finally {
@@ -524,7 +532,6 @@ export default function McpWorkerPanel({
         {!editing &&
           !(online && loading) &&
           servers.map((s) => {
-            const connected = s.status === 'connected'
             const statusText =
               s.status === 'connected'
                 ? t('mcp.status.connected')
@@ -539,10 +546,6 @@ export default function McpWorkerPanel({
                 style={{ border: '1px solid ' + colors.detailBorder, borderRadius: 6, padding: '10px 12px', marginBottom: 8, background: colors.bg }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span
-                    title={connected ? t('mcp.status.connected') : t('mcp.status.configured')}
-                    style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: connected ? colors.toolCompleted : colors.textDimmed }}
-                  />
                   <strong style={{ color: colors.text, fontSize: fontSizes.md }}>{s.name}</strong>
                   {s.protocol && <Chip colors={colors}>{s.protocol}</Chip>}
                   {statusText && <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed }}>{statusText}</span>}
