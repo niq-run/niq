@@ -27,6 +27,13 @@ import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type Contex
 // (both the initial watermark backfill and the load-more pagination).
 const HISTORY_PAGE = 100
 
+// Events the talk view keeps even though the worker.* family is hidden: the
+// conversation-bearing kinds plus the callable meta capabilities (worker.help).
+// worker.ready rides along so the worker detail can derive its watch contract.
+// ONE list for the live stream and both history queries — a keep override that
+// only covers the stream makes a row appear live and vanish on refresh.
+const TALK_KEEP = ['worker.input', 'worker.abort', 'worker.ready', 'worker.help']
+
 // Thresholds for the talk/events list trim. Rather than trimming to a tiny
 // window on every event (which made the pinned bottom visibly bounce as rows
 // were removed/re-added), we let the live list grow up to TRIM_HIGH while the
@@ -486,14 +493,8 @@ export default function App() {
   // worker.* lifecycle is always hidden; delta partials are hidden unless
   // streaming is on, because the live stream needs them to render in-flight
   // thinking/text while history never does.
-  	const talkExclude: string[] = streamingMode ? [] : ['reason.thinking_delta', 'reason.text_delta', 'request.progressed']
-  	const talkExcludePrefix = ['worker.']
-  	// worker.ready rides along even though the whole worker.* family is hidden:
-  	// the worker detail derives its "supported events" from it (and from the
-  	// on-demand worker.discover reply, which IS a worker.ready). worker.help is a
-  	// callable capability like any tool event, so its invocation and reply render
-  	// as a normal card. The timeline still hides the rest of worker.*.
-  	const talkKeep = ['worker.input', 'worker.abort', 'worker.ready', 'worker.help']
+	const talkExclude: string[] = streamingMode ? [] : ['reason.thinking_delta', 'reason.text_delta', 'request.progressed']
+	const talkExcludePrefix = ['worker.']
 
   useEffect(() => {
     // No project → no event stream.
@@ -517,7 +518,7 @@ export default function App() {
       if (responseOnly) for (const t of RESPONSE_ONLY_TYPES) params.append('type', t)
       for (const t of talkExclude) params.append('exclude', t)
       for (const p of talkExcludePrefix) params.append('exclude_prefix', p)
-      for (const t of talkKeep) params.append('keep', t)
+      for (const t of TALK_KEEP) params.append('keep', t)
     }
     const url = projectBase + `/api/stream?${params}`
 
@@ -559,7 +560,7 @@ export default function App() {
         // the live stream keeps them for in-flight rendering.
         ? { workers: talkScope, types: responseOnly ? [...RESPONSE_ONLY_TYPES] as string[] : [],
             exclude: ['reason.thinking_delta', 'reason.text_delta', 'request.progressed'],
-            excludePrefix: ['worker.'], keep: ['worker.input', 'worker.abort'] }
+            excludePrefix: ['worker.'], keep: TALK_KEEP }
         : { workers, roles, trace }
       try {
         // Merge history into whatever the live stream has already delivered
@@ -1109,7 +1110,7 @@ export default function App() {
       const opts = isTalk
         ? { workers: talkScope, types: responseOnly ? [...RESPONSE_ONLY_TYPES] as string[] : [],
             exclude: ['reason.thinking_delta', 'reason.text_delta', 'request.progressed'],
-            excludePrefix: ['worker.'], keep: ['worker.input', 'worker.abort'] }
+            excludePrefix: ['worker.'], keep: TALK_KEEP }
         : { workers: [...filterWorkers], roles: [...filterRoles], trace: traceFilter }
       const older = (await loadEventsBefore(events[0].id, HISTORY_PAGE, opts)) as EventPayload[]
       // Fewer than a full page means the store has nothing older that matches.
