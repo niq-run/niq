@@ -36,10 +36,12 @@ func (w *BaseReasonWorker) registerReadme() {
 	}
 
 	w.RegisterReadme(
-		"Read this worker's readme: a short, first-person statement of what it is responsible for "+
-			"and what it has been working on lately. Use it to recall a worker's purpose and its current "+
-			"focus before delegating to it, so the work you hand over lands where the worker already is. "+
-			"It is not a rulebook: instructions, policies and step-by-step procedures live in programs.",
+		"Read this worker's readme: a short, first-person statement in Markdown of what it is "+
+			"responsible for and what it has been working on lately. Markdown is rendered by the WebUI, "+
+			"so headings and short lists read well for both agents and human users. Use it to recall a "+
+			"worker's purpose and its current focus before delegating to it, so the work you hand over "+
+			"lands where the worker already is. It is not a rulebook: instructions, policies and "+
+			"step-by-step procedures live in programs.",
 		w.ReadmeLocked, nil)
 
 	w.Register(baseworker.Extension{
@@ -48,7 +50,9 @@ func (w *BaseReasonWorker) registerReadme() {
 		// (and an authorized peer) may perform; the bus ACL decides who may send
 		// the event.
 		Response: baseworker.StringSchema("confirmation that the readme was replaced"),
-		Description: "Replace this worker's readme. Write it first person and short, in two parts: " +
+		Description: "Replace this worker's readme. Write it in Markdown — the WebUI renders it for " +
+			"human readers, so short headings and bullets are welcome. Keep it first person and short, " +
+			"in two parts: " +
 			"(1) what this worker is responsible for — its scope, what it is for; " +
 			"(2) what it has recently been working on — its current focus, the last piece of work it " +
 			"carried, and anything a peer handing it new work should know. " +
@@ -60,8 +64,8 @@ func (w *BaseReasonWorker) registerReadme() {
 			"and what is it doing right now\"; programs answer \"what must it do and how\".",
 		Parameters: obj(map[string]any{
 			"readme": map[string]any{"type": "string",
-				"description": "New readme text: what this worker is responsible for, then what it has " +
-					"recently been working on. An empty string clears it."},
+				"description": "New readme text in Markdown: what this worker is responsible for, then " +
+					"what it has recently been working on. An empty string clears it."},
 		}),
 	}, w.handleReadmeUpdate)
 }

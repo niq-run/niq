@@ -122,7 +122,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // Filter events by selected workers.
   const relevantEvents = useMemo(() => {
     return events.filter(evt => {
-      const metaCall = evt.type === 'worker.help' || evt.type === 'worker.readme'
+      const metaCall = evt.type === 'worker.help' || evt.type === 'worker.readme' || evt.type === 'worker.readme.update'
       if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort' && !metaCall) return false
       // The detail panel's own readme fetch (HIW → worker) is UI housekeeping,
       // not a conversation row; an agent reading a peer's readme is kept.
