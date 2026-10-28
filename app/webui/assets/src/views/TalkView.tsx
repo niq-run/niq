@@ -122,7 +122,11 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // Filter events by selected workers.
   const relevantEvents = useMemo(() => {
     return events.filter(evt => {
-      if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort') return false
+      const metaCall = evt.type === 'worker.help' || evt.type === 'worker.readme' || evt.type === 'worker.readme.update'
+      if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort' && !metaCall) return false
+      // The detail panel's own readme fetch (HIW → worker) is UI housekeeping,
+      // not a conversation row; an agent reading a peer's readme is kept.
+      if (evt.type === 'worker.readme' && workerTypes[evt.worker_id] === 'hiw') return false
       // Delta / partial events are never rendered as standalone rows. When
       // streaming mode is on they're consumed to build the streaming UI;
       // when off they're dropped entirely — the terminal events (reason.*,

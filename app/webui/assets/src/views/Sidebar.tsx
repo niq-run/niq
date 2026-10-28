@@ -6,7 +6,7 @@ import WorkerPickerModal from '../components/WorkerPickerModal'
 import WorkerRowMenu from '../components/WorkerRowMenu'
 import ContextMenuSurface from '../components/ContextMenuSurface'
 import PinMark from '../components/PinMark'
-import { useContextMenu, contextMenuElementStyle } from '../hooks/useContextMenu'
+import { contextMenuElementStyle } from '../hooks/useContextMenu'
 import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned, moveWorkerOrder } from '../pinnedWorkers'
 import pinSvg from '../assets/pin.svg'
 import pinwSvg from '../assets/pinw.svg'
@@ -128,8 +128,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     const w = workers.find(x => x.id === rowMenu.id)
     return !!w && isTalkPartnerType(w.type)
   })()
-  // Long-press / right-click on the logo band toggles the inverted palette.
-  const logoMenu = useContextMenu(() => toggleInverted())
+  // Left-clicking the logo swaps the wordmark for the current project name
+  // (and back), cross-faded. The pin still toggles the palette.
+  const [projectLogo, setProjectLogo] = useState(false)
+  // The project-name view only exists while a project is attached; otherwise
+  // fall back to the wordmark even if the toggle was left on.
+  const showProjectName = !!project && projectLogo
   // Expanded picker modal for the worker selector (open on the expand button).
   const [showWorkerPicker, setShowWorkerPicker] = useState(false)
   // Free-text filter for the inline selector list. A search box beats the tag
@@ -250,9 +254,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   useEffect(() => () => window.clearTimeout(iconRevealRef.current), [])
 
   const onLogoPointerDown = (e: ReactPointerEvent) => {
-    // Only the primary button drags the logo; the right button is reserved for
-    // the invert-colors context action on the band.
-    if (e.button !== 0) return
+    // Only the primary button drags the logo, and only while the wordmark is
+    // shown (the project-name view is static).
+    if (e.button !== 0 || showProjectName) return
     // A click cycle may be holding its end frame via the Web Animations API;
     // cancel it so the CSS transform fully owns the drag.
     logoRef.current?.getAnimations().forEach(a => a.cancel())
@@ -343,7 +347,8 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       dragMoved.current = false // consume the click that ends a drag
       return
     }
-    playFullCycle()
+    if (!project) return
+    setProjectLogo(v => !v)
   }
 
   const handleWorkerClick = (id: string) => {
@@ -398,9 +403,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // border is laid out in the resting state so the block never shifts).
   const [projBlockHover, setProjBlockHover] = useState(false)
 
-  // Right-click on the logo band inverts the band's colours: the background
-  // takes the accent colour, the logo takes the page background, and every
-  // neutral border in the UI turns accent too (via the theme's inverted mode).
+  // Close the footer project menu on any click outside it and its trigger.
   useEffect(() => {
     if (!projMenuOpen) return
     const close = () => setProjMenuOpen(false)
@@ -552,8 +555,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           overflow clips the logo exactly at the right divider instead of
           letting it paint over the main content area. */}
       <div
-        {...logoMenu}
-        title={t('sidebar.logo.tooltip')}
+        title={project ? t('sidebar.logo.tooltip') : undefined}
         style={{
           flexShrink: 0, overflow: 'hidden', position: 'relative', margin: `0 -${edgePadX}px`, padding: `0 ${contentPadX}px`,
           // When inverted the band fills accent and its bottom border turns
@@ -566,24 +568,29 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           ...contextMenuElementStyle,
         }}
       >
-      {/* Logo + project name — clicking anywhere here plays the single-click
-          cycle (a drag in the logo suppresses it). */}
+      {/* Logo band — left-click cross-fades between the wordmark and the
+          project name. Drag and the pin's right-click flip apply only while
+          the wordmark is shown. */}
       <div style={{ flex: 1, minWidth: 0 }} onClick={onLogoClick}>
-        <h2 ref={logoWrapRef} style={{ margin: '0 0 0 -3px', lineHeight: 1, color: inverted ? '#EEEEEE' : colors.accent, fontSize: 36, fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace", fontWeight: 'bold', transition: 'color 0.2s ease' }}>
+        <h2 ref={logoWrapRef} style={{ position: 'relative', margin: '0 0 0 -3px', lineHeight: 1, color: inverted ? '#EEEEEE' : colors.accent, fontSize: 36, fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace", fontWeight: 'bold', transition: 'color 0.2s ease' }}>
           <span
             ref={logoRef}
+            aria-hidden={showProjectName}
             onPointerDown={onLogoPointerDown}
             onPointerMove={onLogoPointerMove}
             onPointerUp={onLogoPointerUp}
             onPointerCancel={onLogoPointerUp}
             style={{
-              cursor: dragging ? 'grabbing' : 'grab',
+              cursor: showProjectName ? 'default' : dragging ? 'grabbing' : 'grab',
               display: 'inline-block',
+              opacity: showProjectName ? 0 : 1,
+              pointerEvents: showProjectName ? 'none' : undefined,
               transform: `perspective(200px) translateX(${dragX}px) rotateY(${flipped ? 180 : 0}deg)`,
-              // No transition while dragging; on release the transform springs
-              // back with a decelerating bezier (fast-then-slow) and a short,
-              // distance-scaled duration.
-              transition: dragging ? 'none' : `transform ${moveDur} ${logoEasing}`,
+              // Fade the wordmark out/in on the text swap; the transform spring
+              // keeps its own timing (and is off while dragging).
+              transition: dragging
+                ? 'opacity 180ms ease'
+                : `opacity 180ms ease, transform ${moveDur} ${logoEasing}`,
               // Swallow touch gestures on the logo so the drag wins over page
               // scrolling on any touch device.
               touchAction: 'none',
@@ -592,27 +599,46 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               WebkitUserSelect: 'none',
             }}
           >
-            <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>n</span>
-            <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>i</span>
-            <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>p</span>
+            <LogoWordmark />
           </span>
+          {project && (
+            <span
+              aria-hidden={!showProjectName}
+              style={{
+                position: 'absolute', left: 0, right: 34, top: 0,
+                lineHeight: '36px',
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
+                fontSize: 26, fontWeight: 'bold',
+                opacity: showProjectName ? 1 : 0,
+                transition: 'opacity 180ms ease',
+                pointerEvents: 'none',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+            >
+              {project}
+            </span>
+          )}
         </h2>
       </div>
       {/* Pin pattern logo — right-aligned in the logo band. By default it
           picks the version whose background matches the current page theme
           (light → pinw, dark → pin), so it blends into the backdrop. When the
-          band is inverted (right-click the band or click the pin) it switches
-          to the single light-background version, matching the unified blue
-          band + light logo look regardless of theme. It is absolutely
-          positioned so it doesn't take layout space from the draggable text
-          logo, and fades+shrinks as the logo is dragged toward it (invisible
-          at the far right) so the two never overlap. */}
+          band is inverted (click the pin) it switches to the single
+          light-background version, matching the unified blue band + light logo
+          look regardless of theme. It is absolutely positioned so it doesn't
+          take layout space from the draggable text logo, and fades+shrinks as
+          the logo is dragged toward it (invisible at the far right) so the two
+          never overlap. */}
       <img
         src={inverted ? pinwSvg : (dark ? pinSvg : pinwSvg)}
         alt=""
-        title={t('sidebar.logo.pattern.tooltip')}
+        title={showProjectName ? t('sidebar.logo.pattern.tooltipProject') : t('sidebar.logo.pattern.tooltip')}
         draggable={false}
         onClick={toggleInverted}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          if (!showProjectName) playFullCycle()
+        }}
         style={{
           position: 'absolute', right: contentPadX, top: '50%',
           transform: `translateY(-50%) scale(${iconScale})`,
@@ -738,10 +764,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                   <span
                     title={w.id}
-                    style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0, transition: 'color 0.12s' }}
+                    style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
                   >
                     {w.id}
                   </span>
+                  {onOpenDetail && hoverId === 'worker:' + w.id && (
+                    <ReadmeIcon colors={colors} label={t('badge.menu.readme')} onClick={() => onOpenDetail(w.id, 'readme')} />
+                  )}
                   {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} />}
                 </ContextMenuSurface>
               )
@@ -759,11 +788,16 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               >
                 <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: 12, flex: 1, minWidth: 0 }}>
-                  <span
-                    title={w.id}
-                    style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
-                  >
-                    {w.id}
+                  <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, flexShrink: 1, minWidth: 0 }}>
+                    <span
+                      title={w.id}
+                      style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
+                    >
+                      {w.id}
+                    </span>
+                    {onOpenDetail && hoverId === 'worker:' + w.id && (
+                      <ReadmeIcon colors={colors} label={t('badge.menu.readme')} onClick={() => onOpenDetail(w.id, 'readme')} />
+                    )}
                   </span>
                   {w.type ? <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm, flexShrink: 0 }}>[{w.type}]</span> : null}
                   {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} />}
@@ -854,7 +888,6 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             <div
               onClick={(e) => {
                 e.stopPropagation()
-                if (projRunning === undefined) return
                 setProjMenuOpen(v => !v)
               }}
               onMouseEnter={() => setProjBlockHover(true)}
@@ -868,19 +901,32 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 // out transparently otherwise so nothing shifts.
                 border: '1px solid ' + (projBlockHover || projMenuOpen ? colors.border : 'transparent'),
                 color: colors.textDim, fontSize: fontSizes.sm + 1,
-                cursor: projRunning !== undefined ? 'pointer' : 'default', userSelect: 'none',
+                cursor: 'pointer', userSelect: 'none',
                 // While the menu is open the block fuses with it: same panel
                 // background — the block's own top border becomes the separator
                 // between menu and handle.
                 ...(projMenuOpen ? { background: colors.bgLight } : {}),
               }}
             >
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
+              {showProjectName ? (
+                <span style={{
+                  flexShrink: 0, display: 'inline-block', whiteSpace: 'nowrap',
+                  fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace",
+                  fontSize: fontSizes.lg, fontWeight: 'bold', lineHeight: 1,
+                  color: colors.accent,
+                }}>
+                  <LogoWordmark />
+                </span>
+              ) : (
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
+              )}
             </div>
             {/* Lifecycle menu, opening upward from the footer. Mirrors the
                 projects page rows: running → restart/stop, stopped → start,
-                with a spinner while an op is in flight and inline errors. */}
-            {projMenuOpen && projRunning !== undefined && (
+                with a spinner while an op is in flight and inline errors. When
+                the control-plane poll has not answered yet, restart/stop stay
+                available and the menu says the state is unknown. */}
+            {projMenuOpen && (
               <div
                 onClick={(e) => e.stopPropagation()}
                 style={{
@@ -896,7 +942,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                     <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
                     {projBusy === 'stop' ? t('projects.stopping') : t('projects.restarting')}
                   </span>
-                ) : projRunning ? (
+                ) : projRunning === false ? (
+                  <span onClick={onProjectStart} className="btn-hover" style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, borderRadius: 2, padding: '3px 8px', display: 'inline-flex', alignItems: 'center', gap: 6, userSelect: 'none' }}>
+                    {projStarting && <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />}
+                    {projStarting ? t('projects.starting') : t('projects.start')}
+                  </span>
+                ) : (
                   <>
                     <span onClick={onProjectRestart} className="btn-hover" style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, borderRadius: 2, padding: '3px 8px', userSelect: 'none' }}>
                       {t('projects.restart')}
@@ -904,12 +955,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                     <span onClick={onProjectStop} className="btn-hover" style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.toolFailed, borderRadius: 2, padding: '3px 8px', userSelect: 'none' }}>
                       {t('projects.stop')}
                     </span>
+                    {projRunning === undefined && (
+                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, padding: '2px 8px' }}>
+                        {t('projects.statusUnknown')}
+                      </span>
+                    )}
                   </>
-                ) : (
-                  <span onClick={onProjectStart} className="btn-hover" style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.accent, borderRadius: 2, padding: '3px 8px', display: 'inline-flex', alignItems: 'center', gap: 6, userSelect: 'none' }}>
-                    {projStarting && <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />}
-                    {projStarting ? t('projects.starting') : t('projects.start')}
-                  </span>
                 )}
                 {projActionErr && (
                   <span style={{ color: colors.toolFailed, fontSize: fontSizes.xs, padding: '0 8px', wordBreak: 'break-all' }}>{projActionErr}</span>
@@ -969,6 +1020,43 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         />
       )}
     </>
+  )
+}
+
+// The niq wordmark: three glyphs individually mirrored so the bundled
+// Sometype Mono subset (n/i/p) renders the brand's q. Shared by the sidebar
+// logo and the footer wordmark that replaces the project name when the logo is
+// switched.
+function LogoWordmark() {
+  return (
+    <>
+      <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>n</span>
+      <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>i</span>
+      <span style={{ display: 'inline-block', transform: 'scaleX(-1)' }}>p</span>
+    </>
+  )
+}
+
+// A small "i" affordance for the worker selector: hovering a row reveals it,
+// and clicking opens that worker's readme directly (the same destination as the
+// row menu's Readme entry).
+function ReadmeIcon({ colors, label, onClick }: { colors: Palette; label: string; onClick: () => void }) {
+  return (
+    <span
+      role="button"
+      aria-label={label}
+      title={label}
+      draggable={false}
+      onClick={(e) => { e.stopPropagation(); onClick() }}
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+        border: '1px solid ' + colors.border, color: colors.textDim,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 10, fontStyle: 'italic', fontWeight: 600, lineHeight: 1,
+        cursor: 'pointer', userSelect: 'none',
+      }}
+    >i</span>
   )
 }
 

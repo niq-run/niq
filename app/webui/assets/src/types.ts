@@ -21,6 +21,8 @@ export interface WatchEntry {
 
 export interface EventPattern {
   type: string
+  // "*" (canonical) or absent both mean "any source"; a worker id restricts
+  // the subscription to events that worker published.
   source?: string
 }
 

@@ -1256,7 +1256,16 @@ func (s *Server) handleUpdateAllow(w http.ResponseWriter, r *http.Request) {
 	}
 	subAllow := idt.SubscribeAllow
 	if req.SubscribeAllow != nil {
-		subAllow = req.SubscribeAllow
+		// Store the canonical spelling: an omitted source means "any source",
+		// which is "*". The empty form stays accepted on input so existing
+		// clients keep working.
+		subAllow = make([]event.EventPattern, 0, len(req.SubscribeAllow))
+		for _, p := range req.SubscribeAllow {
+			if p.SourceID == "" {
+				p.SourceID = "*"
+			}
+			subAllow = append(subAllow, p)
+		}
 	}
 	if err := s.registry.Update(id, pubAllow, subAllow); err != nil {
 		http.Error(w, "update allow: "+err.Error(), http.StatusInternalServerError)

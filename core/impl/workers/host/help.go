@@ -111,7 +111,8 @@ These decide what the worker is and what it pays attention to:
   Instructions stay in the system prompt; playbooks are behavior the worker can
   load on demand. When non-empty, ` + "`instruction`" + ` is ignored.
 - ` + "`readme`" + ` (string) — seed for ` + "`worker.readme`" + `, the self-description peers and the
-  WebUI read. The worker can revise it itself later.
+  WebUI read. Markdown is rendered by the WebUI; keep it short. The worker can
+  revise it itself later.
 - ` + "`events`" + ` (array of event types) — events this worker should convert into input,
   e.g. ` + "`[\"github.issue.new\"]`" + `.
 - ` + "`subscriptions`" + ` (array) — broadcast subscriptions; entries are an event type

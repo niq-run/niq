@@ -1,8 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { createWorker } from '../services/api'
-import { isReasonFamilyType, type CreateWorkerResult } from '../types'
+import { isReasonFamilyType, type CreateWorkerResult, type WorkerInfo } from '../types'
+import PermissionPanel from '../components/PermissionPanel'
+import type { PublishRow, SubscribeRow } from '../components/AllowEditors'
+import { defaultAllow, samePublish, sameSubscribe, type AllowDefaults, type WorkerCreateMode } from '../allowDefaults'
 
 interface CreateWorkerDialogProps {
   open: boolean
@@ -17,6 +20,9 @@ interface CreateWorkerDialogProps {
   // to append a worker entry into the template's JSON). The form and its
   // validation are exactly the same — only the destination differs.
   onBuild?: (body: Record<string, unknown>) => void
+  // Live worker list for the permission module's "pick a worker's published
+  // events" helper. Optional: the module fetches the list itself when absent.
+  workers?: WorkerInfo[]
 }
 
 // Managed worker types offered by the form. host/hiw are infrastructure the
@@ -24,6 +30,12 @@ interface CreateWorkerDialogProps {
 // and history are built-in singletons (one per project), so a second one is
 // never wanted. niw is a bridge worker that dials another niq's bus.
 const MANAGED_TYPES = ['reason', 'coding', 'workspace', 'program', 'niw', 'mcp'] as const
+
+// The form opens on a managed reason worker; its permission drafts start from
+// that type's backend defaults (see allowDefaults.ts).
+const INITIAL_MODE: WorkerCreateMode = 'managed'
+const INITIAL_TYPE = 'reason'
+const INITIAL_ALLOW = defaultAllow(INITIAL_MODE, INITIAL_TYPE)
 
 // parseNiwConfig turns the far-side bus's copyable worker config (KEY=value
 // lines, as rendered by that bus for a created remote worker) into a map.
@@ -44,11 +56,11 @@ const parseNiwConfig = (s: string): Record<string, string> => {
 // the host worker's spawn event. A centered overlay on both desktop and
 // mobile: the trigger is a header pill (no anchor for a dropdown) and the form
 // is far larger than a picker list.
-export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, busPort, onBuild }: CreateWorkerDialogProps) {
+export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, busPort, onBuild, workers }: CreateWorkerDialogProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
-  const [mode, setMode] = useState<'managed' | 'external' | 'remote'>('managed')
-  const [type, setType] = useState('reason')
+  const [mode, setMode] = useState<'managed' | 'external' | 'remote'>(INITIAL_MODE)
+  const [type, setType] = useState(INITIAL_TYPE)
   const [extType, setExtType] = useState('')
   const [id, setId] = useState('')
   const [instruction, setInstruction] = useState('')
@@ -68,9 +80,15 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [rootDir, setRootDir] = useState('')
   const [command, setCommand] = useState('')
   const [cwd, setCwd] = useState('')
-  const [envText, setEnvText] = useState('')
-  const [subscriptions, setSubscriptions] = useState('')
-  const [publish, setPublish] = useState('')
+  // Environment variables for an external process: an editable key/value list
+  // (not a KEY=value text blob), so a value containing '=' or newlines can be
+  // entered without ambiguity.
+  const [envRows, setEnvRows] = useState<{ key: string; value: string }[]>([])
+  // Allow-list drafts: the same row shapes the worker detail's permission tab
+  // edits, rendered by the shared 订阅发布管理 module. They open on the current
+  // type's backend defaults, so what the form shows is what the worker gets.
+  const [subscriptions, setSubscriptions] = useState<SubscribeRow[]>(INITIAL_ALLOW.subscribe)
+  const [publish, setPublish] = useState<PublishRow[]>(INITIAL_ALLOW.publish)
   // MCP (managed worker): expose mode + the remote servers as a JSON list.
   const [mcpExpose, setMcpExpose] = useState('agentic')
   const [mcpFixed, setMcpFixed] = useState(false)
@@ -86,12 +104,30 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [result, setResult] = useState<CreateWorkerResult | null>(null)
   const [copied, setCopied] = useState(false)
 
+  // The permission drafts follow the selected worker kind/type: switching type
+  // re-seeds them from that type's defaults, but only while the rows are still
+  // untouched — a hand-edited allow list is never silently thrown away.
+  const effectiveType = mode === 'managed' ? type : extType.trim()
+  const allowKey = mode + ':' + effectiveType
+  const allowRef = useRef<{ key: string; value: AllowDefaults }>({
+    key: INITIAL_MODE + ':' + INITIAL_TYPE,
+    value: INITIAL_ALLOW,
+  })
+  useEffect(() => {
+    if (allowRef.current.key === allowKey) return
+    const next = defaultAllow(mode, effectiveType)
+    const prev = allowRef.current.value
+    setPublish((cur) => (samePublish(cur, prev.publish) ? next.publish : cur))
+    setSubscriptions((cur) => (sameSubscribe(cur, prev.subscribe) ? next.subscribe : cur))
+    allowRef.current = { key: allowKey, value: next }
+  }, [allowKey, mode, effectiveType])
+
   if (!open) return null
 
   const isExternal = mode === 'external'
   const isRemote = mode === 'remote'
   const isManaged = mode === 'managed'
-  const effType = isExternal || isRemote ? extType.trim() : type
+  const effType = effectiveType
 
   const input: React.CSSProperties = {
     width: '100%',
@@ -122,10 +158,6 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     background: active ? colors.bgChip : undefined,
   })
 
-  // typesFromList splits a comma-separated event-type list into bare specs.
-  const typesFromList = (s: string) =>
-    s.split(',').map(x => x.trim()).filter(Boolean)
-
   // buildBody assembles the worker declaration from the form fields — the
   // shared core of both destinations (create a live worker / append to a
   // template's workers). Returns null after recording a validation note.
@@ -135,9 +167,9 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     if (isExternal && !command.trim()) { setNote(t('workers.create.errCommand')); return null }
 
     const env: Record<string, string> = {}
-    for (const line of envText.split('\n')) {
-      const i = line.indexOf('=')
-      if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1).trim()
+    for (const row of envRows) {
+      const k = row.key.trim()
+      if (k) env[k] = row.value
     }
     const body: Record<string, unknown> = {
       type: effType,
@@ -234,10 +266,16 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
       const d = Number(tokenTtl.trim())
       if (Number.isFinite(d) && d > 0) body.token_ttl_seconds = Math.round(d * 86400)
     }
-    const subs = typesFromList(subscriptions)
-    const pubs = typesFromList(publish)
-    if (subs.length > 0) body.subscriptions = subs.map(x => ({ type: x }))
-    if (pubs.length > 0) body.publish = pubs.map(x => ({ type: x }))
+    const subs = subscriptions.filter((r) => r.type.trim() !== '')
+    const pubs = publish.filter((r) => r.type.trim() !== '')
+    if (subs.length > 0) {
+      // An empty source is the legacy spelling of "any source"; write the
+      // canonical wildcard so the declaration matches what the backend stores.
+      body.subscriptions = subs.map((r) => ({ type: r.type.trim(), source: r.source.trim() || '*' }))
+    }
+    if (pubs.length > 0) {
+      body.publish = pubs.map((r) => ({ type: r.type.trim(), target: r.target.trim() || '*' }))
+    }
     return body
   }
 
@@ -381,13 +419,6 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
                 style={{ cursor: 'pointer', border: '1px solid ' + (extType === 'remote-niw' ? colors.accent : colors.border), borderRadius: 3, padding: '2px 10px', fontSize: fontSizes.xs, color: (extType === 'remote-niw' ? colors.accent : colors.textDim), userSelect: 'none' }}
               >
                 remote-niw
-              </span>
-              <span
-                onClick={() => { setExtType('mcp'); setNote('') }}
-                className="btn-hover"
-                style={{ cursor: 'pointer', border: '1px solid ' + (extType === 'mcp' ? colors.accent : colors.border), borderRadius: 3, padding: '2px 10px', fontSize: fontSizes.xs, color: (extType === 'mcp' ? colors.accent : colors.textDim), userSelect: 'none' }}
-              >
-                mcp
               </span>
             </div>
           )}
@@ -571,7 +602,37 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
             </div>
             <div style={field}>
               <label style={label}>{t('workers.create.env')}</label>
-              <textarea style={{ ...input, resize: 'vertical', minHeight: 48 }} value={envText} onChange={e => setEnvText(e.target.value)} />
+              {envRows.map((row, i) => (
+                <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                  <input
+                    style={{ ...input, width: 'auto', flex: '0 0 40%' }}
+                    value={row.key}
+                    placeholder={t('workers.create.env.key')}
+                    onChange={e => setEnvRows(envRows.map((r, j) => j === i ? { ...r, key: e.target.value } : r))}
+                  />
+                  <input
+                    style={{ ...input, width: 'auto', flex: 1, minWidth: 0 }}
+                    value={row.value}
+                    placeholder={t('workers.create.env.value')}
+                    onChange={e => setEnvRows(envRows.map((r, j) => j === i ? { ...r, value: e.target.value } : r))}
+                  />
+                  <span
+                    onClick={() => setEnvRows(envRows.filter((_, j) => j !== i))}
+                    className="btn-hover"
+                    title={t('wd.remove')}
+                    style={{ cursor: 'pointer', color: colors.textDimmed, fontSize: fontSizes.md, userSelect: 'none', padding: '0 4px' }}
+                  >
+                    {'\u2715'}
+                  </span>
+                </div>
+              ))}
+              <span
+                onClick={() => setEnvRows([...envRows, { key: '', value: '' }])}
+                className="btn-hover"
+                style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 10px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+              >
+                {t('wd.add')}
+              </span>
             </div>
           </>
         )}
@@ -586,19 +647,16 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           </div>
         )}
 
+        {/* Subscription / publish grants: one module for all three worker
+            kinds, collapsed to a single 权限管理 button until opened. */}
         <div style={field}>
-          <label style={label}>{t('workers.create.subscriptions')}</label>
-          <input style={input} value={subscriptions} onChange={e => setSubscriptions(e.target.value)} placeholder={t('workers.create.emptyDefault')} />
-          <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
-            {t('workers.create.subscriptions.default')}
-          </div>
-        </div>
-        <div style={field}>
-          <label style={label}>{t('workers.create.publish')}</label>
-          <input style={input} value={publish} onChange={e => setPublish(e.target.value)} placeholder={t('workers.create.emptyDefault')} />
-          <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
-            {t('workers.create.publish.default')}
-          </div>
+          <PermissionPanel
+            publish={publish}
+            subscribe={subscriptions}
+            onPublishChange={setPublish}
+            onSubscribeChange={setSubscriptions}
+            workers={workers}
+          />
         </div>
         </>)}
 

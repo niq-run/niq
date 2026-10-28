@@ -858,7 +858,8 @@ func eventPatternsFromStrings(types []string) []event.EventPattern {
 
 // subscriptionPatterns parses config subscription entries into bus patterns.
 // Each entry is a bare event-type string or a {"type","source"} object (see
-// SubscriptionSpec); both spell the same EventPattern.
+// SubscriptionSpec); both spell the same EventPattern, with an omitted source
+// normalized to the canonical "any source" wildcard ("*").
 func subscriptionPatterns(v any) []event.EventPattern {
 	raw, _ := v.([]any)
 	if len(raw) == 0 {
@@ -875,6 +876,9 @@ func subscriptionPatterns(v any) []event.EventPattern {
 				continue
 			}
 			s, _ := e["source"].(string)
+			if s == "" {
+				s = "*"
+			}
 			out = append(out, event.EventPattern{Type: event.EventType(t), SourceID: s})
 		}
 	}
