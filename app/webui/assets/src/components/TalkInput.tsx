@@ -16,6 +16,34 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const IMAGE_MAX_DIM = 1568
 const IMAGE_JPEG_QUALITY = 0.85
 
+// ── Input box size ──
+// Where the user's chosen input-box height is kept, so it survives reloads
+// and the conversation switches that remount the talk view's input.
+const BOX_HEIGHT_KEY = 'niq-talk-input-height'
+// The input box's size: the height the user settled on (null = the
+// textarea's natural 3-row size) and whether the tall expand preset is on.
+interface BoxState {
+  h: number | null
+  expanded: boolean
+}
+// The shortest the box may get — about two lines of text.
+const MIN_BOX_H = 56
+// The room the layout needs besides the input box: the page header, the
+// panel's own chrome (grip strip, action row, padding) and a usable slice
+// of the conversation above.
+const RESERVED_H = 240
+// The tallest the box may get, so the conversation never disappears.
+function maxBoxHeight(): number {
+  const h = typeof window !== 'undefined' ? window.innerHeight : 800
+  return Math.max(MIN_BOX_H, h - RESERVED_H)
+}
+// The expand preset: a fairly tall box, but never more than the room the
+// layout can spare.
+function expandedBoxHeight(): number {
+  const h = typeof window !== 'undefined' ? window.innerHeight : 800
+  return Math.round(Math.min(maxBoxHeight(), h * 0.45))
+}
+
 // Recursively read a directory entry into a flat list of File objects. A
 // dropped/pasted folder shows up as a directory entry, not a File, so we walk
 // it with the File System API (webkitGetAsEntry) and collect every file inside
@@ -119,6 +147,36 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   // survive drag events bubbling over child elements.
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
+  // ── Input box height ──
+  // The textarea starts at its default 3-row size (h === null). The user can
+  // drag the panel's top edge to give it more room, or hit the expand button
+  // to jump it to a tall preset.
+  //
+  // The user's adjustment is the default from then on: it is persisted, so
+  // the box keeps the height they chose across reloads and across the
+  // conversation switches that remount the talk view's input.
+  const [boxState, setBoxState] = useState<BoxState>(() => {
+    try {
+      const raw = localStorage.getItem(BOX_HEIGHT_KEY)
+      const s = raw ? JSON.parse(raw) as BoxState : null
+      if (s && (s.h === null || (Number.isFinite(s.h) && s.h > 0))) {
+        return { h: s.h, expanded: !!s.expanded }
+      }
+    } catch { /* ignore: unreadable or private-mode storage */ }
+    return { h: null, expanded: false }
+  })
+  // Persist on every change but a drag: a drag writes to localStorage only
+  // once, when the pointer is released.
+  const saveBox = (s: BoxState, persist = true) => {
+    setBoxState(s)
+    if (!persist) return
+    try { localStorage.setItem(BOX_HEIGHT_KEY, JSON.stringify(s)) } catch { /* ignore */ }
+  }
+  // The grip highlights on hover.
+  const [gripHover, setGripHover] = useState(false)
+  // Live drag state: the pointer position the drag started at and the box
+  // height at that moment (the new height is derived from the pointer delta).
+  const resizeRef = useRef<{ startY: number; startH: number; h: number } | null>(null)
   // Running staged-attachment count (attachments.length is the prop, which
   // is stale inside an async addFiles loop — a folder drop must cap against
   // what's already committed, not the value at render time).
@@ -580,6 +638,78 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   // viewport (minus padding) or it overflows the screen.
   const modePickerWidth = Math.min(420, Math.max(280, (typeof window !== 'undefined' ? window.innerWidth : 420) - 24))
 
+  // ── Input box resizing ──
+  // The input panel is anchored to the bottom of the talk view, so its height
+  // is taken from the conversation above: a taller box means a shorter
+  // message list. Heights are the textarea's own pixel height.
+  //
+  // boxState.h is the height the user settled on (null = the textarea's
+  // natural 3-row size); the expanded flag is the temporary tall preset.
+  // The effective height follows from the two.
+  // Clamped at render time too: a height saved on a big screen must not
+  // overflow a smaller one.
+  const boxH = boxState.expanded
+    ? expandedBoxHeight()
+    : boxState.h === null ? null : Math.min(boxState.h, maxBoxHeight())
+  // The expand button is pointless once the box is already at least as tall
+  // as the preset — expanding would shrink it. It stays visible while the
+  // preset is on, so the box can be collapsed back.
+  const showExpand = boxState.expanded || boxH === null || boxH < expandedBoxHeight()
+
+  // Drag the grip: the panel grows upward, so a pointer that moves up makes
+  // the box taller. The start height is the textarea's measured height
+  // (its natural 3-row size when no explicit height is set yet).
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault()
+    // Capture the pointer so the drag survives leaving the grip (or the
+    // window) and cannot be stolen by a scroll gesture.
+    ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+    const ta = textareaRef.current
+    const startH = ta ? ta.offsetHeight : MIN_BOX_H
+    resizeRef.current = { startY: e.clientY, startH, h: startH }
+    document.body.style.cursor = 'ns-resize'
+    document.body.style.userSelect = 'none'
+    const onMove = (ev: PointerEvent) => {
+      const st = resizeRef.current
+      if (!st) return
+      const next = st.startH - (ev.clientY - st.startY)
+      const h = Math.round(Math.min(maxBoxHeight(), Math.max(MIN_BOX_H, next)))
+      // The dragged height is kept in the ref, not read back from state:
+      // the last pointermove's setState may not have flushed yet when the
+      // pointer is released.
+      st.h = h
+      // A drag sets the user's own height and leaves the expanded preset.
+      // Not persisted here — the drag writes to storage once, when the
+      // pointer is released.
+      saveBox({ h, expanded: false }, false)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      // Persist the dragged height now that the drag is over.
+      const st = resizeRef.current
+      if (st) saveBox({ h: st.h, expanded: false })
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  // The expand button toggles the tall preset; collapsing returns the box to
+  // the height the user had settled on.
+  const toggleExpand = () => {
+    saveBox({ h: boxState.h, expanded: !boxState.expanded })
+  }
+
+  // Double-clicking the grip restores the textarea's natural size — the way
+  // back to the default without hunting for a "reset" button.
+  const resetBoxHeight = () => {
+    saveBox({ h: null, expanded: false })
+  }
+
   const targetChip = (
     <div style={{ position: 'relative', display: 'flex', minWidth: 0, ...(isMobile ? { flexShrink: 1 } : { marginRight: 'auto' }) }}>
         <span
@@ -696,7 +826,9 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         dragDepth.current = 0
         setDragging(false)
       }}
-      style={{ padding: '12px 24px', borderTop: '1px solid ' + colors.border, position: 'relative', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', ...(dragging ? { outline: '2px dashed ' + colors.accent, outlineOffset: -2 } : {}) }}
+      // flexShrink 0: a taller input box takes its room from the message
+      // list above, never from the input itself.
+      style={{ padding: '0 24px', borderTop: '1px solid ' + colors.border, position: 'relative', flexShrink: 0, paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))', ...(dragging ? { outline: '2px dashed ' + colors.accent, outlineOffset: -2 } : {}) }}
     >
       {/* Drag overlay: a full-area hint shown while files hover over the
           input, so dropping is discoverable. Sits above the text. */}
@@ -705,6 +837,65 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           <span style={{ color: colors.accent, fontSize: fontSizes.md, fontWeight: 600 }}>{t('talk.attach.drop')}</span>
         </div>
       )}
+
+      {/* Resize strip: the panel's top border is the drag line, and the
+          grip straddles it exactly like the sidebar's grip straddles its
+          vertical line (same 5x30 pill). The panel is anchored to the
+          bottom, so dragging up makes the box taller. The button at the
+          right jumps straight to a tall box (and back); it is bottom-aligned
+          so a clear gap separates it from the border above. */}
+      <div style={{ position: 'relative', height: isMobile ? 30 : 26, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end' }}>
+        <div
+          onPointerDown={startResize}
+          onDoubleClick={resetBoxHeight}
+          onMouseEnter={() => setGripHover(true)}
+          onMouseLeave={() => setGripHover(false)}
+          title={t('talk.input.resize.tooltip')}
+          style={{
+            // Hit area straddling the panel's top border (which sits 1px
+            // above this strip), wide enough to grab on a phone.
+            position: 'absolute', top: -3, left: '50%', transform: 'translateX(-50%)',
+            width: isMobile ? 56 : 44, height: 13,
+            cursor: 'ns-resize', touchAction: 'none', userSelect: 'none',
+          }}
+        >
+          <span style={{
+            // The grip pill: 5 thick, 30 long, centered on the panel's 1px
+            // top border — the sidebar's grip, turned to lie along it.
+            //
+            // Geometry: the strip starts right below the panel's 1px border,
+            // so the border occupies y -1..0 relative to the strip. The hit
+            // area starts 3px above the strip, so the pill at offset 0 lands
+            // on y -3..2 — straddling the border's center (-0.5) exactly.
+            position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
+            width: 30, height: 5, borderRadius: 3, zIndex: 1,
+            background: gripHover ? colors.textDim : colors.textDimmed,
+            transition: 'background 0.15s',
+          }} />
+        </div>
+        {showExpand && (
+          <button
+            onClick={toggleExpand}
+            title={boxState.expanded ? t('talk.input.collapse.tooltip') : t('talk.input.expand.tooltip')}
+            style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: isMobile ? 30 : 24, height: isMobile ? 22 : 18,
+              padding: 0, background: 'none',
+              border: '1px solid ' + colors.border, borderRadius: 4,
+              color: boxState.expanded ? colors.accent : colors.textDimmed,
+              cursor: 'pointer', flexShrink: 0,
+            }}
+          >
+            {/* Drawn chevron — glyph baselines sit off-center in the mono font. */}
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path
+                d={boxState.expanded ? 'M2.5 4.5 6 8l3.5-3.5' : 'M2.5 7.5 6 4l3.5 3.5'}
+                stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        )}
+      </div>
 
       {/* Attachment chips: staged images (thumbnail) and uploaded files
           (name), each removable, plus upload/note status. */}
@@ -775,6 +966,10 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           resize: 'none',
           lineHeight: 1.5,
           boxSizing: 'border-box',
+          // A dragged/expanded box has an explicit height; without one the
+          // textarea keeps its natural 3-row size.
+          height: boxH === null ? undefined : boxH,
+          overflowY: 'auto',
         }}
       />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: isMobile ? 4 : 12, rowGap: isMobile ? 4 : 6, justifyContent: 'flex-end', alignItems: 'center' }}>
