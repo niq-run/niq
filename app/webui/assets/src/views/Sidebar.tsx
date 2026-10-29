@@ -761,7 +761,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   {...dragPropsFor(w.id)}
                   style={rowStyleWithDrop(workerRowStyle('worker:' + w.id), w.id)}
                 >
-                  <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
+                  <CheckBox active={isActive} accent={colors.accent} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                   <span
                     title={w.id}
                     style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
@@ -786,7 +786,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 {...dragPropsFor(w.id)}
                 style={rowStyleWithDrop(workerRowStyle('worker:' + w.id), w.id)}
               >
-                <CheckBox active={isActive} accent={colors.accent} bg={colors.bg} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
+                <CheckBox active={isActive} accent={colors.accent} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: 12, flex: 1, minWidth: 0 }}>
                   <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, flexShrink: 1, minWidth: 0 }}>
                     <span
@@ -1062,7 +1062,14 @@ function ReadmeIcon({ colors, label, onClick }: { colors: Palette; label: string
 
 // A small drawn checkbox for the selector state: a bordered box that fills
 // with the accent color and shows a checkmark when active.
-function CheckBox({ active, accent, bg, border, size = 13, style }: { active: boolean; accent: string; bg: string; border: string; size?: number; style?: CSSProperties }) {
+//
+// The checkmark is drawn in white — the foreground an accent-filled chip
+// carries in both themes (see TagFilterDropdown's tag chips). It used to be
+// drawn in the page background colour, as a knockout through the accent
+// fill: that colour changes with the theme, so in dark mode the mark was a
+// dark blob on the blue box, and on a hovered row it did not even match the
+// band behind it.
+function CheckBox({ active, accent, border, size = 13, style }: { active: boolean; accent: string; border: string; size?: number; style?: CSSProperties }) {
   return (
     <span
       style={{
@@ -1084,7 +1091,12 @@ function CheckBox({ active, accent, bg, border, size = 13, style }: { active: bo
             display: 'inline-block',
             width: size * 0.38,
             height: size * 0.72,
-            border: 'solid ' + bg,
+            // The long and short edges of a box, rotated — the classic
+            // border-only checkmark. Border colour and width are set
+            // separately (not via the `border` shorthand) so the width
+            // cannot be reset by the shorthand's own default.
+            borderStyle: 'solid',
+            borderColor: '#fff',
             borderWidth: '0 2px 2px 0',
             transform: 'rotate(45deg)',
             marginTop: -2,
