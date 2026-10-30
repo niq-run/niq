@@ -113,6 +113,14 @@ type Config struct {
 	// worker supplies its own to narrow the surface — e.g. a coding worker's
 	// "ptc" mode exposing only the program worker's tools.
 	ToolListBuilder ToolListBuilder
+
+	// Collaborators, when non-nil, is the whitelist of reason-family workers
+	// this worker may collaborate with. nil (the default) means every reason
+	// worker is visible; an empty non-nil slice means none. A reason peer outside
+	// the list is dropped at discovery, so this worker never learns it, and a
+	// directed call to it is refused. Capability workers are unaffected: the
+	// scope says who thinks with you, not which capabilities you may call.
+	Collaborators []string
 }
 
 // NewBaseReasonWorker assembles a BaseReasonWorker from a Config: applies
@@ -153,6 +161,15 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		toolListBuilder = cfg.ToolListBuilder
 	}
 
+	// A nil slice means unrestricted; a non-nil one (even empty) is a whitelist.
+	var collaborators map[string]bool
+	if cfg.Collaborators != nil {
+		collaborators = make(map[string]bool, len(cfg.Collaborators))
+		for _, id := range cfg.Collaborators {
+			collaborators[id] = true
+		}
+	}
+
 	w := &BaseReasonWorker{
 		BaseWorker:      baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
 		llmProvider:     initialProvider,
@@ -172,6 +189,8 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 		reasoningEffort: cfg.ReasoningEffort,
 		readme:          cfg.Readme,
 		workerType:      workerTypeOrDefault(cfg.WorkerType),
+		collaborators:   collaborators,
+		excludedPeers:   make(map[string]bool),
 	}
 	// Durable-change signalling is the base's machinery (baseworker); the
 	// mechanism only decides when to raise it (see handleSetLLMProvider).
@@ -479,10 +498,18 @@ type BaseReasonWorker struct {
 	transcript      transcript.Transcript
 	discovered      []DiscoveredCapability // unified capability universe (bus announcements only; the self-ready round-trip includes this worker's own capabilities)
 	toolListBuilder ToolListBuilder        // LLM tool list policy (extension point)
-	workerType      string                 // announced presence type (default "reason")
-	programs        []program.Program
-	readme          string // the worker's own description (worker.readme)
-	requestTracker  *requesttracker.RequestTracker
+
+	// Collaboration scope. collaborators is nil when unrestricted; excludedPeers
+	// accumulates reason peers that announced outside it, so a later directed
+	// send can be refused. scopeMu guards both and is separate from mu because
+	// MayAddress is called from paths that do not hold the event-loop lock.
+	scopeMu        sync.RWMutex
+	collaborators  map[string]bool
+	excludedPeers  map[string]bool
+	workerType     string // announced presence type (default "reason")
+	programs       []program.Program
+	readme         string // the worker's own description (worker.readme)
+	requestTracker *requesttracker.RequestTracker
 	// toolCallSeq mints globally-unique tool-call ids for calls whose model
 	// omitted one. It must be monotonic across rounds (not per-turn) because the
 	// tracker persists pending calls between rounds — a per-turn "call_0" would

@@ -41,7 +41,7 @@ worker who exists) and not the project's declarations.
 ## How to use
 
 1. Prefer an existing worker over spawning a duplicate: ask the directory worker
-   with search_workers / get_worker_info first.
+   with search / describe first.
 2. Spawn when a new standing focus is needed, not for a one-off question — for
    that, use message/request to a worker that already exists.
 3. suspend / resume take the worker id returned by spawn (or from the roster).

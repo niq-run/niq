@@ -1,6 +1,6 @@
 // Package directory implements the DirectoryWorker — a single, read-only
-// worker that serves the fleet roster (list_workers / get_worker_info /
-// search_workers).
+// worker that serves the fleet roster with two tools: search (the roster, or a
+// keyword filter over it) and describe (one worker's contract).
 //
 // It has NO lifecycle authority: it only LEARNS from the bus. Every worker's
 // worker.ready announcement (including third-party workers connecting directly,
@@ -42,8 +42,8 @@ type workerRecord struct {
 	Publishes []map[string]any `json:"publishes,omitempty"`
 }
 
-// DirectoryWorker serves list_workers / get_worker_info from a directory it
-// builds by collecting worker.ready / worker.gone on the bus.
+// DirectoryWorker serves search / describe from a directory it builds by
+// collecting worker.ready / worker.gone on the bus.
 type DirectoryWorker struct {
 	baseworker.BaseWorker
 	params  map[string]any // declaration params, for the readme customization
@@ -57,9 +57,14 @@ type DirectoryWorker struct {
 // Directory tools — each its own event type (see the request-response
 // convention on the bus).
 const (
-	TypeListWorkers   event.EventType = "list_workers"
-	TypeGetWorkerInfo event.EventType = "get_worker_info"
-	TypeSearchWorkers event.EventType = "search_workers"
+	// TypeSearch answers both "who is here" and "which one do I mean": with no
+	// query it is the roster, with a query it is a keyword search. One event
+	// rather than a list/search pair because the two differ only in whether a
+	// filter was supplied, not in what they can return.
+	TypeSearch event.EventType = "search"
+	// TypeDescribe returns one worker's contract: its type, the events it
+	// serves with their schemas, and the events it publishes.
+	TypeDescribe event.EventType = "describe"
 )
 
 // New creates a directory worker.
@@ -95,6 +100,7 @@ func (w *DirectoryWorker) Start(ctx context.Context) error {
 	busCh, _ := w.Channel.Receive(runCtx)
 	go w.watch(runCtx, busCh)
 	w.AnnounceReady("directory", nil)
+	w.rememberSelf()
 
 	disc := event.New(event.TypeWorkerDiscover, w.ID(), map[string]any{
 		"worker_id": w.ID(),
@@ -144,7 +150,9 @@ func (w *DirectoryWorker) process(evt event.Event) {
 	case event.TypeWorkerReady:
 		w.rememberReady(evt)
 	case event.TypeWorkerGone:
-		if evt.WorkerId != "" {
+		// A gone notice about this worker would be a mistake: the directory is
+		// always in its own roster.
+		if evt.WorkerId != "" && evt.WorkerId != w.ID() {
 			w.dirMu.Lock()
 			delete(w.workers, evt.WorkerId)
 			w.dirMu.Unlock()
@@ -158,6 +166,21 @@ func (w *DirectoryWorker) process(evt event.Event) {
 			log.Printf("[directory %s] no extension for event %s", w.ID(), evt.Type)
 		}
 	}
+}
+
+// rememberSelf records this worker in its own roster. Peers learn the directory
+// from its ready broadcast, which excludes the sender — so without this entry a
+// caller asking "who is here", or "describe the directory worker", would not find
+// the one worker it is already talking to. The record is built from the extension
+// registry rather than off the wire, so it carries exactly what the announcement
+// carries (the peer-facing contract, Internal left out).
+func (w *DirectoryWorker) rememberSelf() {
+	w.dirMu.Lock()
+	w.workers[w.ID()] = workerRecord{
+		Type:  "directory",
+		Watch: w.WatchEntries(false),
+	}
+	w.dirMu.Unlock()
 }
 
 // rememberReady records (or replaces, since a ready is the whole contract) a
@@ -210,27 +233,39 @@ func (w *DirectoryWorker) registerExtensions() {
 	}
 
 	w.RegisterReadme(
-		"Read this worker's usage guide: the fleet roster, its three tools, and how to use them.",
+		"Read this worker's usage guide: the fleet roster, its two tools, and how to use them.",
 		w.readmeText, w.params)
 
 	w.Register(baseworker.Extension{
-		Event: TypeListWorkers,
+		Event: TypeSearch,
 		Response: obj(map[string]any{
-			"type": "array",
-			"items": obj(map[string]any{
-				"worker_id": map[string]any{"type": "string"},
-				"type":      map[string]any{"type": "string"},
-			}),
+			"query": map[string]any{"type": "string"},
+			"total": map[string]any{"type": "number", "description": "matches before the limit is applied"},
+			"workers": map[string]any{"type": "array",
+				"items": obj(map[string]any{
+					"worker_id": map[string]any{"type": "string"},
+					"type":      map[string]any{"type": "string"},
+					"matched":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "where the query matched (absent for the unfiltered roster)"},
+				})},
 		}),
-		Description: "List every worker on the bus as a minimal roster: worker_id and type only. It deliberately omits both tool schemas and published events (those are large and belong to get_worker_info) — this is the cheap answer to which workers exist, including peer reason workers and third-party workers that connected directly. Peer reason workers are NOT callable tools (their ready lists events they respond to, not capabilities to invoke) but are reachable as message targets. When you do not know the id, use search_workers; to see one worker's tools/publishes, use get_worker_info.",
-		Parameters:  obj(map[string]any{}),
+		Description: "Look up workers on the bus. With no query it is the roster: every worker as worker_id + type — the cheap answer to who exists, including peer reason workers and third-party workers that connected directly. With a query it is a keyword search over ids, types, and the tools/events each worker exposes (case-insensitive; every whitespace-separated term must match somewhere). Hits are slim — id, type, where it matched — so confirm with describe or worker.readme. Peer reason workers are listed but are NOT callable tools (their ready lists events they respond to, not capabilities to invoke); reach them with message.",
+		Parameters: obj(map[string]any{
+			"query": map[string]any{"type": "string",
+				"description": "Optional keywords, e.g. \"fish\", \"web search\". Omit for the full roster."},
+			"limit": map[string]any{"type": "integer",
+				"description": "Max hits when a query is given (default 20, max 100); ignored for the roster. The response's total counts all matches."},
+			"types": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
+				"description": "Only workers of these types (e.g. [\"workspace\", \"program\"]). Case-insensitive; combines with exclude_types."},
+			"exclude_types": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
+				"description": "Drop workers of these types (e.g. [\"reason\", \"coding\"]). Useful when looking for a capability and the other thinkers are noise."},
+		}),
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		w.handleListWorkers(evt, tc)
+		w.handleSearch(evt, tc)
 	})
 
 	w.Register(baseworker.Extension{
-		Event: TypeGetWorkerInfo,
+		Event: TypeDescribe,
 		Response: obj(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -246,41 +281,14 @@ func (w *DirectoryWorker) registerExtensions() {
 				"publishes": map[string]any{"type": "array"},
 			},
 		}),
-		Description: "Full details for one worker: its type and the tools it exposes with complete parameter schemas plus published events. Use a worker_id from list_workers or search_workers.",
+		Description: "Full details for one worker: its type, the tools it exposes with complete parameter schemas plus published events. Use a worker_id from search.",
 		Parameters: obj(map[string]any{
 			"worker": map[string]any{"type": "string",
-				"description": "Worker ID, as returned by list_workers."},
+				"description": "Worker ID, as returned by search."},
 		}),
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		w.handleGetWorkerInfo(evt, tc)
-	})
-
-	w.Register(baseworker.Extension{
-		Event: TypeSearchWorkers,
-		Response: obj(map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query":   map[string]any{"type": "string"},
-				"total":   map[string]any{"type": "number", "description": "hits before the limit is applied"},
-				"workers": map[string]any{"type": "array", "description": "slim hits: worker_id, type, matched"},
-			},
-		}),
-		Description: "Keyword-search the roster by worker id, type, and the tools/events a worker exposes " +
-			"(case-insensitive). Every whitespace-separated term must match somewhere, so " +
-			"\"web search\" narrows more than \"web\". Use it to recall a worker whose exact id you " +
-			"do not remember; results are slim (id, type, where it matched) — follow up with " +
-			"get_worker_info or worker.readme on the candidates to confirm. A worker's readme text is " +
-			"not searched.",
-		Parameters: obj(map[string]any{
-			"query": map[string]any{"type": "string",
-				"description": "Keywords, e.g. \"fish\", \"web search\", \"mcp emit\"."},
-			"limit": map[string]any{"type": "integer",
-				"description": "Max results (default 20, max 100). The response's total counts all matches."},
-		}),
-	}, func(evt event.Event) {
-		tc := baseworker.ParseToolCall(evt)
-		w.handleSearchWorkers(evt, tc)
+		w.handleDescribe(evt, tc)
 	})
 }
 
@@ -292,19 +300,19 @@ worker.ready and forgets it on worker.gone; it has no lifecycle authority.
 
 ## Tools
 
-- list_workers {} — the minimal roster: worker_id and type only (no schemas, no
-  published events; those belong to get_worker_info).
-- search_workers { query, limit? } — keyword search over worker ids, types and
-  the tools/events they expose. Case-insensitive; every whitespace-separated
-  term must match somewhere. Results are slim (id, type, where it matched).
-- get_worker_info { "worker": "<id>" } — one worker's full contract: type, its
-  tools with complete parameter schemas, and its published events.
+- search { query?, limit? } — no query: the roster (worker_id + type only, no
+  schemas, no publishes). With a query: keyword search over worker ids, types
+  and the tools/events they expose — case-insensitive, every whitespace-
+  separated term must match somewhere. Hits are slim (id, type, where it
+  matched).
+- describe { "worker": "<id>" } — one worker's full contract: type, its tools
+  with complete parameter schemas, and its published events.
 
 ## How to use
 
-1. search_workers { query } — recall a worker by what it does when you do not
-   know its id (or list_workers for the whole roster).
-2. get_worker_info { worker } — inspect a candidate before calling or messaging it.
+1. search { query } — recall a worker by what it does when you do not know its
+   id; search {} returns the whole roster.
+2. describe { worker } — inspect a candidate before calling or messaging it.
 3. worker.readme on a candidate reason worker — read its own description (what
    it is responsible for and what it has recently been working on) to confirm it
    is the one you remember, and whether it is already busy with this work.
@@ -317,7 +325,8 @@ worker.ready and forgets it on worker.gone; it has no lifecycle authority.
 - Peer reason workers appear in the roster but are NOT callable tools: their
   ready lists the events they respond to, not capabilities to invoke. They are
   reachable as message targets.
-- The roster is rebuilt from the bus at start; it is never persisted.`
+- The roster is rebuilt from the bus at start; it is never persisted. This
+  worker is in its own roster too, so "who is here" includes the directory.`
 
 // readmeText is the guide plus the number of workers currently in the roster.
 func (w *DirectoryWorker) readmeText() string {
@@ -327,71 +336,37 @@ func (w *DirectoryWorker) readmeText() string {
 	return fmt.Sprintf("%s\n\n## Current\n\n- workers known: %d\n", directoryReadme, n)
 }
 
-// handleListWorkers serves the roster: every worker learned from its ready, as
-// the minimal identity list — worker_id and type. Neither tool schemas nor
-// published events appear here: both belong to get_worker_info's drill-in view,
-// so a roster over hundreds of workers stays cheap to read.
-func (w *DirectoryWorker) handleListWorkers(evt event.Event, tc baseworker.ToolCall) {
-	w.dirMu.Lock()
-	roster := make([]map[string]any, 0, len(w.workers))
-	for id, rec := range w.workers {
-		roster = append(roster, map[string]any{
-			"worker_id": id,
-			"type":      rec.Type,
-		})
-	}
-	w.dirMu.Unlock()
-
-	w.ReplyCompleted(evt.WorkerId, tc.CallID, roster, tc.TraceID)
-	log.Printf("[directory %s] list_workers → %d worker(s)", w.ID(), len(roster))
-}
-
-// handleGetWorkerInfo serves one worker's full record.
-func (w *DirectoryWorker) handleGetWorkerInfo(evt event.Event, tc baseworker.ToolCall) {
-	target := baseworker.ArgString(tc.Args, "worker")
-	if target == "" {
-		w.ReplyFailed(evt.WorkerId, tc.CallID, "get_worker_info requires the 'worker' parameter (worker ID)", tc.TraceID)
-		return
-	}
-	w.dirMu.Lock()
-	rec, ok := w.workers[target]
-	w.dirMu.Unlock()
-	if !ok {
-		w.ReplyFailed(evt.WorkerId, tc.CallID,
-			fmt.Sprintf("unknown worker %q — call list_workers to see the known ids", target), tc.TraceID)
-		return
-	}
-	w.ReplyCompleted(evt.WorkerId, tc.CallID, map[string]any{
-		"worker_id": target,
-		"type":      rec.Type,
-		"tools":     rec.Watch,
-		"publishes": rec.Publishes,
-	}, tc.TraceID)
-	log.Printf("[directory %s] get_worker_info → %s", w.ID(), target)
-}
-
-// searchHit is one slim search result: the identity plus the contract fields the
-// query matched, so the caller can tell why it surfaced without a second call.
-// score is ranking-only and never serialized.
-type searchHit struct {
-	WorkerID string   `json:"worker_id"`
-	Type     string   `json:"type"`
-	Matched  []string `json:"matched,omitempty"`
-	score    int
-}
-
-// handleSearchWorkers serves a keyword search over the directory. Matching is
-// case-insensitive and AND across whitespace-separated terms: each term must
-// occur somewhere in the worker's announced contract (id, type, exposed tool
-// event or description, published event). Ranking puts an id hit first, so a
-// half-remembered name beats a tool description that merely mentions the word.
-func (w *DirectoryWorker) handleSearchWorkers(evt event.Event, tc baseworker.ToolCall) {
+// handleSearch answers both "who is here" and "which one do I mean". With no
+// query it returns the whole roster (worker_id + type); with a query it narrows
+// by the announced contract. One event instead of a list/search pair: the two
+// differ only in whether a filter was supplied, and neither carries tool schemas
+// — that is describe's drill-in job, so a roster over hundreds of workers stays
+// cheap to read.
+func (w *DirectoryWorker) handleSearch(evt event.Event, tc baseworker.ToolCall) {
 	query := strings.TrimSpace(baseworker.ArgString(tc.Args, "query"))
+	allowType := typeFilter(tc.Args)
+
 	if query == "" {
-		w.ReplyFailed(evt.WorkerId, tc.CallID,
-			"search_workers requires the 'query' parameter; use list_workers for the full roster", tc.TraceID)
+		w.dirMu.Lock()
+		roster := make([]searchHit, 0, len(w.workers))
+		for id, rec := range w.workers {
+			if !allowType(rec.Type) {
+				continue
+			}
+			roster = append(roster, searchHit{WorkerID: id, Type: rec.Type})
+		}
+		w.dirMu.Unlock()
+		sort.Slice(roster, func(i, j int) bool { return roster[i].WorkerID < roster[j].WorkerID })
+
+		w.ReplyCompleted(evt.WorkerId, tc.CallID, map[string]any{
+			"query":   "",
+			"total":   len(roster),
+			"workers": roster,
+		}, tc.TraceID)
+		log.Printf("[directory %s] search (roster) → %d worker(s)", w.ID(), len(roster))
 		return
 	}
+
 	lowerQuery := strings.ToLower(query)
 	terms := strings.Fields(lowerQuery)
 	limit := baseworker.ArgInt(tc.Args, "limit", 20)
@@ -404,6 +379,9 @@ func (w *DirectoryWorker) handleSearchWorkers(evt event.Event, tc baseworker.Too
 	w.dirMu.Lock()
 	hits := make([]searchHit, 0)
 	for id, rec := range w.workers {
+		if !allowType(rec.Type) {
+			continue
+		}
 		if hit, ok := matchWorker(id, rec, terms, lowerQuery); ok {
 			hits = append(hits, hit)
 		}
@@ -425,7 +403,66 @@ func (w *DirectoryWorker) handleSearchWorkers(evt event.Event, tc baseworker.Too
 		"total":   total,
 		"workers": hits,
 	}, tc.TraceID)
-	log.Printf("[directory %s] search_workers %q → %d/%d hit(s)", w.ID(), query, len(hits), total)
+	log.Printf("[directory %s] search %q → %d/%d hit(s)", w.ID(), query, len(hits), total)
+}
+
+// handleDescribe serves one worker's full record: the drill-in half of the pair.
+func (w *DirectoryWorker) handleDescribe(evt event.Event, tc baseworker.ToolCall) {
+	target := baseworker.ArgString(tc.Args, "worker")
+	if target == "" {
+		w.ReplyFailed(evt.WorkerId, tc.CallID, "describe requires the 'worker' parameter (worker ID)", tc.TraceID)
+		return
+	}
+	w.dirMu.Lock()
+	rec, ok := w.workers[target]
+	w.dirMu.Unlock()
+	if !ok {
+		w.ReplyFailed(evt.WorkerId, tc.CallID,
+			fmt.Sprintf(`unknown worker %q — send "search" to %q to see the known ids`, target, w.ID()), tc.TraceID)
+		return
+	}
+	w.ReplyCompleted(evt.WorkerId, tc.CallID, map[string]any{
+		"worker_id": target,
+		"type":      rec.Type,
+		"tools":     rec.Watch,
+		"publishes": rec.Publishes,
+	}, tc.TraceID)
+	log.Printf("[directory %s] describe → %s", w.ID(), target)
+}
+
+// typeFilter builds the predicate behind search's "types" / "exclude_types"
+// arguments: an include list (empty = any) minus an exclude list. Matching is
+// case-insensitive, and an excluded type always wins over an included one so the
+// two arguments compose predictably.
+func typeFilter(args map[string]any) func(string) bool {
+	include := make(map[string]bool)
+	for _, t := range baseworker.ArgStrings(args, "types") {
+		include[strings.ToLower(strings.TrimSpace(t))] = true
+	}
+	exclude := make(map[string]bool)
+	for _, t := range baseworker.ArgStrings(args, "exclude_types") {
+		exclude[strings.ToLower(strings.TrimSpace(t))] = true
+	}
+	return func(workerType string) bool {
+		t := strings.ToLower(workerType)
+		if exclude[t] {
+			return false
+		}
+		if len(include) > 0 && !include[t] {
+			return false
+		}
+		return true
+	}
+}
+
+// searchHit is one slim search result: the identity plus the contract fields the
+// query matched, so the caller can tell why it surfaced without a second call.
+// score is ranking-only and never serialized.
+type searchHit struct {
+	WorkerID string   `json:"worker_id"`
+	Type     string   `json:"type"`
+	Matched  []string `json:"matched,omitempty"`
+	score    int
 }
 
 // matchWorker reports whether every term occurs somewhere in the worker's

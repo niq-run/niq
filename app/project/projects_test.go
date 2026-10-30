@@ -338,7 +338,7 @@ func TestLinkProjectRejectsInvalid(t *testing.T) {
 
 // TestCreateProjectSeedsBuiltinPrograms verifies a project created from the
 // built-in default template gets the template's programs/ resources (the
-// using-niq playbook) in its own programs/ dir, so program.load can address them.
+// using-niq playbook) in its own programs/ dir, so program.read can address them.
 func TestCreateProjectSeedsBuiltinPrograms(t *testing.T) {
 	setupProjectsRoot(t)
 	def, err := LoadPreset("default")
@@ -357,7 +357,7 @@ func TestCreateProjectSeedsBuiltinPrograms(t *testing.T) {
 // TestBuiltinPlaybookIsLoadable verifies the seeded built-in playbook is
 // addressable through the program worker's store: the entry loads as
 // "using-niq", and the cheatsheet is listed and loads as
-// "using-niq/CHEATSHEET.md" (what program.load takes).
+// "using-niq/CHEATSHEET.md" (what program.read takes).
 func TestBuiltinPlaybookIsLoadable(t *testing.T) {
 	setupProjectsRoot(t)
 	def, err := LoadPreset("default")

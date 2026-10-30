@@ -1,6 +1,6 @@
 // Runtime program management: the reason worker's instruction/playbook list
 // (w.programs) is a single attribute seeded from config and mutated in place
-// by the program.query / program.update meta-extensions.
+// by the program.query / program.attach / program.detach meta-extensions.
 //
 // Locking contract: extension handlers are invoked from process(), which holds
 // w.mu for the whole dispatch. The *Locked variants below are for handlers —
@@ -17,8 +17,8 @@ import (
 )
 
 // AddProgram appends a new program. It errors if a program with the same name
-// already exists — program.update "add" is purely additive; use "remove" then
-// "add" to replace. Locked programs may be added (they are operator-set).
+// already exists — program.attach is purely additive; detach and attach again to
+// replace. Locked programs may be attached (they are operator-set).
 func (w *BaseReasonWorker) AddProgram(p program.Program) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

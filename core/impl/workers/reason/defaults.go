@@ -31,7 +31,8 @@ import (
 // override (empty for the built-in fallback); it is owned by this worker, not
 // the mechanism, and captured here so the context strategy can resolve it.
 // RegisterDefaultExtensions registers the default reason-family toolkit on w:
-// message / request / context.compress / program.query / program.update. The
+// message / request / context.compress / program.query / program.attach /
+// program.detach. The
 // generic reason worker uses it via NewWorker; a PARALLEL reason-family worker
 // (e.g. the coding worker) reuses the same baseline while adding its own
 // differences (tool-list policy, compaction directive). compactDirective is the
@@ -51,7 +52,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		// peers should be able to call, so it is announced only to itself.
 		Internal:    true,
 		Response:    baseworker.StringSchema("confirmation: \"message sent to <worker>\"; the target's answer, if any, arrives later as worker.input"),
-		Description: "Send a message to a specific worker on the bus. The message is delivered in append mode: it does not interrupt the target's in-flight reasoning — it is appended as a supplement and the target schedules a fresh round.",
+		Description: "Send a message to a specific worker on the bus — this is how you talk to another reasoning worker, both to start a conversation and to reply to one. The message is delivered in append mode: it does not interrupt the target's in-flight reasoning — it is appended as a supplement and the target schedules a fresh round.",
 		Parameters: obj(map[string]any{
 			"target": map[string]any{"type": "string", "description": "Target worker ID"},
 			"text":   map[string]any{"type": "string", "description": "Message text"},
@@ -71,7 +72,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		// reached).
 		Internal:    true,
 		Response:    baseworker.ObjectSchema(map[string]any{"result": map[string]any{"type": "string", "description": "the target capability's reply text — its shape is whatever that capability declares as its response"}}),
-		Description: "Invoke a capability on another worker without it being a listed tool: provide target (worker id), event (the capability event type, as shown by the directory worker's get_worker_info), and arguments. The call awaits the worker's request.completed and returns its result. Not limited to capabilities discovered by this worker — the target may serve events that were never announced here (e.g. a peer reason worker's worker.readme).",
+		Description: "Invoke a capability on another worker without it being a listed tool: provide target (worker id), event (the capability event type, as shown by the directory worker's describe), and arguments. The call awaits the worker's request.completed and returns its result. Not limited to capabilities discovered by this worker — the target may serve events that were never announced here (e.g. a peer reason worker's worker.readme).",
 		Parameters: obj(map[string]any{
 			"target":    map[string]any{"type": "string", "description": "Target worker ID"},
 			"event":     map[string]any{"type": "string", "description": "Capability event type on the target worker"},
@@ -83,6 +84,39 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		// than leaving the call unresolved.
 		tc := baseworker.ParseToolCall(evt)
 		w.ReplyFailed(tc.CallerID, tc.CallID, "request must be dispatched via the forward path", tc.TraceID)
+	})
+
+	// run_program: the third built-in send, alongside message and request. Its
+	// target (the program worker) and event (run) are filled in by handleToolCalls,
+	// so this registration only declares the contract the model sees; the handler
+	// is defensive for the same reason request's is.
+	w.Register(baseworker.Extension{
+		Event:    TypeRunProgram,
+		Internal: true, // the worker's own tool: not something peers call
+		Response: baseworker.ObjectSchema(map[string]any{
+			"output":        map[string]any{"description": "the script's return value (sdk.result or a top-level return), any JSON type"},
+			"log":           baseworker.ArraySchema(map[string]any{"type": "string"}),
+			"log_truncated": map[string]any{"type": "number", "description": "how many earlier log lines were dropped"},
+		}),
+		Description: "Run a JavaScript program on the program worker: a stored script (path) or inline source. Inside it, " +
+			"await sdk.call(target, event, arguments) sends the same event a tool call or request would and resolves with " +
+			"its reply value; await sdk.message(target, text) leaves a note without waiting; sdk.result(payload) sets the " +
+			"output; sdk.log(text) comes back with it. Use it to send a whole " +
+			"sequence of events in one step instead of one reasoning round per call. The sandbox has no filesystem, " +
+			"process or network access — everything goes through sdk.call.",
+		Parameters: obj(map[string]any{
+			"path": map[string]any{"type": "string",
+				"description": "Run a stored script program by its content path (its name for the entry content). Provide this or source."},
+			"source": map[string]any{"type": "string",
+				"description": "Run inline JavaScript (nothing persisted). Provide this or path."},
+			"args": map[string]any{"type": "object",
+				"description": "Arguments handed to the script as sdk.args (default {})."},
+			"timeout_seconds": map[string]any{"type": "number",
+				"description": "Wall-clock limit for the whole run in seconds (default 120), covering nested calls."},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "run_program must be dispatched via the forward path", tc.TraceID)
 	})
 
 	w.Register(baseworker.Extension{
@@ -126,34 +160,43 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		Response: baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "content_type": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}, "tags": baseworker.ArraySchema(map[string]any{"type": "string"}), "locked": map[string]any{"type": "boolean"}, "path": map[string]any{"type": "string"}})),
 		Description: "List this worker's instruction and playbook programs (name, type, description, tags, locked, path). " +
 			"Instructions carry their content here; playbooks are references — only metadata is listed, and their content " +
-			"is loaded from the program worker by passing the path to program__load.",
+			"is read from the program worker by passing the path to program__read.",
 		Parameters: obj(map[string]any{}),
 	}, func(evt event.Event) {
 		handleProgramQuery(w, evt)
 	})
 
 	w.Register(baseworker.Extension{
-		Event:    TypeProgramUpdate,
-		Response: baseworker.StringSchema("confirmation naming the program added or removed"),
-		Description: "Add or remove one of this worker's programs. Instruction: supply content and it is inlined " +
-			"into the system prompt — self-contained, nothing to set up elsewhere. Playbook: only name/description/tags " +
-			"are kept here (surfaced in the prompt); its content lives in the program worker, so create it there first " +
-			"with program__upsert then program__write, and load it with program__load(\"<name>\"). " +
-			"Locked programs cannot be removed.",
+		Event:    TypeProgramAttach,
+		Response: baseworker.StringSchema("confirmation naming the attached program"),
+		Description: "Attach a program to this worker. Instruction: supply content and it is inlined into the " +
+			"system prompt — self-contained, nothing to set up elsewhere. Playbook: only name/description/tags are " +
+			"kept here (surfaced in the prompt); its content lives in the program worker, so create it there first " +
+			"(touch then write) and read it with program__read(\"<name>\"). Attaching a name that is already mounted " +
+			"fails — detach it first to replace it.",
 		Parameters: obj(map[string]any{
-			"op": map[string]any{"type": "string", "enum": []string{"add", "remove"},
-				"description": "add a new program, or remove an existing one by name"},
-			"name": map[string]any{"type": "string", "description": "program name (required for both ops)"},
+			"name": map[string]any{"type": "string", "description": "program name — also its root path"},
 			"content_type": map[string]any{"type": "string", "enum": []string{"instruction", "playbook"},
-				"description": "required for add: instruction is inlined, playbook is a metadata reference"},
+				"description": "instruction is inlined into the prompt; playbook is a metadata reference"},
 			"content": map[string]any{"type": "string",
 				"description": "instruction text; required for content_type=instruction, ignored for playbook"},
 			"description": map[string]any{"type": "string", "description": "human description (playbooks surface this in the prompt)"},
 			"tags":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"locked":      map[string]any{"type": "boolean", "description": "if true, the program cannot be removed via this tool"},
+			"locked":      map[string]any{"type": "boolean", "description": "if true, the program cannot be detached via this tool"},
 		}),
 	}, func(evt event.Event) {
-		handleProgramUpdate(w, evt)
+		handleProgramAttach(w, evt)
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeProgramDetach,
+		Response:    baseworker.StringSchema("confirmation naming the detached program"),
+		Description: "Detach a program from this worker by name. The program itself is not deleted — only this worker's mounting of it. Locked programs cannot be detached.",
+		Parameters: obj(map[string]any{
+			"name": map[string]any{"type": "string", "description": "program name to unmount"},
+		}),
+	}, func(evt event.Event) {
+		handleProgramDetach(w, evt)
 	})
 }
 
@@ -162,28 +205,32 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 const TypeContextRotate event.EventType = "context.rotate"
 
 // The default worker's own LLM-facing tools, each its own event type (see the
-// request-response convention in pkg/reason). list_workers / get_worker_info
-// deliberately live on the HOST worker, not here: a reason worker must not
-// treat peer reasons' ready events as callable tools, and the fleet roster is
-// the host's directory service.
+// request-response convention in pkg/reason). The fleet roster deliberately
+// lives on the directory worker, not here: a reason worker must not treat peer
+// reasons' ready events as callable tools, and discovery is the directory's
+// service.
 // TypeMessage / TypeRequest are the default worker's generated self tools:
 // message (fire-and-forget worker.input) and request (forward a peer capability
 // call and await its request.completed via the normal tracker).
 const (
-	TypeMessage event.EventType = reasonBase.TypeMessage
-	TypeRequest event.EventType = reasonBase.TypeRequest
+	TypeMessage    event.EventType = reasonBase.TypeMessage
+	TypeRequest    event.EventType = reasonBase.TypeRequest
+	TypeRunProgram event.EventType = reasonBase.TypeRunProgram
 )
 
-// TypeProgramUpdate / TypeProgramAdd / TypeProgramRemove are the program
-// management tools (see the consts below the registerDefaultExtensions block).
-
-// TypeProgramQuery / TypeProgramUpdate are the program-management extensions:
-// read this worker's instruction/playbook list, or add/remove one entry. They
-// are advertised (not Internal) so other authorized workers (e.g. webui-hiw)
-// can manage them; bus permissions control who may address the directed events.
+// TypeProgramQuery / TypeProgramAttach / TypeProgramDetach are the program
+// management extensions: read this worker's instruction/playbook list, mount one
+// entry on it, or unmount one. They are advertised (not Internal) so other
+// authorized workers (e.g. webui-hiw) can manage them; bus permissions control
+// who may address the directed events.
+//
+// attach/detach are two events rather than one "update" with an op argument:
+// the operation IS the event, which is the same shape every other capability
+// uses and leaves no discriminated-union argument to misread.
 const (
 	TypeProgramQuery  event.EventType = "program.query"
-	TypeProgramUpdate event.EventType = "program.update"
+	TypeProgramAttach event.EventType = "program.attach"
+	TypeProgramDetach event.EventType = "program.detach"
 )
 
 // handleSendMessage serves the send_message tool: forwards the text to the
@@ -193,6 +240,11 @@ func handleSendMessage(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 	text, _ := args["text"].(string)
 	if target == "" || text == "" {
 		w.ReplyFailed(callerID, callID, "target and text are required", traceID)
+		return
+	}
+	if !w.MayAddress(target) {
+		w.ReplyFailed(callerID, callID,
+			fmt.Sprintf("%s is outside this worker's collaboration scope", target), traceID)
 		return
 	}
 
@@ -322,55 +374,50 @@ func handleProgramQuery(w *reasonBase.BaseReasonWorker, evt event.Event) {
 	w.ReplyCompleted(tc.CallerID, tc.CallID, w.ProgramsLocked(), tc.TraceID)
 }
 
-// handleProgramUpdate serves the program.update tool: add or remove a single
-// program entry. "add" appends a new program (error if the name exists);
-// "remove" deletes by name (error if absent or Locked). On success it raises
-// the durable-change signal so the worker snapshots the new list, and replies
-// with request.completed / request.failed echoing the request's id — the
-// normal reply path schedules the next reasoning round.
+// handleProgramAttach serves program.attach: mount one program on this worker.
+// It errors if the name is already mounted (purely additive — detach first to
+// replace). On success it raises the durable-change signal so the worker
+// snapshots the new list, and replies through the normal path, which schedules
+// the next reasoning round.
 //
 // The two kinds are deliberately asymmetric: an instruction is self-contained
 // (its content is supplied here and inlined into the prompt), while a playbook
 // is only a reference — name/description/tags live here, and its content stays
-// in the program worker to be loaded on demand. See buildInstruction.
+// in the program worker to be read on demand. See buildInstruction.
 //
 // Runs inside process() with w.mu held (see handleProgramQuery).
-func handleProgramUpdate(w *reasonBase.BaseReasonWorker, evt event.Event) {
+func handleProgramAttach(w *reasonBase.BaseReasonWorker, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
-	op, _ := tc.Args["op"].(string)
-
-	var result string
-	var err error
-	switch op {
-	case "add":
-		var p program.Program
-		p, err = programFromArgs(tc.Args)
-		if err == nil {
-			err = w.AddProgramLocked(p)
-		}
-		if err == nil {
-			result = "added program " + p.Name
-		}
-	case "remove":
-		name, _ := tc.Args["name"].(string)
-		if name == "" {
-			err = fmt.Errorf("name is required for remove")
-		} else {
-			err = w.RemoveProgramLocked(name)
-		}
-		if err == nil {
-			result = "removed program " + name
-		}
-	default:
-		err = fmt.Errorf("unknown op %q (want add or remove)", op)
-	}
-
+	p, err := programFromArgs(tc.Args)
 	if err == nil {
-		w.NotifyDurableChange()
-		w.ReplyCompleted(tc.CallerID, tc.CallID, result, tc.TraceID)
+		err = w.AddProgramLocked(p)
+	}
+	if err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
 		return
 	}
-	w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
+	w.NotifyDurableChange()
+	w.ReplyCompleted(tc.CallerID, tc.CallID, "attached program "+p.Name, tc.TraceID)
+}
+
+// handleProgramDetach serves program.detach: unmount one program by name. It
+// errors if the program is absent or Locked. The program's content is never
+// touched — detaching only removes this worker's mounting of it.
+//
+// Runs inside process() with w.mu held (see handleProgramQuery).
+func handleProgramDetach(w *reasonBase.BaseReasonWorker, evt event.Event) {
+	tc := baseworker.ParseToolCall(evt)
+	name, _ := tc.Args["name"].(string)
+	if name == "" {
+		w.ReplyFailed(tc.CallerID, tc.CallID, "name is required", tc.TraceID)
+		return
+	}
+	if err := w.RemoveProgramLocked(name); err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
+		return
+	}
+	w.NotifyDurableChange()
+	w.ReplyCompleted(tc.CallerID, tc.CallID, "detached program "+name, tc.TraceID)
 }
 
 // programFromArgs builds a program.Program from a tool-call argument map. The

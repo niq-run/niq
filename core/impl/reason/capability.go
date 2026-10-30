@@ -34,7 +34,11 @@ import (
 // describes what the worker can SEE, not what it announces. The self-registry
 // (Extension / Register) lives in pkg/baseworker.
 type DiscoveredCapability struct {
-	Source      string          // declaring worker ID (own ID for self)
+	Source string // declaring worker ID (own ID for self)
+	// SourceType is the declaring worker's announced type (reason, workspace,
+	// directory, ...). Carried so a tool-list policy can select a whole worker
+	// by what it IS rather than by its id or by enumerating its events.
+	SourceType  string
 	Event       event.EventType // the extension's own event type (send_message, context.compress, ...)
 	Description string
 	Parameters  map[string]any
@@ -70,9 +74,18 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 	// A reason's ready lists the events it RESPONDS to, not callable tools: this
 	// worker exposes its own capabilities to itself, but a peer reason's ready is
 	// not treated as callable capabilities — its extensions (context.compress,
-	// program_query, ...) are never surfaced as tools here. Infra workers
+	// program_attach, ...) are never surfaced as tools here. Infra workers
 	// (workspace/timer/program/directory...) expose real tools and are kept.
-	if workerID != w.ID() && isReasonFamilyWorkerType(evt.Payload["type"]) {
+	sourceType, _ := evt.Payload["type"].(string)
+	if workerID != w.ID() && isReasonFamilyWorkerType(sourceType) {
+		// A reason peer outside the collaboration scope is kept out of this
+		// worker's world entirely: no discovered capabilities, nothing to call.
+		// The id is remembered so a directed send (which does not need
+		// discovery) is refused too.
+		if w.reasonPeerOutOfScope(workerID) {
+			w.markOutOfScope(workerID)
+			w.discovered = removeDiscoveredCapabilities(w.discovered, workerID)
+		}
 		return
 	}
 
@@ -100,7 +113,7 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 		if typ == "" {
 			continue
 		}
-		dc := DiscoveredCapability{Source: workerID, Event: event.EventType(typ)}
+		dc := DiscoveredCapability{Source: workerID, SourceType: sourceType, Event: event.EventType(typ)}
 		dc.Description, _ = e["desc"].(string)
 		dc.Parameters, _ = e["parameters"].(map[string]any)
 		dc.Response, _ = e["response"].(map[string]any)
@@ -109,6 +122,41 @@ func (w *BaseReasonWorker) HandleWorkerReady(evt event.Event) {
 	if len(watch) > 0 {
 		log.Printf("[reason %s] received watch from %s (%d entries)", w.ID(), workerID, len(watch))
 	}
+}
+
+// reasonPeerOutOfScope reports whether a reason-family peer is outside this
+// worker's collaboration scope. A nil scope means every peer is inside it.
+func (w *BaseReasonWorker) reasonPeerOutOfScope(peerID string) bool {
+	w.scopeMu.RLock()
+	defer w.scopeMu.RUnlock()
+	if w.collaborators == nil {
+		return false
+	}
+	return !w.collaborators[peerID]
+}
+
+// markOutOfScope remembers a reason peer that announced outside the scope, so a
+// directed send to it can be refused even though it is not in the discovered
+// universe. Without this, an id learned some other way (a directory search, a
+// handover brief) would be reachable.
+func (w *BaseReasonWorker) markOutOfScope(peerID string) {
+	w.scopeMu.Lock()
+	w.excludedPeers[peerID] = true
+	w.scopeMu.Unlock()
+}
+
+// MayAddress reports whether this worker may send a directed event to target.
+// The only restriction is the collaboration scope: a reason-family peer that
+// announced outside the whitelist is refused. Capability workers, unknown ids
+// and this worker itself are always allowed — the scope governs who thinks with
+// you, not which capabilities you may call.
+func (w *BaseReasonWorker) MayAddress(target string) bool {
+	if target == "" || target == w.ID() {
+		return true
+	}
+	w.scopeMu.RLock()
+	defer w.scopeMu.RUnlock()
+	return !w.excludedPeers[target]
 }
 
 // removeDiscoveredCapabilities returns caps without the entries declared by source.
@@ -184,6 +232,25 @@ func (w *BaseReasonWorker) capabilityByToolName(name string) (DiscoveredCapabili
 // encoded provider__request and never treated as this escape hatch.
 func (w *BaseReasonWorker) isRequestCap(cap DiscoveredCapability) bool {
 	return cap.Source == w.ID() && string(cap.Event) == string(TypeRequest)
+}
+
+// isRunProgramCap reports whether a capability is THIS worker's own built-in
+// run_program tool — the script counterpart of request.
+func (w *BaseReasonWorker) isRunProgramCap(cap DiscoveredCapability) bool {
+	return cap.Source == w.ID() && string(cap.Event) == string(TypeRunProgram)
+}
+
+// findProviderByType returns the peer of the given worker type that serves the
+// given event. It resolves a built-in tool's target without hardcoding an id:
+// run_program finds whichever worker announces itself as the program worker.
+// Callers must hold w.mu.
+func (w *BaseReasonWorker) findProviderByType(workerType string, evt event.EventType) (string, bool) {
+	for _, cap := range w.discovered {
+		if cap.Source != w.ID() && cap.SourceType == workerType && cap.Event == evt {
+			return cap.Source, true
+		}
+	}
+	return "", false
 }
 
 // --- convention capabilities -------------------------------------------------
@@ -344,7 +411,7 @@ func defaultToolListBuilder(w *BaseReasonWorker, caps []DiscoveredCapability) []
 // responseHintMaxBytes caps the schema text appended to a tool description. The
 // hint is there to tell the model what shape to expect, not to be a full
 // reference: an enormous schema would bloat every request's tool list, and the
-// authoritative copy is the directory worker's get_worker_info.
+// authoritative copy is the directory worker's describe.
 const responseHintMaxBytes = 600
 
 // withResponseHint appends the declared reply shape to a tool description, so the
@@ -380,6 +447,112 @@ func withResponseHint(desc string, response map[string]any) string {
 // so a reason-family worker can compose it over a filtered universe (e.g. keep
 // only self + the program worker) instead of reimplementing the naming/sorting.
 var DefaultToolListBuilder ToolListBuilder = defaultToolListBuilder
+
+// Worker types the reason-family scopes select by. Selecting a whole peer
+// surface by TYPE rather than by id means a worker with a non-default id still
+// resolves, and a new event on that worker needs no change here.
+const (
+	DirectoryWorkerType = "directory"
+	ProgramWorkerType   = "program"
+)
+
+// IsMetaCapability reports whether an event describes a worker rather than does
+// work: readme (read and replace) and per-event help. These are how a caller
+// learns about a worker, not capabilities it invokes, so no scope can expose them
+// as tools — a request reaches them when one is genuinely needed. The rule is
+// global so a worker cannot leak its self-description into the model's tool list
+// merely by being a type that an exposed policy takes whole.
+func IsMetaCapability(t event.EventType) bool {
+	switch t {
+	case event.TypeWorkerReadme, event.TypeWorkerHelp, TypeReadmeUpdate:
+		return true
+	}
+	return false
+}
+
+// ToolScope declares what a worker's model may see as tools. It is a filter over
+// the discovered universe, not a naming rule: DefaultToolListBuilder still owns
+// the names, the reply hints and the cache-stable sort.
+//
+// A capability is exposed iff it is not a meta capability and one of
+//
+//   - it is the worker's own and Own lists its event;
+//   - the announcing worker's type is in PeerTypes (its whole surface);
+//   - the announcing worker's type is in PeerEvents and that event is listed.
+//
+// Everything else stays reachable by request — from peers and from the model
+// itself. Changing a worker's visible range is therefore a one-line edit where
+// the worker is assembled, not a new builder.
+type ToolScope struct {
+	// Own lists this worker's own events that become tools. Anything else it
+	// serves is request-only.
+	Own []event.EventType
+	// PeerTypes lists peer worker types whose whole announced surface becomes
+	// tools. Empty exposes no peer tools, and no peer meta tools ever.
+	PeerTypes []string
+	// PeerEvents narrows a peer type to specific events, for the case where a
+	// worker is the invocation channel but only one of its events should be
+	// listed (PTC: the program worker contributes run and nothing else). A type
+	// in PeerTypes contributes everything; a type here contributes exactly the
+	// events named. Meta events are still dropped.
+	PeerEvents map[string][]event.EventType
+}
+
+// DefaultToolScope is the reason family's scope, and it is the whole tool list:
+// the three built-in sends and nothing else.
+//
+//   - message      — leave a note (no reply awaited)
+//   - request      — send any event and await its reply
+//   - run_program  — send events from inside a script (the program worker's run)
+//
+// Nothing peer-supplied is exposed. Discovery (the directory worker) is reached
+// with request like any other capability, so the tool list is fixed: it does not
+// change as workers come and go, and the model has exactly three ways to act.
+var DefaultToolScope = ToolScope{
+	Own: []event.EventType{TypeMessage, TypeRequest, TypeRunProgram},
+}
+
+// ScopedToolListBuilder turns a ToolScope into a ToolListBuilder.
+func ScopedToolListBuilder(scope ToolScope) ToolListBuilder {
+	own := make(map[event.EventType]bool, len(scope.Own))
+	for _, t := range scope.Own {
+		own[t] = true
+	}
+	peerTypes := make(map[string]bool, len(scope.PeerTypes))
+	for _, t := range scope.PeerTypes {
+		peerTypes[t] = true
+	}
+	peerEvents := make(map[string]map[event.EventType]bool, len(scope.PeerEvents))
+	for t, evts := range scope.PeerEvents {
+		set := make(map[event.EventType]bool, len(evts))
+		for _, e := range evts {
+			set[e] = true
+		}
+		peerEvents[t] = set
+	}
+	return func(w *BaseReasonWorker, caps []DiscoveredCapability) []llm.ToolDef {
+		keep := make([]DiscoveredCapability, 0, len(caps))
+		for _, c := range caps {
+			if IsMetaCapability(c.Event) {
+				continue
+			}
+			if c.Source == w.ID() {
+				if own[c.Event] {
+					keep = append(keep, c)
+				}
+				continue
+			}
+			if peerTypes[c.SourceType] {
+				keep = append(keep, c)
+				continue
+			}
+			if set := peerEvents[c.SourceType]; set != nil && set[c.Event] {
+				keep = append(keep, c)
+			}
+		}
+		return DefaultToolListBuilder(w, keep)
+	}
+}
 
 // ToolNameOfCapability is the LLM-facing name of a discovered capability (own:
 // event type with dots→underscores; peer: provider__event). Exported so a custom

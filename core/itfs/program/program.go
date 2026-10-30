@@ -8,7 +8,7 @@
 // Programs have a three-layer structure:
 //
 //	Program → EntryContent (always loaded first)
-//	        → Contents (loaded progressively via program.load)
+//	        → Contents (loaded progressively via program.read)
 package program
 
 // ContentType describes what a Program says — its role in guiding the
@@ -63,7 +63,7 @@ type Meta struct {
 //
 // EntryContent is always loaded first. It describes what the program does
 // and what sub-contents are available. Contents are loaded progressively
-// via program.load at runtime.
+// via program.read at runtime.
 type Program struct {
 	Meta
 
@@ -83,7 +83,7 @@ type Program struct {
 
 // ProgramContent is a single content item within a Program.
 // It is the unit of progressive loading: EntryContent is always loaded,
-// Contents are loaded on demand via program.load.
+// Contents are loaded on demand via program.read.
 type ProgramContent struct {
 	// Name is the Program this content belongs to. Every content carries it
 	// so a content is self-describing once detached from its Program.

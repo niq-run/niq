@@ -66,7 +66,7 @@ type ArchivedStore interface {
 }
 
 // programWorkerID is the bus address of the program worker — the data-plane
-// authority for every program (list/search/load/upsert/write/delete). The
+// authority for every program (search/describe/read/touch/update/write/delete). The
 // WebUI talks to it over the event bus exactly like the worker detail panel
 // talks to workspace/reason workers: send a tool event, correlate the
 // request.* reply by trace id, and reshape it for the UI.
@@ -306,7 +306,7 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, worke
 	mux.HandleFunc("GET /api/context", s.handleContext)
 
 	// Programs: browse, read, edit and delete programs via the program
-	// worker's bus tools (search/load/upsert/write/delete).
+	// worker's bus tools (search/read/touch/update/write/delete).
 	mux.HandleFunc("GET /api/programs", s.handleListPrograms)
 	mux.HandleFunc("GET /api/programs/{name}", s.handleGetProgram)
 	mux.HandleFunc("GET /api/programs/{name}/content", s.handleGetProgramContent)
@@ -474,7 +474,7 @@ func (s *Server) programWorkerOnline() bool {
 	return online && wtype == "program"
 }
 
-// askProgram publishes one program-worker tool event (search/load/upsert/write/
+// askProgram publishes one program-worker tool event (search/read/touch/update/write/
 // delete) and waits for the correlated request.completed / request.failed reply,
 // exactly as the workspace/reason endpoints do.
 func (s *Server) askProgram(ctx context.Context, opts *programTool, args map[string]any) (event.Event, error) {
@@ -487,13 +487,14 @@ func (s *Server) askProgram(ctx context.Context, opts *programTool, args map[str
 }
 
 // isProgramRead reports whether a program tool is a read-only query (search /
-// load). Mutations (upsert/write/edit/delete) return false and stay durable.
+// read). Mutations (touch/update/write/edit/delete) return false and stay durable.
 func isProgramRead(t event.EventType) bool {
-	return t == programBase.TypeSearch || t == programBase.TypeLoad
+	return t == programBase.TypeSearch || t == programBase.TypeRead
 }
 
 // programTool carries one bus call. The event type IS the tool the worker
-// serves (search/load/upsert/write/delete); parseProgram uses payload "result".
+// serves (search/read/touch/update/write/edit/delete/run); parseProgram uses
+// payload "result".
 type programTool struct {
 	Type event.EventType
 }
@@ -606,8 +607,8 @@ func (s *Server) handleGetProgram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2) entry body from load(path=name).
-	loadReply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeLoad}, map[string]any{"path": name})
+	// 2) entry body from read(path=name).
+	loadReply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeRead}, map[string]any{"path": name})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
@@ -636,14 +637,14 @@ func (s *Server) handleGetProgram(w http.ResponseWriter, r *http.Request) {
 }
 
 // ProgramContent is one sub-content file's body, reshaped from the program
-// worker's load answer for the sub-content viewer.
+// worker's read answer for the sub-content viewer.
 type ProgramContent struct {
 	Name string `json:"name"`
 	Body string `json:"body"`
 }
 
 // handleGetProgramContent returns one sub-content file's content by asking the
-// program worker's load tool for the given path — the same read the detail
+// program worker's read tool for the given path — the same read the detail
 // endpoint uses for the entry body. path (a full abstract address like
 // "tasks/brief.md") arrives as a query param so it may contain slashes. The
 // worker owns the path's validity; a missing/unknown file surfaces as an error.
@@ -657,7 +658,7 @@ func (s *Server) handleGetProgramContent(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "program worker offline", http.StatusServiceUnavailable)
 		return
 	}
-	reply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeLoad}, map[string]any{"path": path})
+	reply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeRead}, map[string]any{"path": path})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
@@ -672,7 +673,7 @@ func (s *Server) handleGetProgramContent(w http.ResponseWriter, r *http.Request)
 }
 
 // handleUpdateProgram replaces a program's metadata and entry body via the
-// program worker's upsert (metadata) + write (entry body) tools. Locked
+// program worker's update (metadata) + write (entry body) tools. Locked
 // programs are refused by the worker.
 func (s *Server) handleUpdateProgram(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
@@ -691,17 +692,17 @@ func (s *Server) handleUpdateProgram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Metadata first (upsert), then the entry body (write) — two correlated
+	// Metadata first (update), then the entry body (write) — two correlated
 	// bus round trips, faithful to the program worker's separation.
-	upsertArgs := map[string]any{"name": name, "content_type": in.ContentType, "description": in.Description}
+	metaArgs := map[string]any{"name": name, "content_type": in.ContentType, "description": in.Description}
 	if in.Tags != nil {
 		tags := make([]any, 0, len(in.Tags))
 		for _, tag := range in.Tags {
 			tags = append(tags, tag)
 		}
-		upsertArgs["tags"] = tags
+		metaArgs["tags"] = tags
 	}
-	reply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeUpsert}, upsertArgs)
+	reply, err := s.askProgram(r.Context(), &programTool{Type: programBase.TypeUpdate}, metaArgs)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return

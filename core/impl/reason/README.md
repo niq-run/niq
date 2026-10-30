@@ -159,8 +159,8 @@ status line, refreshed when the focus moves on — it is not a work log, and it
 must not turn into one.
 
 - `worker.readme` (peer-facing) returns the current text, so the recall flow is:
-  list/search the roster (directory), then read the readme of the candidates to
-  confirm which worker is the right one — and what it is busy with right now.
+  search the roster (directory), describe the candidates, then read their readmes
+  to confirm which worker is the right one — and what it is busy with right now.
 - `worker.readme.update { readme }` replaces it. It is advertised like the
   read half: the WebUI and authorized peers can discover it in the roster, and
   the bus ACL — not the announcement — decides who may send the update.

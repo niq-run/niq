@@ -390,14 +390,14 @@ func toolCall(args map[string]any) baseworker.ToolCall {
 	return baseworker.ToolCall{CallerID: "tester", CallID: "c1", Args: args}
 }
 
-// TestHandleUpsertCreatesThenWrite checks the tool flow: upsert makes the
+// TestHandleTouchCreatesThenWrite checks the tool flow: touch makes the
 // program with its metadata, write fills in the content.
-func TestHandleUpsertCreatesThenWrite(t *testing.T) {
+func TestHandleTouchCreatesThenWrite(t *testing.T) {
 	root := t.TempDir()
 	w := newToolWorker(root)
 	ctx := context.Background()
 
-	w.handleUpsert(ctx, toolCall(map[string]any{
+	w.handleTouch(ctx, toolCall(map[string]any{
 		"name":         "p",
 		"content_type": "instruction",
 		"description":  "a rule",
@@ -412,6 +412,17 @@ func TestHandleUpsertCreatesThenWrite(t *testing.T) {
 		t.Fatalf("Description = %q, Tags = %v", got.Description, got.Tags)
 	}
 
+	// Touch is idempotent: a second call on an existing program is a no-op and
+	// must not overwrite the metadata already stored.
+	w.handleTouch(ctx, toolCall(map[string]any{
+		"name":         "p",
+		"content_type": "playbook",
+		"description":  "should not stick",
+	}))
+	if got := listByName(t, w, "p"); got.Description != "a rule" || got.ContentType != coreprogram.ContentTypeInstruction {
+		t.Fatalf("touch overwrote an existing program: %+v", got.Meta)
+	}
+
 	w.handleWrite(ctx, toolCall(map[string]any{
 		"path":    "p",
 		"content": "BODY",
@@ -420,7 +431,7 @@ func TestHandleUpsertCreatesThenWrite(t *testing.T) {
 		t.Fatalf("body = %q, want BODY", body)
 	}
 
-	// Writing to an unknown program is refused — creation is upsert's job.
+	// Writing to an unknown program is refused — creation is touch's job.
 	w.handleWrite(ctx, toolCall(map[string]any{
 		"path":    "ghost",
 		"content": "nope",
@@ -430,14 +441,14 @@ func TestHandleUpsertCreatesThenWrite(t *testing.T) {
 	}
 }
 
-// TestHandleUpsertUpdatesOnlySuppliedFields is the point of upsert: changing
+// TestHandleUpdateChangesOnlySuppliedFields is the point of update: changing
 // one field must leave the rest — and the body — alone.
-func TestHandleUpsertUpdatesOnlySuppliedFields(t *testing.T) {
+func TestHandleUpdateChangesOnlySuppliedFields(t *testing.T) {
 	root := t.TempDir()
 	w := newToolWorker(root)
 	ctx := context.Background()
 
-	w.handleUpsert(ctx, toolCall(map[string]any{
+	w.handleTouch(ctx, toolCall(map[string]any{
 		"name":         "p",
 		"content_type": "instruction",
 		"description":  "a rule",
@@ -445,8 +456,8 @@ func TestHandleUpsertUpdatesOnlySuppliedFields(t *testing.T) {
 	}))
 	w.handleWrite(ctx, toolCall(map[string]any{"path": "p", "content": "BODY"}))
 
-	// Only the description changes; content is not part of upsert at all.
-	w.handleUpsert(ctx, toolCall(map[string]any{
+	// Only the description changes; content is not part of update at all.
+	w.handleUpdate(ctx, toolCall(map[string]any{
 		"name":        "p",
 		"description": "a better rule",
 	}))
@@ -464,10 +475,16 @@ func TestHandleUpsertUpdatesOnlySuppliedFields(t *testing.T) {
 	if body, _ := w.backend.Read(ctx, "p"); body != "BODY" {
 		t.Fatalf("body = %q, want BODY (unchanged)", body)
 	}
+
+	// update refuses a program that does not exist: creation is touch's job.
+	w.handleUpdate(ctx, toolCall(map[string]any{"name": "ghost", "description": "x"}))
+	if _, err := w.backend.Read(ctx, "ghost"); err == nil {
+		t.Fatal("update unexpectedly created the program")
+	}
 }
 
-// TestHandleUpsertRejectsLockedPrograms covers the guard.
-func TestHandleUpsertRejectsLockedPrograms(t *testing.T) {
+// TestHandleUpdateRejectsLockedPrograms covers the guard.
+func TestHandleUpdateRejectsLockedPrograms(t *testing.T) {
 	root := t.TempDir()
 	writeProgram(t, root, "locked", "locked", "a locked program", "BODY")
 	// Mark it locked on disk.
@@ -481,7 +498,14 @@ func TestHandleUpsertRejectsLockedPrograms(t *testing.T) {
 	}
 
 	w := newToolWorker(root)
-	w.handleUpsert(context.Background(), toolCall(map[string]any{
+
+	// touch is a no-op on an existing program, so a locked one is harmless.
+	w.handleTouch(context.Background(), toolCall(map[string]any{"name": "locked"}))
+	if got := listByName(t, w, "locked"); got.Description != "a locked program" {
+		t.Fatalf("Description = %q, want unchanged", got.Description)
+	}
+
+	w.handleUpdate(context.Background(), toolCall(map[string]any{
 		"name":        "locked",
 		"description": "should not stick",
 	}))
@@ -511,5 +535,38 @@ func TestProgramForPathResolvesOwner(t *testing.T) {
 	}
 	if _, err := w.programForPath(ctx, "nope/x.md"); err == nil {
 		t.Fatal("programForPath on unknown address: want error")
+	}
+}
+
+// TestSendMessageIsFireAndForget verifies the SDK's message(): it sends a
+// worker.input in append mode with NO request id (nothing waits for a reply), so
+// a script can leave a note without the call hanging until the run timeout.
+func TestSendMessageIsFireAndForget(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "program", Bus: ch, Backend: coreprogram.Compose(pgbackend.New(t.TempDir()), nil)})
+
+	if err := w.sendMessage(context.Background(), "peer", "hello"); err != nil {
+		t.Fatalf("sendMessage: %v", err)
+	}
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	var got *event.Event
+	for i := range ch.sent {
+		if ch.sent[i].Type == event.TypeWorkerInput {
+			got = &ch.sent[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("no worker.input sent, got %d events", len(ch.sent))
+	}
+	if got.RequestId != "" {
+		t.Fatalf("message must be a notification (no request id), got %q", got.RequestId)
+	}
+	if mode, _ := got.Payload["input_mode"].(string); mode != "append" {
+		t.Fatalf("input_mode = %q, want append", mode)
+	}
+	if text, _ := got.Payload["text"].(string); text != "hello" {
+		t.Fatalf("text = %q, want hello", text)
 	}
 }

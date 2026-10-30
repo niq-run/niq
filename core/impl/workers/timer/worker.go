@@ -232,7 +232,7 @@ func (w *Worker) readmeText() string {
 }
 
 // timerPublishes are the events the timer declares it emits, shown to peers
-// via list_workers. A reminder is not listed: it is delivered as a directed
+// via search. A reminder is not listed: it is delivered as a directed
 // worker.input to the caller, not a timer-domain event.
 var timerPublishes = []map[string]any{
 	{"type": "timer.timeout", "description": "A tool-call timeout timer has fired"},

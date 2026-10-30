@@ -67,9 +67,10 @@ func TestProgramQueryViaBus(t *testing.T) {
 	}
 }
 
-// TestProgramUpdateViaBus adds a program through the real dispatch path and
-// verifies the durable-change signal fires and a follow-up query sees it.
-func TestProgramUpdateViaBus(t *testing.T) {
+// TestProgramAttachDetachViaBus mounts and unmounts a program through the real
+// dispatch path and verifies the durable-change signal fires and a follow-up
+// query sees the change.
+func TestProgramAttachDetachViaBus(t *testing.T) {
 	var calls int32c
 	ch := newMockChannel()
 	w := NewWorker(Config{ID: "r1", Provider: &staticProvider{}, Bus: ch,
@@ -81,20 +82,19 @@ func TestProgramUpdateViaBus(t *testing.T) {
 	}
 	t.Cleanup(func() { w.Stop() })
 
-	ch.in <- event.New(TypeProgramUpdate, "tester", map[string]any{
-		"op":           "add",
+	ch.in <- event.New(TypeProgramAttach, "tester", map[string]any{
 		"name":         "p1",
 		"content_type": "playbook",
 		"description":  "test playbook",
 	})
 	waitCond(t, progTestTimeout, func() bool {
 		for _, e := range ch.eventsOf(event.TypeRequestCompleted) {
-			if event.ReplyText(e.Payload) == "added program p1" {
+			if event.ReplyText(e.Payload) == "attached program p1" {
 				return true
 			}
 		}
 		return false
-	}, "request.completed for program.update add")
+	}, "request.completed for program.attach")
 	waitCond(t, progTestTimeout, func() bool { return calls.get() > 0 }, "durable-change callback")
 
 	// Query again: the added program must be visible.
@@ -117,21 +117,21 @@ func TestProgramUpdateViaBus(t *testing.T) {
 		t.Fatalf("query after add: Path = %q, want %q", programs[0].Path, "p1")
 	}
 
-	// Removing the same program succeeds and is visible.
-	ch.in <- event.New(TypeProgramUpdate, "tester", map[string]any{"op": "remove", "name": "p1"})
+	// Detaching the same program succeeds and is visible.
+	ch.in <- event.New(TypeProgramDetach, "tester", map[string]any{"name": "p1"})
 	waitCond(t, progTestTimeout, func() bool {
 		for _, e := range ch.eventsOf(event.TypeRequestCompleted) {
-			if r, _ := e.Payload["result"].(string); r == "removed program p1" {
+			if r, _ := e.Payload["result"].(string); r == "detached program p1" {
 				return true
 			}
 		}
 		return false
-	}, "request.completed for program.update remove")
+	}, "request.completed for program.detach")
 }
 
 // TestProgramFromArgsPinsPathAndPlaybookReference covers the two rules that
 // make a query result usable: every program carries Path == its name (so
-// program__load has an address to take), and a playbook stores no content
+// program__read has an address to take), and a playbook stores no content
 // (it is only a reference into the program worker).
 func TestProgramFromArgsPinsPathAndPlaybookReference(t *testing.T) {
 	instr, err := programFromArgs(map[string]any{
@@ -177,8 +177,8 @@ func (c *int32c) get() int32 {
 	return c.v.Load()
 }
 
-// scriptedProvider plays a fixed sequence of assistant messages: round 1 adds
-// a program via program_update, round 2 lists them via program_query, round 3
+// scriptedProvider plays a fixed sequence of assistant messages: round 1 attaches
+// a program via program_attach, round 2 lists them via program_query, round 3
 // answers with text — the exact add→query flow, driven through real reasoning
 // rounds so tool results land in the transcript.
 type scriptedProvider struct {
@@ -201,9 +201,9 @@ func (p *scriptedProvider) CompleteStream(_ context.Context, _ *llm.CompletionRe
 	switch n {
 	case 1:
 		es.End(llm.Message{Role: llm.RoleAssistant, StopReason: "tool_calls",
-			Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolName: "program_update",
+			Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolName: "program_attach",
 				ToolCallID:    "call_add",
-				ToolArguments: `{"op":"add","name":"p1","content_type":"playbook","description":"d"}`}}})
+				ToolArguments: `{"name":"p1","content_type":"playbook","description":"d"}`}}})
 	case 2:
 		es.End(llm.Message{Role: llm.RoleAssistant, StopReason: "tool_calls",
 			Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolName: "program_query",

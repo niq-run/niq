@@ -16,8 +16,6 @@
 package coding
 
 import (
-	"fmt"
-
 	reasonBase "github.com/niq-run/niq/core/impl/reason"
 	"github.com/niq-run/niq/core/impl/reason/transcript"
 	reasonworkers "github.com/niq-run/niq/core/impl/workers/reason"
@@ -29,8 +27,8 @@ import (
 
 // Tool-list modes.
 const (
-	// ToolModeNormal exposes every discovered capability, like the generic
-	// reason worker.
+	// ToolModeNormal uses the reason worker's minimal surface unchanged:
+	// message, request, and the directory worker's discovery events.
 	ToolModeNormal = "normal"
 	// ToolModePTC (Programmatic Tool Call) exposes only the program worker's
 	// tools (and this worker's own self tools). Other workers' tools are
@@ -38,14 +36,6 @@ const (
 	// running that script (program.run).
 	ToolModePTC = "ptc"
 )
-
-// DefaultProgramWorkerID is the program worker whose tools PTC mode keeps.
-const DefaultProgramWorkerID = "program"
-
-// DefaultDirectoryWorkerID is the directory worker whose tools PTC mode keeps —
-// capability DISCOVERY is directory's job (program is capability INVOCATION), so
-// it is exposed directly rather than being reached through a script.
-const DefaultDirectoryWorkerID = "directory"
 
 // Config holds the configuration for a coding reason worker.
 type Config struct {
@@ -74,12 +64,18 @@ type Config struct {
 	SeedMessages    []llm.Message
 	Readme          string
 
+	// Collaborators is the reason-worker collaboration whitelist: nil (default)
+	// means every reason peer is visible, a non-nil slice is an allowlist (empty
+	// = none). See reasonBase.Config.Collaborators.
+	Collaborators []string
+
 	// ToolMode selects the tool-list policy: ToolModeNormal (default) or
 	// ToolModePTC.
 	//
 	// Which peers PTC keeps is NOT configurable: the program worker is the
 	// invocation channel and the directory worker is discovery, both fixed by
-	// the PTC contract (see DefaultProgramWorkerID / DefaultDirectoryWorkerID).
+	// the PTC contract (see reasonBase.ProgramWorkerType /
+	// reasonBase.DirectoryWorkerType).
 	ToolMode string
 }
 
@@ -94,9 +90,6 @@ func NewWorker(cfg Config) *Worker {
 	if mode == "" {
 		mode = ToolModeNormal
 	}
-	programID := DefaultProgramWorkerID
-	directoryID := DefaultDirectoryWorkerID
-
 	// Coding compaction directive: keep the working set in the carried digest.
 	compactDirective := cfg.CompactDirective
 	if compactDirective == "" {
@@ -107,7 +100,7 @@ func NewWorker(cfg Config) *Worker {
 	if mode == ToolModePTC {
 		// Seed the PTC guidance as a locked instruction program so it renders in
 		// the system prompt every round.
-		programs = append([]program.Program{ptcInstructionProgram(programID)}, programs...)
+		programs = append([]program.Program{ptcInstructionProgram()}, programs...)
 	}
 
 	base := reasonBase.NewBaseReasonWorker(reasonBase.Config{
@@ -130,7 +123,8 @@ func NewWorker(cfg Config) *Worker {
 		MaxPayloadBytes: cfg.MaxPayloadBytes,
 		SeedMessages:    cfg.SeedMessages,
 		Readme:          cfg.Readme,
-		ToolListBuilder: toolListBuilder(mode, programID, directoryID),
+		Collaborators:   cfg.Collaborators,
+		ToolListBuilder: toolListBuilder(mode),
 		// Announce as "coding" (not the default "reason") so peers, the
 		// directory and the control plane see the accurate type.
 		WorkerType: "coding",
@@ -144,86 +138,62 @@ func NewWorker(cfg Config) *Worker {
 	return &Worker{BaseReasonWorker: base}
 }
 
-// codingExcludedSelfEvents are the worker's OWN tools that stay REGISTERED but
-// are kept out of the model's own tool list. Registration is what lets peers,
-// the WebUI and the control plane still use them (e.g. switch this worker's
-// model); the filter only hides them from the agent itself:
-//   - context.compress: compaction is automatic under budget pressure;
-//   - program.query / program.update: programs are fixed at creation time;
-//   - provider.current / provider.list / provider.switch: model management is a
-//     control-plane action, not something the agent does to itself.
-var codingExcludedSelfEvents = map[event.EventType]bool{
-	reasonBase.TypeContextCompress:  true,
-	reasonworkers.TypeProgramQuery:  true,
-	reasonworkers.TypeProgramUpdate: true,
-	reasonBase.TypeProviderCurrent:  true,
-	reasonBase.TypeProviderList:     true,
-	reasonBase.TypeProviderSwitch:   true,
+// ptcScope is PTC's visible range: message and run_program, nothing else.
+//
+// PTC is "scripts in place of direct sends", so request is left out: everything
+// the model does goes through a script, including discovery (the directory is
+// reached with sdk.call, not as a tool).
+var ptcScope = reasonBase.ToolScope{
+	Own: []event.EventType{reasonBase.TypeMessage, reasonBase.TypeRunProgram},
 }
 
 // toolListBuilder returns the LLM tool-list policy for the mode.
 //
-// Coding focus applies in BOTH modes: context.compress and program.update are
-// always dropped from the model's tool list. In PTC mode the list additionally
-// keeps this worker's own tools, the directory worker's (capability DISCOVERY)
-// and the program worker's (capability INVOCATION), drops every other peer tool,
-// and also drops the self `request` escape hatch so peer calls go through
-// program.run rather than an ad-hoc event call.
-func toolListBuilder(mode, programID, directoryID string) reasonBase.ToolListBuilder {
-	ptc := mode == ToolModePTC
-	return func(w *reasonBase.BaseReasonWorker, caps []reasonBase.DiscoveredCapability) []llm.ToolDef {
-		keep := make([]reasonBase.DiscoveredCapability, 0, len(caps))
-		for _, c := range caps {
-			self := c.Source == w.ID()
-			if self && codingExcludedSelfEvents[c.Event] {
-				continue
-			}
-			if ptc {
-				if self && c.Event == reasonBase.TypeRequest {
-					continue
-				}
-				if !self && c.Source != programID && c.Source != directoryID {
-					continue
-				}
-			}
-			keep = append(keep, c)
-		}
-		return reasonBase.DefaultToolListBuilder(w, keep)
+// Normal mode is the reason worker's minimal scope, unchanged — message, request
+// and the directory worker's surface. Being a coding agent does not widen the
+// tool list; the one coding-specific policy is PTC, which swaps
+// discovery-by-request for scripted invocation by adding the program worker and
+// dropping request (see ptcScope).
+func toolListBuilder(mode string) reasonBase.ToolListBuilder {
+	if mode != ToolModePTC {
+		return reasonBase.ScopedToolListBuilder(reasonBase.DefaultToolScope)
 	}
+	return reasonBase.ScopedToolListBuilder(ptcScope)
 }
 
 // ptcInstructionProgram is the locked instruction seeded in PTC mode: it tells
-// the model how to discover and execute tools while its LLM tool list holds only
-// the program worker's tools.
-func ptcInstructionProgram(programID string) program.Program {
+// the model how to work when its tool list is only message and run_program.
+func ptcInstructionProgram() program.Program {
 	name := "coding-ptc-tooling"
-	text := fmt.Sprintf(`## PTC tool mode
-Your tool list holds the directory worker's tools (capability discovery), the %[1]s worker's tools (capability invocation), and your own message tool. Every other worker's tools are intentionally not listed — do not expect a flat tool list.
+	text := `## PTC tool mode
+Your tool list holds just two tools: message, and run_program. There is no request tool and no directory tool — run_program is how you reach everything. You write a script; inside it, await sdk.call(target, event, arguments) sends exactly the event a request would, and program.run executes it under your identity as the caller's delegate.
 
-**Discover** what other workers offer with the directory worker, called directly as a tool:
-- directory list_workers — the roster of workers;
-- directory get_worker_info { worker: "<id>" } — one worker's capability events, each with "parameters" (request schema), "response" (reply schema, when declared) and "desc".
+**Discover** from inside the script:
+- await sdk.call("directory", "search", {}) — the roster of workers;
+- await sdk.call("directory", "search", { query: "..." }) — narrow by keyword;
+- await sdk.call("directory", "describe", { worker: "<id>" }) — one worker's capability events, each with "parameters" (request schema), "response" (reply schema, when declared) and "desc".
 Discover once up front, then act; avoid re-listing tools you already looked up.
 
-**Execute** by running a JavaScript script with the %[1]s worker's run tool. Two modes:
+**Execute** with run_program. Two modes:
 - source: pass the script inline for a one-off;
-- path: store it first (write/upsert) and run it by path to reuse.
+- path: store it first (touch + write) and run it by path to reuse.
 
 The script API (inside the script; the sandbox has no imports — no require/import/dynamic import() — and no filesystem, process or network access; only the JavaScript builtins plus sdk):
-- await sdk.call(target, event, args) — invoke a capability as a normal request and get its reply VALUE: a string for prose, a real JS object/array for a structured reply (check the target's "response" in get_worker_info and read the fields directly — no JSON.parse). A tool-level failure comes back as a result, not an exception (bash exiting 3 resolves "Exit code: 3"); only an unknown worker / failed / rejected request throws. Fan out with Promise.all — calls are concurrent.
+- await sdk.call(target, event, args) — invoke a capability as a normal request and get its reply VALUE: a string for prose, a real JS object/array for a structured reply (check the target's "response" via the directory worker's describe event, then read the fields directly — no JSON.parse). A tool-level failure comes back as a result, not an exception (bash exiting 3 resolves "Exit code: 3"); only an unknown worker / failed / rejected request throws. Fan out with Promise.all — calls are concurrent.
+- await sdk.message(target, text) — the fire-and-forget sibling of call: sends a worker.input note (append mode) and resolves once it is on the bus. The recipient answers nothing; use it instead of sdk.call(target, "worker.input", {text}).
 - sdk.result(payload) — string verbatim, other values JSON; last call wins. A top-level return of a payload does the same when sdk.result is never called. With neither, the result is "".
 - sdk.log(text) — comes back to you after the result under "--- script log ---" (tail-capped); use it to trace a long run.
 - sdk.args — the run args object (defaults to {}); read stored scripts' inputs from here.
 The body is async (top-level await works). A script error is reported with the failing line of your own source, so a failing run is fixable in one round.
 
-Note: there is no request tool in this mode — to invoke a peer capability, do it inside a script via sdk.call. Context compaction happens automatically under budget pressure; you do not need to call it.
+Note: there is no request tool in this mode — to invoke anything, do it inside a script via sdk.call. Context compaction happens automatically under budget pressure; you do not need to call it.
 
-Prefer one script that performs the whole sequence (act, then summarise) over many separate tool calls.`, programID)
+Prefer one script that performs the whole sequence (act, then summarise) over many separate tool calls.`
 	return program.Program{
 		Meta: program.Meta{
 			Name:        name,
 			ContentType: program.ContentTypeInstruction,
-			Description: "How to work in PTC tool mode: discover via the directory worker's tools, execute via the program worker's run.",
+			Description: "How to work in PTC tool mode: message and run_program only; discover and act from inside the script.",
 			Locked:      true,
 		},
 		EntryContent: program.ProgramContent{

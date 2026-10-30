@@ -12,7 +12,7 @@ import (
 )
 
 // TestCoreExtensionsRegistered verifies the default worker registers its
-// toolkit on the extension registry: send_message / list_workers / context
+// toolkit on the extension registry: send_message / search / context
 // ops each as their own event type, and the context ops as self-editing
 // meta extensions.
 func TestCoreExtensionsRegistered(t *testing.T) {
@@ -35,11 +35,11 @@ func TestCoreExtensionsRegistered(t *testing.T) {
 	if !registered(reasonBase.TypeContextCompress) {
 		t.Fatal("context.compress not registered as a self-editing meta extension")
 	}
-	// list_workers / get_worker_info are NOT the reason worker's tools anymore
+	// search / describe are NOT the reason worker's tools anymore
 	// — the fleet directory lives on the HOST worker, so a reason worker does
 	// not surface peer-reason capabilities as callable tools.
-	if registered("list_workers") || registered("get_worker_info") {
-		t.Fatal("list_workers / get_worker_info must not be registered on the reason worker (host owns the directory)")
+	if registered("search") || registered("describe") {
+		t.Fatal("search / describe must not be registered on the reason worker (host owns the directory)")
 	}
 }
 
@@ -71,12 +71,11 @@ func TestHandleSendMessageSendsAppendInput(t *testing.T) {
 	}
 }
 
-// TestCoreExtensionsExposedToLLM verifies the LLM tool list is the union of
-// the worker's own exposed capabilities and nothing else — provider
-// switch/status are not exposed, and the context meta ops are. The worker
-// learns its own capabilities from its directed full-contract announcement,
-// processed by HandleWorkerReady like any other worker's.
-func TestCoreExtensionsExposedToLLM(t *testing.T) {
+// TestCoreToolPolicy verifies the reason worker's tool list is exactly the three
+// built-in sends — message, request, run_program — and nothing else. Everything
+// else (capability workers' tools, the directory's lookups, the worker's own meta
+// events) is reachable only through request.
+func TestCoreToolPolicy(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 
 	// The self-directed ready carries the full contract (Internal included).
@@ -84,28 +83,45 @@ func TestCoreExtensionsExposedToLLM(t *testing.T) {
 		"worker_id": w.ID(),
 		"watch":     w.WatchEntries(true),
 	}))
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "directory", map[string]any{
+		"type":      "directory",
+		"worker_id": "directory",
+		"watch": []map[string]any{
+			{"event": "search"},
+			{"event": "describe"},
+			{"event": "search"},
+		},
+	}))
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "workspace", map[string]any{
+		"type":      "workspace",
+		"worker_id": "workspace",
+		"watch":     []map[string]any{{"event": "bash"}},
+	}))
+	// A directory worker, and a same-typed one with a non-default id: neither
+	// contributes a tool any more — discovery is reached with request.
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, "dir-2", map[string]any{
+		"type":      "directory",
+		"worker_id": "dir-2",
+		"watch":     []map[string]any{{"event": "custom_lookup"}},
+	}))
 
-	defs := w.LLMToolDefs()
 	got := make(map[string]bool)
-	for _, d := range defs {
+	for _, d := range w.LLMToolDefs() {
 		got[d.Name] = true
 	}
-	// The fleet roster is NOT an LLM tool here — that is the host's
-	// list_workers directory. This worker's own tools are its self tools.
-	for _, want := range []string{"message", "context_compress"} {
+	for _, want := range []string{"message", "request", "run_program"} {
 		if !got[want] {
 			t.Fatalf("expected %q in LLM tool list, got %v", want, keysOf(got))
 		}
 	}
-	if got["list_workers"] || got["get_worker_info"] {
-		t.Fatalf("list_workers/get_worker_info must not be LLM tools on the reason worker, got %v", keysOf(got))
-	}
-	// The provider.* domain is LLM-callable since the exclusion was dropped:
-	// the model may inspect (and switch) its own model supplier. Tool names
-	// are the event types with dots → underscores.
-	for _, want := range []string{"provider_switch", "provider_list", "provider_current"} {
-		if !got[want] {
-			t.Fatalf("provider tool %q should be exposed to the LLM, got %v", want, keysOf(got))
+	for _, unwanted := range []string{
+		"directory__search", "directory__describe", "dir-2__custom_lookup",
+		"context_compress", "program_query", "program_attach", "program_detach",
+		"provider_switch", "provider_list", "provider_current",
+		"workspace__bash",
+	} {
+		if got[unwanted] {
+			t.Fatalf("%q must be request-only, got %v", unwanted, keysOf(got))
 		}
 	}
 }
@@ -264,7 +280,7 @@ func TestDefaultToolsDeclareResponse(t *testing.T) {
 	w := NewWorker(Config{ID: "w1", Bus: newMockChannel()})
 	want := []event.EventType{
 		reasonBase.TypeMessage, reasonBase.TypeRequest, reasonBase.TypeContextCompress,
-		TypeProgramQuery, TypeProgramUpdate,
+		TypeProgramQuery, TypeProgramAttach, TypeProgramDetach,
 	}
 	have := map[event.EventType]bool{}
 	for _, e := range w.WatchEntries(true) {

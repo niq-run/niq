@@ -3,6 +3,9 @@
 // compiles the untrusted script in memory, and injects a minimal SDK.
 //
 // SDK contract (kept in sync with the program.run tool description):
+//   sdk.message(target, text) — a fire-and-forget note: sends a worker.input
+//     event (append mode) and resolves once it is on the bus. Nothing comes back
+//     from the target — the same thing the message tool does outside a script.
 //   sdk.call(target, event, args) — a normal request to another worker. Resolves
 //     with the target's result TEXT. A tool-level failure is a RESULT, not an
 //     exception (e.g. bash exit 3 -> "Exit code: 3"); only a capability-level
@@ -21,7 +24,9 @@
 // Protocol (one JSON object per line):
 //   worker -> script: {type:"run", src, args}
 //                     {type:"call_result", id, value | error}
+//                     {type:"message_result", id, ok | error}
 //   script -> worker: {type:"call", id, target, event, arguments}
+//                     {type:"message", id, target, text}
 //                     {type:"log", text}
 //                     {type:"result", value}
 //                     {type:"error", message}
@@ -122,6 +127,14 @@ function makeSdk(args) {
         pending.set(id, { resolve, reject });
         write({ type: "call", id, target, event, arguments: callArgs });
       }),
+    // message: the fire-and-forget sibling. It awaits only the local ack, so a
+    // failed send (unknown target, refused) rejects instead of disappearing.
+    message: (target, text) =>
+      new Promise((resolve, reject) => {
+        const id = "m" + ++seq;
+        pending.set(id, { resolve, reject });
+        write({ type: "message", id, target, text: String(text) });
+      }),
   };
 }
 
@@ -147,6 +160,15 @@ rl.on("line", (line) => {
   try {
     msg = JSON.parse(text);
   } catch {
+    return;
+  }
+
+  if (msg.type === "message_result") {
+    const p = pending.get(msg.id);
+    if (!p) return;
+    pending.delete(msg.id);
+    if (msg.error) p.reject(new Error(String(msg.error)));
+    else p.resolve({ status: "sent" });
     return;
   }
 

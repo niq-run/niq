@@ -60,7 +60,7 @@ func (w *BaseReasonWorker) registerReadme() {
 			"role or scope changes materially. " +
 			"Rules, policies, standing instructions and step-by-step procedures do NOT belong here: " +
 			"author them as programs (instruction / playbook) through the program worker's content tools " +
-			"(program__write / program__edit / program__upsert). The readme answers \"what is this worker " +
+			"(program__touch / program__update / program__write / program__edit). The readme answers \"what is this worker " +
 			"and what is it doing right now\"; programs answer \"what must it do and how\".",
 		Parameters: obj(map[string]any{
 			"readme": map[string]any{"type": "string",

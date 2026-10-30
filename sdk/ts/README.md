@@ -101,7 +101,7 @@ Properties are required unless wrapped in `s.optional(...)`; arrays, enums and
 free-form values are `s.array(...)`, `s.enumOf([...])`, `s.any()`.
 
 Both schemas ride `worker.ready`, so peers and the directory worker see them
-(`get_worker_info` → `parameters` / `response`). `response` is what lets an agent
+(`describe` → `parameters` / `response`). `response` is what lets an agent
 — in particular a PTC script, written before anything runs — plan how to parse a
 reply; declare it whenever the reply is structured.
 

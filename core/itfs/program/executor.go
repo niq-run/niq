@@ -21,6 +21,14 @@ import (
 // holds bus credentials or the channel.
 type ToolCaller func(ctx context.Context, target string, eventType event.EventType, arguments map[string]any) (any, error)
 
+// MessageSender is the fire-and-forget half of a script's outbound channel: the
+// SDK's message(target, text) sends a worker.input note, waits for nothing from
+// the target, and returns once the event is on the bus (an error means it never
+// got there — an unknown target, a refused send). It exists so the three built-in
+// sends a reason worker has — request, message, run_program — are the same three
+// inside a script, instead of message decaying into call(target, "worker.input").
+type MessageSender func(ctx context.Context, target, text string) error
+
 // Executor runs a FormType:script program in an isolated sandbox. It is the
 // execution half of a ProgramBackend — the counterpart of Store. Implementations
 // are interchangeable: a local subprocess (bun/node, containing accidental
@@ -37,7 +45,7 @@ type Executor interface {
 	// is the ToolCaller that the script's call() is relayed through. Start owns
 	// the sandbox process lifecycle: Cancel on the returned session must tear it
 	// down, and the session must clean up its own resources on Result/error.
-	Start(ctx context.Context, src string, args map[string]any, call ToolCaller) (ScriptSession, error)
+	Start(ctx context.Context, src string, args map[string]any, call ToolCaller, msg MessageSender) (ScriptSession, error)
 }
 
 // ScriptSession is the program worker's handle to one running script.
