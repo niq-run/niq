@@ -570,3 +570,27 @@ func TestSendMessageIsFireAndForget(t *testing.T) {
 		t.Fatalf("text = %q, want hello", text)
 	}
 }
+
+// TestOrphanReplyIsConsumedNotAnswered pins the fix for the request.failed
+// ping-pong: a reply that matches no pending script call is an orphan, not a
+// request. Answering it (the no-handler fallback) makes the peer answer that
+// answer, and two workers bounce failure events forever.
+func TestOrphanReplyIsConsumedNotAnswered(t *testing.T) {
+	for _, typ := range []event.EventType{
+		event.TypeRequestCompleted, event.TypeRequestFailed, event.TypeRequestRejected,
+	} {
+		ch := &stubChannel{}
+		w := New(Config{ID: "program", Bus: ch, Backend: coreprogram.Compose(pgbackend.New(t.TempDir()), nil)})
+
+		evt := event.New(typ, "workspace", map[string]any{"error": "nope"})
+		evt.RequestId = "unknown-request"
+		w.process(context.Background(), evt)
+
+		ch.mu.Lock()
+		sent := len(ch.sent)
+		ch.mu.Unlock()
+		if sent != 0 {
+			t.Fatalf("%s orphan produced %d outbound event(s), want none (would loop with the peer)", typ, sent)
+		}
+	}
+}

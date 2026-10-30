@@ -253,11 +253,20 @@ func (w *Worker) process(ctx context.Context, evt event.Event) {
 			w.AnnounceReadyTo(evt.WorkerId, "program", nil, false)
 		}
 	case event.TypeRequestCompleted, event.TypeRequestFailed, event.TypeRequestRejected:
-		// A reply to a script-initiated tool call (relayed through callTool).
-		// Simplest mechanism: Route replies before default-dispatch. Matching by
-		// request id; if it matches a pending call it is consumed here.
+		// A reply is never a request, so it is never answered. resolveReply
+		// consumes the ones that belong to a script call still waiting on its
+		// result; the rest are orphans — the call already timed out, or the
+		// reply answers something this worker never asked.
+		//
+		// An orphan must NOT fall through to DispatchExtension: it has no
+		// handler, so the fallback would answer it with request.failed, and a
+		// peer that lacks a handler does the same with the answer — two workers
+		// bouncing "does not serve event request.failed" at each other. That
+		// loop once ran at ~1900 events/second for ten minutes and wrote 1.17M
+		// rows. Consuming the orphan ends it after one hop.
 		if !w.resolveReply(evt) {
-			w.DispatchExtension(evt)
+			log.Printf("[program %s] orphan reply %s from %s (request_id=%s) — dropped",
+				w.ID(), evt.Type, evt.WorkerId, evt.RequestId)
 		}
 	default:
 		if !w.DispatchExtension(evt) {

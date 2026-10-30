@@ -153,7 +153,7 @@ func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 		return false
 	}
 	if reg.ext.Internal && evt.WorkerId != w.id {
-		if evt.RequestId != "" && w.Channel != nil {
+		if evt.RequestId != "" && w.Channel != nil && !isReplyEvent(evt.Type) {
 			w.ReplyRejected(evt.WorkerId, evt.RequestId,
 				"internal capability: only "+w.id+" may invoke it", evt.TraceID)
 		}
@@ -163,6 +163,23 @@ func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 	}
 	reg.handler(evt)
 	return true
+}
+
+// isReplyEvent reports whether an event type ANSWERS a request rather than
+// asking one. A reply carries the requester's RequestId like any other directed
+// event, which is why the distinction has to be made by type: without it a
+// worker that receives a failure reply it has no handler for answers it with
+// another failure reply, and two such workers bounce error events forever.
+//
+// request.cancel is deliberately NOT here: the caller sends it TO a worker to
+// abandon a pending call, so it may legitimately be rejected or fail.
+func isReplyEvent(t event.EventType) bool {
+	switch t {
+	case event.TypeRequestCompleted, event.TypeRequestFailed,
+		event.TypeRequestRejected, event.TypeRequestProgressed:
+		return true
+	}
+	return false
 }
 
 // replyNoHandler answers a request for an event this worker does not serve, so
@@ -175,6 +192,13 @@ func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 // caller-visible contract (Internal events only for the owner), so what it shows
 // is exactly what that caller may send.
 func (w *BaseWorker) replyNoHandler(evt event.Event) {
+	// A reply is never a request: nothing is waiting for an answer to it, so
+	// there is nothing to answer. Replying anyway is how two workers that both
+	// lack a handler end up feeding each other's failure replies — once seen
+	// running at ~1900 events/second for ten minutes and writing 1.17M rows.
+	if isReplyEvent(evt.Type) {
+		return
+	}
 	if evt.RequestId == "" || w.Channel == nil {
 		return
 	}

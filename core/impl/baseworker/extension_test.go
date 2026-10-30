@@ -138,3 +138,38 @@ func TestUnknownEventListsWhatIsServed(t *testing.T) {
 		t.Fatalf("a peer must not see Internal events in the list: %q", msg)
 	}
 }
+
+// TestReplyIsNeverAnswered pins the mechanism-level guard: a reply event
+// (request.completed / failed / rejected / progressed) that this worker has no
+// handler for must be dropped, not answered. Answering it produces another
+// reply, which the peer answers in turn — the loop that once wrote 1.17M rows
+// in ten minutes. request.cancel is a request, not a reply, so it still gets
+// the normal failure answer.
+func TestReplyIsNeverAnswered(t *testing.T) {
+	for _, typ := range []event.EventType{
+		event.TypeRequestCompleted, event.TypeRequestFailed,
+		event.TypeRequestRejected, event.TypeRequestProgressed,
+	} {
+		ch := &recordingChannel{}
+		w := NewBaseWorker("w1", ch)
+
+		evt := event.New(typ, "peer", map[string]any{"error": "no handler"})
+		evt.RequestId = "r1"
+		if w.DispatchExtension(evt) {
+			t.Fatalf("%s: dispatched to a handler it does not have", typ)
+		}
+		if len(ch.sent) != 0 {
+			t.Fatalf("%s: replied with %s; a reply is never answered", typ, ch.sent[0].Type)
+		}
+	}
+
+	// A cancel is a request: an unknown one still gets the failure answer.
+	ch := &recordingChannel{}
+	w := NewBaseWorker("w1", ch)
+	cancel := event.New(event.TypeRequestCancel, "peer", nil)
+	cancel.RequestId = "r2"
+	w.DispatchExtension(cancel)
+	if len(ch.sent) != 1 || ch.sent[0].Type != event.TypeRequestFailed {
+		t.Fatalf("request.cancel should still be answered with request.failed, got %+v", ch.sent)
+	}
+}
