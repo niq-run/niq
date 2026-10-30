@@ -53,16 +53,16 @@ func newCoding(t *testing.T, mode string) *Worker {
 }
 
 // TestPTCModeExposesRunAndDiscovery verifies PTC lists exactly three kinds of
-// tool: message and run_program. PTC puts scripts in place of direct sends, so
+// tool: message and run. PTC puts scripts in place of direct sends, so
 // request is gone; discovery happens inside the script, so the directory is not a
 // tool either.
 func TestPTCModeExposesMessageAndRunProgram(t *testing.T) {
 	w := newCoding(t, ToolModePTC)
 	// The worker's own contract arrives through its self-directed ready.
-	announce(w, "coder", "reason", "message", "run_program")
+	announce(w, "coder", "reason", "message", "run")
 	names := toolNames(w)
 
-	for _, want := range []string{"message", "run_program"} {
+	for _, want := range []string{"message", "run"} {
 		if !names[want] {
 			t.Errorf("PTC tool list missing %q (got %v)", want, names)
 		}
@@ -86,13 +86,13 @@ func TestPTCModeExposesMessageAndRunProgram(t *testing.T) {
 func TestPTCModeKeepsMessageButDropsRequestAndFocusTools(t *testing.T) {
 	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: ToolModePTC})
 	// The worker's own full contract (Internal included), as it sends itself.
-	announce(w, "coder", "reason", "message", "run_program", "request", "context.compress", "program.query", "program.attach", "program.detach")
+	announce(w, "coder", "reason", "message", "run", "request", "context.compress", "program.query", "program.attach", "program.detach")
 	announce(w, "program", "program", "run")
 	announce(w, "directory", "directory", "search", "describe")
 	announce(w, "workspace", "workspace", "bash")
 
 	names := toolNames(w)
-	for _, want := range []string{"message", "run_program"} {
+	for _, want := range []string{"message", "run"} {
 		if !names[want] {
 			t.Errorf("PTC should keep %q (got %v)", want, names)
 		}
@@ -110,12 +110,12 @@ func TestPTCModeKeepsMessageButDropsRequestAndFocusTools(t *testing.T) {
 // tools (context.compress, program.*) stay out of the list.
 func TestNormalModeUsesCoreSurface(t *testing.T) {
 	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: ToolModeNormal})
-	announce(w, "coder", "reason", "message", "request", "run_program", "context.compress", "program.query", "program.attach", "program.detach")
+	announce(w, "coder", "reason", "message", "request", "run", "context.compress", "program.query", "program.attach", "program.detach")
 	announce(w, "workspace", "workspace", "bash")
 	announce(w, "directory", "directory", "search", "describe")
 
 	names := toolNames(w)
-	for _, want := range []string{"message", "request", "run_program"} {
+	for _, want := range []string{"message", "request", "run"} {
 		if !names[want] {
 			t.Errorf("normal mode should keep %q (got %v)", want, names)
 		}

@@ -86,10 +86,10 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		w.ReplyFailed(tc.CallerID, tc.CallID, "request must be dispatched via the forward path", tc.TraceID)
 	})
 
-	// run_program: the third built-in send, alongside message and request. Its
-	// target (the program worker) and event (run) are filled in by handleToolCalls,
-	// so this registration only declares the contract the model sees; the handler
-	// is defensive for the same reason request's is.
+	// run: the third built-in send, alongside message and request — it executes
+	// a script program. handleToolCalls fills in the target (the program worker)
+	// and the event, so this registration only declares the contract the model
+	// sees; the handler is defensive for the same reason request's is.
 	w.Register(baseworker.Extension{
 		Event:    TypeRunProgram,
 		Internal: true, // the worker's own tool: not something peers call
@@ -116,7 +116,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		}),
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		w.ReplyFailed(tc.CallerID, tc.CallID, "run_program must be dispatched via the forward path", tc.TraceID)
+		w.ReplyFailed(tc.CallerID, tc.CallID, "run must be dispatched via the forward path", tc.TraceID)
 	})
 
 	w.Register(baseworker.Extension{

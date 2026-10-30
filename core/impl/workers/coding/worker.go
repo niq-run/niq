@@ -138,7 +138,7 @@ func NewWorker(cfg Config) *Worker {
 	return &Worker{BaseReasonWorker: base}
 }
 
-// ptcScope is PTC's visible range: message and run_program, nothing else.
+// ptcScope is PTC's visible range: message and run, nothing else.
 //
 // PTC is "scripts in place of direct sends", so request is left out: everything
 // the model does goes through a script, including discovery (the directory is
@@ -162,11 +162,11 @@ func toolListBuilder(mode string) reasonBase.ToolListBuilder {
 }
 
 // ptcInstructionProgram is the locked instruction seeded in PTC mode: it tells
-// the model how to work when its tool list is only message and run_program.
+// the model how to work when its tool list is only message and run.
 func ptcInstructionProgram() program.Program {
 	name := "coding-ptc-tooling"
 	text := `## PTC tool mode
-Your tool list holds just two tools: message, and run_program. There is no request tool and no directory tool — run_program is how you reach everything. You write a script; inside it, await sdk.call(target, event, arguments) sends exactly the event a request would, and program.run executes it under your identity as the caller's delegate.
+Your tool list holds just two tools: message, and run. There is no request tool and no directory tool — run is how you reach everything. You write a script; inside it, await sdk.call(target, event, arguments) sends exactly the event a request would, and program.run executes it under your identity as the caller's delegate.
 
 **Discover** from inside the script:
 - await sdk.call("directory", "search", {}) — the roster of workers;
@@ -174,7 +174,7 @@ Your tool list holds just two tools: message, and run_program. There is no reque
 - await sdk.call("directory", "describe", { worker: "<id>" }) — one worker's capability events, each with "parameters" (request schema), "response" (reply schema, when declared) and "desc".
 Discover once up front, then act; avoid re-listing tools you already looked up.
 
-**Execute** with run_program. Two modes:
+**Execute** with run. Two modes:
 - source: pass the script inline for a one-off;
 - path: store it first (touch + write) and run it by path to reuse.
 
@@ -193,7 +193,7 @@ Prefer one script that performs the whole sequence (act, then summarise) over ma
 		Meta: program.Meta{
 			Name:        name,
 			ContentType: program.ContentTypeInstruction,
-			Description: "How to work in PTC tool mode: message and run_program only; discover and act from inside the script.",
+			Description: "How to work in PTC tool mode: message and run only; discover and act from inside the script.",
 			Locked:      true,
 		},
 		EntryContent: program.ProgramContent{

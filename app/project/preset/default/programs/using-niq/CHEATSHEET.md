@@ -27,7 +27,7 @@
 | `message` | async note, or hand over work it should take at its own pace |
 
 Your tools field holds only three built-in sends: `message`, `request`,
-`run_program`. Everything else — other workers' tools, the directory's lookups,
+`run`. Everything else — other workers' tools, the directory's lookups,
 your own meta events — is `request(target, event, arguments)` to the owning worker.
 
 ## Worker types

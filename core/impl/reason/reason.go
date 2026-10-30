@@ -700,19 +700,19 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 			dispatched++ // a request-routed call is dispatched too (never enters callsByTarget)
 			continue
 		}
-		// The built-in run_program tool is request with target and event fixed:
+		// The built-in run tool is request with target and event fixed:
 		// the model passes the program worker's own run arguments and the reply
 		// resolves this call through the normal tracker. The provider is resolved
 		// by announced type, so a program worker with a non-default id works.
 		if w.isRunProgramCap(cap) {
 			provider, ok := w.findProviderByType(ProgramWorkerType, programRunTool)
 			if !ok {
-				log.Printf("[reason %s] run_program: no %s worker serving %q", w.ID(), ProgramWorkerType, programRunTool)
+				log.Printf("[reason %s] run: no %s worker serving %q", w.ID(), ProgramWorkerType, programRunTool)
 				unavailable = append(unavailable, tc.ToolName)
 				w.transcript.Apply(transcript.ToolResultPatch{
 					CallID: tc.ToolCallID, Name: tc.ToolName,
 					Content: []llm.ContentBlock{{Type: llm.ContentText,
-						Text: "run_program: no program worker is available on the bus."}},
+						Text: "run: no program worker is available on the bus."}},
 					IsErr: true,
 				})
 				continue
@@ -723,7 +723,7 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 					w.transcript.Apply(transcript.ToolResultPatch{
 						CallID: tc.ToolCallID, Name: tc.ToolName,
 						Content: []llm.ContentBlock{{Type: llm.ContentText,
-							Text: "run_program: bad arguments: " + err.Error()}},
+							Text: "run: bad arguments: " + err.Error()}},
 						IsErr: true,
 					})
 					continue
@@ -845,15 +845,22 @@ const (
 
 	TypeMessage event.EventType = "message"
 	TypeRequest event.EventType = "request"
-	// TypeRunProgram is the third built-in send: it runs a script program. Like
-	// request it is a convention, not a discovered capability — handleToolCalls
-	// fills in the target (the program worker) and the event (run), so the model
-	// passes run's own arguments and nothing else.
-	TypeRunProgram event.EventType = "run_program"
+	// TypeRunProgram is the third built-in send: it executes a script program.
+	// Like request it is a convention, not a discovered capability —
+	// handleToolCalls fills in the target (the program worker) and the event
+	// (programRunTool), so the model passes the script's own arguments and
+	// nothing else.
+	//
+	// Its wire name is deliberately the program worker's own "run": the tool IS
+	// that event, pre-addressed. The two are told apart by the owner — this
+	// worker's own capability named run is the tool, program's run is a peer
+	// tool (program__run) — never by the name.
+	TypeRunProgram event.EventType = "run"
 )
 
-// programRunTool is the bare event the program worker serves for script
-// execution; TypeRunProgram forwards to it.
+// programRunTool is the event the program worker serves for script execution;
+// TypeRunProgram forwards to it. Same name as the tool because it is the same
+// event, seen from the caller's side.
 const programRunTool event.EventType = "run"
 
 func (w *BaseReasonWorker) broadcastReasonStart(traceID string) {

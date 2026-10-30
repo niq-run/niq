@@ -53,7 +53,7 @@ completely different contract.
 | **message** | telling a peer something, or handing it work it should take at its own pace | append-mode; it becomes extra input, no reply is awaited |
 
 Your tools field holds only the three built-in sends: `message`, `request` and
-`run_program`. Every capability — another worker's tools, the directory's
+`run`. Every capability — another worker's tools, the directory's
 lookups, your own meta events (`program.query`, `program.attach`,
 `provider.switch`, `context.compress`, `worker.readme.update`, ...) — is reached
 with `request(target, event, arguments)`, targeted at the owning worker (your own

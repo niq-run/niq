@@ -235,14 +235,14 @@ func (w *BaseReasonWorker) isRequestCap(cap DiscoveredCapability) bool {
 }
 
 // isRunProgramCap reports whether a capability is THIS worker's own built-in
-// run_program tool — the script counterpart of request.
+// run tool — the script counterpart of request.
 func (w *BaseReasonWorker) isRunProgramCap(cap DiscoveredCapability) bool {
 	return cap.Source == w.ID() && string(cap.Event) == string(TypeRunProgram)
 }
 
 // findProviderByType returns the peer of the given worker type that serves the
 // given event. It resolves a built-in tool's target without hardcoding an id:
-// run_program finds whichever worker announces itself as the program worker.
+// run finds whichever worker announces itself as the program worker.
 // Callers must hold w.mu.
 func (w *BaseReasonWorker) findProviderByType(workerType string, evt event.EventType) (string, bool) {
 	for _, cap := range w.discovered {
@@ -503,7 +503,7 @@ type ToolScope struct {
 //
 //   - message      — leave a note (no reply awaited)
 //   - request      — send any event and await its reply
-//   - run_program  — send events from inside a script (the program worker's run)
+//   - run  — send events from inside a script (the program worker's run)
 //
 // Nothing peer-supplied is exposed. Discovery (the directory worker) is reached
 // with request like any other capability, so the tool list is fixed: it does not
