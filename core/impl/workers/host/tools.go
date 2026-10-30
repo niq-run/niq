@@ -60,6 +60,11 @@ func (w *HostWorker) registerExtensions() {
 				"type":        "string",
 				"description": "Optional short note explaining what this worker is for. Display metadata only.",
 			},
+			"collaborators": map[string]any{
+				"type":        "array",
+				"description": "When type=reason/coding: the reason workers this one may collaborate with. Omitted means every reason worker is visible; when given it is an allowlist (empty = none). An out-of-scope reason peer is invisible to this worker and cannot be messaged or called; capability workers are unaffected.",
+				"items":       map[string]any{"type": "string"},
+			},
 		}),
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)

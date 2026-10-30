@@ -55,6 +55,25 @@ func (w *Worker) callTool(ctx context.Context, target string, eventType event.Ev
 	return w.relay(ctx, target, eventType, arguments)
 }
 
+// sendMessage implements the SDK's message(): a fire-and-forget worker.input to
+// target, delivered in append mode so it lands beside whatever that worker is
+// already doing rather than interrupting it. No request id is set — nothing waits
+// for a reply. The target is still validated, so a typo fails the script instead
+// of vanishing into the bus.
+func (w *Worker) sendMessage(ctx context.Context, target, text string) error {
+	if err := w.checkTarget(ctx, target); err != nil {
+		return err
+	}
+	evt := event.New(event.TypeWorkerInput, w.ID(), map[string]any{
+		"text":       text,
+		"input_mode": "append",
+	})
+	if err := w.Channel.Send(ctx, evt, target); err != nil {
+		return fmt.Errorf("message %s: %w", target, err)
+	}
+	return nil
+}
+
 // relay performs one request/reply round trip, WITHOUT validating the target.
 // callTool is relay plus the target check; the directory probe uses relay
 // directly so it cannot recurse into itself.
@@ -183,7 +202,7 @@ func (w *Worker) handleRun(ctx context.Context, tc baseworker.ToolCall) {
 			src = loaded
 		}
 
-		sess, err := w.backend.Start(runCtx, src, args, w.callTool)
+		sess, err := w.backend.Start(runCtx, src, args, w.callTool, w.sendMessage)
 		if errors.Is(err, program.ErrNoExecutor) {
 			// A store-only environment: the worker manages content but cannot run
 			// a script. Say that, rather than surfacing a start failure.
@@ -278,14 +297,15 @@ func (w *Worker) checkTarget(ctx context.Context, target string) error {
 
 	probeCtx, cancel := context.WithTimeout(ctx, directoryProbeWait)
 	defer cancel()
-	_, err := w.relay(probeCtx, w.directoryID, directory.TypeGetWorkerInfo, map[string]any{"worker": target})
+	_, err := w.relay(probeCtx, w.directoryID, directory.TypeDescribe, map[string]any{"worker": target})
 	if err == nil {
 		return nil
 	}
 	var re *remoteError
 	if errors.As(err, &re) {
-		// The directory answered: it does not know this worker.
-		return fmt.Errorf("unknown worker: %s", target)
+		// The directory answered: it does not know this worker. Say where the
+		// roster comes from — "search" alone reads like a worker id to call.
+		return fmt.Errorf("unknown worker: %s (the directory worker's search event lists the roster)", target)
 	}
 	// Timeout / transport / ctx cancelled: we cannot tell. Remember it so the
 	// next calls are not delayed, and let them through — the run timeout still

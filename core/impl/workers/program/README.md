@@ -2,7 +2,7 @@
 
 `program` is niq's domain-service worker for **Programs** — the reusable
 "source" a worker loads and that compiles into tool calls. It manages a
-Program's lifecycle (search / load / write / edit / upsert / delete)
+Program's lifecycle (search / read / write / edit / touch / update / delete)
 and, for **script programs**, executes them.
 
 Two axes define a Program (`core/itfs/program`):
@@ -64,7 +64,7 @@ Plus optional `args` (exposed to the script as `sdk.args`) and
 | File | Responsibility |
 |---|---|
 | `worker.go` | `Worker` (embeds `baseworker.BaseWorker`) + `Config` (`ID` / `Bus` / `Backend` / `Executor`) + lifecycle (`Start`/`Stop`/`Snapshot`/`Restore`) + the event loop (`watch`/`process`) + Program lookup over the storage backend (`search` / `programForPath` / `matchProgram`) |
-| `tools.go` | the tool event types (`search` / `load` / `edit` / `upsert` / `write` / `delete` / `run`) + `registerExtensions` + the per-tool handlers (`handleSearch` / `handleLoad` / `handleEdit` / `handleUpsert` / `handleWrite` / `handleDelete`) |
+| `tools.go` | the tool event types (`search` / `read` / `edit` / `touch` / `update` / `write` / `delete` / `run`) + `registerExtensions` + the per-tool handlers (`handleSearch` / `handleRead` / `handleEdit` / `handleTouch` / `handleUpdate` / `handleWrite` / `handleDelete`) |
 | `execute.go` | script-program execution and its reply shaping: `handleRun` (both modes, timeout, log collection), `callTool`/`relay` (the `ToolCaller` — mint id, send `request`, await reply), `resolveReply` (route `request.*` replies to the waiting call), `checkTarget` (ask the directory worker), and the `sdk.log` tail buffer + 20 KiB result cap that decide what the reply text looks like |
 | `pgbackend/` | the filesystem store (one `program.Store` implementation) |
 | `jsexec/` | the local subprocess executor (one `program.Executor` implementation; `node` by default, `script_executor_args` to change it) + the embedded `launcher.mjs` (trusted bootstrap: in-memory compile, minimal SDK injection, error-location mapping) |
@@ -88,6 +88,10 @@ environment variables or the network goes through another worker via
 
 Inside a run the script is handed a minimal `sdk`:
 
+- `sdk.message(target, text)` — a fire-and-forget note: sends a `worker.input` (append
+  mode) and resolves once it is on the bus. Nothing comes back from the target — the
+  script-side twin of the `message` tool, so all three built-in sends survive into a
+  script instead of `message` decaying into `call(target, "worker.input", …)`.
 - `sdk.call(target, event, args)` — a normal request to another worker; resolves with the
   reply VALUE, type preserved: a prose reply is a string, a structured reply is a real
   JS object/array (no `JSON.parse`), because the worker sends `result` as-is rather than
@@ -138,8 +142,9 @@ bwrap / container), or a remote execution backend.
 ## Relationship to the reason worker
 
 A reason worker discovers the program worker's tools (e.g. `program__search`,
-`program__load`, `program__run`) like any peer's capabilities. `program.run`
+`program__read`, `program__run`) like any peer's capabilities. `program.run`
 lets the model execute a whole encoded sequence of tool calls in **one** tool
 call instead of one reasoning round per call — the round-compression PTC
 provides. The reason worker's own program tools (`program_query` /
-`program_update`) manage *its* program list; content and execution live here.
+`program_attach` / `program_detach`) manage *its* program list; content and
+execution live here.

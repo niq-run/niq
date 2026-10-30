@@ -29,6 +29,20 @@ func (s *stubChannel) Receive(context.Context) (<-chan event.Event, error) {
 }
 func (s *stubChannel) Close() error { return nil }
 
+// lastError returns the error text of the most recent request.failed reply.
+func (s *stubChannel) lastError() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.sent) - 1; i >= 0; i-- {
+		if s.sent[i].Type != event.TypeRequestFailed {
+			continue
+		}
+		msg, _ := s.sent[i].Payload["error"].(string)
+		return msg
+	}
+	return ""
+}
+
 // result renders the last completed reply as JSON text. A structured reply
 // carries its value directly (the worker no longer pre-encodes it), so both
 // shapes are normalized here for assertions.
@@ -72,7 +86,7 @@ func recall(w *DirectoryWorker, typ event.EventType, workerID string, payload ma
 func TestReadmeText(t *testing.T) {
 	w := New(Config{ID: "dir", Bus: &stubChannel{}})
 	text := w.readmeText()
-	for _, want := range []string{"list_workers", "search_workers", "get_worker_info", "roster"} {
+	for _, want := range []string{"search", "describe", "roster"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("readme missing %q", want)
 		}
@@ -98,11 +112,15 @@ func TestDirectoryCollectsFromBus(t *testing.T) {
 		"watch": []map[string]any{{"event": "program.query"}},
 	})
 
-	invoke(w, TypeListWorkers, map[string]any{})
-	var roster []map[string]any
-	if err := json.Unmarshal([]byte(ch.result()), &roster); err != nil {
-		t.Fatalf("list_workers not JSON array: %v", err)
+	invoke(w, TypeSearch, map[string]any{})
+	var res struct {
+		Total   int              `json:"total"`
+		Workers []map[string]any `json:"workers"`
 	}
+	if err := json.Unmarshal([]byte(ch.result()), &res); err != nil {
+		t.Fatalf("search not JSON object: %v", err)
+	}
+	roster := res.Workers
 	if len(roster) != 3 {
 		t.Fatalf("expected 3 (incl third-party lark + peer reason), got %d: %s", len(roster), ch.result())
 	}
@@ -114,29 +132,29 @@ func TestDirectoryCollectsFromBus(t *testing.T) {
 		t.Fatalf("lark/peer-reason missing: %v", byID)
 	}
 	// list must be MINIMAL: identity only — no tool schemas, no published events
-	// (both belong to get_worker_info).
+	// (both belong to describe).
 	for _, r := range roster {
 		if _, hasTools := r["tools"]; hasTools {
-			t.Fatalf("list_workers must NOT carry tool details, got %v", roster)
+			t.Fatalf("search must NOT carry tool details, got %v", roster)
 		}
 		if _, hasPublishes := r["publishes"]; hasPublishes {
-			t.Fatalf("list_workers must NOT carry published events, got %v", roster)
+			t.Fatalf("search must NOT carry published events, got %v", roster)
 		}
 	}
 
-	// get_worker_info known → full record (tools included); unknown → fail.
-	invoke(w, TypeGetWorkerInfo, map[string]any{"worker": "workspace"})
+	// describe known → full record (tools included); unknown → fail.
+	invoke(w, TypeDescribe, map[string]any{"worker": "workspace"})
 	var rec map[string]any
 	if err := json.Unmarshal([]byte(ch.result()), &rec); err != nil {
-		t.Fatalf("get_worker_info not JSON: %v", err)
+		t.Fatalf("describe not JSON: %v", err)
 	}
 	if rec["type"] != "workspace" {
-		t.Fatalf("get_worker_info type=%v", rec["type"])
+		t.Fatalf("describe type=%v", rec["type"])
 	}
 	if _, hasTools := rec["tools"]; !hasTools {
-		t.Fatalf("get_worker_info must carry full tool detail, got %s", ch.result())
+		t.Fatalf("describe must carry full tool detail, got %s", ch.result())
 	}
-	invoke(w, TypeGetWorkerInfo, map[string]any{"worker": "ghost"})
+	invoke(w, TypeDescribe, map[string]any{"worker": "ghost"})
 	if ch.lastType() != event.TypeRequestFailed {
 		t.Fatalf("unknown worker should fail")
 	}
@@ -154,10 +172,10 @@ func TestDirectoryParsesRemoteReadyWatch(t *testing.T) {
 		"watch": []any{map[string]any{"event": "niw.recipient.set"}, map[string]any{"event": "niw.recipient.unset"}},
 	}))
 
-	invoke(w, TypeGetWorkerInfo, map[string]any{"worker": "niw-a"})
+	invoke(w, TypeDescribe, map[string]any{"worker": "niw-a"})
 	var rec map[string]any
 	if err := json.Unmarshal([]byte(ch.result()), &rec); err != nil {
-		t.Fatalf("get_worker_info not JSON: %v", err)
+		t.Fatalf("describe not JSON: %v", err)
 	}
 	tools, ok := rec["tools"].([]any)
 	if !ok || len(tools) != 2 {
@@ -174,18 +192,21 @@ func TestDirectoryForgetsOnGone(t *testing.T) {
 	recall(w, event.TypeWorkerReady, "workspace", map[string]any{"worker_id": "workspace", "type": "workspace"})
 	recall(w, event.TypeWorkerGone, "lark", map[string]any{"worker_id": "lark"})
 
-	invoke(w, TypeListWorkers, map[string]any{})
-	var roster []map[string]any
-	_ = json.Unmarshal([]byte(ch.result()), &roster)
+	invoke(w, TypeSearch, map[string]any{})
+	var res struct {
+		Workers []map[string]any `json:"workers"`
+	}
+	_ = json.Unmarshal([]byte(ch.result()), &res)
+	roster := res.Workers
 	if len(roster) != 1 || roster[0]["worker_id"] != "workspace" {
 		t.Fatalf("after gone, roster should be just workspace: %s", ch.result())
 	}
 }
 
-// searchIDs invokes search_workers and returns the total plus the returned ids.
+// searchIDs invokes search and returns the total plus the returned ids.
 func searchIDs(t *testing.T, w *DirectoryWorker, ch *stubChannel, args map[string]any) (int, []string) {
 	t.Helper()
-	invoke(w, TypeSearchWorkers, args)
+	invoke(w, TypeSearch, args)
 	if ch.lastType() != event.TypeRequestCompleted {
 		t.Fatalf("search failed (%s): %s", ch.lastType(), ch.result())
 	}
@@ -269,9 +290,123 @@ func TestSearchWorkers(t *testing.T) {
 		t.Fatalf("query nope → total=%d ids=%v, want empty", total, ids)
 	}
 
-	// A missing query is rejected with a pointer to list_workers.
-	invoke(w, TypeSearchWorkers, map[string]any{})
+	// A missing query is the roster: every worker, no matched labels. This is
+	// the list-half of the merged tool, not an error.
+	total, ids = searchIDs(t, w, ch, map[string]any{})
+	if total != 3 || len(ids) != 3 {
+		t.Fatalf("roster → total=%d ids=%v, want all 3", total, ids)
+	}
+
+	// Type filters. exclude_types drops the other thinkers; types keeps only
+	// them; an excluded type wins over an included one; both compose with a
+	// query and apply to the roster too.
+	total, ids = searchIDs(t, w, ch, map[string]any{"query": "web", "exclude_types": []string{"reason"}})
+	if total != 1 || ids[0] != "test_mcp_fish" {
+		t.Fatalf("exclude_types=reason → total=%d ids=%v, want only test_mcp_fish", total, ids)
+	}
+	total, _ = searchIDs(t, w, ch, map[string]any{"types": []string{"reason"}})
+	if total != 2 {
+		t.Fatalf("types=reason → total=%d, want 2", total)
+	}
+	total, _ = searchIDs(t, w, ch, map[string]any{"types": []string{"mcp"}, "exclude_types": []string{"MCP"}})
+	if total != 0 {
+		t.Fatalf("exclude must win over include → total=%d", total)
+	}
+}
+
+// TestDirectoryListsAndDescribesItself verifies the directory is a member of its
+// own roster: a caller asking "who is here" sees it, and describe returns its
+// contract (type + the two tools it serves). Peers learn it from its ready
+// broadcast, which excludes the sender, so this entry is added at start.
+func TestDirectoryListsAndDescribesItself(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "directory", Bus: ch})
+	if err := w.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Stop() })
+
+	invoke(w, TypeSearch, map[string]any{})
+	var roster struct {
+		Total   int `json:"total"`
+		Workers []struct {
+			WorkerID string `json:"worker_id"`
+			Type     string `json:"type"`
+		} `json:"workers"`
+	}
+	if err := json.Unmarshal([]byte(ch.result()), &roster); err != nil {
+		t.Fatalf("search not JSON: %v", err)
+	}
+	if roster.Total != 1 || len(roster.Workers) != 1 {
+		t.Fatalf("roster = %+v, want just this worker", roster)
+	}
+	if roster.Workers[0].WorkerID != "directory" || roster.Workers[0].Type != "directory" {
+		t.Fatalf("roster entry = %+v, want the directory itself", roster.Workers[0])
+	}
+
+	invoke(w, TypeDescribe, map[string]any{"worker": "directory"})
+	var rec struct {
+		WorkerID string           `json:"worker_id"`
+		Type     string           `json:"type"`
+		Tools    []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(ch.result()), &rec); err != nil {
+		t.Fatalf("describe not JSON: %v", err)
+	}
+	if rec.Type != "directory" {
+		t.Fatalf("describe type = %q", rec.Type)
+	}
+	events := map[string]bool{}
+	for _, tool := range rec.Tools {
+		if e, ok := tool["event"].(string); ok {
+			events[e] = true
+		}
+	}
+	if !events["search"] || !events["describe"] {
+		t.Fatalf("describe should list the directory's own tools: %v", events)
+	}
+	if events["worker.readme"] != true {
+		t.Fatalf("the peer-facing contract should include worker.readme: %v", events)
+	}
+}
+
+// TestDirectoryGoneOfSelfIsIgnored verifies a stray worker.gone naming the
+// directory cannot remove it from its own roster.
+func TestDirectoryGoneOfSelfIsIgnored(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "directory", Bus: ch})
+	if err := w.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Stop() })
+
+	recall(w, event.TypeWorkerGone, "directory", map[string]any{"worker_id": "directory"})
+
+	invoke(w, TypeDescribe, map[string]any{"worker": "directory"})
+	if ch.lastType() != event.TypeRequestCompleted {
+		t.Fatalf("directory should still describe itself after a stray gone: %s", ch.lastType())
+	}
+}
+
+// TestUnknownWorkerMessageNamesASend pins a real confusion: the old text said
+// "call search", which reads as if search were a worker to address (and answers
+// "target is not online"). The message must say who to send what.
+func TestUnknownWorkerMessageNamesASend(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "directory", Bus: ch})
+
+	invoke(w, TypeDescribe, map[string]any{"worker": "ghost"})
 	if ch.lastType() != event.TypeRequestFailed {
-		t.Fatalf("empty query should fail, got %s", ch.lastType())
+		t.Fatalf("unknown worker should fail, got %s", ch.lastType())
+	}
+	msg := ch.lastError()
+	if !strings.Contains(msg, "ghost") || !strings.Contains(msg, "search") {
+		t.Fatalf("message should name the id and the search event: %q", msg)
+	}
+	if !strings.Contains(msg, `send "search" to "directory"`) {
+		t.Fatalf("message should say what to send and to whom: %q", msg)
+	}
+	if strings.Contains(msg, "call search") {
+		t.Fatalf("message must not phrase an event as a worker: %q", msg)
 	}
 }

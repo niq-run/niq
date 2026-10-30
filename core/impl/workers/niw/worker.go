@@ -387,7 +387,7 @@ func (w *Worker) watchLocal(ctx context.Context, localCh <-chan event.Event) {
 				w.forwardToRemote(ctx, evt)
 			case event.TypeWorkerDiscover:
 				// A local directory asks who is here: answer directly with this
-				// worker's contract, so the roster/list_workers sees us.
+				// worker's contract, so the roster/search sees us.
 				if evt.WorkerId != "" && evt.WorkerId != w.ID() {
 					w.AnnounceReadyTo(evt.WorkerId, "niw", nil, true)
 				}
@@ -422,7 +422,7 @@ func (w *Worker) watchRemote(ctx context.Context, remoteCh <-chan event.Event) {
 				w.handleRemoteUnset(evt)
 			case event.TypeWorkerDiscover:
 				// The far side's directory asks who is there; answer directly so its
-				// roster/list_workers sees us as a peer. Only if a far-side caller
+				// roster/search sees us as a peer. Only if a far-side caller
 				// other than ourselves asked.
 				if evt.WorkerId != "" {
 					w.announceRemoteTo(evt.WorkerId)

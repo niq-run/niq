@@ -172,9 +172,16 @@ func (w *Worker) registerTools() {
 		w.readmeText, w.params)
 
 	w.Register(baseworker.Extension{
-		Event:       TypeHistoryList,
-		Response:    baseworker.ObjectSchema(map[string]any{"events": map[string]any{"type": "array", "description": "matching events, each with its payload truncated to a per-item cap"}, "next_cursor": map[string]any{"type": "string"}}),
-		Description: "Recall PAST events from the event bus store (your own or another worker's) across time and restarts. USE this only to recover/verify historical facts NOT already in your current context — e.g. after a restart you lost your working memory, or you need a tool result you sent/ran turns ago. Each call the store returns any number of events, so always narrow with worker + types + limit (default 50) and keep the page small; the bus also appends continuously, so don't page through a whole history you only cursor-checked once. DON'T use it for present state (use list_workers/get_worker_info), for anything your current context already answers, or to satisfy idle curiosity — it costs tokens and a large listing wastes them. Events come back with payloads truncated to a per-item cap; for one event's full content, drill in with history.get.",
+		Event: TypeHistoryList,
+		Response: baseworker.ObjectSchema(map[string]any{
+			"count":           map[string]any{"type": "number"},
+			"payload_omitted": map[string]any{"type": "boolean", "description": "at least one event's payload exceeded the per-item budget and was left out (history.get returns it in full)"},
+			"events":          map[string]any{"type": "array", "description": "matching events; each carries payload as an object, or payload_omitted + payload_preview when it did not fit"},
+			"next_cursor": map[string]any{"type": "string",
+				"description": "pass it back as the next_cursor_param argument to fetch the next page; absent when the page is not full"},
+			"next_cursor_param": map[string]any{"type": "string", "enum": []string{"before", "after"}},
+		}),
+		Description: "Recall PAST events from the event bus store (your own or another worker's) across time and restarts. USE this only to recover/verify historical facts NOT already in your current context — e.g. after a restart you lost your working memory, or you need a tool result you sent/ran turns ago. Each call the store returns any number of events, so always narrow with worker + types + limit (default 50) and keep the page small; the bus also appends continuously, so don't page through a whole history you only cursor-checked once. DON'T use it for present state (send the directory worker its search / describe event), for anything your current context already answers, or to satisfy idle curiosity — it costs tokens and a large listing wastes them. Events come back with the payload as an object; one that exceeds the per-item budget is left out (payload_omitted, plus a payload_preview) — history.get returns it in full, in the same shape. A page that comes back full carries next_cursor — pass it back as next_cursor_param to continue in the same direction.",
 		Parameters: obj(map[string]any{
 			"worker": map[string]any{"type": "string",
 				"description": "Worker ID to filter by source, target, or recipient. Use \"*\" (default) for all workers."},
@@ -182,16 +189,16 @@ func (w *Worker) registerTools() {
 				"description": "Which side of the worker's traffic matches: sent (it is the source) or received (target/recipient). Omit for both."},
 			"since": map[string]any{"type": "integer",
 				"description": "Unix timestamp in seconds; only events at or after this time."},
-			"type": map[string]any{"type": "string",
-				"description": "Exact event type filter (e.g. request.completed, bash, reason.thinking). Shorthand for a single-entry 'types'."},
 			"types": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
-				"description": "Restrict to one or more exact event types (e.g. [\"bash\", \"request.completed\"]). Filtering happens in the store, so it stays efficient."},
+				"description": "Restrict to exact event types — one or more, e.g. [\"bash\", \"request.completed\"]. A single string (\"bash\") is accepted too. Filtering happens in the store, so it stays efficient."},
 			"trace_id": map[string]any{"type": "string",
 				"description": "Only events in this reasoning trace."},
 			"request_id": map[string]any{"type": "string",
 				"description": "Only events carrying this request id (a tool call + its reply echo it)."},
 			"before": map[string]any{"type": "string",
-				"description": "Event ID anchor for pagination: only events strictly before it (newest first)."},
+				"description": "Pagination anchor: only events strictly before this event id. Walks backwards in time, so pair it with desc=true (the default)."},
+			"after": map[string]any{"type": "string",
+				"description": "Pagination anchor: only events strictly after this event id. Walks forwards in time, so pair it with desc=false."},
 			"limit": map[string]any{"type": "integer",
 				"description": "Max events to return (default 50)."},
 			"desc": map[string]any{"type": "boolean",
@@ -209,7 +216,7 @@ func (w *Worker) registerTools() {
 	w.Register(baseworker.Extension{
 		Event:       TypeHistoryGet,
 		Response:    baseworker.ArraySchema(map[string]any{"type": "object"}),
-		Description: "Drill into the FULL, untruncated content of specific historical events. USE this only after history.list has shown you a truncated stub or given you an exact id/request_id you need — pass 'id' for one event, or 'request_id' for its whole request→response pair (the tool call and whichever request.* reply echoed it). DON'T fetch many events by hand here (that's history.list's narrowing job), and don't call it without a specific id/request_id in hand. A single result can be large (e.g. a big tool output) and is returned verbatim, so only fetch what you genuinely need — not deducible from what you already have.",
+		Description: "Drill into the FULL content of specific historical events. USE this only after history.list has shown you an omitted payload or given you an exact id/request_id you need — pass 'id' for one event, or 'request_id' for its whole request→response pair (the tool call and whichever request.* reply echoed it). DON'T fetch many events by hand here (that's history.list's narrowing job), and don't call it without a specific id/request_id in hand. A single result can be large (e.g. a big tool output) and is returned verbatim, so only fetch what you genuinely need — not deducible from what you already have.",
 		Parameters: obj(map[string]any{
 			"id": map[string]any{"type": "string",
 				"description": "Event ID to fetch in full (as shown by history.list)."},
@@ -220,6 +227,8 @@ func (w *Worker) registerTools() {
 		tc := baseworker.ParseToolCall(evt)
 		w.handleGet(tc)
 	})
+
+	w.registerHelp()
 }
 
 // historyReadme is the agent-facing usage guide returned by worker.readme.
@@ -231,8 +240,8 @@ inspect present state (for that, use the directory worker).
 
 ## Tools
 
-- history.list { worker?, role?, since?, type?/types?, trace_id?, request_id?,
-  before?, limit?, desc?, max_bytes?, truncate? } — a compact, per-item
+- history.list { worker?, role?, since?, types?, trace_id?, request_id?,
+  before?, after?, limit?, desc?, max_bytes?, truncate? } — a compact, per-item
   truncated page of past events (default limit 50). Narrow aggressively with
   worker + types + limit.
 - history.get { "id": "<event id>" | "request_id": "<id>" } — the full,
@@ -241,8 +250,13 @@ inspect present state (for that, use the directory worker).
 
 ## Notes
 
-- Listed payloads are truncated per item; payload_truncated marks a stub — use
-  history.get for the real content.
+- A payload over the per-item budget is omitted from a listing (payload_omitted
+  plus a payload_preview); history.get returns it in full. Both tools return the
+  same record shape.
+- A full page carries next_cursor: pass it back as the argument named by
+  next_cursor_param (before when descending, after when ascending) to continue
+  in the same direction. A short page is the end of the walk. before and after
+  also work as explicit anchors — set both to read the window between them.
 - The store is append-only and live. Don't page through a whole history you only
   cursor-checked once.`
 
@@ -254,21 +268,28 @@ func (w *Worker) readmeText() string {
 
 // ── history.list ──
 
-// listItem is one compact, possibly truncated event in a history.list result.
-// The payload is always a string (the compact JSON encoding of the event's
-// payload map). When it exceeded the per-entry byte cap it is cut with a
-// marker and payload_truncated is set, signalling the caller to history.get
-// the event for its real content.
+// listItem is one event as history.list and history.get both return it: the same
+// field names, and the payload as an object. The only difference between the two
+// tools is the per-item budget — a listing omits a payload that does not fit
+// (payload_omitted + payload_preview) instead of handing back a half-cut JSON
+// string no caller could parse.
 type listItem struct {
-	ID               string `json:"id"`
-	Type             string `json:"type"`
-	Worker           string `json:"worker"`
-	Target           string `json:"target,omitempty"`
-	TS               int64  `json:"ts"`
-	TraceID          string `json:"trace_id,omitempty"`
-	RequestID        string `json:"request_id,omitempty"`
-	Payload          string `json:"payload"`
-	PayloadTruncated bool   `json:"payload_truncated,omitempty"`
+	ID         string   `json:"id"`
+	Type       string   `json:"type"`
+	Worker     string   `json:"worker"`
+	Target     string   `json:"target,omitempty"`
+	Recipients []string `json:"recipients,omitempty"`
+	TS         int64    `json:"ts"`
+	TraceID    string   `json:"trace_id,omitempty"`
+	RequestID  string   `json:"request_id,omitempty"`
+	// Payload is the event's payload AS AN OBJECT, identical in history.list and
+	// history.get, so one piece of caller code reads both. When it does not fit
+	// the per-item budget it is absent (never a half-cut JSON string, which no
+	// caller could parse) and PayloadOmitted marks it; PayloadPreview carries the
+	// leading bytes for recognition only.
+	Payload        map[string]any `json:"payload,omitempty"`
+	PayloadOmitted bool           `json:"payload_omitted,omitempty"`
+	PayloadPreview string         `json:"payload_preview,omitempty"`
 }
 
 func (w *Worker) handleList(tc baseworker.ToolCall) {
@@ -302,21 +323,36 @@ func (w *Worker) handleList(tc baseworker.ToolCall) {
 	}
 
 	type result struct {
-		Count     int        `json:"count"`
-		Truncated bool       `json:"truncated,omitempty"`
-		Events    []listItem `json:"events"`
+		Count           int        `json:"count"`
+		PayloadOmitted  bool       `json:"payload_omitted,omitempty"`
+		Events          []listItem `json:"events"`
+		NextCursor      string     `json:"next_cursor,omitempty"`
+		NextCursorParam string     `json:"next_cursor_param,omitempty"`
 	}
 	res := result{Events: make([]listItem, 0, len(events))}
-	var anyTruncated bool
+	var anyOmitted bool
 	for _, e := range events {
-		item, truncated := w.trim(e, capBytes, truncate)
-		if truncated {
-			anyTruncated = true
+		item, omitted := w.trim(e, capBytes, !truncate)
+		if omitted {
+			anyOmitted = true
 		}
 		res.Events = append(res.Events, item)
 	}
 	res.Count = len(res.Events)
-	res.Truncated = anyTruncated
+	res.PayloadOmitted = anyOmitted
+
+	// A full page may have more behind it. The cursor is the LAST event in
+	// traversal order — the one the next page must start past — and the argument
+	// to hand it back as is the anchor that continues in the same direction:
+	// desc walks backwards (before), ascending walks forwards (after). A short
+	// page ends the walk, so it carries no cursor.
+	if res.Count > 0 && res.Count == opts.Limit {
+		res.NextCursor = res.Events[res.Count-1].ID
+		res.NextCursorParam = "after"
+		if opts.Desc {
+			res.NextCursorParam = "before"
+		}
+	}
 
 	w.ReplyCompleted(tc.CallerID, tc.CallID, res, tc.TraceID)
 	log.Printf("[history %s] history.list → %d events (caller=%s)", w.ID(), res.Count, tc.CallerID)
@@ -339,12 +375,20 @@ func (w *Worker) listOpts(args map[string]any) (store.QueryOpts, error) {
 	if rid := baseworker.ArgString(args, "request_id"); rid != "" {
 		opts.RequestID = rid
 	}
-	// Event-type filter: 'types' (array) wins over the single 'type' shorthand;
-	// both are passed to the store so filtering happens at query time.
+	// Pagination anchors. Both are ids, and the store compares by insertion
+	// order, so they compose with Desc: before+desc walks backwards, after+asc
+	// walks forwards. Setting both narrows to a window between them.
+	if before := baseworker.ArgString(args, "before"); before != "" {
+		opts.BeforeID = before
+	}
+	if after := baseworker.ArgString(args, "after"); after != "" {
+		opts.AfterID = after
+	}
+	// Event-type filter: one list, passed to the store so filtering happens at
+	// query time. ArgStrings takes a string or an array, which is why there is no
+	// separate single-type shorthand to keep in sync.
 	if types := baseworker.ArgStrings(args, "types"); len(types) > 0 {
 		opts.Types = types
-	} else if t := baseworker.ArgString(args, "type"); t != "" {
-		opts.Types = []string{t}
 	}
 	if opts.Limit <= 0 || opts.Limit > w.maxListEvents {
 		opts.Limit = w.maxListEvents
@@ -352,32 +396,41 @@ func (w *Worker) listOpts(args map[string]any) (store.QueryOpts, error) {
 	return opts, nil
 }
 
-// trim renders one event as a compact listItem. When truncation is enabled,
-// the payload string is capped at capBytes (0 means *only* truncate when the
-// worker's configured limit decides — see callers; here capBytes is always
-// >=1 for the truncate=true path) and marked truncated. With truncate=false,
-// the full payload is returned verbatim and never flagged. Returns whether
-// truncation happened.
-func (w *Worker) trim(e event.Event, capBytes int, truncate bool) (listItem, bool) {
+// trim renders one event as a listItem. includePayload=false applies the
+// per-item budget: a payload that fits comes back as the object, one that does
+// not is omitted and previewed. includePayload=true (history.get, and
+// truncate=false) always carries the whole object. Returns whether the payload
+// was omitted.
+func (w *Worker) trim(e event.Event, capBytes int, includePayload bool) (listItem, bool) {
+	item := listItem{
+		ID:         e.ID,
+		Type:       string(e.Type),
+		Worker:     e.WorkerId,
+		Target:     e.TargetWorkerID,
+		Recipients: e.Recipients,
+		TS:         e.Timestamp,
+		TraceID:    e.TraceID,
+		RequestID:  e.RequestId,
+	}
+	if includePayload {
+		item.Payload = e.Payload
+		return item, false
+	}
+
 	raw, err := json.Marshal(e.Payload)
 	if err != nil || raw == nil {
 		raw = []byte("null")
 	}
-	truncated := truncate && len(raw) > capBytes
-	if truncated {
-		raw = append(raw[:capBytes], []byte(" …[truncated; use history.get]")...)
+	if len(raw) <= capBytes {
+		item.Payload = e.Payload
+		return item, false
 	}
-	return listItem{
-		ID:               e.ID,
-		Type:             string(e.Type),
-		Worker:           e.WorkerId,
-		Target:           e.TargetWorkerID,
-		TS:               e.Timestamp,
-		TraceID:          e.TraceID,
-		RequestID:        e.RequestId,
-		Payload:          string(raw),
-		PayloadTruncated: truncated,
-	}, truncated
+	// Too big for this page: omit the payload entirely rather than cutting the
+	// JSON text (a half object is parseable by nothing). The preview is for
+	// recognising the event; history.get returns the real thing.
+	item.PayloadOmitted = true
+	item.PayloadPreview = string(raw[:capBytes]) + " …"
+	return item, true
 }
 
 // ── history.get ──
@@ -417,9 +470,15 @@ func (w *Worker) handleGet(tc baseworker.ToolCall) {
 		return
 	}
 
-	// Full, untruncated detail: no trim here, the structured payload is what
-	// the caller came for.
-	w.ReplyCompleted(tc.CallerID, tc.CallID, events, tc.TraceID)
+	// Full detail, in the SAME item shape history.list returns: same field names,
+	// same payload type (an object), only without the per-item budget. A caller
+	// can therefore read both replies with one piece of code.
+	items := make([]listItem, 0, len(events))
+	for _, e := range events {
+		item, _ := w.trim(e, 0, true)
+		items = append(items, item)
+	}
+	w.ReplyCompleted(tc.CallerID, tc.CallID, items, tc.TraceID)
 	log.Printf("[history %s] history.get → %d event(s) (caller=%s)", w.ID(), len(events), tc.CallerID)
 }
 

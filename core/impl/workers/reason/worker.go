@@ -60,6 +60,11 @@ type Config struct {
 	// updates by the worker itself are persisted in its snapshot and override
 	// this value on restore.
 	Readme string
+
+	// Collaborators is the reason-worker collaboration whitelist: nil (default)
+	// means every reason peer is visible, a non-nil slice is an allowlist (empty
+	// = none). See reasonBase.Config.Collaborators.
+	Collaborators []string
 }
 
 // Worker is the generic reason-family worker: it embeds the shared reasoning
@@ -104,6 +109,10 @@ func NewWorker(cfg Config) *Worker {
 		MaxPayloadBytes: cfg.MaxPayloadBytes,
 		SeedMessages:    cfg.SeedMessages,
 		Readme:          cfg.Readme,
+		Collaborators:   cfg.Collaborators,
+		// The model sees the minimal surface: message, request and the
+		// directory's whole discovery surface. Everything else is request-only.
+		ToolListBuilder: reasonBase.ScopedToolListBuilder(reasonBase.DefaultToolScope),
 	})
 
 	// The default worker layers its own toolkit on top of the base

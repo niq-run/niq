@@ -130,6 +130,9 @@ type reasonFamilyIn struct {
 	compactDirective string
 	readme           string
 	seedBrief        []llm.Message
+	// collaborators is the reason-worker collaboration whitelist; nil means
+	// every reason peer is visible (see reason.Config.Collaborators).
+	collaborators []string
 }
 
 // resolveReasonFamily computes the shared inputs from a worker config. typ is
@@ -195,6 +198,8 @@ func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, 
 	rotateRounds := pInt(p, "rotate_rounds")
 	compactDirective, _ := p["compact_directive"].(string)
 	readme, _ := p["readme"].(string)
+	// collaborators: absent = unrestricted; present (even []) = whitelist.
+	collaborators := pStrings(p, "collaborators")
 
 	providerSources := providerpkg.NewProviderSources(provider, apiKey, baseURL, model)
 	pname, pmodel := providerpkg.InitialProviderInfo(provider, apiKey, baseURL, model)
@@ -216,6 +221,7 @@ func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, 
 		compactDirective: compactDirective,
 		readme:           readme,
 		seedBrief:        seedBrief,
+		collaborators:    collaborators,
 	}, nil
 }
 
@@ -244,6 +250,7 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 			RotateRounds:     in.rotateRounds,
 			CompactDirective: in.compactDirective,
 			Readme:           in.readme,
+			Collaborators:    in.collaborators,
 			// Fixed per-message payload cap for tool results / inputs.
 			MaxPayloadBytes: 20 * 1024,
 			SeedMessages:    in.seedBrief,
@@ -290,6 +297,7 @@ func buildCodingSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 			RotateRounds:     in.rotateRounds,
 			CompactDirective: in.compactDirective,
 			Readme:           in.readme,
+			Collaborators:    in.collaborators,
 			MaxPayloadBytes:  20 * 1024,
 			SeedMessages:     in.seedBrief,
 			ToolMode:         toolMode,
@@ -437,7 +445,7 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 	// events (spawn/suspend/resume) are directed calls — no subscription
 	// needed; request.cancel is directed too (sent to the target worker).
 	// SubscribeAllow: worker.discover, so the host re-announces its tools to
-	// any worker that asks (late joiners, list_workers refresh). The fleet
+	// any worker that asks (late joiners, search refresh). The fleet
 	// roster lives on the directory worker, not here — host manages lifecycles
 	// and must not be misread as listing or suspending arbitrary workers.
 	connect := specConnect(ctx, id, "host",
@@ -937,7 +945,7 @@ func buildHistorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	// events (history.list / history.get) are directed calls — no broadcast
 	// subscription is needed to serve them. SubscribeAllow: worker.discover,
 	// so the history worker re-announces its tools to joiners (late reason
-	// workers, list_workers refresh).
+	// workers, search refresh).
 	connect := specConnect(ctx, id, "history",
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
@@ -963,6 +971,42 @@ func buildHistorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}, nil
 }
 
+// pStrings reads an optional string-list worker param. Accepts a JSON array or
+// a comma-separated string. It returns nil when the key is absent ("not
+// configured") and a non-nil slice when present, so callers can tell an empty
+// whitelist from an unset one.
+func pStrings(p map[string]any, key string) []string {
+	raw, ok := p[key]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return append([]string{}, v...)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if v == "" {
+			return []string{}
+		}
+		parts := strings.Split(v, ",")
+		out := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if s := strings.TrimSpace(part); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // pInt reads an optional int worker param (JSON numbers arrive as float64).
 func pInt(p map[string]any, key string) int {
 	switch n := p[key].(type) {
@@ -983,7 +1027,7 @@ func buildDirectorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 		id = "directory"
 	}
 	// The directory LEARNS the fleet from worker.ready/gone broadcasts and
-	// serves list_workers/get_worker_info as callable tools to peers. It
+	// serves search/describe as callable tools to peers. It
 	// never touches lifecycle (no WorkerService): a neutral observer.
 	// PublishAllow: replies + presence. SubscribeAllow: worker.discover (so it
 	// re-announces and answers joiners) plus worker.ready/worker.gone to build

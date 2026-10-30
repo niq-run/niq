@@ -15,12 +15,19 @@ func TestBuildInstructionEmpty(t *testing.T) {
 	if !strings.Contains(s, "r1") {
 		t.Fatalf("prompt should mention worker ID r1, got: %q", s)
 	}
-	if !strings.Contains(s, "around their own focus and context") || !strings.Contains(s, "message") {
-		t.Fatalf("prompt should describe focus and worker collaboration: %q", s)
-	}
-	for _, want := range []string{"context_compress", "program_query / program_update", "provider_switch", "worker_readme_update", "skill card", "timer", "directory", "search_workers", "get_worker_info"} {
-		if !strings.Contains(s, want) {
-			t.Fatalf("prompt should highlight key tools (%q missing): %q", want, s)
+	// The prompt names the three built-in sends and the discovery chain instead
+	// of enumerating every capability a worker might hold.
+	// Case-insensitive: the prompt opens sentences with these words.
+	lower := strings.ToLower(s)
+	for _, want := range []string{
+		"request", "message", "run_program",
+		"search", "describe",
+		"worker.readme", "worker.help",
+		"program", "directory",
+		"program.attach",
+	} {
+		if !strings.Contains(lower, want) {
+			t.Fatalf("prompt should mention %q (missing): %q", want, s)
 		}
 	}
 }

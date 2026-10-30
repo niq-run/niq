@@ -131,7 +131,7 @@ func TestProviderToolsExposedToLLM(t *testing.T) {
 
 // TestRequestForwardsUndiscoveredCapability verifies the generalized `request`
 // tool is not gated on local discovery: the model learns (target, event) from
-// the directory worker's get_worker_info and the event goes straight out. A peer
+// the directory worker's describe and the event goes straight out. A peer
 // reason worker's worker.readme is never announced to peers (a peer reason's
 // ready is not surfaced as callable tools), which is exactly what this covers.
 func TestRequestForwardsUndiscoveredCapability(t *testing.T) {
@@ -349,5 +349,185 @@ func TestOwnCapabilitiesDeclareResponse(t *testing.T) {
 		if !have[ev] {
 			t.Errorf("%s does not declare a response schema", ev)
 		}
+	}
+}
+
+// TestRequestRoutedTimeoutArmsRoundTimer pins that the timeout convention does
+// not depend on the tool-list policy: with the timer worker's tools hidden
+// (request-only), a request(target, "timeout") still arms the round timer, so a
+// minimal tool surface does not silently lose per-round timeouts.
+func TestRequestRoutedTimeoutArmsRoundTimer(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+
+	w.Register(baseworker.Extension{Event: TypeRequest, Internal: true, Description: "generalized call"}, func(event.Event) {})
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+		"type":  "reason",
+		"watch": w.WatchEntries(true),
+	}))
+
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "request",
+			ToolArguments: `{"target":"timer","event":"timeout","arguments":{"duration_ms":1000}}`},
+	}, "trace1")
+
+	if w.activeTimeout != "c1" {
+		t.Fatalf("activeTimeout = %q, want the request call id c1", w.activeTimeout)
+	}
+	if w.activeTimeoutProvider != "timer" {
+		t.Fatalf("activeTimeoutProvider = %q, want timer", w.activeTimeoutProvider)
+	}
+	evts := ch.eventsOf(event.EventType("timeout"))
+	if len(evts) != 1 || evts[0].RequestId != "c1" {
+		t.Fatalf("timeout not forwarded with the call id: %+v", evts)
+	}
+}
+
+// TestMetaCapabilitiesAreNeverTools pins the global rule: readme / readme.update
+// / help describe a worker, they do not do work, so no scope exposes them — not
+// for a peer type the scope takes whole, and not for the worker itself.
+func TestMetaCapabilitiesAreNeverTools(t *testing.T) {
+	w := newTestWorker(nil, nil)
+	// A scope that both names a self meta event and takes a peer type whole: the
+	// rule must hold against both ways a capability can be admitted.
+	scope := ToolScope{
+		Own:       []event.EventType{TypeMessage, TypeRunProgram, event.TypeWorkerReadme, TypeReadmeUpdate},
+		PeerTypes: []string{DirectoryWorkerType},
+	}
+	caps := []DiscoveredCapability{
+		{Source: w.ID(), Event: TypeMessage},
+		{Source: w.ID(), Event: TypeRunProgram},
+		{Source: w.ID(), Event: event.TypeWorkerReadme},
+		{Source: w.ID(), Event: TypeReadmeUpdate},
+		{Source: "directory", SourceType: DirectoryWorkerType, Event: event.EventType("search")},
+		{Source: "directory", SourceType: DirectoryWorkerType, Event: event.TypeWorkerReadme},
+		{Source: "directory", SourceType: DirectoryWorkerType, Event: event.TypeWorkerHelp},
+	}
+	defs := ScopedToolListBuilder(scope)(w, caps)
+	got := map[string]bool{}
+	for _, d := range defs {
+		got[d.Name] = true
+	}
+	if !got["message"] || !got["run_program"] || !got["directory__search"] {
+		t.Fatalf("scope dropped a real capability: %v", got)
+	}
+	for _, unwanted := range []string{
+		"worker_readme", "worker_readme_update",
+		"directory__worker_readme", "directory__worker_help",
+	} {
+		if got[unwanted] {
+			t.Fatalf("meta capability %q must never be a tool: %v", unwanted, got)
+		}
+	}
+}
+
+// TestCollaborationScopeHidesOutOfScopeReasonPeers pins the spawn-time scope: a
+// reason peer outside the whitelist never enters the discovered universe, and a
+// directed call to it is refused even when its id is known from elsewhere.
+func TestCollaborationScopeHidesOutOfScopeReasonPeers(t *testing.T) {
+	ch := newTestChannel()
+	w := NewBaseReasonWorker(Config{ID: "r1", Bus: ch, Provider: &staticProvider{}, Collaborators: []string{"ally"}})
+
+	w.Register(baseworker.Extension{Event: TypeRequest, Internal: true, Description: "generalized call"}, func(event.Event) {})
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+		"type":  "reason",
+		"watch": w.WatchEntries(true),
+	}))
+	w.HandleWorkerReady(readyFor("ally", "reason", "worker.readme"))
+	w.HandleWorkerReady(readyFor("stranger", "reason", "worker.readme"))
+	w.HandleWorkerReady(readyFor("workspace", "workspace", "bash"))
+
+	w.mu.Lock()
+	for _, c := range w.discoveredCapabilities() {
+		if c.Source == "stranger" {
+			w.mu.Unlock()
+			t.Fatalf("out-of-scope reason peer leaked into discovery: %+v", c)
+		}
+	}
+	w.mu.Unlock()
+
+	if !w.MayAddress("ally") {
+		t.Fatal("in-scope reason peer must be addressable")
+	}
+	if !w.MayAddress("workspace") {
+		t.Fatal("capability worker must be addressable")
+	}
+	if w.MayAddress("stranger") {
+		t.Fatal("out-of-scope reason peer must be refused")
+	}
+
+	// The request path obeys the same gate: nothing is put on the bus.
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "request",
+			ToolArguments: `{"target":"stranger","event":"worker.readme","arguments":{}}`},
+	}, "trace1")
+	if evts := ch.eventsOf(event.TypeWorkerReadme); len(evts) != 0 {
+		t.Fatalf("request to an out-of-scope peer was forwarded: %+v", evts)
+	}
+}
+
+// TestRunProgramForwardsToProgramWorker verifies the built-in run_program tool:
+// it resolves the program worker by announced type (not by a hardcoded id), sends
+// the program worker's own "run" event with the model's arguments, and reuses the
+// call id as the request id so the reply pairs back through the normal tracker.
+func TestRunProgramForwardsToProgramWorker(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(&staticProvider{}, ch)
+
+	w.Register(baseworker.Extension{Event: TypeRunProgram, Internal: true, Description: "run a script"}, func(event.Event) {})
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+		"type":  "reason",
+		"watch": w.WatchEntries(true),
+	}))
+	w.HandleWorkerReady(readyFor("runner", "program", "run"))
+
+	// The target is resolved by announced type, not by a hardcoded id.
+	w.mu.Lock()
+	provider, ok := w.findProviderByType(ProgramWorkerType, programRunTool)
+	w.mu.Unlock()
+	if !ok || provider != "runner" {
+		t.Fatalf("findProviderByType = %q,%v; want runner,true", provider, ok)
+	}
+
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "run_program",
+			ToolArguments: `{"source":"sdk.result(1)"}`},
+	}, "trace1")
+
+	evts := ch.eventsOf(event.EventType("run"))
+	if len(evts) != 1 {
+		t.Fatalf("expected one run event, got %d", len(evts))
+	}
+	if evts[0].RequestId != "c1" {
+		t.Fatalf("request id = %q, want the tool call id c1", evts[0].RequestId)
+	}
+	if src, _ := evts[0].Payload["source"].(string); src != "sdk.result(1)" {
+		t.Fatalf("arguments not forwarded: %+v", evts[0].Payload)
+	}
+}
+
+// TestRunProgramWithoutProgramWorkerFails verifies the tool fails the call
+// instead of emitting an event no one can answer when no program worker is on
+// the bus.
+func TestRunProgramWithoutProgramWorkerFails(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(&staticProvider{}, ch)
+	w.Register(baseworker.Extension{Event: TypeRunProgram, Internal: true, Description: "run a script"}, func(event.Event) {})
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, w.ID(), map[string]any{
+		"type":  "reason",
+		"watch": w.WatchEntries(true),
+	}))
+
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "run_program",
+			ToolArguments: `{"source":"1"}`},
+	}, "trace1")
+
+	if evts := ch.eventsOf(event.EventType("run")); len(evts) != 0 {
+		t.Fatalf("nothing should be sent without a program worker, got %+v", evts)
 	}
 }

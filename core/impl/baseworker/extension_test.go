@@ -1,6 +1,7 @@
 package baseworker
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/niq-run/niq/core/itfs/event"
@@ -21,8 +22,8 @@ func TestUnknownEventRepliesFailed(t *testing.T) {
 	if len(ch.sent) != 1 || ch.sent[0].Type != event.TypeRequestFailed || ch.sent[0].RequestId != "r1" {
 		t.Fatalf("expected request.failed for r1, got %+v", ch.sent)
 	}
-	if msg, _ := ch.sent[0].Payload["error"].(string); msg != "no handler for event nope" {
-		t.Fatalf("error = %q, want the event named", msg)
+	if msg, _ := ch.sent[0].Payload["error"].(string); msg != `w1 does not serve event "nope"; it serves: (none)` {
+		t.Fatalf("error = %q, want the event named and what is served", msg)
 	}
 
 	// A notification is dropped silently: nothing is waiting on it.
@@ -112,5 +113,28 @@ func TestWatchEntriesCarriesResponse(t *testing.T) {
 	}
 	if _, present := byEvent["plain"]["response"]; present {
 		t.Fatal("a capability without a Response must not advertise one")
+	}
+}
+
+// TestUnknownEventListsWhatIsServed verifies the failure reply names the events
+// the worker does serve (caller-visible only), so a wrong name is obvious
+// instead of just "no handler".
+func TestUnknownEventListsWhatIsServed(t *testing.T) {
+	ch := &recordingChannel{}
+	w := NewBaseWorker("w1", ch)
+	w.Register(Extension{Event: "search", Description: "roster"}, func(event.Event) {})
+	w.Register(Extension{Event: "describe", Description: "contract"}, func(event.Event) {})
+	w.Register(Extension{Event: "internal_thing", Internal: true}, func(event.Event) {})
+
+	evt := event.New("nope", "peer", nil)
+	evt.RequestId = "r1"
+	w.DispatchExtension(evt)
+
+	msg, _ := ch.sent[0].Payload["error"].(string)
+	if !strings.Contains(msg, "search") || !strings.Contains(msg, "describe") {
+		t.Fatalf("reply should list the served events: %q", msg)
+	}
+	if strings.Contains(msg, "internal_thing") {
+		t.Fatalf("a peer must not see Internal events in the list: %q", msg)
 	}
 }

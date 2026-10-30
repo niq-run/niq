@@ -654,10 +654,12 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 			}
 			// A generalized call is NOT gated on local discovery: the model learns
 			// (target, event, arguments) from the directory worker's
-			// get_worker_info and sends the event straight out. Discovery only
+			// describe and sends the event straight out. Discovery only
 			// decides what is listed as a tool; a capability the target serves but
 			// that was never announced here (a peer reason's worker.readme, a
 			// third-party worker that joined before this one) is still callable.
+			// The one gate is the collaboration scope: a reason peer outside the
+			// whitelist is not a valid target, however its id was learned.
 			if target == "" || eventType == "" {
 				log.Printf("[reason %s] request: missing target or event", w.ID())
 				unavailable = append(unavailable, fmt.Sprintf("%s(%s/%s)", tc.ToolName, target, eventType))
@@ -669,14 +671,69 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 				})
 				continue
 			}
+			if !w.MayAddress(target) {
+				log.Printf("[reason %s] request to %s refused: outside collaboration scope", w.ID(), target)
+				unavailable = append(unavailable, target)
+				w.transcript.Apply(transcript.ToolResultPatch{
+					CallID: tc.ToolCallID, Name: tc.ToolName,
+					Content: []llm.ContentBlock{{Type: llm.ContentText,
+						Text: "request: " + target + " is outside this worker's collaboration scope."}},
+					IsErr: true,
+				})
+				continue
+			}
 			// Track the request call under its own id so the target's reply pairs
 			// with the model's request placeholder; the id is ALSO the RequestId
 			// we send, so no second placeholder is needed.
 			w.requestTracker.Add(target, []llm.ContentBlock{{
 				Type: llm.ContentToolCall, ToolCallID: tc.ToolCallID, ToolName: tc.ToolName,
 			}})
+			// The timeout convention must not depend on whether the timer worker's
+			// tools happen to be in the model's tool list: a request-routed
+			// timeout arms the same round timer as a direct timeout tool call, so
+			// a minimal tool surface does not silently lose per-round timeouts.
+			if event.EventType(eventType) == timeoutTool {
+				w.activeTimeout = tc.ToolCallID
+				w.activeTimeoutProvider = target
+			}
 			w.invokeCapability(context.Background(), event.EventType(eventType), target, args, tc.ToolCallID, traceID)
 			dispatched++ // a request-routed call is dispatched too (never enters callsByTarget)
+			continue
+		}
+		// The built-in run_program tool is request with target and event fixed:
+		// the model passes the program worker's own run arguments and the reply
+		// resolves this call through the normal tracker. The provider is resolved
+		// by announced type, so a program worker with a non-default id works.
+		if w.isRunProgramCap(cap) {
+			provider, ok := w.findProviderByType(ProgramWorkerType, programRunTool)
+			if !ok {
+				log.Printf("[reason %s] run_program: no %s worker serving %q", w.ID(), ProgramWorkerType, programRunTool)
+				unavailable = append(unavailable, tc.ToolName)
+				w.transcript.Apply(transcript.ToolResultPatch{
+					CallID: tc.ToolCallID, Name: tc.ToolName,
+					Content: []llm.ContentBlock{{Type: llm.ContentText,
+						Text: "run_program: no program worker is available on the bus."}},
+					IsErr: true,
+				})
+				continue
+			}
+			args := map[string]any{}
+			if tc.ToolArguments != "" {
+				if err := json.Unmarshal([]byte(tc.ToolArguments), &args); err != nil {
+					w.transcript.Apply(transcript.ToolResultPatch{
+						CallID: tc.ToolCallID, Name: tc.ToolName,
+						Content: []llm.ContentBlock{{Type: llm.ContentText,
+							Text: "run_program: bad arguments: " + err.Error()}},
+						IsErr: true,
+					})
+					continue
+				}
+			}
+			w.requestTracker.Add(provider, []llm.ContentBlock{{
+				Type: llm.ContentToolCall, ToolCallID: tc.ToolCallID, ToolName: tc.ToolName,
+			}})
+			w.invokeCapability(context.Background(), programRunTool, provider, args, tc.ToolCallID, traceID)
+			dispatched++
 			continue
 		}
 		argsMap := map[string]any{}
@@ -788,7 +845,16 @@ const (
 
 	TypeMessage event.EventType = "message"
 	TypeRequest event.EventType = "request"
+	// TypeRunProgram is the third built-in send: it runs a script program. Like
+	// request it is a convention, not a discovered capability — handleToolCalls
+	// fills in the target (the program worker) and the event (run), so the model
+	// passes run's own arguments and nothing else.
+	TypeRunProgram event.EventType = "run_program"
 )
+
+// programRunTool is the bare event the program worker serves for script
+// execution; TypeRunProgram forwards to it.
+const programRunTool event.EventType = "run"
 
 func (w *BaseReasonWorker) broadcastReasonStart(traceID string) {
 	evt := event.New(TypeReasonStart, w.ID(), map[string]any{

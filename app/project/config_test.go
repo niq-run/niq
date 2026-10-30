@@ -212,7 +212,7 @@ func TestDeclFromSpawnCarriesMeta(t *testing.T) {
 // seeds the reason worker with the using-niq playbook, and that it survives
 // the template → params → builder roundtrip (params["programs"], as parsePrograms
 // reads it). The content itself lives in the template's programs/ directory, so the
-// playbook's path is loadable by the program worker (program.load).
+// playbook's path is readable by the program worker (program.read).
 func TestDefaultPresetShipsUsingNiqPlaybook(t *testing.T) {
 	def, err := LoadPreset("default")
 	if err != nil {
@@ -257,7 +257,7 @@ func TestDefaultPresetShipsUsingNiqPlaybook(t *testing.T) {
 	}
 
 	// The playbook content must live in the template's programs/ dir, which is
-	// what program.load addresses by path.
+	// what program.read addresses by path.
 	raw, err := presetFS.ReadFile("preset/default/programs/using-niq/PROGRAM.md")
 	if err != nil || len(raw) == 0 {
 		t.Fatalf("embedded using-niq PROGRAM.md: %v", err)

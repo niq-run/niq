@@ -46,30 +46,37 @@ func newCoding(t *testing.T, mode string) *Worker {
 	t.Helper()
 	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: mode})
 	// Peers: the program worker and a workspace worker.
-	announce(w, "program", "program", "search", "load", "run")
+	announce(w, "program", "program", "search", "read", "run")
 	announce(w, "workspace", "workspace", "bash")
-	announce(w, "directory", "directory", "list_workers", "get_worker_info")
+	announce(w, "directory", "directory", "search", "describe")
 	return w
 }
 
-// TestPTCModeExposesDirectoryAndProgramTools verifies PTC mode keeps the
-// directory worker's tools (discovery) and the program worker's tools
-// (invocation) plus the worker's own self tools — every other peer tool is
-// dropped from the LLM tool list.
-func TestPTCModeExposesDirectoryAndProgramTools(t *testing.T) {
+// TestPTCModeExposesRunAndDiscovery verifies PTC lists exactly three kinds of
+// tool: message and run_program. PTC puts scripts in place of direct sends, so
+// request is gone; discovery happens inside the script, so the directory is not a
+// tool either.
+func TestPTCModeExposesMessageAndRunProgram(t *testing.T) {
 	w := newCoding(t, ToolModePTC)
+	// The worker's own contract arrives through its self-directed ready.
+	announce(w, "coder", "reason", "message", "run_program")
 	names := toolNames(w)
 
-	for _, want := range []string{
-		"program__run", "program__search", "program__load",
-		"directory__list_workers", "directory__get_worker_info",
-	} {
+	for _, want := range []string{"message", "run_program"} {
 		if !names[want] {
 			t.Errorf("PTC tool list missing %q (got %v)", want, names)
 		}
 	}
-	if names["workspace__bash"] {
-		t.Error("PTC tool list must not include workspace__bash (reached through a script)")
+	for _, unwanted := range []string{
+		"request", "program__run", "program__search", "program__read",
+		"directory__search", "directory__describe", "workspace__bash",
+	} {
+		if names[unwanted] {
+			t.Errorf("PTC tool list must not include %q (got %v)", unwanted, names)
+		}
+	}
+	if len(names) != 2 {
+		t.Errorf("PTC should expose exactly 2 tools, got %v", names)
 	}
 }
 
@@ -79,40 +86,41 @@ func TestPTCModeExposesDirectoryAndProgramTools(t *testing.T) {
 func TestPTCModeKeepsMessageButDropsRequestAndFocusTools(t *testing.T) {
 	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: ToolModePTC})
 	// The worker's own full contract (Internal included), as it sends itself.
-	announce(w, "coder", "reason", "message", "request", "context.compress", "program.query", "program.update")
+	announce(w, "coder", "reason", "message", "run_program", "request", "context.compress", "program.query", "program.attach", "program.detach")
 	announce(w, "program", "program", "run")
-	announce(w, "directory", "directory", "list_workers", "get_worker_info")
+	announce(w, "directory", "directory", "search", "describe")
 	announce(w, "workspace", "workspace", "bash")
 
 	names := toolNames(w)
-	for _, want := range []string{"message", "program__run", "directory__list_workers"} {
+	for _, want := range []string{"message", "run_program"} {
 		if !names[want] {
 			t.Errorf("PTC should keep %q (got %v)", want, names)
 		}
 	}
-	for _, unwanted := range []string{"request", "context_compress", "program_query", "program_update", "workspace__bash"} {
+	for _, unwanted := range []string{"request", "context_compress", "program_query", "program_attach", "program_detach", "workspace__bash"} {
 		if names[unwanted] {
 			t.Errorf("PTC must drop %q (got %v)", unwanted, names)
 		}
 	}
 }
 
-// TestNormalModeDropsFocusToolsButKeepsRequest verifies the coding focus filter
-// applies in normal mode too: context.compress and both program tools are
-// dropped (programs are fixed at creation), while request and every peer tool
-// stay.
-func TestNormalModeDropsFocusToolsButKeepsRequest(t *testing.T) {
+// TestNormalModeUsesCoreSurface verifies normal mode is the reason worker's tool
+// list, unchanged: the three built-in sends and nothing else. Peer capability
+// workers and the directory are reached through request; the worker's own meta
+// tools (context.compress, program.*) stay out of the list.
+func TestNormalModeUsesCoreSurface(t *testing.T) {
 	w := NewWorker(Config{ID: "coder", Bus: stubChannel{}, ToolMode: ToolModeNormal})
-	announce(w, "coder", "reason", "message", "request", "context.compress", "program.query", "program.update")
+	announce(w, "coder", "reason", "message", "request", "run_program", "context.compress", "program.query", "program.attach", "program.detach")
 	announce(w, "workspace", "workspace", "bash")
+	announce(w, "directory", "directory", "search", "describe")
 
 	names := toolNames(w)
-	for _, want := range []string{"message", "request", "workspace__bash"} {
+	for _, want := range []string{"message", "request", "run_program"} {
 		if !names[want] {
 			t.Errorf("normal mode should keep %q (got %v)", want, names)
 		}
 	}
-	for _, unwanted := range []string{"context_compress", "program_query", "program_update"} {
+	for _, unwanted := range []string{"directory__search", "directory__describe", "workspace__bash", "context_compress", "program_query", "program_attach", "program_detach"} {
 		if names[unwanted] {
 			t.Errorf("normal mode must drop %q (got %v)", unwanted, names)
 		}
@@ -146,18 +154,6 @@ func TestProviderToolsRegisteredButHidden(t *testing.T) {
 	}
 	if !names["message"] {
 		t.Error("message should stay in the LLM tool list")
-	}
-}
-
-// TestNormalModeExposesAllTools verifies normal mode keeps every discovered
-// capability, like the generic reason worker.
-func TestNormalModeExposesAllTools(t *testing.T) {
-	w := newCoding(t, ToolModeNormal)
-	names := toolNames(w)
-	for _, want := range []string{"program__run", "workspace__bash", "directory__list_workers"} {
-		if !names[want] {
-			t.Errorf("normal tool list missing %q (got %v)", want, names)
-		}
 	}
 }
 

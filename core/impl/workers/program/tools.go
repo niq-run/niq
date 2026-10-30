@@ -13,10 +13,11 @@ import (
 // The program worker's tools, each its own event type.
 const (
 	TypeSearch event.EventType = "search"
-	TypeLoad   event.EventType = "load"
+	TypeRead   event.EventType = "read"
 	TypeWrite  event.EventType = "write"
 	TypeEdit   event.EventType = "edit"
-	TypeUpsert event.EventType = "upsert"
+	TypeTouch  event.EventType = "touch"
+	TypeUpdate event.EventType = "update"
 	TypeDelete event.EventType = "delete"
 	TypeRun    event.EventType = "run"
 )
@@ -25,6 +26,37 @@ const (
 // by its own event type, announced to peers via AnnounceReady.
 func (w *Worker) registerExtensions() {
 	ctx := context.Background()
+
+	// metaParams is the argument schema shared by touch and update: both carry
+	// program metadata only, never content. They differ solely in whether
+	// content_type is meaningful (touch may need it to create; update keeps the
+	// stored one when omitted).
+	metaParams := func(contentTypeDesc string) map[string]any {
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Program name — also its root path, so read(\"<name>\") reads its entry content.",
+				},
+				"content_type": map[string]any{
+					"type":        "string",
+					"description": contentTypeDesc,
+					"enum":        []string{"instruction", "playbook"},
+				},
+				"description": map[string]any{
+					"type":        "string",
+					"description": "Short description of what this program does.",
+				},
+				"tags": map[string]any{
+					"type":        "array",
+					"description": "Tags for search and categorization. Replaces the existing tags.",
+					"items":       map[string]any{"type": "string"},
+				},
+			},
+			"required": []any{"name"},
+		}
+	}
 
 	// Self-description: the generic worker.readme read capability, so peers, the
 	// WebUI and the worker itself can recall what this worker is for.
@@ -72,9 +104,9 @@ func (w *Worker) registerExtensions() {
 	})
 
 	w.Register(baseworker.Extension{
-		Event:       TypeLoad,
+		Event:       TypeRead,
 		Response:    map[string]any{"type": "string", "description": "the content body (frontmatter stripped)"},
-		Description: "Load a program's content by its path. '{program_name}' loads the program's entry content; '{program_name}/path/to/file.md' loads one of its sub-contents.",
+		Description: "Read a program's content by its path. '{program_name}' reads the program's entry content; '{program_name}/path/to/file.md' reads one of its sub-contents.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -87,7 +119,7 @@ func (w *Worker) registerExtensions() {
 		},
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		w.handleLoad(ctx, tc)
+		w.handleRead(ctx, tc)
 	})
 
 	w.Register(baseworker.Extension{
@@ -98,9 +130,9 @@ func (w *Worker) registerExtensions() {
 			"log_truncated": map[string]any{"type": "number", "description": "how many earlier log lines were dropped"},
 		}),
 		Description: "Run a fresh, stateless JAVASCRIPT snippet in a separate, short-lived subprocess and return its result. Two modes, exactly one: " +
-			"path = run a stored script program (path is its entry content, e.g. \"ptc-report\"; find candidates with program__search, read source with program__load), " +
+			"path = run a stored script program (path is its entry content, e.g. \"ptc-report\"; find candidates with program__search, read source with program__read), " +
 			"or source = run inline code (ad-hoc, nothing persisted). " +
-			"The only API you are given is `sdk`; reach the world through sdk.call. Sandbox contract — the script must not reach the host directly: " +
+			"The only API you are given is `sdk`; reach the world through sdk.call / sdk.message. Sandbox contract — the script must not reach the host directly: " +
 			"no imports of any kind (`import`, `export`, dynamic `import(...)`, `require`) — there is no module resolution and no package dependencies, only the JavaScript language builtins (JSON, Math, Date, Promise, …); " +
 			"no filesystem, process or network APIs (`fs` / `node:fs` / `fs/promises`, `child_process`, `process` env/argv/exit, `fetch` / `XMLHttpRequest` / sockets, `Deno` / `Bun` globals). " +
 			"Anything that needs files, a shell, environment variables or the network goes through another worker via sdk.call (e.g. the workspace worker's bash). " +
@@ -109,11 +141,13 @@ func (w *Worker) registerExtensions() {
 			"A TOOL-LEVEL failure is an ordinary result, not an exception (e.g. bash exiting 3 resolves to \"Exit code: 3\"), so parse the text instead of wrapping everything in try/catch; " +
 			"only a CAPABILITY-level failure rejects (unknown worker, request.failed / rejected). " +
 			"Calls run concurrently — `await Promise.all([...])` fans out; keep fan-out modest. " +
-			"(2) sdk.result(payload) sets the run output as the value it is (string, object, array …); the LAST call wins. " +
+			"(2) await sdk.message(target, text) leaves a note for another reasoning worker: a fire-and-forget worker.input (append mode), the same thing the message tool does outside a script. " +
+			"It resolves once the event is on the bus; nothing comes back from the target. Use it instead of sdk.call(target, \"worker.input\", …). " +
+			"(3) sdk.result(payload) sets the run output as the value it is (string, object, array …); the LAST call wins. " +
 			"A top-level `return payload` does the same and is used only when sdk.result was never called; with neither, the output is an empty string. " +
-			"(3) sdk.log(text) is echoed back to the caller AFTER the result under a \"--- script log ---\" header (last 100 lines / 8KB, older lines dropped) — use it for progress and diagnosis. " +
-			"(4) sdk.args is the run's args object (never undefined, defaults to {}); a stored script should read its inputs from it. " +
-			"Discovering peers: this worker's own tool list need not contain other workers' tools, so look them up with the directory worker (list_workers / get_worker_info) and call them from the script; " +
+			"(4) sdk.log(text) is echoed back to the caller AFTER the result under a \"--- script log ---\" header (last 100 lines / 8KB, older lines dropped) — use it for progress and diagnosis. " +
+			"(5) sdk.args is the run's args object (never undefined, defaults to {}); a stored script should read its inputs from it. " +
+			"Discovering peers: this worker's own tool list need not contain other workers' tools, so look them up with the directory worker (search / describe) and call them from the script; " +
 			"a target the directory does not know fails fast with \"unknown worker: <id>\" (the directory worker owns the roster; the program worker asks it). " +
 			"Timing and size: timeout_seconds (default 120) bounds the WHOLE run including every nested call; on expiry the sandbox is killed, in-flight requests are abandoned, and the log collected so far comes back with the error. " +
 			"Result text larger than 20KB is truncated to head + tail. " +
@@ -180,42 +214,29 @@ func (w *Worker) registerExtensions() {
 	})
 
 	w.Register(baseworker.Extension{
-		Event:       TypeUpsert,
-		Response:    baseworker.StringSchema("confirmation"),
-		Description: "Create a program, or update an existing one's metadata (content_type, description, tags). Omit a field to leave it as it is; only 'name' is required when updating. This never touches content — write content with the write tool, change it in place with edit. Cannot modify locked programs.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name": map[string]any{
-					"type":        "string",
-					"description": "Program name — also its root path, so load(\"<name>\") reads its entry content.",
-				},
-				"content_type": map[string]any{
-					"type":        "string",
-					"description": "Program type: 'instruction' or 'playbook'. Required when creating.",
-					"enum":        []string{"instruction", "playbook"},
-				},
-				"description": map[string]any{
-					"type":        "string",
-					"description": "Short description of what this program does.",
-				},
-				"tags": map[string]any{
-					"type":        "array",
-					"description": "Tags for search and categorization. Replaces the existing tags.",
-					"items":       map[string]any{"type": "string"},
-				},
-			},
-			"required": []any{"name"},
-		},
+		Event:       TypeTouch,
+		Response:    baseworker.StringSchema("confirmation naming the program, and whether it was created or already existed"),
+		Description: "Ensure a program exists, creating it if absent. Idempotent: an existing program (locked or not) is left untouched and the call still succeeds, so it is safe to call before write/edit without checking existence first. Creates metadata only — a new program starts with an empty body; put content in with write. content_type is required only when the program does not exist yet.",
+		Parameters:  metaParams("Program type: 'instruction' or 'playbook'. Required when the program does not exist yet."),
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
-		w.handleUpsert(ctx, tc)
+		w.handleTouch(ctx, tc)
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeUpdate,
+		Response:    baseworker.StringSchema("confirmation"),
+		Description: "Change an existing program's metadata (content_type, description, tags). The program must already exist — create it with touch. Only the fields you supply change and content is never touched (write replaces it, edit patches it). Cannot modify locked programs.",
+		Parameters:  metaParams("Program type: 'instruction' or 'playbook'. Leave empty to keep the current type."),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		w.handleUpdate(ctx, tc)
 	})
 
 	w.Register(baseworker.Extension{
 		Event:       TypeWrite,
 		Response:    baseworker.StringSchema("confirmation"),
-		Description: "Replace a program's content outright. '{program_name}' replaces the entry content; '{program_name}/rules/go.md' replaces a sub-content (creating the file if absent). The program must exist — create it with upsert first. For small in-place changes prefer edit. Cannot write to locked programs.",
+		Description: "Replace a program's content outright. '{program_name}' replaces the entry content; '{program_name}/rules/go.md' replaces a sub-content (creating the file if absent). The program must exist — create it with touch first. For small in-place changes prefer edit. Cannot write to locked programs.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -307,9 +328,9 @@ func (w *Worker) handleSearch(ctx context.Context, tc baseworker.ToolCall) {
 	log.Printf("[program] search query=%q ct=%q → %d results", query, ctStr, len(results))
 }
 
-// handleLoad handles the load tool call. It takes a single address:
+// handleRead handles the read tool call. It takes a single address:
 // "{name}" for a program's entry content, "{name}/path" for a sub-content.
-func (w *Worker) handleLoad(ctx context.Context, tc baseworker.ToolCall) {
+func (w *Worker) handleRead(ctx context.Context, tc baseworker.ToolCall) {
 	contentPath, _ := tc.Args["path"].(string)
 	if contentPath == "" {
 		w.ReplyFailed(tc.CallerID, tc.CallID, "path is required", tc.TraceID)
@@ -325,7 +346,7 @@ func (w *Worker) handleLoad(ctx context.Context, tc baseworker.ToolCall) {
 	}
 
 	w.ReplyCompleted(tc.CallerID, tc.CallID, raw, tc.TraceID)
-	log.Printf("[program] load %s → %d chars", contentPath, len(raw))
+	log.Printf("[program] read %s → %d chars", contentPath, len(raw))
 }
 
 // handleEdit handles the edit tool call.
@@ -361,54 +382,95 @@ func (w *Worker) handleEdit(ctx context.Context, tc baseworker.ToolCall) {
 	log.Printf("[program] edit %s", contentPath)
 }
 
-// handleUpsert handles the upsert tool call: it creates a Program, or updates
-// an existing one's metadata. Only the fields actually supplied are changed —
-// an omitted one keeps its current value. Content is deliberately out of
-// scope: it is written with the write tool and changed in place with edit.
+// handleTouch handles the touch tool call: ensure the program exists. An
+// existing program — locked or not — is left untouched and the call still
+// succeeds, which is what makes touch idempotent and safe to call before a
+// write/edit without a prior existence check. Content is out of scope: a newly
+// created program starts with an empty body, filled by write.
 //
-// Programs written through this tool are always unlocked. The Locked flag can
+// Programs created through this tool are always unlocked. The Locked flag can
 // only be set by writing to the backend directly — meta-extensions cannot
 // create locked programs.
-func (w *Worker) handleUpsert(ctx context.Context, tc baseworker.ToolCall) {
+func (w *Worker) handleTouch(ctx context.Context, tc baseworker.ToolCall) {
 	name, _ := tc.Args["name"].(string)
-	ctStr, _ := tc.Args["content_type"].(string)
-	desc, hasDesc := tc.Args["description"].(string)
-
-	var tags []string
-	hasTags := false
-	if tagsRaw, ok := tc.Args["tags"].([]any); ok {
-		hasTags = true
-		for _, t := range tagsRaw {
-			if s, ok := t.(string); ok {
-				tags = append(tags, s)
-			}
-		}
-	}
-
 	if name == "" {
 		w.ReplyFailed(tc.CallerID, tc.CallID, "name is required", tc.TraceID)
 		return
 	}
 
-	existing, findErr := w.programForPath(ctx, name)
-	if findErr == nil && existing.Locked {
+	if existing, err := w.programForPath(ctx, name); err == nil {
+		w.ReplyCompleted(tc.CallerID, tc.CallID,
+			fmt.Sprintf("program %q already exists", existing.Name), tc.TraceID)
+		return
+	}
+
+	p, err := programMetaFromArgs(name, nil, tc.Args, true)
+	if err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
+		return
+	}
+	// The backend stores the metadata however it likes; the worker knows
+	// nothing about frontmatter or file layout.
+	if err := w.backend.Upsert(ctx, p); err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("touch failed: %v", err), tc.TraceID)
+		return
+	}
+	w.ReplyCompleted(tc.CallerID, tc.CallID,
+		fmt.Sprintf("program %q created at %q", name, name), tc.TraceID)
+	log.Printf("[program] touch: created %s (%s)", name, p.ContentType)
+}
+
+// handleUpdate handles the update tool call: change an existing program's
+// metadata. The program must already exist — creating one is touch's job. Only
+// the fields actually supplied change; content is never touched (write
+// replaces it, edit patches it). Locked programs are refused.
+func (w *Worker) handleUpdate(ctx context.Context, tc baseworker.ToolCall) {
+	name, _ := tc.Args["name"].(string)
+	if name == "" {
+		w.ReplyFailed(tc.CallerID, tc.CallID, "name is required", tc.TraceID)
+		return
+	}
+
+	existing, err := w.programForPath(ctx, name)
+	if err != nil {
 		w.ReplyFailed(tc.CallerID, tc.CallID,
-			fmt.Sprintf("cannot modify locked program: %q", name), tc.TraceID)
+			fmt.Sprintf("program %q not found — create it with touch first", name), tc.TraceID)
 		return
 	}
-	creating := findErr != nil
+	if existing.Locked {
+		w.ReplyFailed(tc.CallerID, tc.CallID,
+			fmt.Sprintf("cannot modify locked program: %q", existing.Name), tc.TraceID)
+		return
+	}
 
+	p, err := programMetaFromArgs(name, &existing.Meta, tc.Args, false)
+	if err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
+		return
+	}
+	if err := w.backend.Upsert(ctx, p); err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("update failed: %v", err), tc.TraceID)
+		return
+	}
+	w.ReplyCompleted(tc.CallerID, tc.CallID,
+		fmt.Sprintf("program %q updated at %q", name, name), tc.TraceID)
+	log.Printf("[program] update: %s (%s)", name, p.ContentType)
+}
+
+// programMetaFromArgs builds the metadata half of a Program from tool args.
+// base is the stored meta when updating (nil when creating). A supplied field
+// overrides base and an omitted one keeps it, so an update touches only what
+// the caller sent. Content is never part of this — it belongs to write/edit.
+func programMetaFromArgs(name string, base *program.Meta, args map[string]any, creating bool) (*program.Program, error) {
+	ctStr, _ := args["content_type"].(string)
 	if ctStr == "" && creating {
-		w.ReplyFailed(tc.CallerID, tc.CallID, "content_type is required to create a program", tc.TraceID)
-		return
+		return nil, fmt.Errorf("content_type is required to create a program")
 	}
 
-	// Start from what is already stored so an update touches only the fields
-	// that were supplied.
 	p := &program.Program{Path: name}
 	p.Name = name
-	if !creating {
-		p.Meta = existing.Meta
+	if base != nil {
+		p.Meta = *base
 	}
 
 	switch ctStr {
@@ -418,34 +480,25 @@ func (w *Worker) handleUpsert(ctx context.Context, tc baseworker.ToolCall) {
 		p.ContentType = program.ContentTypePlaybook
 	case "": // leave as is
 	default:
-		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("invalid content_type: %s", ctStr), tc.TraceID)
-		return
+		return nil, fmt.Errorf("invalid content_type: %s", ctStr)
 	}
-	if hasDesc {
+	if desc, ok := args["description"].(string); ok {
 		p.Description = desc
 	}
-	if hasTags {
+	if tagsRaw, ok := args["tags"].([]any); ok {
+		tags := make([]string, 0, len(tagsRaw))
+		for _, t := range tagsRaw {
+			if s, ok := t.(string); ok {
+				tags = append(tags, s)
+			}
+		}
 		p.Tags = tags
 	}
-
-	// The backend stores the metadata however it likes; the worker knows
-	// nothing about frontmatter or file layout.
-	if err := w.backend.Upsert(ctx, p); err != nil {
-		w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("upsert failed: %v", err), tc.TraceID)
-		return
-	}
-
-	verb := "updated"
-	if creating {
-		verb = "created"
-	}
-	w.ReplyCompleted(tc.CallerID, tc.CallID,
-		fmt.Sprintf("program %q %s at %q", name, verb, name), tc.TraceID)
-	log.Printf("[program] upsert: %s (%s, %s)", name, p.ContentType, verb)
+	return p, nil
 }
 
 // handleWrite handles the write tool call: it replaces the content at a path
-// outright. Metadata is out of scope — that belongs to upsert.
+// outright. Metadata is out of scope — that belongs to touch / update.
 func (w *Worker) handleWrite(ctx context.Context, tc baseworker.ToolCall) {
 	contentPath, _ := tc.Args["path"].(string)
 	content, _ := tc.Args["content"].(string)
@@ -455,12 +508,12 @@ func (w *Worker) handleWrite(ctx context.Context, tc baseworker.ToolCall) {
 		return
 	}
 
-	// The program must already exist — creating one is upsert's job, since
+	// The program must already exist — creating one is touch's job, since
 	// it needs metadata.
 	prog, err := w.programForPath(ctx, contentPath)
 	if err != nil {
 		w.ReplyFailed(tc.CallerID, tc.CallID,
-			fmt.Sprintf("program %q not found — create it with upsert first", contentPath), tc.TraceID)
+			fmt.Sprintf("program %q not found — create it with touch first", contentPath), tc.TraceID)
 		return
 	}
 	if prog.Locked {

@@ -13,55 +13,56 @@ It differs from the generic reason worker in exactly two places.
 
 | Mode | Tool list | How tools are used |
 |---|---|---|
-| `normal` (default) | every discovered capability | like the generic reason worker |
-| `ptc` | **the directory worker's tools** (capability discovery) + **the program worker's tools** (capability invocation) + this worker's own `message` | discover peers' capabilities with **directory** directly, then execute via a script run with **`program.run`** |
+| `normal` (default) | the reason worker's tool list, unchanged: `message`, `request`, `run_program` | discover with `request(directory, "search")`, then call with `request(target, event, args)` |
+| `ptc` | `message` + `run_program` | discover **and** act from inside a script: `sdk.call("directory", "search", …)`, then `sdk.call(target, event, args)` |
 
-PTC exists to keep the tool list small and stable (better prompt-cache
-behaviour, less tool-list churn) while still reaching the whole bus. The split
-is deliberate: **discovery is the directory worker's job, invocation is the
-program worker's** — so both are exposed directly. Every other peer's tools are
-reached only from inside a script: the model writes one (`source` for a
-one-off, or `write` + run by `name` to reuse) and the script calls tools through
-`sdk.call(target, event, args)`. In PTC mode the worker seeds a **locked
-instruction program** (`coding-ptc-tooling`) that renders into the system prompt
-and explains this workflow.
+Normal mode does not widen the list because the worker writes code: a coding
+agent calls the bus exactly like any reason worker. The one coding-specific
+policy is PTC, which drops `request` so that **every** event send — discovery
+included — happens inside a script that `run_program` executes (`source` for a
+one-off, or `write` + run by path to reuse). No capability is lost, only the
+route: peer tools that normal mode would call directly become
+`sdk.call(target, event, args)` in the script. In PTC mode the worker seeds a
+**locked instruction program** (`coding-ptc-tooling`) that renders into the
+system prompt and explains this workflow.
 
-### Focus filter (both modes)
+### The policy is a scope, not an exclusion list
 
-A coding agent should not spend rounds on meta tools, so the tool-list policy
-always drops:
+Both modes are a `reasonBase.ToolScope`: which of the worker's own events become
+tools (`Own`), which peer worker types contribute their whole surface
+(`PeerTypes`), and which contribute only named events (`PeerEvents`). Nothing
+peer-supplied is exposed by default any more — discovery is a `request` away:
 
-- `context_compress` — compaction is automatic under budget pressure; the model
-  never needs to call it;
-- `program_query` / `program_update` — the coding agent's programs are fixed
-  at creation time, so it neither reads nor rewrites its own program list;
-- `provider_current` / `provider_list` / `provider_switch` — model management is
-  a control-plane action. These stay **registered** (peers / the WebUI can still
-  read and switch this worker's provider — the detail panel's provider switcher
-  works), they are only hidden from the agent's own tool list.
+| Mode | Scope |
+|---|---|
+| `normal` | `DefaultToolScope` — `Own: message, request, run_program` |
+| `ptc` | `Own: message, run_program` |
 
-In PTC mode it additionally drops the self **`request`** escape hatch, so peer
-calls must go through `program.run` rather than an ad-hoc event call. The
-agent-to-agent `message` channel stays.
+Two properties fall out of the model instead of out of a list to maintain:
 
-The policy lives in the injected `ToolListBuilder`:
+- **Meta events are never tools.** readme / readme.update / help describe a
+  worker rather than do work, so `ScopedToolListBuilder` drops them for every
+  source (`reasonBase.IsMetaCapability`). The coding agent's
+  `context.compress`, `program.*` and `provider.*` stay **registered** — peers,
+  the WebUI and the control plane still call them (the detail panel's provider
+  switcher works) — they simply are not in `Own`.
+- **PTC drops `request` by omission.** `message` and `run_program` are in `Own`,
+  `request` is not, so every capability call goes through a script rather than an
+  ad-hoc event send.
 
 ```go
-func toolListBuilder(mode, programID, directoryID string) reasonBase.ToolListBuilder {
+func toolListBuilder(mode string) reasonBase.ToolListBuilder {
     if mode != ToolModePTC {
-        return reasonBase.DefaultToolListBuilder
+        return reasonBase.ScopedToolListBuilder(reasonBase.DefaultToolScope)
     }
-    return func(w *reasonBase.BaseReasonWorker, caps []reasonBase.DiscoveredCapability) []llm.ToolDef {
-        keep := caps filtered to (Source == w.ID() || Source == programID || Source == directoryID)
-        return reasonBase.DefaultToolListBuilder(w, keep) // same naming + cache-stable sort
-    }
+    return reasonBase.ScopedToolListBuilder(ptcScope)
 }
 ```
 
-Every other peer capability is dropped, so the equivalent tools are absent from
-the LLM's own tool field — that is the point. `directory` is the exception that
-stays: capability discovery is a first-class step, not something to reach
-through a script.
+No peer capability is exposed in either mode, so the equivalent tools are absent
+from the LLM's own tool field — that is the point. Discovery is not an exception:
+`request(directory, "search")` in normal mode, `sdk.call("directory", "search", …)`
+in PTC, through the same built-in send either way.
 
 ## 2. Compaction keeps the coding working set
 

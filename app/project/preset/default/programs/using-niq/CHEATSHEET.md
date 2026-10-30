@@ -1,6 +1,6 @@
 # Using niq · cheatsheet
 
-> One page. Full guide: `program__load("using-niq")`.
+> One page. Full guide: `program__read("using-niq")`.
 
 ## Three concepts
 
@@ -14,8 +14,8 @@
 
 | Question | Tool |
 |---|---|
-| Who is here? | `directory__list_workers` / `directory__search_workers` |
-| What can it do? | `directory__get_worker_info` / `<worker>__worker_readme` |
+| Who is here? | `request(directory, "search")` (roster, or keyword with `query`) |
+| What can it do? | `request(directory, "describe", {worker})` / `request(<id>, "worker.readme")` |
 | How do I talk to it? | tool call / `request` / `message` |
 
 ## Three ways to communicate
@@ -23,13 +23,12 @@
 | Way | When |
 |---|---|
 | Tool call | the capability is already in your `tools` |
-| `request` | you know the worker + event, but it is not in your tools |
+| `request` | you know the worker + event — the normal way to call anything |
 | `message` | async note, or hand over work it should take at its own pace |
 
-Peer tools are `<worker>__<event>`, dots become underscores: `workspace__bash`,
-`program__load`, `timer__elapse`, `history__history_list`. Your own tools are
-unprefixed: `message`, `request`, `context_compress`, `context_rotate`,
-`program_query`, `program_update`, `worker_readme_update`.
+Your tools field holds only three built-in sends: `message`, `request`,
+`run_program`. Everything else — other workers' tools, the directory's lookups,
+your own meta events — is `request(target, event, arguments)` to the owning worker.
 
 ## Worker types
 
@@ -38,7 +37,7 @@ unprefixed: `message`, `request`, `context_compress`, `context_rotate`,
 | `reason`, `coding` | ✅ | reasoning, decisions, collaboration |
 | `workspace` | ❌ | file I/O, command execution |
 | `timer` | ❌ | scheduling, reminders, tool timeouts |
-| `program` | ❌ | program store: search / load / run / edit |
+| `program` | ❌ | program store: search / read / write / edit / run |
 | `host` | ❌ | worker lifecycle: spawn / suspend / resume |
 | `directory` | ❌ | the roster: list / search / capability info |
 | `history` | ❌ | past events from the persisted bus |
@@ -64,7 +63,7 @@ unprefixed: `message`, `request`, `context_compress`, `context_rotate`,
 Need reasoning                          → yourself
 Need files / commands                   → workspace
 Need scheduling / reminders             → timer
-Need programs (find / load / run)       → program
+Need programs (find / read / run)       → program
 Need to create / stop workers           → host
 Need to know who is here                → directory
 Need to recall what already happened    → history
@@ -87,7 +86,7 @@ Need the human                          → hiw / ask the user
 ## First run
 
 1. Read the instructions and the project context
-2. `directory__list_workers` + read the readmes of the workers your goal touches
+2. `request(directory, "search")` + read the readmes of the workers your goal touches
 3. Confirm goal and boundary with the user in one sentence
 4. Start from the smallest verifiable step
 5. Turn rules into programs; put data in the workspace

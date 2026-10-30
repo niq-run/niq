@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -107,8 +108,9 @@ func TestHistoryListFiltersAndTruncates(t *testing.T) {
 	w, ch := newTestWorker(t, s, 0, 200)
 
 	// Filter to worker "a" on the sent side, type filter, ascending.
+	// types takes a single string as well as an array (one parameter, not two).
 	invoke(w, TypeHistoryList, map[string]any{
-		"worker": "a", "role": "sent", "type": "bash", "desc": false,
+		"worker": "a", "role": "sent", "types": "bash", "desc": false,
 	})
 	res := listResult(t, ch)
 	list := res["events"].([]any)
@@ -120,18 +122,23 @@ func TestHistoryListFiltersAndTruncates(t *testing.T) {
 		t.Fatalf("expected e1, got %v", item["id"])
 	}
 
-	// The big payload must be truncated and flagged.
+	// The big payload is OMITTED, not half-cut: an unparseable JSON fragment
+	// would be useless to every caller. The preview is bounded, and the page-level
+	// flag says some payload was left out.
 	invoke(w, TypeHistoryList, map[string]any{"worker": "b"})
 	res = listResult(t, ch)
 	item = res["events"].([]any)[0].(map[string]any)
-	if item["payload_truncated"] != true {
-		t.Fatalf("expected large payload to be flagged truncated")
+	if item["payload_omitted"] != true {
+		t.Fatalf("expected large payload to be omitted")
 	}
-	if pl := item["payload"].(string); len(pl) > 300 { // 200 cap + marker
-		t.Fatalf("truncated payload too long: %d bytes", len(pl))
+	if _, has := item["payload"]; has {
+		t.Fatalf("an omitted payload must not be present: %v", item["payload"])
 	}
-	if res["truncated"] != true {
-		t.Fatalf("expected result.truncated=true")
+	if pv, _ := item["payload_preview"].(string); len(pv) > 300 { // 200 cap + marker
+		t.Fatalf("preview too long: %d bytes", len(pv))
+	}
+	if res["payload_omitted"] != true {
+		t.Fatalf("expected page-level payload_omitted=true")
 	}
 }
 
@@ -161,26 +168,34 @@ func TestHistoryListTypesFilterAndTruncationControl(t *testing.T) {
 		t.Fatalf("unexpected order/results: %v %v", list[0].(map[string]any)["id"], list[1].(map[string]any)["id"])
 	}
 
-	// max_bytes overrides the worker default: cap the thinking payload at 10.
+	// max_bytes is the per-item budget: over it the payload is omitted with a
+	// bounded preview.
 	invoke(w, TypeHistoryList, map[string]any{"worker": "a", "types": []string{"reason.thinking"}, "max_bytes": 10})
 	res = listResult(t, ch)
 	item := res["events"].([]any)[0].(map[string]any)
-	if item["payload_truncated"] != true {
-		t.Fatalf("expected truncation with max_bytes=10")
+	if item["payload_omitted"] != true {
+		t.Fatalf("expected the payload to be omitted with max_bytes=10")
 	}
-	if pl := item["payload"].(string); len(pl) > 50 { // 10 cap + marker
-		t.Fatalf("max_bytes=10 not respected: payload %d bytes", len(pl))
+	if _, has := item["payload"]; has {
+		t.Fatalf("omitted payload must not be present")
+	}
+	if pv, _ := item["payload_preview"].(string); len(pv) > 60 {
+		t.Fatalf("max_bytes=10 not respected: preview %d bytes", len(pv))
 	}
 
-	// truncate=false disables the cap entirely: full payload, no flag.
+	// truncate=false ignores the budget: the payload comes back as the object.
 	invoke(w, TypeHistoryList, map[string]any{"worker": "a", "types": []string{"reason.thinking"}, "truncate": false})
 	res = listResult(t, ch)
 	item = res["events"].([]any)[0].(map[string]any)
-	if item["payload_truncated"] != nil {
+	if item["payload_omitted"] != nil {
 		t.Fatalf("truncate=false must not flag payloads")
 	}
-	if pl := item["payload"].(string); len(pl) < 200 {
-		t.Fatalf("truncate=false should return the full payload; got %d bytes", len(pl))
+	payload, ok := item["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("truncate=false should return the payload object, got %T", item["payload"])
+	}
+	if content, _ := payload["content"].(string); len(content) < 300 {
+		t.Fatalf("truncate=false should return the full payload; got %d bytes", len(content))
 	}
 }
 
@@ -249,4 +264,141 @@ func TestHistoryGetUnknownFails(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected request.failed for unknown id")
+}
+
+// TestHistoryListPagination walks the whole history one page at a time in both
+// directions, using the cursor the reply hands back, and checks the pages
+// neither repeat nor skip events.
+func TestHistoryListPagination(t *testing.T) {
+	s := eventbus.NewMemoryEventStore()
+	var events []event.Event
+	for i := 0; i < 5; i++ {
+		events = append(events, event.Event{
+			ID: fmt.Sprintf("e%d", i), Type: "x", WorkerId: "a",
+			Timestamp: int64(100 + i), Payload: map[string]any{"i": i},
+		})
+	}
+	if err := s.Append(context.Background(), events...); err != nil {
+		t.Fatal(err)
+	}
+	w, ch := newTestWorker(t, s, 2, 200) // page size 2
+
+	walk := func(desc bool) (ids []string, cursors int) {
+		cursor, param := "", ""
+		for page := 0; page < 10; page++ {
+			args := map[string]any{"worker": "a", "desc": desc}
+			if cursor != "" {
+				args[param] = cursor
+			}
+			invoke(w, TypeHistoryList, args)
+			res := listResult(t, ch)
+			list, _ := res["events"].([]any)
+			if len(list) == 0 {
+				break
+			}
+			for _, item := range list {
+				ids = append(ids, item.(map[string]any)["id"].(string))
+			}
+			next, _ := res["next_cursor"].(string)
+			nextParam, _ := res["next_cursor_param"].(string)
+			if next == "" {
+				break
+			}
+			cursors++
+			cursor, param = next, nextParam
+		}
+		return ids, cursors
+	}
+
+	// Newest first: 2+2+1, walking backwards with "before".
+	desc, cursors := walk(true)
+	if got, want := strings.Join(desc, ","), "e4,e3,e2,e1,e0"; got != want {
+		t.Fatalf("desc pages = %s, want %s", got, want)
+	}
+	if cursors != 2 { // the last page is short, so no cursor
+		t.Fatalf("desc cursors = %d, want 2 full pages before the short one", cursors)
+	}
+
+	// Oldest first: the same walk forwards with "after".
+	asc, cursors := walk(false)
+	if got, want := strings.Join(asc, ","), "e0,e1,e2,e3,e4"; got != want {
+		t.Fatalf("asc pages = %s, want %s", got, want)
+	}
+	if cursors != 2 {
+		t.Fatalf("asc cursors = %d, want 2", cursors)
+	}
+
+	// A page that is not full carries no cursor at all (a bigger page size, so
+	// all five events fit).
+	big, bigCh := newTestWorker(t, s, 10, 200)
+	invoke(big, TypeHistoryList, map[string]any{"worker": "a"})
+	if cur, _ := listResult(t, bigCh)["next_cursor"].(string); cur != "" {
+		t.Fatalf("short page should not offer a cursor, got %q", cur)
+	}
+
+	// Explicit anchors: a window between two ids.
+	invoke(w, TypeHistoryList, map[string]any{"worker": "a", "after": "e1", "before": "e4", "desc": false})
+	res := listResult(t, ch)
+	var window []string
+	for _, item := range res["events"].([]any) {
+		window = append(window, item.(map[string]any)["id"].(string))
+	}
+	if got, want := strings.Join(window, ","), "e2,e3"; got != want {
+		t.Fatalf("window (e1, e4) = %s, want %s", got, want)
+	}
+}
+
+// TestHistoryListAndGetShareOneShape pins the fix for a caller-hostile
+// inconsistency: history.list and history.get return the same record — the same
+// field names, and payload as an OBJECT in both — so one piece of caller code
+// reads either reply. Envelope names (worker_id / timestamp / ...) never leak
+// out of get.
+func TestHistoryListAndGetShareOneShape(t *testing.T) {
+	s := eventbus.NewMemoryEventStore()
+	evt := event.Event{
+		ID: "e1", Type: "bash", WorkerId: "a", TargetWorkerID: "workspace",
+		Payload: map[string]any{"command": "ls"}, Timestamp: 100,
+		TraceID: "t1", RequestId: "r1", Recipients: []string{"x"},
+	}
+	if err := s.Append(context.Background(), evt); err != nil {
+		t.Fatal(err)
+	}
+	w, ch := newTestWorker(t, s, 0, 200)
+
+	invoke(w, TypeHistoryList, map[string]any{})
+	fromList := listResult(t, ch)["events"].([]any)[0].(map[string]any)
+
+	invoke(w, TypeHistoryGet, map[string]any{"id": "e1"})
+	var fromGet []map[string]any
+	if err := json.Unmarshal([]byte(lastResult(t, ch)), &fromGet); err != nil {
+		t.Fatalf("history.get not an array: %v", err)
+	}
+	if len(fromGet) != 1 {
+		t.Fatalf("history.get returned %d events", len(fromGet))
+	}
+
+	var listKeys, getKeys []string
+	for k := range fromList {
+		listKeys = append(listKeys, k)
+	}
+	for k := range fromGet[0] {
+		getKeys = append(getKeys, k)
+	}
+	sort.Strings(listKeys)
+	sort.Strings(getKeys)
+	if strings.Join(listKeys, ",") != strings.Join(getKeys, ",") {
+		t.Fatalf("field names differ — list: %v, get: %v", listKeys, getKeys)
+	}
+
+	for _, item := range []map[string]any{fromList, fromGet[0]} {
+		if _, ok := item["payload"].(map[string]any); !ok {
+			t.Fatalf("payload must be an object in both tools, got %T", item["payload"])
+		}
+	}
+
+	for _, envelope := range []string{"worker_id", "target_worker_id", "timestamp", "specversion", "status"} {
+		if _, ok := fromGet[0][envelope]; ok {
+			t.Fatalf("history.get leaked the envelope field %q", envelope)
+		}
+	}
 }

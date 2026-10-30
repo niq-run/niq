@@ -25,7 +25,7 @@ func (c *stubChannel) snapshot() []event.Event {
 }
 
 // serveDirectory stands in for the directory worker: it answers the program
-// worker's get_worker_info probes, reporting the ids in known as present and
+// worker's describe probes, reporting the ids in known as present and
 // everything else as absent (request.failed), exactly like the real one.
 func serveDirectory(t *testing.T, w *Worker, ch *stubChannel, known ...string) {
 	t.Helper()
@@ -44,7 +44,7 @@ func serveDirectory(t *testing.T, w *Worker, ch *stubChannel, known ...string) {
 			case <-time.After(2 * time.Millisecond):
 			}
 			for _, e := range ch.snapshot() {
-				if e.Type != directory.TypeGetWorkerInfo || e.RequestId == "" || seen[e.RequestId] {
+				if e.Type != directory.TypeDescribe || e.RequestId == "" || seen[e.RequestId] {
 					continue
 				}
 				seen[e.RequestId] = true
@@ -157,7 +157,7 @@ func (blockingSession) Cancel() {}
 
 type blockingExecutor struct{}
 
-func (blockingExecutor) Start(context.Context, string, map[string]any, program.ToolCaller) (program.ScriptSession, error) {
+func (blockingExecutor) Start(context.Context, string, map[string]any, program.ToolCaller, program.MessageSender) (program.ScriptSession, error) {
 	return blockingSession{}, nil
 }
 
@@ -247,7 +247,7 @@ func TestHandleRunTimesOut(t *testing.T) {
 	}, "timeout reply")
 }
 
-func (e *replayExecutor) Start(_ context.Context, src string, args map[string]any, call program.ToolCaller) (program.ScriptSession, error) {
+func (e *replayExecutor) Start(_ context.Context, src string, args map[string]any, call program.ToolCaller, msg program.MessageSender) (program.ScriptSession, error) {
 	if e.gotSrc != nil {
 		e.gotSrc <- src
 	}
@@ -333,7 +333,7 @@ func (s *scriptedSession) Cancel() {}
 
 type scriptedExecutor struct{ sess *scriptedSession }
 
-func (e scriptedExecutor) Start(context.Context, string, map[string]any, program.ToolCaller) (program.ScriptSession, error) {
+func (e scriptedExecutor) Start(context.Context, string, map[string]any, program.ToolCaller, program.MessageSender) (program.ScriptSession, error) {
 	e.sess.logs = make(chan string)
 	return e.sess, nil
 }

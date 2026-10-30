@@ -23,7 +23,9 @@ package baseworker
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/niq-run/niq/core/itfs/event"
@@ -166,12 +168,32 @@ func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 // replyNoHandler answers a request for an event this worker does not serve, so
 // the caller's pending call cannot hang on a silent drop. Only requests get a
 // reply — a notification (no request id) has nothing waiting on it.
+//
+// The reply names the worker and then lists what it DOES serve: "no handler for
+// event x" leaves the caller to guess whether the event name was wrong, the
+// worker was wrong, or the capability lives somewhere else. The list is the
+// caller-visible contract (Internal events only for the owner), so what it shows
+// is exactly what that caller may send.
 func (w *BaseWorker) replyNoHandler(evt event.Event) {
 	if evt.RequestId == "" || w.Channel == nil {
 		return
 	}
-	w.ReplyFailed(evt.WorkerId, evt.RequestId, "no handler for event "+string(evt.Type), evt.TraceID)
+	names := visibleEventNames(w.Extensions(), evt.WorkerId == w.id)
+	served := "(none)"
+	if len(names) > 0 {
+		if len(names) > maxServedEventsInError {
+			names = append(names[:maxServedEventsInError:maxServedEventsInError], "…")
+		}
+		served = strings.Join(names, ", ")
+	}
+	w.ReplyFailed(evt.WorkerId, evt.RequestId,
+		fmt.Sprintf("%s does not serve event %q; it serves: %s", w.id, evt.Type, served), evt.TraceID)
 }
+
+// maxServedEventsInError caps the event list in a "does not serve" reply: the
+// message is a pointer, not a catalogue (a ready-mode mcp worker can carry
+// dozens of tool events).
+const maxServedEventsInError = 10
 
 // Extensions returns a snapshot of the registered extensions. The
 // worker.ready announcement renderer and any lookup helpers read the registry

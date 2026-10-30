@@ -88,7 +88,7 @@ func New(opts Options) *Executor {
 
 // Start materializes the launcher, spawns it, and sends the run message. The
 // session owns the process; its Cancel kills it.
-func (e *Executor) Start(ctx context.Context, src string, args map[string]any, call program.ToolCaller) (program.ScriptSession, error) {
+func (e *Executor) Start(ctx context.Context, src string, args map[string]any, call program.ToolCaller, msg program.MessageSender) (program.ScriptSession, error) {
 	path, err := e.materialize()
 	if err != nil {
 		return nil, err
@@ -124,7 +124,7 @@ func (e *Executor) Start(ctx context.Context, src string, args map[string]any, c
 		ctx:      ctx,
 		launcher: path,
 	}
-	go s.readStdout(stdout, call)
+	go s.readStdout(stdout, call, msg)
 	go s.drainStderr(stderr)
 
 	if args == nil {
@@ -204,7 +204,7 @@ func (s *session) writeLine(v any) error {
 
 // readStdout consumes the launcher's protocol stream: log / call / result /
 // error. It finishes the session on a terminal message or EOF.
-func (s *session) readStdout(r io.Reader, call program.ToolCaller) {
+func (s *session) readStdout(r io.Reader, call program.ToolCaller, msg program.MessageSender) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for sc.Scan() {
@@ -220,6 +220,8 @@ func (s *session) readStdout(r io.Reader, call program.ToolCaller) {
 			}
 		case "call":
 			go s.handleCall(m, call)
+		case "message":
+			go s.handleMessage(m, msg)
 		case "result":
 			s.finish(m["value"], nil)
 			return
@@ -253,6 +255,21 @@ func (s *session) handleCall(m map[string]any, call program.ToolCaller) {
 		// The reply keeps its type on the wire: a string stays a string, a
 		// structured reply arrives in the script as an object/array.
 		resp["value"] = value
+	}
+	_ = s.writeLine(resp)
+}
+
+// handleMessage relays one SDK message() — a fire-and-forget note. The target
+// answers nothing, so only the local send is acknowledged; the script learns
+// whether the event reached the bus, not what the recipient did with it.
+func (s *session) handleMessage(m map[string]any, msg program.MessageSender) {
+	resp := map[string]any{"type": "message_result", "id": str(m["id"])}
+	if msg == nil {
+		resp["error"] = "message is not supported by this executor"
+	} else if err := msg(s.ctx, str(m["target"]), str(m["text"])); err != nil {
+		resp["error"] = err.Error()
+	} else {
+		resp["ok"] = true
 	}
 	_ = s.writeLine(resp)
 }

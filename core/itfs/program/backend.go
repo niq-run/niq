@@ -58,9 +58,9 @@ func (c composed) Edit(ctx context.Context, path, oldStr, newStr string) error {
 
 func (c composed) Remove(ctx context.Context, path string) error { return c.store.Remove(ctx, path) }
 
-func (c composed) Start(ctx context.Context, src string, args map[string]any, call ToolCaller) (ScriptSession, error) {
+func (c composed) Start(ctx context.Context, src string, args map[string]any, call ToolCaller, msg MessageSender) (ScriptSession, error) {
 	if c.executor == nil {
 		return nil, ErrNoExecutor
 	}
-	return c.executor.Start(ctx, src, args, call)
+	return c.executor.Start(ctx, src, args, call, msg)
 }

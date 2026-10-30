@@ -22,15 +22,20 @@ func TestExecutorRunsScriptUnderNode(t *testing.T) {
 	src := `
 		sdk.log("starting");
 		const r = await sdk.call("ws", "bash", { cmd: "ls" });
+		await sdk.message("peer", "hello");
 		sdk.result("got:" + r);
 	`
-	var gotTarget, gotEvent string
+	var gotTarget, gotEvent, gotMsgTarget, gotMsgText string
 	call := func(_ context.Context, target string, evt event.EventType, args map[string]any) (any, error) {
 		gotTarget, gotEvent = target, string(evt)
 		return "LS-OUT", nil
 	}
+	msg := func(_ context.Context, target, text string) error {
+		gotMsgTarget, gotMsgText = target, text
+		return nil
+	}
 
-	sess, err := ex.Start(context.Background(), src, map[string]any{"x": 1}, call)
+	sess, err := ex.Start(context.Background(), src, map[string]any{"x": 1}, call, msg)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -57,6 +62,9 @@ func TestExecutorRunsScriptUnderNode(t *testing.T) {
 	if gotTarget != "ws" || gotEvent != "bash" {
 		t.Fatalf("relayed call = %s/%s, want ws/bash", gotTarget, gotEvent)
 	}
+	if gotMsgTarget != "peer" || gotMsgText != "hello" {
+		t.Fatalf("relayed message = %s/%q, want peer/hello", gotMsgTarget, gotMsgText)
+	}
 }
 
 // TestExecutorSurfacesScriptError verifies a throwing script ends the session
@@ -67,7 +75,7 @@ func TestExecutorSurfacesScriptError(t *testing.T) {
 	}
 	ex := New(Options{Args: []string{"node"}})
 	sess, err := ex.Start(context.Background(), `throw new Error("boom");`, nil,
-		func(context.Context, string, event.EventType, map[string]any) (any, error) { return "", nil })
+		func(context.Context, string, event.EventType, map[string]any) (any, error) { return "", nil }, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -90,7 +98,7 @@ func TestExecutorReportsProtocolStreamError(t *testing.T) {
 	huge := "process.stdout.write('x'.repeat(9 * 1024 * 1024));"
 	ex := New(Options{Args: []string{"node"}, Launcher: []byte(huge + "\n")})
 	sess, err := ex.Start(context.Background(), `return 1`, nil,
-		func(context.Context, string, event.EventType, map[string]any) (any, error) { return "", nil })
+		func(context.Context, string, event.EventType, map[string]any) (any, error) { return "", nil }, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -117,7 +125,7 @@ func TestCallResultKeepsType(t *testing.T) {
 	}
 	ex := New(Options{Args: []string{"node"}})
 	src := `
-		const listing = await sdk.call("directory", "list_workers", {});
+		const listing = await sdk.call("directory", "search", {});
 		const text = await sdk.call("ws", "bash", { cmd: "ls" });
 		sdk.result([
 			typeof listing,
@@ -132,7 +140,7 @@ func TestCallResultKeepsType(t *testing.T) {
 		}
 		return "LS-OUT", nil
 	}
-	sess, err := ex.Start(context.Background(), src, nil, call)
+	sess, err := ex.Start(context.Background(), src, nil, call, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

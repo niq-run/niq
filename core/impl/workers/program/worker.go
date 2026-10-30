@@ -149,8 +149,10 @@ func (w *Worker) readmeText() string {
 		"script = JavaScript interpreted into tool calls). A script program is the " +
 		"script-form counterpart of a playbook.\n\n" +
 		"Tools:\n" +
-		"- search / load / write / edit / upsert / delete — manage Program content. " +
-		"load returns a program's entry content or a sub-content by path.\n" +
+		"- search / read / write / edit / touch / update / delete — manage Programs. " +
+		"read returns a program's entry content or a sub-content by path. touch " +
+		"creates a program if absent (idempotent); update changes metadata only; " +
+		"write replaces content and edit patches it.\n" +
 		"- run — execute a FormType:script program in a sandbox. Provide exactly one " +
 		"of path (a stored script program, reused; name still works) or source " +
 		"(inline JavaScript, ad-hoc); optional args (exposed to the script as " +
