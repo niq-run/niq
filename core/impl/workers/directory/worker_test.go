@@ -410,3 +410,31 @@ func TestUnknownWorkerMessageNamesASend(t *testing.T) {
 		t.Fatalf("message must not phrase an event as a worker: %q", msg)
 	}
 }
+
+// TestWorkerHelpServesGuides verifies the directory answers worker.help: a named
+// event returns its long-form guide, and no event_name returns the index of
+// everything it serves. Without this the prompt's "send worker.help for more
+// detail" step would dead-end on the very worker every discovery starts at.
+func TestWorkerHelpServesGuides(t *testing.T) {
+	ch := &stubChannel{}
+	w := New(Config{ID: "directory", Bus: ch})
+
+	invoke(w, event.TypeWorkerHelp, map[string]any{"event_name": "search"})
+	if got := ch.lastType(); got != event.TypeRequestCompleted {
+		t.Fatalf("search guide: reply = %s, want request.completed (%s)", got, ch.lastError())
+	}
+	if guide := ch.result(); !strings.Contains(guide, "roster") || !strings.Contains(guide, "exclude_types") {
+		t.Fatalf("search guide should explain both modes and the filters: %q", guide)
+	}
+
+	invoke(w, event.TypeWorkerHelp, map[string]any{"event_name": "describe"})
+	if guide := ch.result(); !strings.Contains(guide, "parameters") {
+		t.Fatalf("describe guide should explain the reply schema: %q", guide)
+	}
+
+	// No event_name: the index of everything this worker serves.
+	invoke(w, event.TypeWorkerHelp, map[string]any{})
+	if index := ch.result(); !strings.Contains(index, "search") || !strings.Contains(index, "describe") {
+		t.Fatalf("help index should list both events: %q", index)
+	}
+}

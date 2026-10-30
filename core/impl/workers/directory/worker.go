@@ -290,6 +290,8 @@ func (w *DirectoryWorker) registerExtensions() {
 		tc := baseworker.ParseToolCall(evt)
 		w.handleDescribe(evt, tc)
 	})
+
+	w.registerHelp()
 }
 
 // directoryReadme is the agent-facing usage guide returned by worker.readme.
