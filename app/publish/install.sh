@@ -4,7 +4,7 @@
 # verifies the binary runs.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/install.sh | sh
 #
 # Options (env vars):
 #   NIQ_INSTALL_DIR      target directory (default: ~/.niq/bin)
