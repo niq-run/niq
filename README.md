@@ -25,7 +25,7 @@ npm install -g @niq.run/niq
 **Install script** (installs to `~/.niq/bin`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/install.sh | sh
 ```
 
 **From source** (Go 1.25+):
