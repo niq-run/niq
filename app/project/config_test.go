@@ -3,8 +3,10 @@ package project
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	providerpkg "github.com/niq-run/niq/app/project/provider"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
@@ -189,6 +191,7 @@ func TestDeclFromSpawnCarriesMeta(t *testing.T) {
 		ID:          "oncall",
 		Type:        "reason",
 		Params:      map[string]any{"id": "oncall", "type": "reason"},
+		Label:       "值班机器人",
 		Tags:        []string{"work", "ops/backup"},
 		Description: "值班专用",
 	}
@@ -202,8 +205,11 @@ func TestDeclFromSpawnCarriesMeta(t *testing.T) {
 	if decl.Description != "值班专用" {
 		t.Fatalf("decl description = %q", decl.Description)
 	}
+	if decl.Label != "值班机器人" {
+		t.Fatalf("decl label = %q", decl.Label)
+	}
 	// Params stay verbatim (construction params only).
-	if decl.Params["tags"] != nil || decl.Params["description"] != nil {
+	if decl.Params["label"] != nil || decl.Params["tags"] != nil || decl.Params["description"] != nil {
 		t.Fatalf("display metadata leaked into params: %+v", decl.Params)
 	}
 }
@@ -261,5 +267,38 @@ func TestDefaultPresetShipsUsingNiqPlaybook(t *testing.T) {
 	raw, err := presetFS.ReadFile("preset/default/programs/using-niq/PROGRAM.md")
 	if err != nil || len(raw) == 0 {
 		t.Fatalf("embedded using-niq PROGRAM.md: %v", err)
+	}
+}
+
+// TestReasonFamilyRejectsUnknownProvider verifies a reason worker must name a
+// provider that exists in provider.json: there is no ad-hoc endpoint/credential
+// fallback any more, so a typo fails the spawn with a clear message instead of
+// silently building a provider nobody configured.
+func TestReasonFamilyRejectsUnknownProvider(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "provider.json")
+	t.Setenv("NIQ_PROVIDER_CONFIG", cfgPath)
+	if err := providerpkg.Write(&providerpkg.Config{Providers: []providerpkg.Entry{
+		{Name: "known", Type: "deepseek", APIKey: "k", Model: "m1"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := resolveReasonFamily(worker.WorkerConfig{
+		ID:     "r1",
+		Params: map[string]any{"provider": "typo-name", "model": "m1"},
+	}, "reason")
+	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("unknown provider: err = %v, want a 'not configured' error", err)
+	}
+
+	in, err := resolveReasonFamily(worker.WorkerConfig{
+		ID:     "r2",
+		Params: map[string]any{"provider": "known", "model": "m1"},
+	}, "reason")
+	if err != nil {
+		t.Fatalf("known provider rejected: %v", err)
+	}
+	if in.pname != "known" || in.pmodel != "m1" {
+		t.Fatalf("resolved %s/%s, want known/m1", in.pname, in.pmodel)
 	}
 }

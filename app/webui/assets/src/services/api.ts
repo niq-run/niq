@@ -350,14 +350,14 @@ export async function createWorker(body: Record<string, unknown>): Promise<Creat
   return res.json()
 }
 
-// updateWorkerMeta updates a worker's display metadata (tags / description),
-// persisted to its project.json declaration and reflected live in the UI (no
-// restart). Tags are sent as an array (empty = clear), description always sent.
-export async function updateWorkerMeta(id: string, tags: string[], description: string): Promise<void> {
+// updateWorkerMeta updates a worker's display metadata (label / tags /
+// description), persisted to its project.json declaration and reflected live in
+// the UI (no restart). Every field is sent, so an empty value clears it.
+export async function updateWorkerMeta(id: string, meta: { label: string; tags: string[]; description: string }): Promise<void> {
   const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/meta`), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tags, description }),
+    body: JSON.stringify(meta),
   })
   if (!res.ok) throw new Error((await res.text()).trim() || 'update metadata failed: ' + res.status)
 }
@@ -596,8 +596,11 @@ async function askWorker(
   const timeoutMs = opts.timeoutMs ?? 15000
   const intervalMs = opts.intervalMs ?? 250
   const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, intervalMs))
+  for (let first = true; Date.now() < deadline; first = false) {
+    // Look before waiting: a fast worker's reply is already persisted by the
+    // time sendWorkerEvent returns, and sleeping first adds that delay to
+    // every answer.
+    if (!first) await new Promise((r) => setTimeout(r, intervalMs))
     const evts = await fetchEventsByRequest(reqId).catch(() => [] as EventPayload[])
     const reply = evts.find(
       (e) => e.type === 'request.completed' || e.type === 'request.failed' || e.type === 'request.rejected',

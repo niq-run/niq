@@ -67,9 +67,6 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [readme, setReadme] = useState('')
   const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
-  // Provider override details (rare; leave empty to use the global provider.json).
-  const [apiKey, setApiKey] = useState('')
-  const [baseUrl, setBaseUrl] = useState('')
   // Spawn seeding: goal rides the system prompt (survives compaction), brief
   // lands as the transcript's first message (working material).
   const [goal, setGoal] = useState('')
@@ -97,6 +94,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [tokenTtl, setTokenTtl] = useState('')
   const [niwConfig, setNiwConfig] = useState('')
   const [niwRecipient, setNiwRecipient] = useState('')
+  const [workerLabel, setWorkerLabel] = useState('')
   const [tags, setTags] = useState('')
   const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
@@ -179,8 +177,10 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     // A remote (third-party) worker: host-managed=false, remote=true, and no
     // local command — the worker connects to the bus on its own.
     if (isRemote) body.remote = true
-    // Display metadata: slash-path tags (grouping) + purpose note. Applies to
-    // every worker kind, managed or external; carried in the declaration.
+    // Display metadata: label (the name shown instead of the id), slash-path
+    // tags (grouping) and a purpose note. Applies to every worker kind, managed
+    // or external; carried in the declaration.
+    if (workerLabel.trim()) body.label = workerLabel.trim()
     const tagList = tags.split(',').map(x => x.trim()).filter(Boolean)
     if (tagList.length > 0) body.tags = tagList
     if (description.trim()) body.description = description.trim()
@@ -189,8 +189,6 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         if (instruction.trim()) body.instruction = instruction.trim()
         if (provider.trim()) body.provider = provider.trim()
         if (model.trim()) body.model = model.trim()
-        if (apiKey.trim()) body.api_key = apiKey.trim()
-        if (baseUrl.trim()) body.base_url = baseUrl.trim()
         // Spawn seeding has no typed declaration field: it is a param
         // (context-builder: goal → system prompt, brief → first message).
         const params: Record<string, unknown> = {}
@@ -433,8 +431,13 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           <input style={input} value={id} onChange={e => setId(e.target.value)} placeholder="my-worker" />
         </div>
 
-        {/* Display metadata: slash-path tags group the worker in the target
-            picker; the description says what it is for. Applies to all kinds. */}
+        {/* Display metadata: the label is the name shown in place of the id,
+            slash-path tags group the worker in the target picker, and the
+            description says what it is for. Applies to all kinds. */}
+        <div style={field}>
+          <label style={label}>{t('workers.create.label')}</label>
+          <input style={input} value={workerLabel} onChange={e => setWorkerLabel(e.target.value)} placeholder={t('workers.create.label.placeholder')} />
+        </div>
         <div style={field}>
           <label style={label}>{t('workers.create.tags')}</label>
           <input style={input} value={tags} onChange={e => setTags(e.target.value)} placeholder="ops/backup, service/analytics" />
@@ -463,21 +466,11 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ ...field, flex: 1 }}>
                 <label style={label}>{t('workers.create.provider')}</label>
-                <input style={input} value={provider} onChange={e => setProvider(e.target.value)} />
+                <input style={input} value={provider} onChange={e => setProvider(e.target.value)} placeholder={t('workers.create.provider.placeholder')} />
               </div>
               <div style={{ ...field, flex: 1 }}>
                 <label style={label}>{t('workers.create.model')}</label>
                 <input style={input} value={model} onChange={e => setModel(e.target.value)} />
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={{ ...field, flex: 1 }}>
-                <label style={label}>{t('workers.create.baseUrl')}</label>
-                <input style={input} value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://…" />
-              </div>
-              <div style={{ ...field, flex: 1 }}>
-                <label style={label}>{t('workers.create.apiKey')}</label>
-                <input style={input} type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={t('workers.create.apiKeyPlaceholder')} />
               </div>
             </div>
 

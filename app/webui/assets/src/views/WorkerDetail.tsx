@@ -45,11 +45,12 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
     ? (declStopped ? t('worker.stopped') : suspended ? t('worker.suspended') : t('worker.running'))
     : '\u2014'
   const typeColor = worker.type ? getWorkerTypeColor(worker.type, colors) : colors.textDimmed
-  // Display metadata (tags / description) inline editing.
+  // Display metadata (label / tags / description) inline editing.
   const [editingMeta, setEditingMeta] = useState(false)
   const [metaNote, setMetaNote] = useState('')
   // Tabs: Info / Readme / Send Event / Permissions.
   const [tab, setTab] = useState<WorkerDetailTab>(initialTab ?? 'info')
+  const [draftLabel, setDraftLabel] = useState('')
   const [draftTags, setDraftTags] = useState('')
   const [draftDesc, setDraftDesc] = useState('')
   const [draftParams, setDraftParams] = useState('')
@@ -95,7 +96,8 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
     }
   }
 
-  // Save edits to a worker's declaration: display metadata (tags / description),
+  // Save edits to a worker's declaration: display metadata (label / tags /
+  // description),
   // which the running worker ignores, and construction params, which apply on
   // the next restart. onRefresh reloads the worker list so the UI reflects the
   // change immediately.
@@ -118,7 +120,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
       params = parsed as Record<string, unknown>
     }
     try {
-      await updateWorkerMeta(worker.id, tags, draftDesc.trim())
+      await updateWorkerMeta(worker.id, { label: draftLabel.trim(), tags, description: draftDesc.trim() })
       await updateWorkerParams(worker.id, params)
       setEditingMeta(false)
       setParamsSaved(t('wd.params.saved'))
@@ -213,7 +215,10 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
           padding: '12px 14px 8px',
         }}
       >
-        <span style={{ color: colors.text, fontSize: fontSizes.md }}>{worker.id}</span>
+        <span style={{ color: colors.text, fontSize: fontSizes.md }}>{worker.label || worker.id}</span>
+        {worker.label && (
+          <span style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{worker.id}</span>
+        )}
         {worker.type && <span style={tag}>{worker.type}</span>}
         <span
           onClick={onClose}
@@ -267,7 +272,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
               {/* Edit toggles an inline editor for tags / description / params.
                   Opening it hydrates the drafts from the current values. */}
               <span
-                onClick={() => { if (!editingMeta) { setDraftTags((worker.tags || []).join(', ')); setDraftDesc(worker.description || ''); setDraftParams(JSON.stringify(worker.params ?? {}, null, 2)); setMetaNote(''); setParamsSaved('') } setEditingMeta(v => !v) }}
+                onClick={() => { if (!editingMeta) { setDraftLabel(worker.label || ''); setDraftTags((worker.tags || []).join(', ')); setDraftDesc(worker.description || ''); setDraftParams(JSON.stringify(worker.params ?? {}, null, 2)); setMetaNote(''); setParamsSaved('') } setEditingMeta(v => !v) }}
                 className="btn-hover"
                 style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, marginLeft: 'auto', userSelect: 'none' }}
               >
@@ -276,6 +281,16 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
             </div>
             {editingMeta ? (
               <div style={{ maxWidth: 520 }}>
+                <div style={{ marginBottom: 8 }}>
+                  <label style={{ display: 'block', fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 3 }}>{t('wd.label')}</label>
+                  <input
+                    value={draftLabel}
+                    onChange={e => setDraftLabel(e.target.value)}
+                    placeholder={t('wd.label.placeholder')}
+                    style={{ width: '100%', boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', color: colors.text, fontSize: fontSizes.sm, outline: 'none' }}
+                  />
+                  <div style={{ fontSize: fontSizes.xs, color: colors.detailLabel, marginTop: 3, lineHeight: 1.4 }}>{t('wd.label.hint')}</div>
+                </div>
                 <div style={{ marginBottom: 8 }}>
                   <label style={{ display: 'block', fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 3 }}>{t('wd.meta.tags')}</label>
                   <input
@@ -313,6 +328,9 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {worker.label && (
+                  <DetailRow label={t('wd.label')} value={worker.label} colors={colors} />
+                )}
                 <DetailRow label={t('wd.id')} value={worker.id} colors={colors} />
                 <DetailRow label={t('wd.type')} value={worker.type || '(none)'} colors={colors} />
                 {(worker.tags && worker.tags.length > 0) && (
@@ -598,7 +616,9 @@ function ReadmeSection({ workerId, supported }: { workerId: string; supported: b
         const reqId = await sendWorkerEvent(workerId, 'worker.readme', {})
         if (!reqId) throw new Error('no request id')
         for (let i = 0; i < 20 && !cancelled; i++) {
-          await new Promise((r) => setTimeout(r, 250))
+          // Look before waiting: the reply is normally persisted by the time
+          // the send returns.
+          if (i > 0) await new Promise((r) => setTimeout(r, 150))
           const evts = await fetchEventsByRequest(reqId).catch(() => [] as EventPayload[])
           const reply = evts.find((e) =>
             e.type === 'request.completed' || e.type === 'request.failed' || e.type === 'request.rejected')

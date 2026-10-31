@@ -1037,10 +1037,11 @@ func sanitizeFileName(name string) string {
 	return out
 }
 
-// WorkerMeta is the display metadata (tags, description) of a worker
+// WorkerMeta is the display metadata (label, tags, description) of a worker
 // declaration. It is injected by the assembly layer from project.json and
 // merged into WorkerView for the UI.
 type WorkerMeta struct {
+	Label       string   `json:"label,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Description string   `json:"description,omitempty"`
 }
@@ -1120,6 +1121,7 @@ func (s *Server) workerMetaFor(id string) WorkerMeta {
 type WorkerView struct {
 	ID             string                 `json:"id"`
 	Type           string                 `json:"type"`
+	Label          string                 `json:"label,omitempty"`
 	Tags           []string               `json:"tags,omitempty"`
 	Description    string                 `json:"description,omitempty"`
 	Params         map[string]any         `json:"params,omitempty"`
@@ -1169,7 +1171,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 			PublishAllow: id.PublishAllow, SubscribeAllow: id.SubscribeAllow,
 			Online: online[id.WorkerID]}
 		meta := s.workerMetaFor(id.WorkerID)
-		v.Tags, v.Description = meta.Tags, meta.Description
+		v.Label, v.Tags, v.Description = meta.Label, meta.Tags, meta.Description
 		v.Params = params[id.WorkerID]
 		if state, ok := managed[id.WorkerID]; ok {
 			v.Managed = true
@@ -1192,7 +1194,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 			meta := s.workerMetaFor(wi.ID)
 			views = append(views, WorkerView{
 				ID: wi.ID, Type: wi.Type, Managed: true, State: string(wi.State), Online: online[wi.ID],
-				Tags: meta.Tags, Description: meta.Description, Params: params[wi.ID],
+				Label: meta.Label, Tags: meta.Tags, Description: meta.Description, Params: params[wi.ID],
 			})
 		}
 	}
@@ -1212,13 +1214,13 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 			}
 			views = append(views, WorkerView{
 				ID: st.ID, Type: st.Type, Managed: true, State: "stopped",
-				Tags: meta.Tags, Description: meta.Description, Params: params[st.ID],
+				Label: meta.Label, Tags: meta.Tags, Description: meta.Description, Params: params[st.ID],
 			})
 			continue
 		}
 		views = append(views, WorkerView{
 			ID: st.ID, Type: st.Type, Unmanaged: true, UnmanagedState: st.State, Remote: st.Remote,
-			Tags: meta.Tags, Description: meta.Description, Params: params[st.ID],
+			Label: meta.Label, Tags: meta.Tags, Description: meta.Description, Params: params[st.ID],
 		})
 	}
 
@@ -1759,6 +1761,7 @@ func (s *Server) handleUpdateWorkerMeta(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var in struct {
+		Label       string   `json:"label"`
 		Tags        []string `json:"tags"`
 		Description string   `json:"description"`
 	}
@@ -1766,7 +1769,7 @@ func (s *Server) handleUpdateWorkerMeta(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	meta := WorkerMeta{Tags: in.Tags, Description: in.Description}
+	meta := WorkerMeta{Label: in.Label, Tags: in.Tags, Description: in.Description}
 	if err := s.metaUpdater.UpdateWorkerMeta(id, meta); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

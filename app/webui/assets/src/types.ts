@@ -54,8 +54,10 @@ export interface WorkerInfo {
   // unmanaged start/stop. Shown for the connect configuration to copy.
   remote?: boolean
   // Display metadata from the worker declaration: tags form a slash-path
-  // hierarchy used to group workers in the target picker, and description
-  // is a short purpose note shown as a dimmed second line.
+  // hierarchy used to group workers in the target picker, description is a
+  // short purpose note shown as a dimmed second line, and label is the
+  // display name the UI shows in place of the id when set.
+  label?: string
   tags?: string[]
   description?: string
   // Declared construction params (project.json `params`), shown in the Info tab.

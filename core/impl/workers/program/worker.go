@@ -249,9 +249,7 @@ func (w *Worker) watch(ctx context.Context, busCh <-chan event.Event) {
 func (w *Worker) process(ctx context.Context, evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
-		if evt.WorkerId != w.ID() {
-			w.AnnounceReadyTo(evt.WorkerId, "program", nil, false)
-		}
+		w.AnswerDiscover(evt, "program", nil, false)
 	case event.TypeRequestCompleted, event.TypeRequestFailed, event.TypeRequestRejected:
 		// A reply is never a request, so it is never answered. resolveReply
 		// consumes the ones that belong to a script call still waiting on its

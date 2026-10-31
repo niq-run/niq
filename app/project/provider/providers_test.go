@@ -142,3 +142,33 @@ func TestModelsForPropagatesInputTypes(t *testing.T) {
 		t.Errorf("details[2].InputTypes = %v, want empty (unknown)", got)
 	}
 }
+
+// TestInitialProviderInfoNamesOnly verifies a worker selects its provider by
+// NAME and its model by name: no endpoint or credential is involved, an empty
+// model falls back to the entry's default, and an unknown name resolves to
+// nothing (the builder rejects it before a worker exists).
+func TestInitialProviderInfoNamesOnly(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "provider.json")
+	t.Setenv("NIQ_PROVIDER_CONFIG", cfgPath)
+	if err := Write(&Config{Active: "a", Providers: []Entry{
+		{Name: "a", Type: "deepseek", APIKey: "k1", Model: "m1"},
+		{Name: "b", Type: "openai-compatible", BaseURL: "https://b.example", APIKey: "k2", Model: "m2"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct{ provider, model, wantName, wantModel string }{
+		{"b", "m2", "b", "m2"}, // explicit pair
+		{"b", "", "b", "m2"},   // name only: the entry's default model
+		{"", "m1", "a", "m1"},  // model only: config's active provider
+		{"", "", "a", "m1"},    // nothing: config default
+		{"gone", "m1", "", ""}, // unknown name resolves to nothing
+	}
+	for _, c := range cases {
+		gotName, gotModel := InitialProviderInfo(c.provider, c.model)
+		if gotName != c.wantName || gotModel != c.wantModel {
+			t.Fatalf("InitialProviderInfo(%q,%q) = %q/%q, want %q/%q",
+				c.provider, c.model, gotName, gotModel, c.wantName, c.wantModel)
+		}
+	}
+}

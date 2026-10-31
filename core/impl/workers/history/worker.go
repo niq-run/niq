@@ -151,9 +151,7 @@ func (w *Worker) process(ctx context.Context, evt event.Event) {
 		// A discoverer asked who the fleet is — answer it directly, not by a
 		// broadcast re-announce (a discover storm would otherwise fan O(N²)
 		// ready broadcasts across every online worker).
-		if evt.WorkerId != w.ID() {
-			w.AnnounceReadyTo(evt.WorkerId, "history", nil, false)
-		}
+		w.AnswerDiscover(evt, "history", nil, false)
 	default:
 		if !w.DispatchExtension(evt) {
 			log.Printf("[history %s] no extension for event %s", w.ID(), evt.Type)

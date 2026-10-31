@@ -1,9 +1,10 @@
 // Project → template export: build a TemplateConfig from a project's declared
 // workers, so a project can serve as a clone source just like another template.
 // Declarations carry their config (typed fields and/or a raw params map); a
-// worker's runtime state stays behind. Secrets (the reason worker's api_key, an
-// unmanaged worker's bus credential) never enter the template, and params the
-// template schema cannot express are dropped.
+// worker's runtime state stays behind. Secrets (an unmanaged worker's bus
+// credential) never enter the template; a reason worker names its provider
+// instead of carrying endpoint credentials, so nothing secret is expressible.
+// Params the template schema cannot express are dropped.
 package project
 
 import (

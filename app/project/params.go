@@ -18,14 +18,12 @@ import (
 // map. Both workerConfigParams (typed → params) and workerConfigFromParams
 // (params → typed) drive off it. The omitempty tags mirror the forward
 // direction's "only carry non-empty fields" rule: marshaling a paramsShape
-// yields exactly the map workerConfigParams is defined to build. The api_key
-// field is deliberately excluded from the reverse path (see
-// workerConfigFromParams): secrets never survive an export.
+// yields exactly the map workerConfigParams is defined to build. A worker does
+// not carry its own endpoint credentials: the provider referenced by name owns
+// them (see provider.json), so nothing secret can leak through this shape.
 type paramsShape struct {
 	Instruction   string             `json:"instruction,omitempty"`
 	Provider      string             `json:"provider,omitempty"`
-	APIKey        string             `json:"api_key,omitempty"`
-	BaseURL       string             `json:"base_url,omitempty"`
 	Model         string             `json:"model,omitempty"`
 	Subscriptions []SubscriptionSpec `json:"subscriptions,omitempty"`
 	Publish       []PublishSpec      `json:"publish,omitempty"`
@@ -38,9 +36,8 @@ type paramsShape struct {
 // persisted params (goal/brief/programs/context tuning — spawn-tool extras)
 // has no template field and is dropped on export with a log line.
 var exportableParams = map[string]bool{
-	"instruction": true, "provider": true, "api_key": true, "base_url": true,
-	"model": true, "subscriptions": true, "publish": true, "mounts": true,
-	"approver": true,
+	"instruction": true, "provider": true, "model": true,
+	"subscriptions": true, "publish": true, "mounts": true, "approver": true,
 }
 
 // workerConfigParams converts a WorkerConfig into the Params map consumed by
@@ -51,8 +48,6 @@ func workerConfigParams(wc WorkerConfig) map[string]any {
 	shape := paramsShape{
 		Instruction:   wc.Instruction,
 		Provider:      wc.Provider,
-		APIKey:        wc.APIKey,
-		BaseURL:       wc.BaseURL,
 		Model:         wc.Model,
 		Subscriptions: wc.Subscriptions,
 		Publish:       wc.Publish,
@@ -97,14 +92,14 @@ func spawnConfig(wc WorkerConfig) worker.WorkerConfig {
 // is carried on typed fields for the WebUI selector/filter.
 func declFromSpawn(cfg worker.WorkerConfig) WorkerConfig {
 	return WorkerConfig{Type: cfg.Type, ID: cfg.ID, Params: cfg.Params,
-		Tags: cfg.Tags, Description: cfg.Description}
+		Label: cfg.Label, Tags: cfg.Tags, Description: cfg.Description}
 }
 
 // workerConfigFromParams converts a declared worker's effective params back
 // into the template WorkerConfig it was seeded from. The params map travels
 // through JSON (not hand-parsed) so the subscription/publish entries reuse
-// their own unmarshalers. The api_key is deliberately not carried over; with
-// withProgram the programs param is lifted into the Programs field.
+// their own unmarshalers. With withProgram the programs param is lifted into
+// the Programs field.
 func workerConfigFromParams(cfg worker.WorkerConfig, withProgram bool) (WorkerConfig, error) {
 	raw, err := json.Marshal(cfg.Params)
 	if err != nil {
@@ -135,7 +130,6 @@ func workerConfigFromParams(cfg worker.WorkerConfig, withProgram bool) (WorkerCo
 		ID:            cfg.ID,
 		Instruction:   shape.Instruction,
 		Provider:      shape.Provider,
-		BaseURL:       shape.BaseURL,
 		Model:         shape.Model,
 		Subscriptions: shape.Subscriptions,
 		Publish:       shape.Publish,

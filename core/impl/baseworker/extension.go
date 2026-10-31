@@ -287,6 +287,31 @@ func (w *BaseWorker) AnnounceReady(workerType string, publishes []map[string]any
 	_ = w.Channel.Broadcast(context.Background(), presence)
 }
 
+// AnswerDiscover replies to a worker.discover with this worker's contract,
+// addressed to the asker. A discover is a question ("who is here?"), so the
+// answer goes to the asker alone: a broadcast re-announce would fan O(N²)
+// ready events across the fleet.
+//
+// The discover a worker broadcasts itself comes back to it (a broadcast
+// reaches the sender too, unless it excluded itself), and that self-echo is
+// not answered — the worker knows its own contract. A discover DIRECTED at
+// this worker is always answered, even when the sender is this worker
+// itself: the WebUI drives the bus through HIW's identity, so its ask about
+// HIW arrives carrying HIW's own id.
+//
+// includeInternal mirrors WatchEntries: false sends the peer-facing contract
+// (Internal left out, for replying to a peer discover); true sends the full
+// contract including Internal (for a worker learning its own capabilities).
+func (w *BaseWorker) AnswerDiscover(evt event.Event, workerType string, publishes []map[string]any, includeInternal bool) {
+	if evt.WorkerId == "" {
+		return // nobody to answer
+	}
+	if evt.TargetWorkerID == "" && evt.WorkerId == w.ID() {
+		return // our own broadcast, echoed back
+	}
+	w.AnnounceReadyTo(evt.WorkerId, workerType, publishes, includeInternal)
+}
+
 // AnnounceReadyTo sends this worker's presence (worker.ready) directly to a
 // single target, instead of broadcasting it. It is the reply to a
 // worker.discover: the discoverer asked who the fleet is, so each responder

@@ -39,67 +39,71 @@ func EnsureLLMConfigured(cfgs []worker.WorkerConfig) error {
 	return fmt.Errorf("no LLM provider configured: edit %s and re-run", Path())
 }
 
-// providerSources exposes every provider configured in provider.json. The
-// initial provider honors any explicit spawn-time selection (the legacy
-// provider/api_key/base_url/model params) and otherwise falls back to the
-// config's active/first provider.
+// providerSources exposes every provider configured in provider.json and
+// resolves the initially active one. A worker's spawn-time choice is a NAME
+// from that file plus one of its models — never a bare endpoint or key: the
+// entry owns the credentials, so rotating them is one edit in one place.
 type providerSources struct {
-	// force is the explicit spawn-time selection, if any. nil selects the
-	// config default.
-	force *forcedProvider
+	// name is the spawn-time provider selection ("" = the config default).
+	name string
+	// model is the spawn-time model selection ("" = the provider's default).
+	model string
 }
 
-type forcedProvider struct {
-	provider string
-	apiKey   string
-	baseURL  string
-	model    string
-}
-
-// NewProviderSources returns a reason.ProviderSources backed by
-// provider.json. An all-empty selection picks the config default; any non-empty
-// spawn-time argument (provider name/type, api_key, base_url, model) forces a
-// specific initial provider.
-func NewProviderSources(provider, apiKey, baseURL, model string) reason.ProviderSources {
-	f := &forcedProvider{provider: provider, apiKey: apiKey, baseURL: baseURL, model: model}
-	if provider == "" && apiKey == "" && baseURL == "" && model == "" {
-		return &providerSources{force: nil}
-	}
-	return &providerSources{force: f}
+// NewProviderSources returns a reason.ProviderSources backed by provider.json.
+// An empty name picks the config default (active/first); an empty model picks
+// the resolved provider's default model.
+func NewProviderSources(name, model string) reason.ProviderSources {
+	return &providerSources{name: name, model: model}
 }
 
 // InitialProviderInfo resolves the initially active provider's name and model,
-// mirroring NewProviderSources' forced-vs-default selection, so the
-// reason worker can report its current choice via worker.status.
-func InitialProviderInfo(provider, apiKey, baseURL, model string) (string, string) {
-	if provider != "" || apiKey != "" || baseURL != "" || model != "" {
-		if model == "" && provider != "" {
-			if p, ok := Find(provider); ok {
-				model = p.ResolveDefaultModel()
-			}
+// mirroring NewProviderSources' selection, so the reason worker can report its
+// current choice via worker.status. An unknown name resolves to ("", "") —
+// the builder rejects it before a worker is ever constructed.
+func InitialProviderInfo(name, model string) (string, string) {
+	if name != "" {
+		p, ok := Find(name)
+		if !ok {
+			return "", ""
 		}
-		return provider, model
-	}
-	if p, ok := Default(); ok {
-		return p.Name, p.ResolveDefaultModel()
-	}
-	return "", ""
-}
-
-// Default returns the initially active provider: the explicit spawn-time
-// selection when given, otherwise the config's active (or first) provider.
-func (s *providerSources) Default() llm.LLMProvider {
-	if s.force != nil {
-		return providerFromArgs(s.force.provider, s.force.apiKey, s.force.baseURL, s.force.model)
+		if model == "" {
+			model = p.ResolveDefaultModel()
+		}
+		return p.Name, model
 	}
 	p, ok := Default()
 	if !ok {
-		log.Printf("[project] provider sources: no default provider configured (provider.json missing or empty)")
+		return "", ""
+	}
+	if model == "" {
+		model = p.ResolveDefaultModel()
+	}
+	return p.Name, model
+}
+
+// Default returns the initially active provider: the spawn-time selection when
+// given, otherwise the config's active (or first) provider.
+func (s *providerSources) Default() llm.LLMProvider {
+	p, ok := s.initial()
+	if !ok {
+		log.Printf("[project] provider sources: no provider %q (provider.json missing or empty)", s.name)
 		return nil
+	}
+	if s.model != "" {
+		p.Model = s.model
 	}
 	log.Printf("[project] resolved default provider: name=%s type=%s model=%s base_url=%s",
 		p.Name, p.Type, p.ResolveDefaultModel(), p.BaseURL)
 	return Build(p)
+}
+
+// initial returns the configured entry the worker starts on.
+func (s *providerSources) initial() (Entry, bool) {
+	if s.name != "" {
+		return Find(s.name)
+	}
+	return Default()
 }
 
 // Build constructs a provider bound to name and an explicit model (empty uses
@@ -119,7 +123,8 @@ func (s *providerSources) Build(name, model string) (llm.LLMProvider, error) {
 	}
 	log.Printf("[project] building provider: name=%s type=%s model=%s base_url=%s",
 		name, p.Type, effModel, p.BaseURL)
-	return BuildWithOverrides(p, "", "", model), nil
+	p.Model = effModel
+	return Build(p), nil
 }
 
 // List enumerates every configured provider and its models. A provider with a
@@ -202,34 +207,4 @@ func (s *providerSources) modelsFor(p Entry) []llm.ModelInfo {
 		details = append(details, m)
 	}
 	return details
-}
-
-// providerFromArgs builds a provider from raw spawn-time args, without reading
-// provider.json: a name/type first resolves to a configured provider (by name,
-// then by type) whose values are overridden by any explicit args; otherwise the
-// args are treated as an ad-hoc provider definition.
-func providerFromArgs(provider, apiKey, baseURL, model string) llm.LLMProvider {
-	if provider != "" {
-		if p, ok := Find(provider); ok {
-			return BuildWithOverrides(p, apiKey, baseURL, model)
-		}
-		if p, ok := FindByType(provider); ok {
-			return BuildWithOverrides(p, apiKey, baseURL, model)
-		}
-		return Build(Entry{
-			Type:    provider,
-			APIKey:  apiKey,
-			BaseURL: baseURL,
-			Model:   model,
-		})
-	}
-	if p, ok := Default(); ok {
-		return BuildWithOverrides(p, apiKey, baseURL, model)
-	}
-	return Build(Entry{
-		Type:    "deepseek",
-		APIKey:  apiKey,
-		BaseURL: baseURL,
-		Model:   model,
-	})
 }

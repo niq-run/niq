@@ -8,6 +8,7 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/workerhost"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
 
@@ -21,6 +22,14 @@ func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService, strin
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
+	return newTestEngineWith(t, dir, registry)
+}
+
+// newTestEngineWith is newTestEngine over a caller-supplied registry, so a test
+// can pre-seed persisted identities (an upgrade from an older contract).
+func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegistry) (BuildContext, *workerhost.WorkerService, string) {
+	t.Helper()
+
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
 	listener := inprocess.NewInProcListener()
 	ctx, cancel := context.WithCancel(context.Background())

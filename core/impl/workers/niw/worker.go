@@ -388,9 +388,7 @@ func (w *Worker) watchLocal(ctx context.Context, localCh <-chan event.Event) {
 			case event.TypeWorkerDiscover:
 				// A local directory asks who is here: answer directly with this
 				// worker's contract, so the roster/search sees us.
-				if evt.WorkerId != "" && evt.WorkerId != w.ID() {
-					w.AnnounceReadyTo(evt.WorkerId, "niw", nil, true)
-				}
+				w.AnswerDiscover(evt, "niw", nil, true)
 			default:
 				if !w.DispatchExtension(evt) {
 					log.Printf("[niw %s] no handler for local event %s", w.ID(), evt.Type)

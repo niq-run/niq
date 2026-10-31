@@ -6,13 +6,15 @@ import { useTheme, fontSizes, VIEW_HEADER_HEIGHT } from '../theme'
 // the logo area's bottom edge.
 // ViewHeader is the shared page header for the main-area views: fixed height,
 // text vertically centered, bottom border on the logo line, unified title
-// size (talk header size + 2). `right` holds the row's action pills.
-export default function ViewHeader({ title, count, right }: { title: string; count?: number; right?: ReactNode }) {
+// size (talk header size + 2). `after` renders immediately right of the title
+// (a status pill), `right` holds the row's action pills at the far edge.
+export default function ViewHeader({ title, count, after, right }: { title: string; count?: number; after?: ReactNode; right?: ReactNode }) {
   const { colors, inverted } = useTheme()
   return (
     <div style={{ height: VIEW_HEADER_HEIGHT, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 24px', borderBottom: '1px solid ' + (inverted ? colors.accent : colors.border), fontSize: fontSizes.xl + 2, color: colors.text }}>
       <strong style={{ fontWeight: 600 }}>{title}</strong>
       {count !== undefined && <span style={{ color: colors.textMuted, fontSize: fontSizes.md }}>({count})</span>}
+      {after}
       <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>{right}</span>
     </div>
   )

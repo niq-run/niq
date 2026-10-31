@@ -117,10 +117,21 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if !hasRequestID {
-		_, err = s.db.Exec(`ALTER TABLE events ADD COLUMN request_id TEXT`)
-		return err
+		if _, err = s.db.Exec(`ALTER TABLE events ADD COLUMN request_id TEXT`); err != nil {
+			return err
+		}
 	}
-	return nil
+
+	// Request → reply pairing: the WebUI asks a worker a question and polls
+	// "all events carrying this request_id" until request.completed lands.
+	// Without this index that query has no equality column to seek on, so it
+	// walks every row — and cannot stop early, since a LIMIT counts matches and
+	// there are only one or two. On a 1.2M-row store every poll took ~2s, which
+	// the UI showed as a reply that "arrived late" long after the worker had
+	// already answered. Created after the column exists: an old store gains it
+	// by the ALTER above, and indexing it before that fails.
+	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_events_request_id ON events(request_id)`)
+	return err
 }
 
 // backfillRecipients copies the recipients JSON of every existing event into

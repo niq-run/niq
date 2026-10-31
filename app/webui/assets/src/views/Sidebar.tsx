@@ -7,6 +7,8 @@ import WorkerRowMenu from '../components/WorkerRowMenu'
 import ContextMenuSurface from '../components/ContextMenuSurface'
 import PinMark from '../components/PinMark'
 import { contextMenuElementStyle } from '../hooks/useContextMenu'
+import { updateWorkerMeta } from '../services/api'
+import type { NotifyPermission } from '../hooks/useApprovalNotifications'
 import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned, moveWorkerOrder } from '../pinnedWorkers'
 import pinSvg from '../assets/pin.svg'
 import pinwSvg from '../assets/pinw.svg'
@@ -45,6 +47,12 @@ interface SidebarProps {
   onNavigate: () => void
   // Pending approval requests (HIW-tracked) — shown as a nav badge.
   pendingApprovals?: number
+  // Browser notifications for approval requests: the browser's permission
+  // state, whether the user has the feature on, and the toggle that asks
+  // for permission (a browser only grants it from a user gesture).
+  notifyPermission?: NotifyPermission
+  notifyOn?: boolean
+  onToggleNotify?: () => void
   // Right-click "mention" action for a talk-partner worker: prefixes the
   // talk input with an @mention for that worker (let handleMention do it).
   onMention?: (id: string) => void
@@ -52,6 +60,9 @@ interface SidebarProps {
   // Open a worker's detail panel, optionally landing on a tab (the row menu's
   // Readme entry deep links that way).
   onOpenDetail?: (id: string, tab?: WorkerDetailTab) => void
+  // Reload the worker list after a display-metadata edit (the row menu's
+  // rename), so the new label shows without waiting for the next poll.
+  onRefreshWorkers?: () => void
 }
 
 // Sidebar resize: the draggable width range, persisted in localStorage.
@@ -63,7 +74,7 @@ function loadSidebarWidth(): number {
   return Math.min(Math.max(v, MIN_SIDEBAR_WIDTH), Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.5))
 }
 
-export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, onClearWorkers, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, onMention, onOpenDetail }: SidebarProps) {
+export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, onClearWorkers, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, notifyPermission = 'unsupported', notifyOn = false, onToggleNotify, onMention, onOpenDetail, onRefreshWorkers }: SidebarProps) {
   const { dark, toggle, colors, inverted, toggleInverted } = useTheme()
   const { lang, setLang, t } = useI18n()
   // Hovered sidebar option (non-toggle, non-checkbox rows) — shows a full-width
@@ -128,6 +139,81 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     const w = workers.find(x => x.id === rowMenu.id)
     return !!w && isTalkPartnerType(w.type)
   })()
+  // Inline rename: the row label turns into an input. The edit is display
+  // metadata only (the id stays the identity), so it is saved to the worker's
+  // declaration and the list is refreshed — nothing touches the running worker.
+  const [renaming, setRenaming] = useState<{ id: string; value: string; busy: boolean; error: string } | null>(null)
+  const renamingRef = useRef(false)
+  const startRename = (id: string) => {
+    const w = workers.find(x => x.id === id)
+    setRenaming({ id, value: w?.label ?? '', busy: false, error: '' })
+  }
+  const commitRename = async () => {
+    const r = renaming
+    if (!r || r.busy) return
+    renamingRef.current = true
+    const w = workers.find(x => x.id === r.id)
+    setRenaming({ ...r, busy: true, error: '' })
+    try {
+      await updateWorkerMeta(r.id, { label: r.value.trim(), tags: w?.tags ?? [], description: w?.description ?? '' })
+      setRenaming(null)
+      onRefreshWorkers?.()
+    } catch (e) {
+      setRenaming({ ...r, busy: false, error: (e as Error)?.message || 'rename failed' })
+    } finally {
+      renamingRef.current = false
+    }
+  }
+  // The name a row shows: the label when the declaration has one, else the id.
+  const displayName = (w: WorkerInfo) => (w.label && w.label.trim()) || w.id
+  // One row's name slot: the display name, or the inline rename input while
+  // this worker is being renamed (Enter saves, Escape/blur cancels).
+  const nameNode = (w: WorkerInfo, isActive: boolean) => {
+    if (renaming?.id === w.id) {
+      return (
+        <input
+          autoFocus
+          value={renaming.value}
+          placeholder={w.id}
+          title={renaming.error || t('sidebar.rename.hint')}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onChange={(e) => setRenaming({ ...renaming, value: e.target.value, error: '' })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); void commitRename() }
+            if (e.key === 'Escape') { e.preventDefault(); setRenaming(null) }
+          }}
+          onBlur={() => { if (!renamingRef.current) setRenaming(null) }}
+          style={{
+            minWidth: 0, flexShrink: 1, width: 90, outline: 'none',
+            background: colors.bg, color: colors.text, fontSize: optSize, lineHeight: optLine,
+            border: '1px solid ' + (renaming.error ? colors.toolFailed : colors.accentBorder),
+            borderRadius: 3, padding: '0 4px',
+          }}
+        />
+      )
+    }
+    const label = (w.label || '').trim()
+    return (
+      <span
+        title={label ? `${label} · ${w.id}` : w.id}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          color: isActive ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine,
+          flexShrink: 1, minWidth: 0, transition: 'color 0.12s',
+        }}
+      >
+        {/* The label truncates; the id never does (it is the identity an event
+            or an @mention uses, so it must stay readable). */}
+        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
+          {label || w.id}
+        </span>
+        {label && (
+          <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, flexShrink: 0 }}>{w.id}</span>
+        )}
+      </span>
+    )
+  }
   // Left-clicking the logo swaps the wordmark for the current project name
   // (and back), cross-faded. The pin still toggles the palette.
   const [projectLogo, setProjectLogo] = useState(false)
@@ -177,7 +263,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       onClick={() => { setView(v); onNavigate() }}
       onMouseEnter={() => setHoverId('view:' + v)}
       onMouseLeave={() => setHoverId(null)}
-      style={{ ...hoverStyle('view:' + v), cursor: 'pointer', color: view === v ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
+      style={{ ...hoverStyle('view:' + v), cursor: 'pointer', color: view === v ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
     >
       <span style={{ flex: 1 }}>{VIEW_LABELS[v]}{view === v ? ' \u25C9' : ''}</span>
       {v === 'approvals' && pendingApprovals > 0 && (
@@ -376,6 +462,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     w.online !== false && (
       q === '' ||
       w.id.toLowerCase().includes(q) ||
+      (w.label || '').toLowerCase().includes(q) ||
       (w.type || '').toLowerCase().includes(q) ||
       (w.description || '').toLowerCase().includes(q) ||
       (w.tags || []).some(tag => tag.toLowerCase().includes(q))
@@ -714,7 +801,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                     onClick={() => setShowWorkerPicker(true)}
                     title={t('sidebar.workerSelector.expand')}
                     className="btn-hover"
-                    style={{ flex: '0 0 auto', cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 8px' }}
+                    style={{ flex: '0 0 auto', cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', color: colors.textMuted, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 8px' }}
                   >
                     {t('sidebar.workerSelector.expandShort')}
                   </span>
@@ -726,7 +813,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                       onClick={onClearWorkers}
                       title={t('sidebar.workerSelector.clearFilter')}
                       className="btn-hover"
-                      style={{ flex: '0 0 auto', cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 8px' }}
+                      style={{ flex: '0 0 auto', cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', whiteSpace: 'nowrap', color: colors.textMuted, border: '1px solid ' + colors.border, borderRadius: 3, fontSize: optSize, lineHeight: optLine, padding: '3px 8px' }}
                     >
                       {t('sidebar.workerSelector.viewAll')}
                     </span>
@@ -762,12 +849,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                   style={rowStyleWithDrop(workerRowStyle('worker:' + w.id), w.id)}
                 >
                   <CheckBox active={isActive} accent={colors.accent} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
-                  <span
-                    title={w.id}
-                    style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
-                  >
-                    {w.id}
-                  </span>
+                  {nameNode(w, isActive)}
                   {onOpenDetail && hoverId === 'worker:' + w.id && (
                     <ReadmeIcon colors={colors} label={t('badge.menu.readme')} onClick={() => onOpenDetail(w.id, 'readme')} />
                   )}
@@ -789,12 +871,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 <CheckBox active={isActive} accent={colors.accent} border={colors.border} size={checkSize} style={{ marginTop: 2 }} />
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: 12, flex: 1, minWidth: 0 }}>
                   <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4, flexShrink: 1, minWidth: 0 }}>
-                    <span
-                      title={w.id}
-                      style={{ color: isActive ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flexShrink: 1, minWidth: 0, transition: 'color 0.12s' }}
-                    >
-                      {w.id}
-                    </span>
+                    {nameNode(w, isActive)}
                     {onOpenDetail && hoverId === 'worker:' + w.id && (
                       <ReadmeIcon colors={colors} label={t('badge.menu.readme')} onClick={() => onOpenDetail(w.id, 'readme')} />
                     )}
@@ -848,7 +925,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         onClick={() => { onSelectPanel('projects'); onNavigate() }}
         onMouseEnter={() => setHoverId('projects')}
         onMouseLeave={() => setHoverId(null)}
-        style={{ ...hoverStyle('projects'), cursor: 'pointer', color: panel === 'projects' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
+        style={{ ...hoverStyle('projects'), cursor: 'pointer', color: panel === 'projects' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
       >
         {t('sidebar.projects')}{panel === 'projects' ? ' \u25C9' : ''}
       </div>
@@ -856,7 +933,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         onClick={() => { onSelectPanel('templates'); onNavigate() }}
         onMouseEnter={() => setHoverId('templates')}
         onMouseLeave={() => setHoverId(null)}
-        style={{ ...hoverStyle('templates'), cursor: 'pointer', color: panel === 'templates' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
+        style={{ ...hoverStyle('templates'), cursor: 'pointer', color: panel === 'templates' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
       >
         {t('sidebar.templates')}{panel === 'templates' ? ' \u25C9' : ''}
       </div>
@@ -864,7 +941,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         onClick={() => { onSelectPanel('providers'); onNavigate() }}
         onMouseEnter={() => setHoverId('providers')}
         onMouseLeave={() => setHoverId(null)}
-        style={{ ...hoverStyle('providers'), cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textDim, fontSize: optSize, lineHeight: optLine }}
+        style={{ ...hoverStyle('providers'), cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
       >
         {t('sidebar.providers')}{panel === 'providers' ? ' \u25C9' : ''}
       </div>
@@ -900,7 +977,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 // Border appears on hover / while the menu is open; it is laid
                 // out transparently otherwise so nothing shifts.
                 border: '1px solid ' + (projBlockHover || projMenuOpen ? colors.border : 'transparent'),
-                color: colors.textDim, fontSize: fontSizes.sm + 1,
+                color: colors.textMuted, fontSize: fontSizes.sm + 1,
                 cursor: 'pointer', userSelect: 'none',
                 // While the menu is open the block fuses with it: same panel
                 // background — the block's own top border becomes the separator
@@ -938,7 +1015,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 }}
               >
                 {projBusy ? (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, color: colors.textDim, padding: '3px 8px' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: fontSizes.sm, color: colors.textMuted, padding: '3px 8px' }}>
                     <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
                     {projBusy === 'stop' ? t('projects.stopping') : t('projects.restarting')}
                   </span>
@@ -969,16 +1046,47 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             )}
           </div>
         )}
+        {/* Approval notifications: a bell that turns the browser
+            notifications on. Clicking it asks the browser for permission
+            (only a user gesture can), and once granted the bell switches
+            the feature on/off. */}
+        {notifyPermission !== 'unsupported' && (
+          <span
+            onClick={onToggleNotify}
+            title={notifyPermission === 'denied'
+              ? t('sidebar.notify.denied')
+              : notifyOn ? t('sidebar.notify.off') : t('sidebar.notify.on')}
+            className="btn-hover"
+            style={{
+              cursor: notifyPermission === 'denied' ? 'default' : 'pointer',
+              display: 'inline-flex', alignItems: 'center',
+              color: notifyPermission === 'denied' ? colors.textDimmed : notifyOn ? colors.accent : colors.textMuted,
+              fontSize: fontSizes.sm + 1, userSelect: 'none',
+            }}
+          >
+            {/* Drawn bell — the glyph is not reliably present in the mono
+                font, and the codebase draws its icons. */}
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              {/* Dome over a flared body. */}
+              <path
+                d="M7 1.5A3.2 3.2 0 0 0 3.8 4.7v1.8L2.3 9.3h9.4l-1.5-2.8V4.7A3.2 3.2 0 0 0 7 1.5Z"
+                stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"
+              />
+              {/* Clapper. */}
+              <path d="M5.9 10.9a1.1 1.1 0 0 0 2.2 0" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
+          </span>
+        )}
         <div
           onClick={toggle}
-          style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm + 1 }}
+          style={{ cursor: 'pointer', color: colors.textMuted, fontSize: fontSizes.sm + 1 }}
         >
           {dark ? t('theme.light') : t('theme.dark')}
         </div>
         <div
           onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
           title={t('sidebar.lang.tooltip')}
-          style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm + 1, userSelect: 'none' }}
+          style={{ cursor: 'pointer', color: colors.textMuted, fontSize: fontSizes.sm + 1, userSelect: 'none' }}
         >
           {lang === 'en' ? t('lang.zh') : t('lang.en')}
         </div>
@@ -1014,6 +1122,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           onMention={() => onMention?.(rowMenu.id)}
           onDetail={onOpenDetail ? () => onOpenDetail(rowMenu.id) : undefined}
           onReadme={onOpenDetail ? () => onOpenDetail(rowMenu.id, 'readme') : undefined}
+          onRename={() => startRename(rowMenu.id)}
           onTogglePin={() => togglePinned(rowMenu.id)}
           onToggleSleep={() => toggleSlept(rowMenu.id)}
           onClose={() => setRowMenu(null)}
@@ -1051,7 +1160,7 @@ function ReadmeIcon({ colors, label, onClick }: { colors: Palette; label: string
       onMouseDown={(e) => e.stopPropagation()}
       style={{
         width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
-        border: '1px solid ' + colors.border, color: colors.textDim,
+        border: '1px solid ' + colors.border, color: colors.textMuted,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         fontSize: 10, fontStyle: 'italic', fontWeight: 600, lineHeight: 1,
         cursor: 'pointer', userSelect: 'none',
@@ -1111,7 +1220,7 @@ function CheckBox({ active, accent, border, size = 13, style }: { active: boolea
 function ToggleRow({ label, on, onToggle, colors, dark, mobile = false, size = fontSizes.sm }: { label: string; on: boolean; onToggle: () => void; colors: Palette; dark: boolean; mobile?: boolean; size?: number }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: mobile ? 14 : 8, padding: mobile ? '4px 0' : undefined }}>
-      <span style={{ color: colors.textDim, fontSize: size }}>{label}</span>
+      <span style={{ color: colors.textMuted, fontSize: size }}>{label}</span>
       <div
         onClick={onToggle}
         style={{

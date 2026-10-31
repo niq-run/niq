@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/niq-run/niq/core/itfs/event"
@@ -180,5 +181,42 @@ func TestMigrateAddsRequestIDColumn(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].RequestId != "call-456" {
 		t.Fatalf("after migrate got %+v, want 1 event with request_id call-456", list)
+	}
+}
+
+// TestRequestIDLookupUsesIndex guards the by-request poll the WebUI runs after
+// every manually sent event: it must seek on request_id, not scan. Without the
+// index a 1.2M-row store answered each poll in ~2s, so a reply that had already
+// been persisted looked seconds late.
+func TestRequestIDLookupUsesIndex(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer s.Close()
+
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN
+		SELECT id, type FROM events WHERE 1=1 AND request_id = ?
+		ORDER BY timestamp DESC, id DESC`, "req-1")
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	defer rows.Close()
+
+	var plan []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan plan: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("plan rows: %v", err)
+	}
+	joined := strings.Join(plan, "\n")
+	if !strings.Contains(joined, "idx_events_request_id") {
+		t.Fatalf("request_id lookup does not use its index:\n%s", joined)
 	}
 }

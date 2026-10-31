@@ -45,9 +45,7 @@ func (w *BaseReasonWorker) process(_ context.Context, evt event.Event) {
 		// complete answer at O(N) per discover — and the startup broadcast still
 		// discloses this worker to whoever is up, so nothing is lost. Replying
 		// to our own discover is pointless (we know ourselves).
-		if evt.WorkerId != w.ID() {
-			w.AnnounceReadyTo(evt.WorkerId, "reason", nil, false)
-		}
+		w.AnswerDiscover(evt, "reason", nil, false)
 	case evt.Type == event.TypeWorkerAbort:
 		w.handleAbort(evt)
 	case evt.Type == TypeTimerTimeout:

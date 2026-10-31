@@ -26,6 +26,8 @@ interface TalkViewProps {
   deliveries: Record<string, string[]>
   humanId?: string
   workerTypes?: Record<string, string>
+  // Declared display names (备注名): shown in place of a worker id when set.
+  workerLabels?: Record<string, string>
   thinkingExpanded: boolean
   compactMode: boolean
   streamingMode: boolean
@@ -36,6 +38,11 @@ interface TalkViewProps {
   // Inline quick-approve for approval.request cards: forwards the human's
   // verdict to the HIW (App wires it to the decisions API).
   onDecide?: (id: string, approved: boolean, note?: string) => void
+  // Pending approval requests, shown as a floating banner under the header so
+  // the human notices them while reading the conversation. onOpenApprovals
+  // switches to the approvals view.
+  pendingApprovals?: number
+  onOpenApprovals?: () => void
   // Bumped by App each time the user sends a message. Sending is a strong
   // "return to the live bottom" signal: even if the user had scrolled up to
   // read, we re-engage the follow and scroll to the newest content.
@@ -46,7 +53,7 @@ interface TalkViewProps {
   onFollowChange?: (following: boolean) => void
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, onAddFilter, onFocusWorker, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, onAddFilter, onFocusWorker, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange, workerLabels, pendingApprovals = 0, onOpenApprovals }: TalkViewProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   // Bubbles fill the whole column on phones: a 90% cap plus the scroll area's
@@ -69,8 +76,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // with its own worker id, so marking the channel tells the reader which
   // door the message came through.
   const displayName = useCallback(
-    (wid?: string) => (wid && wid === humanId ? `${t('talk.you')}[webui]` : wid ?? ''),
-    [humanId, t],
+    (wid?: string) => {
+      if (!wid) return ''
+      if (wid === humanId) return `${t('talk.you')}[webui]`
+      return workerLabels?.[wid] || wid
+    },
+    [humanId, t, workerLabels],
   )
   // Direction of the worker identity in a block title. Left-aligned blocks
   // read from the reason worker's side ("to X" = it sends, "from: X" =
@@ -215,12 +226,35 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     scrollToEvent,
   ])
 
+  // Approval status pill, rendered in the header right after the title (no
+  // shadow — the header row is flat like the rest of the chrome). Clicking it
+  // opens the approvals view.
+  const approvalPill = pendingApprovals > 0 && onOpenApprovals ? (
+    <span
+      onClick={onOpenApprovals}
+      className="btn-hover fade-in"
+      role="button"
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
+        padding: '1px 8px', borderRadius: 0, lineHeight: '18px',
+        background: colors.accentBg, border: '1px solid ' + colors.accentBorder,
+        fontSize: fontSizes.sm, fontWeight: 400,
+      }}
+    >
+      <span style={{ width: 6, height: 6, background: colors.accent, flexShrink: 0 }} />
+      <span style={{ color: colors.text }}>{t('talk.approvalBanner', { n: pendingApprovals })}</span>
+      <span style={{ color: colors.accent }}>{t('talk.approvalBanner.action')}</span>
+    </span>
+  ) : null
+
   // Header: always visible, not in scroll area — shown even when empty. On
   // mobile the app-level top bar (hamburger + view label) already heads the
   // page, so this in-view header is skipped to avoid a double header.
   const header = !isMobile ? (
     <ViewHeader
       title={t('nav.talk')}
+      after={approvalPill}
       right={
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 4, fontSize: fontSizes.sm, color: colors.textMuted }}>
           {t('talk.watching')}
@@ -253,8 +287,10 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return (
       <>
         {header}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: colors.textDimmed }}>
-          <p style={{ fontSize: fontSizes.md }}>{t('talk.empty', { label })}</p>
+        <div style={{ flex: 1, position: 'relative', display: 'flex', minHeight: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: colors.textDimmed }}>
+            <p style={{ fontSize: fontSizes.md }}>{t('talk.empty', { label })}</p>
+          </div>
         </div>
       </>
     )

@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -60,6 +61,10 @@ func (w *HostWorker) registerExtensions() {
 				"type":        "string",
 				"description": "Optional short note explaining what this worker is for. Display metadata only.",
 			},
+			"label": map[string]any{
+				"type":        "string",
+				"description": "Optional display name (备注名) shown in the WebUI in place of the worker id. Display metadata only; the id stays the identity on the bus.",
+			},
 			"collaborators": map[string]any{
 				"type":        "array",
 				"description": "When type=reason/coding: the reason workers this one may collaborate with. Omitted means every reason worker is visible; when given it is an allowlist (empty = none). An out-of-scope reason peer is invisible to this worker and cannot be messaged or called; capability workers are unaffected.",
@@ -116,6 +121,25 @@ func (w *HostWorker) reply(evt event.Event, toolName string, result any, err err
 
 // handleSpawn forwards the spawn request to the WorkerService, which
 // dispatches to the registered builder for the requested type.
+// liftDisplayMeta strips the display-only spawn arguments (label / tags /
+// description) out of the construction params and returns them, so builders
+// never see them. They travel on typed fields and land in the project.json
+// declaration for the WebUI selector/filter; the params map is mutated in place
+// and keeps every type-specific key.
+func liftDisplayMeta(args map[string]any) (label string, tags []string, desc string) {
+	label = strings.TrimSpace(baseworker.ArgString(args, "label"))
+	tags = baseworker.ArgStrings(args, "tags")
+	desc = baseworker.ArgString(args, "description")
+	delete(args, "label")
+	if tags != nil {
+		delete(args, "tags")
+	}
+	if desc != "" {
+		delete(args, "description")
+	}
+	return label, tags, desc
+}
+
 func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 	typ := baseworker.ArgString(tc.Args, "type")
 	if typ == "" {
@@ -123,20 +147,8 @@ func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 	}
 	id := baseworker.ArgString(tc.Args, "id")
 
-	// Lift display metadata (tags / description) out of the construction
-	// params so builders never see them: they travel on typed fields and land
-	// in the project.json declaration for the WebUI selector/filter.
-	tags := baseworker.ArgStrings(tc.Args, "tags")
-	desc := baseworker.ArgString(tc.Args, "description")
-	params := tc.Args
-	if tags != nil {
-		delete(params, "tags")
-	}
-	if desc != "" {
-		delete(params, "description")
-	}
-
-	cfg := worker.WorkerConfig{ID: id, Type: typ, Params: params, Tags: tags, Description: desc}
+	label, tags, desc := liftDisplayMeta(tc.Args)
+	cfg := worker.WorkerConfig{ID: id, Type: typ, Params: tc.Args, Label: label, Tags: tags, Description: desc}
 	if err := w.engine.CreateWorker(context.Background(), cfg); err != nil {
 		return "", err
 	}

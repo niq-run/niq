@@ -173,3 +173,24 @@ func TestReplyIsNeverAnswered(t *testing.T) {
 		t.Fatalf("request.cancel should still be answered with request.failed, got %+v", ch.sent)
 	}
 }
+
+// TestAnswerDiscoverRepliesToTheAsker verifies a worker.discover is answered
+// with a ready addressed to the asker, and that the worker's own broadcast
+// echo is left alone.
+func TestAnswerDiscoverRepliesToTheAsker(t *testing.T) {
+	ch := &recordingChannel{}
+	w := NewBaseWorker("w1", ch)
+
+	w.AnswerDiscover(event.New(event.TypeWorkerDiscover, "peer", nil), "w1", nil, false)
+	if len(ch.sent) != 1 || ch.sent[0].Type != event.TypeWorkerReady {
+		t.Fatalf("sent = %+v, want one worker.ready", ch.sent)
+	}
+
+	// Our own discover, echoed back: we know our own contract.
+	ch.sent = nil
+	echo := event.New(event.TypeWorkerDiscover, "w1", nil)
+	w.AnswerDiscover(echo, "w1", nil, false)
+	if len(ch.sent) != 0 {
+		t.Fatalf("our own discover echo was answered: %+v", ch.sent)
+	}
+}

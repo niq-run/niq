@@ -129,18 +129,26 @@ func (w *BaseReasonWorker) setActiveProvider(name, model string) error {
 
 // resolveContextWindow sets w.contextWindow to the effective context-window size
 // for the currently selected provider/model. An explicit params.context_window
-// (already loaded into w.contextWindow) always wins; otherwise the window is
-// taken from the selected model's reported metadata. Called at init and on
-// every provider switch. Expects w.mu held.
+// (contextWindowExplicit) always wins; otherwise the window is re-derived from
+// the selected model's reported metadata. Called at init and on every provider
+// switch. Expects w.mu held.
+//
+// The derivation must run on EVERY switch, not just when the field is still
+// zero: the window is model-specific, and a previous resolution (say 1024k from
+// the startup model) would otherwise survive a switch to a 262k model and keep
+// reporting — and budgeting against — the old size. Only the explicit user
+// override is sticky, which is why it is tracked separately.
 //
 // Only the exact selected model is consulted. Models on the same provider can
 // have very different windows, so borrowing another model's would silently
 // apply a wrong budget. If the selected model reports no window,
 // w.contextWindow stays 0 and budget handling remains disabled.
 func (w *BaseReasonWorker) resolveContextWindow() {
-	if w.contextWindow > 0 {
-		return // explicit override wins
+	if w.contextWindowExplicit > 0 {
+		w.contextWindow = w.contextWindowExplicit
+		return
 	}
+	w.contextWindow = 0
 	if w.providerSources == nil {
 		return
 	}

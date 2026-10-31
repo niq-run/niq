@@ -33,11 +33,6 @@ func TestProviderConfigDefaultAndFind(t *testing.T) {
 	if !ok || claude.Type != "claude" {
 		t.Fatalf("Find = %+v, %v", claude, ok)
 	}
-
-	byType, ok := FindByType("claude")
-	if !ok || byType.Name != "deepseek-claude" {
-		t.Fatalf("FindByType = %+v, %v", byType, ok)
-	}
 }
 
 func TestProviderConfigMissingFile(t *testing.T) {

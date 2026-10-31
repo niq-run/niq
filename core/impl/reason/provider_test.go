@@ -368,3 +368,76 @@ func TestStatusQueryCurrent(t *testing.T) {
 		t.Fatalf("current = %v/%v, want b/m3", current.Provider, current.Model)
 	}
 }
+
+// TestSwitchRecomputesContextWindow verifies a provider switch re-derives the
+// context window from the newly selected model instead of keeping the one the
+// startup model happened to have: the window is per-model (a 262k model must
+// report and budget 262k), and the startup resolution must not be mistaken for
+// a user override.
+func TestSwitchRecomputesContextWindow(t *testing.T) {
+	pa, pb := &staticProvider{}, &staticProvider{}
+	fake := &fakeSources{
+		infos: []ProviderInfo{
+			{Name: "a", Default: "big", Models: []string{"big"},
+				ModelDetails: []llm.ModelInfo{{ID: "big", ContextWindow: 1024000}}},
+			{Name: "b", Default: "small", Models: []string{"small"},
+				ModelDetails: []llm.ModelInfo{{ID: "small", ContextWindow: 262000}}},
+		},
+		provs: map[string]llm.LLMProvider{"a": pa, "b": pb},
+	}
+	w := NewBaseReasonWorker(Config{
+		ID:              "r1",
+		ProviderSources: fake,
+		ProviderName:    "a",
+		ProviderModel:   "big",
+		Bus:             newTestChannel(),
+	})
+	if w.contextWindow != 1024000 {
+		t.Fatalf("initial context window = %d, want the startup model's 1024000", w.contextWindow)
+	}
+
+	w.mu.Lock()
+	err := w.setActiveProvider("b", "small")
+	w.mu.Unlock()
+	if err != nil {
+		t.Fatalf("setActiveProvider: %v", err)
+	}
+	if w.contextWindow != 262000 {
+		t.Fatalf("context window after switch = %d, want 262000 (the new model's)", w.contextWindow)
+	}
+}
+
+// TestExplicitContextWindowSurvivesSwitch verifies params.context_window (the
+// manual override) still wins over the selected model's reported window, even
+// across a provider switch.
+func TestExplicitContextWindowSurvivesSwitch(t *testing.T) {
+	pa, pb := &staticProvider{}, &staticProvider{}
+	fake := &fakeSources{
+		infos: []ProviderInfo{
+			{Name: "a", Default: "big", ModelDetails: []llm.ModelInfo{{ID: "big", ContextWindow: 1024000}}},
+			{Name: "b", Default: "small", ModelDetails: []llm.ModelInfo{{ID: "small", ContextWindow: 262000}}},
+		},
+		provs: map[string]llm.LLMProvider{"a": pa, "b": pb},
+	}
+	w := NewBaseReasonWorker(Config{
+		ID:              "r1",
+		ProviderSources: fake,
+		ProviderName:    "a",
+		ProviderModel:   "big",
+		ContextWindow:   500000, // explicit override
+		Bus:             newTestChannel(),
+	})
+	if w.contextWindow != 500000 {
+		t.Fatalf("initial context window = %d, want the explicit 500000", w.contextWindow)
+	}
+
+	w.mu.Lock()
+	err := w.setActiveProvider("b", "small")
+	w.mu.Unlock()
+	if err != nil {
+		t.Fatalf("setActiveProvider: %v", err)
+	}
+	if w.contextWindow != 500000 {
+		t.Fatalf("explicit override lost on switch: %d", w.contextWindow)
+	}
+}

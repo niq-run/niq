@@ -52,6 +52,7 @@ Common:
 - ` + "`tags`" + ` — array or comma-separated string of slash-path labels for the WebUI
   selector, e.g. ` + "`[\"ops/backlog\"]`" + `.
 - ` + "`description`" + ` — one-line purpose note for the WebUI.
+- ` + "`label`" + ` — display name (备注名) the WebUI shows in place of the id.
 
 Type-specific arguments are passed as top-level properties next to ` + "`type`" + `.
 For example workspace takes ` + "`path`" + ` (or ` + "`mounts`" + `) and ` + "`approver`" + `.
@@ -127,8 +128,10 @@ These decide what the worker is and what it pays attention to:
 - ` + "`provider`" + ` (string) — provider name from the project's provider config. Omit to
   use the project default provider.
 - ` + "`model`" + ` (string) — model name. Omit to use the provider's default model.
-- ` + "`base_url`" + ` / ` + "`api_key`" + ` (string) — per-worker overrides. Prefer relying on the
-  project provider config; a per-worker key lands in the worker declaration.
+
+The endpoint and its credentials live on the provider entry in provider.json:
+a worker never carries its own ` + "`base_url`" + ` / ` + "`api_key`" + `. To use a different
+endpoint, add it as a provider entry and reference it by name.
 
 ## Context budget
 
@@ -148,6 +151,7 @@ These decide what the worker is and what it pays attention to:
 
 Stripped before the builder sees them; they land in the worker declaration:
 
+- ` + "`label`" + ` — display name (备注名) shown in place of the id.
 - ` + "`tags`" + ` — array or comma-separated slash-path labels, e.g. ` + "`\"ops/backlog\"`" + `.
 - ` + "`description`" + ` — one-line purpose note.
 

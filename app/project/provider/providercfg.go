@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/niq-run/niq/app/niqhome"
 	"github.com/niq-run/niq/core/impl/provider/anthropic"
@@ -271,20 +270,6 @@ func Find(name string) (Entry, bool) {
 	return findByName(cfg, name)
 }
 
-// FindByType returns the first provider with the given type.
-func FindByType(typ string) (Entry, bool) {
-	cfg, err := Load()
-	if err != nil {
-		return Entry{}, false
-	}
-	for _, p := range cfg.Providers {
-		if strings.EqualFold(p.Type, typ) {
-			return p, true
-		}
-	}
-	return Entry{}, false
-}
-
 // Write persists a provider config.
 func Write(cfg *Config) error {
 	path := Path()
@@ -304,7 +289,7 @@ func Write(cfg *Config) error {
 
 // Build constructs an llm.LLMProvider from a provider Entry. The model used is
 // the entry's default model (see ResolveDefaultModel); a caller that wants
-// another model from Models should pass it via BuildWithOverrides.
+// another model from Models sets Entry.Model before calling.
 func Build(p Entry) llm.LLMProvider {
 	if resolved := p.ResolveDefaultModel(); resolved != "" {
 		p.Model = resolved
@@ -386,21 +371,6 @@ func Build(p Entry) llm.LLMProvider {
 			Headers: headers,
 		})
 	}
-}
-
-// BuildWithOverrides constructs a provider but lets caller-supplied values win
-// over values from provider.json.
-func BuildWithOverrides(p Entry, apiKey, baseURL, model string) llm.LLMProvider {
-	if apiKey != "" {
-		p.APIKey = apiKey
-	}
-	if baseURL != "" {
-		p.BaseURL = baseURL
-	}
-	if model != "" {
-		p.Model = model
-	}
-	return Build(p)
 }
 
 func findByName(cfg *Config, name string) (Entry, bool) {

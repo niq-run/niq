@@ -104,9 +104,11 @@ type WorkerConfig struct {
 	Type          string             `json:"type"` // reason / coding / workspace / host / timer / hiw / niw / program / history / directory / mcp
 	ID            string             `json:"id"`
 	Instruction   string             `json:"instruction,omitempty"`
+	// Provider names an entry in ~/.niq/common/providers/provider.json; Model
+	// is one of that entry's models (empty = the entry's default). A worker
+	// never carries its own endpoint/credentials — the provider entry owns
+	// them, so rotating a key is one edit in one place.
 	Provider      string             `json:"provider,omitempty"`
-	APIKey        string             `json:"api_key,omitempty"`
-	BaseURL       string             `json:"base_url,omitempty"`
 	Model         string             `json:"model,omitempty"`
 	Subscriptions []SubscriptionSpec `json:"subscriptions,omitempty"`
 	Publish       []PublishSpec      `json:"publish,omitempty"`
@@ -125,6 +127,10 @@ type WorkerConfig struct {
 	// Description is a short human-readable note explaining what the worker
 	// is for. Display metadata only; not a construction param.
 	Description string `json:"description,omitempty"`
+	// Label is the worker's display name (备注名) — what the WebUI shows in
+	// place of the id. Display metadata only; the id stays the identity the
+	// bus, the ACL and every event reference use.
+	Label string `json:"label,omitempty"`
 	// Managed marks the worker as host-managed (in-process, worker dir is the
 	// config authority). nil or true = managed; false = an external process
 	// launched by the project via Command/Env/Cwd.

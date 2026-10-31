@@ -87,6 +87,7 @@ func New(cfg Config) *Worker {
 	}
 	w.SetOnDurableChange(cfg.OnDurableChange)
 	w.registerReadme()
+	w.registerApprovalRequest()
 	return w
 }
 
@@ -101,7 +102,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	busCh, _ := w.Channel.Receive(context.Background())
 
 	// Announce HIW's presence on the bus.
-	w.publishReady()
+	w.AnnounceReady("hiw", hiwPublishes)
 	disc := event.New(event.TypeWorkerDiscover, w.ID(), nil)
 	disc.Transient = true // presence: live-only, not durable history
 	_ = w.Channel.Broadcast(context.Background(), disc)
@@ -118,15 +119,23 @@ func (w *Worker) Start(ctx context.Context) error {
 				if !ok {
 					return
 				}
-				// HIW reacts to approval requests addressed to it; any other event
-				// is offered to the extension registry only when this worker
-				// actually serves it (worker.readme). Responses and directed
-				// presence are drained, never answered.
+				// HIW answers the fleet's discover questions directly, so peers
+				// (the directory roster, other workers' capability lookup) learn
+				// what it serves. Every other event goes through the extension
+				// registry: approval.request is registered like any capability,
+				// and a request HIW does not serve is answered with a
+				// request.failed by baseworker (replies are never answered).
 				switch evt.Type {
-				case event.TypeApprovalRequest:
-					w.recordApprovalRequest(evt)
+				case event.TypeWorkerDiscover:
+					// Answer the discoverer directly with HIW's contract.
+					// Without this the WebUI cannot learn HIW's watch
+					// contract: the WebUI asks through HIW's identity (it
+					// drives the bus as HIW), so the ask arrives carrying
+					// HIW's own id — the self-echo case every other worker
+					// skips, but here it is a genuine question about us.
+					w.AnswerDiscover(evt, "hiw", hiwPublishes, false)
 				default:
-					w.dispatchRegistered(evt)
+					w.DispatchExtension(evt)
 				}
 			case <-ch:
 				return
@@ -152,19 +161,32 @@ func (w *Worker) Stop() error {
 	return nil
 }
 
-// dispatchRegistered offers an event to the extension registry only when this
-// worker registered that event type. HIW receives directed traffic it does not
-// serve — most importantly request.completed / request.failed responses to the
-// events it publishes on the human's behalf. Passing those to
-// DispatchExtension would answer a RESPONSE with request.failed, so unknown
-// traffic is drained exactly as before.
-func (w *Worker) dispatchRegistered(evt event.Event) bool {
-	for _, ext := range w.Extensions() {
-		if ext.Event == evt.Type {
-			return w.DispatchExtension(evt)
-		}
-	}
-	return false
+// registerApprovalRequest declares approval.request as a served capability, so
+// it rides HIW's worker.ready "watch" like every other worker's inbound events
+// (baseworker.WatchEntries -> directory roster -> capability lookup). Before
+// this it was handled by a private switch branch, which made the approval flow
+// invisible to the fleet and left peers with no schema to send against.
+//
+// An approval.request is state, not a tool call: the handler parks the entry
+// and sends no request.completed — the verdict returns later as
+// approval.decision (see the readme).
+func (w *Worker) registerApprovalRequest() {
+	w.Register(baseworker.Extension{
+		Event:       event.TypeApprovalRequest,
+		Description: "Ask the human (via HIW) to approve an action that needs a wider boundary or a manual go-ahead. HIW parks the request for the UI, which answers with approval.decision carrying the same request id. There is no request.completed: the decision IS the reply. The payload is an envelope — action names what is being approved, everything else is the requester's own context for the human.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action": map[string]any{"type": "string", "description": "What the human is being asked to approve. The requester names its own action (e.g. mount.add, lark.dirs.add); it labels the entry in the approval queue."},
+			},
+			// Everything beyond action is action-specific context the human
+			// needs to decide — the target path, the boundary being expanded,
+			// the tool call that hit it. HIW carries it through untouched and
+			// the UI renders it as-is, so this stays an envelope instead of a
+			// union of whatever kinds happen to exist today.
+			"additionalProperties": true,
+		},
+	}, w.recordApprovalRequest)
 }
 
 // ── Approval state ──
@@ -331,17 +353,10 @@ func (w *Worker) SendEvent(ctx context.Context, evtType event.EventType, target 
 	return evt.ID, nil
 }
 
-// publishReady announces HIW on the bus.
-func (w *Worker) publishReady() {
-	ready := event.New(event.TypeWorkerReady, w.ID(), map[string]any{
-		"worker_id": w.ID(),
-		"type":      "hiw",
-		"watch":     w.WatchEntries(false),
-		"publishes": []map[string]any{
-			{"type": "worker.input", "description": "User input event"},
-			{"type": string(event.TypeApprovalDecision), "description": "Approval decision on a received approval.request"},
-		},
-	})
-	ready.Transient = true // presence: delivered live, not durable history
-	_ = w.Channel.Broadcast(context.Background(), ready)
+// hiwPublishes are the events HIW declares it emits, shown to peers via
+// search. A user input is not listed: it is delivered as a directed
+// worker.input to the target, not an hiw-domain event.
+var hiwPublishes = []map[string]any{
+	{"type": "worker.input", "description": "User input event"},
+	{"type": string(event.TypeApprovalDecision), "description": "Approval decision on a received approval.request"},
 }
