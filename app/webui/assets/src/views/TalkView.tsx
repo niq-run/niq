@@ -4,7 +4,7 @@ import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { isToolResult } from '../components/talk-utils'
 import { isReasonFamilyType, isTalkPartnerType, type EventPayload, type WorkerDetailTab } from '../types'
-import { useChatScroll } from './talk/useChatScroll'
+import { useChatScroll, TALK_SCROLL_CLASS } from './talk/useChatScroll'
 import TalkRows from './talk/TalkRows'
 import StreamingTail from './talk/StreamingTail'
 import ScrollToBottomButton from './talk/ScrollToBottomButton'
@@ -309,7 +309,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             bubbles really span the screen instead of losing width twice. */}
         <div
           ref={scrollRef}
-          className="talk-scroll"
+          className={TALK_SCROLL_CLASS}
           onScroll={handleScroll}
           onWheel={markManual}
           onPointerDown={markManual}

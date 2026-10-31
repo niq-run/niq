@@ -41,10 +41,14 @@ const TALK_KEEP = ['worker.input', 'worker.abort', 'worker.ready', 'worker.help'
 // were removed/re-added), we let the live list grow up to TRIM_HIGH while the
 // user follows, then trim once down to TRIM_LOW. That makes trims rare and big
 // instead of constant and small. Trims only ever run while following (so a
-// scrolled-up reader is never shifted); a trim is also triggered when the input
-// box gains focus, so typing never contends with a huge DOM.
-const TRIM_HIGH = 50
-const TRIM_LOW = 50
+// scrolled-up reader is never shifted), and the thresholds sit well above one
+// history page so a loaded page is never cut back immediately.
+//
+// Trimming on input focus used to exist "so typing stays crisp"; it threw away
+// the conversation the reader had paged in, and the view jumped every time the
+// box was clicked. The list is bounded anyway — typing does not need it.
+const TRIM_HIGH = 400
+const TRIM_LOW = 200
 
 // Per-reason-worker input mode, persisted to localStorage. The default is
 // append (level 2): the gentle mode that supplements the ongoing thought
@@ -336,12 +340,6 @@ export default function App() {
   // Mirrors autoScrollRef for rendering: the scroll-to-bottom button shows
   // while the list isn't pinned to the bottom.
   const [eventsAtBottom, setEventsAtBottom] = useState(true)
-
-  // Trim on input focus: as soon as the user is about to type, reclaim the list
-  // down to TRIM_LOW so typing never contends with a huge DOM.
-  const handleInputFocus = useCallback(() => {
-    if (activeFollowingRef.current && eventsRef.current.length > TRIM_LOW) scheduleTrim(0)
-  }, [scheduleTrim])
 
   // ── Mode: control (no project attached) vs project. In control mode only the
   // projects surface is usable; talk/events/workers need an attached project, so
@@ -1477,7 +1475,6 @@ export default function App() {
               isMobile={isMobile}
               attachments={attachments}
               onAttachmentsChange={setAttachments}
-              onFocus={handleInputFocus}
             />
           </div>
         ) : view === 'approvals' ? (
