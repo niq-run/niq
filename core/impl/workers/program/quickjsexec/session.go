@@ -163,9 +163,15 @@ func (s *session) execute(vm *quickjs.VM) (value any, err error) {
 	// frame's line minus offset is a line of the user's own source.
 	s.offset = strings.Count(prelude, "\n") + 1
 	body := prelude + "(async () => {\n" + s.src + "\n})().then(__finish, __abort);\n"
-	if _, err := vm.EvalValue(body, quickjs.EvalGlobal); err != nil {
+	// EvalValue hands back a reference we own. The run does not use the promise
+	// (the host functions report settling), but dropping the reference without
+	// freeing it leaks the whole realm: measured at ~158 KB per run, which is
+	// exactly the kind of slow growth an in-process engine can afford least.
+	promise, err := vm.EvalValue(body, quickjs.EvalGlobal)
+	if err != nil {
 		return nil, s.wrap(err)
 	}
+	defer promise.Free()
 
 	return s.loop(vm)
 }
@@ -180,7 +186,11 @@ func (s *session) install(vm *quickjs.VM) error {
 	if err != nil {
 		return fmt.Errorf("executor: args: %w", err)
 	}
-	if err := vm.SetProperty(vm.GlobalObject(), atom, args); err != nil {
+	// GlobalObject returns a new reference (JS_GetGlobalObject duplicates), so it
+	// has to be released like any other value this side creates.
+	global := vm.GlobalObject()
+	defer global.Free()
+	if err := vm.SetProperty(global, atom, args); err != nil {
 		return fmt.Errorf("executor: args: %w", err)
 	}
 
