@@ -29,7 +29,7 @@ interface TalkViewProps {
   // Declared display names (备注名): shown in place of a worker id when set.
   workerLabels?: Record<string, string>
   thinkingExpanded: boolean
-  compactMode: boolean
+  collapseEvents: boolean
   streamingMode: boolean
   responseOnly: boolean
   // Mobile changes bubble widths and the tool title layout; desktop keeps the
@@ -53,7 +53,7 @@ interface TalkViewProps {
   onFollowChange?: (following: boolean) => void
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, onAddFilter, onFocusWorker, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, compactMode, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange, workerLabels, pendingApprovals = 0, onOpenApprovals }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, onAddFilter, onFocusWorker, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, collapseEvents, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange, workerLabels, pendingApprovals = 0, onOpenApprovals }: TalkViewProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   // Bubbles fill the whole column on phones: a 90% cap plus the scroll area's
@@ -148,8 +148,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       // initiated chains (caller = the human UI) are outside the reason
       // conversation; the Approvals view owns them.
       if (evt.type === 'approval.request') {
-        // origin is the current field name; worker_id is the pre-rename
-        // spelling still present in persisted history.
+        // The human's own requests always belong to the conversation they are
+        // sitting in (this is the send-event form / an inline approval they
+        // raised), whatever the origin field says. Worker-raised chains ride on
+        // the originating caller instead: origin is the current field name,
+        // worker_id the pre-rename spelling still present in persisted history.
+        if (evt.worker_id === humanId) return true
         const caller = evt.payload?.origin ?? evt.payload?.worker_id
         return typeof caller === 'string' && inReasonScope(caller)
       }
@@ -159,7 +163,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
         inReasonScope(evt.target_worker_id) ||
         (recipients || []).some(inReasonScope)
     })
-  }, [events, talkWorkers, deliveries, workerTypes])
+  }, [events, talkWorkers, deliveries, workerTypes, humanId])
 
   // One pass over the events builds both request-pairing lookups: request_id →
   // the terminal result event (so a card can show its answer), and
@@ -193,8 +197,8 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   })
 
   // Shared box metrics for tool-style blocks (also read by the row components).
-  const tPad = compactMode ? '4px 8px' : '6px 12px'
-  const tFontSize = compactMode ? fontSizes.xs : fontSizes.base
+  const tPad = '6px 12px'
+  const tFontSize = fontSizes.base
   // Separator between title segments: a left border on each segment (instead
   // of a standalone "|"), so a wrapped line never ends with a dangling bar.
   // Memoized: this object is a ctx dependency, so a fresh literal every render
@@ -215,12 +219,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // decision/partial/allEvents) are deliberately NOT in ctx — they're resolved
   // per-row in TalkRows so each row re-renders only when its own data changes.
   const ctx = useMemo<RowCtx>(() => ({
-    dark, colors, t, isMobile, compactMode, thinkingExpanded, bubbleMax,
+    dark, colors, t, isMobile, collapseEvents, thinkingExpanded, bubbleMax,
     tPad, tFontSize, itemSep, humanId, displayName, isReason, isPartner, directionOf,
     expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onAddFilter, onFocusWorker, onTraceClick, onDecide,
     scrollToEvent,
   }), [
-    dark, colors, t, isMobile, compactMode, thinkingExpanded, bubbleMax,
+    dark, colors, t, isMobile, collapseEvents, thinkingExpanded, bubbleMax,
     tPad, tFontSize, itemSep, humanId, displayName, isReason, isPartner, directionOf,
     expandedContent, toggleExpanded, openToolId, toggleTool, onMention, onOpenDetail, onAddFilter, onFocusWorker, onTraceClick, onDecide,
     scrollToEvent,
@@ -305,6 +309,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             bubbles really span the screen instead of losing width twice. */}
         <div
           ref={scrollRef}
+          className="talk-scroll"
           onScroll={handleScroll}
           onWheel={markManual}
           onPointerDown={markManual}

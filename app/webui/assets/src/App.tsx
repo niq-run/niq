@@ -58,9 +58,9 @@ const DEFAULT_INPUT_MODE = 'append'
 const VIEW_SETTINGS_KEY = 'niq.view-settings'
 const DEFAULT_VIEW_SETTINGS: ViewSettings = {
   thinkingExpanded: true,
-  compactMode: false,
   streamingMode: false,
   responseOnly: false,
+  collapseEvents: false,
 }
 function loadViewSettings(): ViewSettings {
   try {
@@ -1450,7 +1450,7 @@ export default function App() {
               workerTypes={workerTypes}
               workerLabels={workerLabels}
               thinkingExpanded={viewSettings.thinkingExpanded}
-              compactMode={viewSettings.compactMode}
+              collapseEvents={viewSettings.collapseEvents}
               streamingMode={viewSettings.streamingMode}
               responseOnly={viewSettings.responseOnly}
               isMobile={isMobile}

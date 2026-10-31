@@ -2,6 +2,7 @@
 // right-alignment rule, the trailing run markers, and the per-event-type
 // dispatch to the row components. TalkView hands it the scoped events plus the
 // resolved per-request lookups; this module turns them into the row list.
+import { useLayoutEffect, useRef, useState } from 'react'
 import { fontSizes } from '../../theme'
 import {
   isReasonBoundary, isToolEvent, isToolInvocation, isToolResult, toolCallId,
@@ -13,6 +14,7 @@ import type { RowCtx } from './RowCtx'
 import {
   InputRow, AbortRow, TimeoutRow,
   CancelRow, InterruptedRow, ThinkingRow, ResponseRow, ApprovalRow, ToolRow,
+  RowBadge,
 } from './rows'
 
 export interface TalkRowsProps {
@@ -99,7 +101,95 @@ function TrailMarker({ workerId, usage, ctx }: { workerId: string; usage?: Usage
   )
 }
 
+// Rows that are conversation content rather than process detail. Everything
+// else — thinking, tool cards, interruptions, cancels — is what the collapse
+// mode folds away, so a turn reads as input → [12 process events] → response.
+const KEEP_VISIBLE = new Set(['worker.input', 'reason.response', 'approval.request', 'worker.abort', 'timer.timeout'])
+
+// ProcessGroup is the collapsed stand-in for a run of process rows: one chip
+// that names what was folded, expandable in place. It never hides the run's
+// trailing speaker marker (that rides below the chip when collapsed), so the
+// block still says whose output it was.
+function ProcessGroup({ count, tools, thinking, other, open, badge, onToggle, children, ctx }: {
+  count: number
+  tools: number
+  thinking: number
+  other: number
+  open: boolean
+  // The run's opening speaker badge, shown only while folded: expanded, the
+  // first row renders its own.
+  badge: React.ReactNode
+  onToggle: (chip: HTMLElement) => void
+  children: React.ReactNode
+  ctx: RowCtx
+}) {
+  const { colors, t } = ctx
+  const detail = [
+    tools > 0 ? t('talk.processGroup.tools', { n: tools }) : '',
+    thinking > 0 ? t('talk.processGroup.thinking', { n: thinking }) : '',
+    other > 0 ? t('talk.processGroup.other', { n: other }) : '',
+  ].filter(Boolean).join(' · ')
+  return (
+    // Full-width wrapper, NOT capped at bubbleMax: the rows inside carry their
+    // own maxWidth (a percentage), so capping the parent would shrink them to a
+    // percentage of a percentage. Only the chip itself is capped.
+    <div style={{ marginBottom: 12, width: '100%', minWidth: 0 }}>
+      {badge}
+      <div
+        onClick={(e) => onToggle(e.currentTarget)}
+        role="button"
+        className="btn-hover"
+        title={open ? t('talk.processGroup.collapse') : t('talk.processGroup.expand')}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, width: '100%', maxWidth: ctx.bubbleMax, boxSizing: 'border-box',
+          cursor: 'pointer', userSelect: 'none',
+          background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 2,
+          padding: '4px 10px', fontSize: fontSizes.xs, lineHeight: '18px', color: colors.textDim,
+        }}
+      >
+        {/* Drawn caret: the ▸/▾ glyphs sit off the text's optical centre in most
+            UI fonts, which made the row look low. A border triangle is centred
+            by construction. */}
+        <span
+          aria-hidden
+          style={{
+            flexShrink: 0, width: 0, height: 0,
+            borderTop: '4px solid transparent', borderBottom: '4px solid transparent',
+            borderLeft: '5px solid ' + colors.textDimmed,
+            transform: open ? 'rotate(90deg)' : 'none',
+            transition: 'transform 0.12s',
+          }}
+        />
+        <span style={{ flexShrink: 0 }}>{t('talk.processGroup', { n: count })}</span>
+        {detail && <span style={{ color: colors.textDimmed, marginLeft: 'auto', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{detail}</span>}
+      </div>
+      {open && <div style={{ marginTop: 6 }}>{children}</div>}
+    </div>
+  )
+}
+
 export default function TalkRows({ relevantEvents, allEvents, responseOnly, talkWorkers, resultByRequestId, decisionByRequestId, toolPartials, ctx }: TalkRowsProps) {
+  // Which collapsed groups the reader has opened, keyed by the group's first
+  // event id (stable across live appends). Purely local: reopening the view
+  // starts folded again.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+  // Folding/unfolding changes the timeline height by however tall the group is
+  // (a big tool list is thousands of pixels). Content above the viewport growing
+  // leaves scrollTop untouched, so the reader is thrown to an earlier part of
+  // the conversation. Remember the chip's screen position on click and restore
+  // it after the commit: the row the finger is on stays where it was.
+  const anchorTopRef = useRef<number | null>(null)
+  const anchorElRef = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    const top = anchorTopRef.current
+    const chip = anchorElRef.current
+    anchorTopRef.current = null
+    if (top === null || !chip) return
+    const scroller = chip.closest('.talk-scroll') as HTMLElement | null
+    if (!scroller) return
+    const delta = chip.getBoundingClientRect().top - top
+    if (delta !== 0) scroller.scrollTop += delta
+  })
   // Track the last DISPLAYED avatar's worker id. Avatars render for reason
   // workers and the human; hidden workers (workspace, timer, ...) don't reset
   // the streak, so a single speaker's avatar stays until the speaker switches.
@@ -151,51 +241,109 @@ export default function TalkRows({ relevantEvents, allEvents, responseOnly, talk
     }
   }
 
-  const nodes: React.ReactNode[] = []
-  for (let i = 0; i < rowFacts.length; i++) {
-    const { evt, alignRight, showBadge } = rowFacts[i]
+  // Every run of consecutive process rows folds, down to a single row: with the
+  // switch on, the very first thinking/tool event of a turn already arrives as
+  // a folded chip. Waiting for a second row to appear would show that first row
+  // expanded and then snap it shut a moment later while the turn streams in.
+  const runEnd: Record<number, number> = {}
+  if (ctx.collapseEvents) {
+    for (let i = 0; i < rowFacts.length; ) {
+      if (KEEP_VISIBLE.has(rowFacts[i].evt.type)) { i++; continue }
+      let j = i
+      while (j + 1 < rowFacts.length && !KEEP_VISIBLE.has(rowFacts[j + 1].evt.type)) j++
+      runEnd[i] = j
+      i = j + 1
+    }
+  }
+
+  const renderRow = (i: number, suppressBadge = false): React.ReactNode => {
+    const { evt, alignRight } = rowFacts[i]
+    const showBadge = rowFacts[i].showBadge && !suppressBadge
     switch (evt.type) {
       case 'worker.input':
-        nodes.push(<InputRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
-        break
+        return <InputRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />
       case 'worker.abort':
-        nodes.push(<AbortRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
-        break
+        return <AbortRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />
       case 'timer.timeout':
-        nodes.push(<TimeoutRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />)
-        break
+        return <TimeoutRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} ctx={ctx} />
       case 'request.cancel':
-        nodes.push(<CancelRow key={evt.id} evt={evt} ctx={ctx} />)
-        break
+        return <CancelRow key={evt.id} evt={evt} ctx={ctx} />
       case 'reason.interrupted':
-        nodes.push(<InterruptedRow key={evt.id} evt={evt} ctx={ctx} />)
-        break
+        return <InterruptedRow key={evt.id} evt={evt} ctx={ctx} />
       case 'reason.thinking':
-        nodes.push(<ThinkingRow key={evt.id} evt={evt} showBadge={showBadge} ctx={ctx} />)
-        break
+        return <ThinkingRow key={evt.id} evt={evt} showBadge={showBadge} ctx={ctx} />
       case 'reason.response':
-        nodes.push(<ResponseRow key={evt.id} evt={evt} showBadge={showBadge} ctx={ctx} allEvents={allEvents} />)
-        break
+        return <ResponseRow key={evt.id} evt={evt} showBadge={showBadge} ctx={ctx} allEvents={allEvents} />
       case 'approval.request': {
         const decision = decisionByRequestId[toolCallId(evt)]
-        nodes.push(<ApprovalRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} decision={decision} ctx={ctx} />)
-        break
+        return <ApprovalRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} decision={decision} ctx={ctx} />
       }
       default: {
         const callId = toolCallId(evt)
         const resultEvt = resultByRequestId[callId]
         const partial = toolPartials[callId] || ''
-        nodes.push(<ToolRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} resultEvt={resultEvt} partial={partial} ctx={ctx} />)
-        break
+        return <ToolRow key={evt.id} evt={evt} alignRight={alignRight} showBadge={showBadge} resultEvt={resultEvt} partial={partial} ctx={ctx} />
       }
     }
-    // Stamp a small trailing avatar on the LEFT block's right edge at the end
-    // of every speaker run. Right-aligned messages already carry their avatar
-    // on the right, so they don't need the extra marker.
+  }
+
+  // The speaker marker closes a run; it travels with whatever ends the run, so
+  // a collapsed group keeps it too (below the chip) rather than swallowing it.
+  const trailFor = (i: number): React.ReactNode => {
     const trail = trails[i]
-    if (trail && !alignRight) {
-      nodes.push(<TrailMarker key={evt.id + '-trail'} workerId={trail} usage={trailUsage[i]} ctx={ctx} />)
+    if (!trail || rowFacts[i].alignRight) return null
+    return <TrailMarker key={rowFacts[i].evt.id + '-trail'} workerId={trail} usage={trailUsage[i]} ctx={ctx} />
+  }
+
+  const nodes: React.ReactNode[] = []
+  for (let i = 0; i < rowFacts.length; i++) {
+    const end = runEnd[i]
+    if (end !== undefined) {
+      const key = rowFacts[i].evt.id
+      const open = !!openGroups[key]
+      let tools = 0, thinking = 0, other = 0
+      const inner: React.ReactNode[] = []
+      for (let j = i; j <= end; j++) {
+        switch (rowFacts[j].evt.type) {
+          case 'reason.thinking':
+            thinking++
+            break
+          case 'reason.interrupted':
+          case 'request.cancel':
+            other++
+            break
+          default:
+            tools++
+        }
+        if (open) {
+          inner.push(renderRow(j, j === i), trailFor(j))
+        }
+      }
+      const head = rowFacts[i]
+      nodes.push(
+        <ProcessGroup
+          key={key}
+          count={end - i + 1}
+          tools={tools}
+          thinking={thinking}
+          other={other}
+          open={open}
+          ctx={ctx}
+          badge={<RowBadge ctx={ctx} workerId={head.evt.worker_id} showBadge={head.showBadge} extraPad />}
+          onToggle={(chip) => {
+            anchorTopRef.current = chip.getBoundingClientRect().top
+            anchorElRef.current = chip
+            setOpenGroups((g) => ({ ...g, [key]: !g[key] }))
+          }}
+        >
+          {inner}
+        </ProcessGroup>,
+      )
+      if (!open) nodes.push(trailFor(end))
+      i = end
+      continue
     }
+    nodes.push(renderRow(i), trailFor(i))
   }
   return <>{nodes}</>
 }

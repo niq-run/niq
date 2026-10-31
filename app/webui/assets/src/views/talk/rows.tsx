@@ -29,7 +29,7 @@ import type { RowCtx } from './RowCtx'
 
 // RowBadge is the shared "avatar row for a speaker switch" wrapper used by
 // most row components. Returns null when no badge is warranted.
-function RowBadge({ ctx, workerId, showBadge, alignRight, extraPad = false }: {
+export function RowBadge({ ctx, workerId, showBadge, alignRight, extraPad = false }: {
   ctx: RowCtx
   workerId: string
   showBadge: boolean
@@ -122,7 +122,7 @@ function AbortRow({ evt, alignRight, showBadge, ctx }: { evt: EventPayload; alig
   // the same bubble, with a lifecycle line saying what it did below it.
   const target = evt.target_worker_id
   return (
-    <div key={evt.id} data-evt-id={evt.id} style={{ marginBottom: ctx.compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
+    <div key={evt.id} data-evt-id={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
       <div
         style={{
@@ -160,7 +160,7 @@ function CancelRow({ evt, ctx }: { evt: EventPayload; ctx: RowCtx }) {
   const { colors, t } = ctx
   const dir = ctx.directionOf(evt)
   return (
-    <div key={evt.id} style={{ maxWidth: ctx.bubbleMax, marginBottom: ctx.compactMode ? 8 : 12 }}>
+    <div key={evt.id} style={{ maxWidth: ctx.bubbleMax, marginBottom: 12 }}>
       <div style={{ border: '1px solid ' + colors.border, padding: ctx.tPad, fontSize: ctx.tFontSize, lineHeight: 1.5, color: colors.textDim }}>
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4, columnGap: 8 }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
@@ -180,7 +180,7 @@ function InterruptedRow({ evt, ctx }: { evt: EventPayload; ctx: RowCtx }) {
   const reason = (evt.payload?.reason as string) || ''
   const preserved = (evt.payload?.preserved_chars as number) || 0
   return (
-    <div key={evt.id} style={{ maxWidth: ctx.bubbleMax, marginBottom: ctx.compactMode ? 8 : 12 }}>
+    <div key={evt.id} style={{ maxWidth: ctx.bubbleMax, marginBottom: 12 }}>
       <div style={{ border: '1px solid ' + colors.border, padding: ctx.tPad, fontSize: ctx.tFontSize, lineHeight: 1.5, color: colors.textDim }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -205,7 +205,7 @@ function ThinkingRow({ evt, showBadge, ctx }: { evt: EventPayload; showBadge: bo
   return (
     <div key={evt.id + '-thinking-' + ctx.thinkingExpanded} style={{ maxWidth: ctx.bubbleMax }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} extraPad />
-      <ThinkingBlock evt={evt} defaultExpanded={ctx.thinkingExpanded} compact={ctx.compactMode} />
+      <ThinkingBlock evt={evt} defaultExpanded={ctx.thinkingExpanded} />
     </div>
   )
 }
@@ -247,12 +247,18 @@ function ApprovalRowImpl({ evt, alignRight, showBadge, decision, ctx }: { evt: E
   const { colors, t } = ctx
   const approved = decision?.payload?.approved === true
   const note = typeof decision?.payload?.note === 'string' ? decision.payload.note : ''
-  const isExpanded = !ctx.expandedContent.has(evt.id)
+  // A pending request starts open — it is asking for a decision. Once decided
+  // it starts folded: the verdict line still shows under the header, the
+  // payload stays one click away. expandedContent holds the ids whose state
+  // was flipped from this default, so it means "collapsed" while pending and
+  // "expanded" once decided.
+  const defaultExpanded = !decision
+  const isExpanded = ctx.expandedContent.has(evt.id) ? !defaultExpanded : defaultExpanded
   const statusColor = decision ? (approved ? colors.toolCompleted : colors.toolFailed) : colors.toolRequested
   return (
-    <div key={evt.id} data-evt-id={evt.id} style={{ marginTop: 16, marginBottom: ctx.compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
+    <div key={evt.id} data-evt-id={evt.id} style={{ marginTop: 16, marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
-      <div className={!isExpanded ? 'block-card' : undefined} style={{ maxWidth: ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', border: '1px solid ' + colors.accent, padding: ctx.compactMode ? '4px 8px' : '6px 12px', fontSize: ctx.compactMode ? fontSizes.xs : fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
+      <div className={!isExpanded ? 'block-card' : undefined} style={{ maxWidth: ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', border: '1px solid ' + colors.accent, padding: '6px 12px', fontSize: fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
         <div onClick={() => ctx.toggleExpanded(evt.id)} style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0, opacity: 0.5 }} />
           <span style={{ color: colors.text, fontWeight: 600 }}>{t('talk.approval.title')}</span>
@@ -260,7 +266,9 @@ function ApprovalRowImpl({ evt, alignRight, showBadge, decision, ctx }: { evt: E
           <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, marginLeft: 'auto' }}>{formatTime(evt.timestamp)}</span>
           <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs }}>{isExpanded ? '\u25BE' : '\u25B8'}</span>
         </div>
-        {isExpanded && <div style={{ marginTop: 6, fontSize: fontSizes.sm, color: colors.text }}>{t(evt.payload?.action === 'mount.add' ? 'approval.reason.mount.add' : 'approval.reason.generic')}</div>}
+        {/* The reason line is one sentence and says what is being approved, so
+            it survives the fold; only the payload JSON is expandable. */}
+        <div style={{ marginTop: 6, fontSize: fontSizes.sm, color: colors.text }}>{t(evt.payload?.action === 'mount.add' ? 'approval.reason.mount.add' : 'approval.reason.generic')}</div>
         {isExpanded && Object.keys(evt.payload ?? {}).length > 0 && (
           <div style={{ background: colors.bg, border: '1px solid ' + colors.borderLight, borderRadius: 2, padding: '6px 8px', marginTop: 8 }}>
             <CollapsibleCode code={JSON.stringify(evt.payload, null, 2)} language="json" />
@@ -309,7 +317,7 @@ function ToolRowImpl({ evt, alignRight, showBadge, resultEvt, partial, ctx }: { 
   const dir = ctx.directionOf(evt, alignRight)
   const segSep = <span style={{ color: colors.textDimmed, opacity: 0.6 }}>|</span>
   return (
-    <div key={evt.id} style={{ marginBottom: ctx.compactMode ? 8 : 12, textAlign: alignRight ? 'right' : 'left' }}>
+    <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
       <div
         className={!isExpanded ? 'block-card' : undefined}
