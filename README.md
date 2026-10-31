@@ -28,18 +28,17 @@ npm install -g @niq.run/niq
 curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/install.sh | sh
 ```
 
-**From source** (Go 1.25+):
+**From source** (Go 1.26+ — the embedded JS engine requires it):
 
 ```sh
 git clone https://github.com/niq-run/niq
 cd niq && make build   # → ./bin/niq
 ```
 
-**Runtime: node** (or any JS runtime you point the executor at). The program
-worker runs script programs (PTC) through a local `node` process, so a machine
-without node can manage programs but cannot execute them. `install.sh` warns when
-node is missing; the runtime is configurable per project via the program worker's
-`script_executor_args` (e.g. `["bun", "run"]`).
+**Runtime: none to install.** The program worker runs script programs (PTC)
+inside an embedded QuickJS engine (`modernc.org/quickjs`, pure Go), so there is no
+`node` process to spawn and no JS runtime to install. Scripts see only the SDK the
+worker injects: no `process`, `require`, `fetch`, or dynamic `import()`.
 
 ## Quick start
 
