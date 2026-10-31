@@ -135,7 +135,6 @@ export const en = {
   'talk.wrap.tooltip': 'toggle soft-wrapping of the code body',
   'talk.watching': 'watching',
   'talk.approvalBanner': '{n} approvals waiting',
-  'talk.approvalBanner.action': 'Review',
   'talk.charsPreserved': '{n} chars preserved',
   'talk.usage.tooltip': 'context usage this round (input · output tokens)',
   'talk.usage.window': 'context window {window} · used {pct}%',

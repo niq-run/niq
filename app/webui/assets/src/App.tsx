@@ -190,6 +190,13 @@ export default function App() {
     if (root) root.style.background = colors.bg
   }, [colors.bg])
 
+  // Mirror the theme onto <html> as well: styles.css keys off [data-theme],
+  // and portaled UI (context menus, pickers) mounts outside .app-shell, so the
+  // attribute has to live on the root for those subtree rules to apply.
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  }, [dark])
+
   // ── State ──
   const [events, setEvents] = useState<EventPayload[]>([])
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
@@ -1545,7 +1552,7 @@ export default function App() {
                           workers' events to show. Both checked = default. */}
                       {(['sent', 'received'] as const).map(role => (
                         <label key={role} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 12, cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm }}>
-                          <input type="checkbox" checked={filterRoles.has(role)} onChange={() => toggleFilterRole(role)} style={{ margin: 0, accentColor: colors.accent }} />
+                          <input type="checkbox" checked={filterRoles.has(role)} onChange={() => toggleFilterRole(role)} style={{ margin: 0 }} />
                           {t(role === 'sent' ? 'events.role.sent' : 'events.role.received')}
                         </label>
                       ))}

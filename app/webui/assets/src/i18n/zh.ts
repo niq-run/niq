@@ -133,7 +133,6 @@ export const zh: Record<StringKey, string> = {
   'talk.wrap.tooltip': '切换代码块的自动换行显示',
   'talk.watching': '正在监听',
   'talk.approvalBanner': '有 {n} 条审批待处理',
-  'talk.approvalBanner.action': '去处理',
   'talk.charsPreserved': '{n} 字符已保留',
   'talk.usage.tooltip': '本轮上下文用量（输入 · 输出 tokens）',
   'talk.usage.window': '上下文窗口 {window} · 已用 {pct}%',

@@ -237,14 +237,13 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
         cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
-        padding: '1px 8px', borderRadius: 0, lineHeight: '18px',
+        padding: '2px 10px', borderRadius: 0, lineHeight: '22px',
         background: colors.accentBg, border: '1px solid ' + colors.accentBorder,
         fontSize: fontSizes.sm, fontWeight: 400,
       }}
     >
       <span style={{ width: 6, height: 6, background: colors.accent, flexShrink: 0 }} />
       <span style={{ color: colors.text }}>{t('talk.approvalBanner', { n: pendingApprovals })}</span>
-      <span style={{ color: colors.accent }}>{t('talk.approvalBanner.action')}</span>
     </span>
   ) : null
 
