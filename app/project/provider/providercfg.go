@@ -62,6 +62,12 @@ type Entry struct {
 	// when the model API does not report one. It backs the reason worker's
 	// context-budget thresholds.
 	ContextWindow int `json:"context_window,omitempty"`
+	// MaxOutput is the default cap on generated tokens, applied to models that
+	// do not declare their own and when the model API does not report one.
+	MaxOutput int `json:"max_output,omitempty"`
+	// InputTypes is the provider-wide default input modalities (text / image /
+	// audio / video), applied to models that do not declare their own.
+	InputTypes []string `json:"input_types,omitempty"`
 	// Headers are extra HTTP headers sent on every provider request, applied
 	// after the built-in auth headers so they may override them. Values (and
 	// api_key) support ${VAR} / $VAR environment-variable expansion.
@@ -75,12 +81,13 @@ type Entry struct {
 type ModelSpec struct {
 	Name          string `json:"name"`
 	ContextWindow int    `json:"context_window,omitempty"`
-	// InputTypes declares the model's accepted input modalities (e.g.
-	// ["text", "image"], or just ["text"] for a text-only model). It backs
-	// the reason worker's image-input gate: a model whose InputTypes exclude
-	// image gets its image content blocks downgraded to a textual hint before
-	// being sent. Empty means "unknown" — the reason worker then defaults to
-	// assuming the model accepts images.
+	// MaxOutput is the model's cap on generated tokens. Zero means
+	// "unspecified" and defers to the provider's MaxOutput, then the model API.
+	MaxOutput int `json:"max_output,omitempty"`
+	// InputTypes declares the model's accepted input modalities: "text",
+	// "image", "audio", "video" (aliases such as "vision" and "multimodal" are
+	// recognized). An empty list means "unknown" — the reader then defaults to
+	// accepting every modality and lets the provider reject what it cannot eat.
 	InputTypes []string `json:"input_types,omitempty"`
 }
 
@@ -113,7 +120,7 @@ func (m *Models) UnmarshalJSON(data []byte) error {
 func (m Models) MarshalJSON() ([]byte, error) {
 	hasMeta := false
 	for _, s := range m {
-		if s.ContextWindow != 0 {
+		if s.ContextWindow != 0 || s.MaxOutput != 0 || len(s.InputTypes) > 0 {
 			hasMeta = true
 			break
 		}

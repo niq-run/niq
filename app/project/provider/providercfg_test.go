@@ -1,8 +1,10 @@
 package provider
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -117,5 +119,36 @@ func TestEnsureExampleAndConfigured(t *testing.T) {
 	raw2, _ := os.ReadFile(path)
 	if !strings.Contains(string(raw2), "sk-x") {
 		t.Fatalf("EnsureExample clobbered user config: %s", raw2)
+	}
+}
+
+// TestModelsMarshalKeepsMetadata verifies a model carrying only max_output or
+// input modalities still serializes as an object: the compact string form is
+// only for names without metadata, and writing one back as a bare string would
+// silently drop the declared capability.
+func TestModelsMarshalKeepsMetadata(t *testing.T) {
+	cases := []Models{
+		{{Name: "a", MaxOutput: 8192}},
+		{{Name: "b", InputTypes: []string{"text", "image", "audio"}}},
+		{{Name: "c", ContextWindow: 128000, MaxOutput: 4096, InputTypes: []string{"text", "video"}}},
+	}
+	for _, in := range cases {
+		raw, err := json.Marshal(in)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.HasPrefix(string(raw), "[{") {
+			t.Fatalf("metadata was flattened to names: %s", raw)
+		}
+		var back Models
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(back) != 1 || back[0].Name != in[0].Name ||
+			back[0].ContextWindow != in[0].ContextWindow ||
+			back[0].MaxOutput != in[0].MaxOutput ||
+			!slices.Equal(back[0].InputTypes, in[0].InputTypes) {
+			t.Fatalf("roundtrip lost metadata: %s -> %+v", raw, back)
+		}
 	}
 }

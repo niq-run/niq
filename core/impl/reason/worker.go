@@ -208,8 +208,10 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 
 	// Resolve the context window for the selected provider/model so the budget
 	// thresholds use the real size (API-reported or configured) instead of the
-	// manual fallback (0 = disabled).
+	// manual fallback (0 = disabled), and the model's output cap so requests
+	// are not silently held to an adapter default.
 	w.resolveContextWindow()
+	w.resolveMaxOutput()
 
 	return w
 }
@@ -538,6 +540,10 @@ type BaseReasonWorker struct {
 
 	// Context budget state; guarded by w.mu
 	contextWindow int
+	// maxOutput is the selected model's declared cap on generated tokens
+	// (0 = unknown). Applied as Context.MaxTokens, so a model that reports a
+	// large cap is no longer silently held to an adapter default.
+	maxOutput int
 	// contextWindowExplicit is the params.context_window override (0 = none).
 	// Kept apart from the effective window so a provider switch can re-derive
 	// the window from the newly selected model instead of inheriting the last

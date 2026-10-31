@@ -172,3 +172,30 @@ func TestInitialProviderInfoNamesOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestModelsForCarriesModelLimits verifies the per-model metadata a worker
+// reads through provider.list: max output and input modalities come from the
+// model entry, falling back to the provider-level defaults when the model does
+// not declare its own.
+func TestModelsForCarriesModelLimits(t *testing.T) {
+	p := Entry{
+		Name:       "p",
+		Type:       "openai-compatible",
+		MaxOutput:  4096,
+		InputTypes: []string{"text"},
+		Models: Models{
+			{Name: "inherits"},
+			{Name: "declared", MaxOutput: 16384, InputTypes: []string{"text", "image", "video"}},
+		},
+	}
+	got := (&providerSources{}).modelsFor(p)
+	if len(got) != 2 {
+		t.Fatalf("models = %+v", got)
+	}
+	if got[0].MaxOutput != 4096 || len(got[0].InputTypes) != 1 || got[0].InputTypes[0] != "text" {
+		t.Fatalf("inherited model limits = %+v", got[0])
+	}
+	if got[1].MaxOutput != 16384 || len(got[1].InputTypes) != 3 || got[1].InputTypes[2] != "video" {
+		t.Fatalf("declared model limits = %+v", got[1])
+	}
+}

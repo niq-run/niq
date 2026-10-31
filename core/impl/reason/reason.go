@@ -96,6 +96,14 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 		Tools:           tools,
 		ReasoningEffort: w.reasoningEffort,
 	}
+	// Ask for the model's declared output cap. Without it every round falls
+	// back to the adapter's own default (Anthropic hardcodes 4096), which
+	// silently truncates models that can write far more. The cap belongs to
+	// the selected model, so a switch re-derives it (resolveMaxOutput).
+	if w.maxOutput > 0 {
+		maxTokens := w.maxOutput
+		c.MaxTokens = &maxTokens
+	}
 	req = &llm.CompletionRequest{Context: c}
 	if len(tools) > 0 {
 		req.ToolChoice = llm.ToolChoiceAuto

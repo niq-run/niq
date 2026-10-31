@@ -72,14 +72,31 @@ export default function ProvidersView() {
     applyConfig(next)
   }
 
-  // Model rows keep per-model metadata (context_window) as objects; the
-  // backend re-marshals the list back to plain names when no entry carries
-  // metadata, so the stored file stays in its compact form.
-  const setModel = (pi: number, mi: number, name: string, contextWindow?: number) => {
+  // Model rows keep per-model metadata (context window, max output, input
+  // modalities) as objects; the backend re-marshals the list back to plain
+  // names when no entry carries metadata, so the stored file stays compact.
+  type ModelFields = { name: string; context_window?: number; max_output?: number; input_types?: string[] }
+  const modelFields = (m: any): ModelFields => (typeof m === 'string'
+    ? { name: m }
+    : { name: m.name || '', context_window: m.context_window, max_output: m.max_output, input_types: m.input_types })
+  const setModel = (pi: number, mi: number, patch: Partial<ModelFields>) => {
     if (!cfg || jsonError) return
     const models = [...(cfg.providers[pi].models || [])]
-    models[mi] = contextWindow ? { name, context_window: contextWindow } : { name }
+    const next: ModelFields = { ...modelFields(models[mi]), ...patch }
+    const row: any = { name: next.name }
+    if (next.context_window) row.context_window = next.context_window
+    if (next.max_output) row.max_output = next.max_output
+    if (next.input_types && next.input_types.length > 0) row.input_types = next.input_types
+    models[mi] = row
     applyConfig({ ...cfg, providers: cfg.providers.map((p: any, j: number) => (j === pi ? { ...p, models } : p)) })
+  }
+  // Modalities are a token list; "text" is always implied, and clearing every
+  // box means "unknown" (the reader then assumes the model accepts anything).
+  const toggleModality = (pi: number, mi: number, m: any, modality: string) => {
+    const cur = modelFields(m).input_types ?? []
+    const has = cur.includes(modality) || cur.includes('multimodal')
+    const next = has ? cur.filter((t) => t !== modality) : [...new Set([...cur, 'text', modality])]
+    setModel(pi, mi, { input_types: next })
   }
   const removeModel = (pi: number, mi: number) => {
     if (!cfg || jsonError) return
@@ -236,31 +253,64 @@ export default function ProvidersView() {
                 </div>
                 {field(t('providers.field.models'), (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {(Array.isArray(p.models) ? p.models : []).map((m: any, j: number) => (
-                      <div key={j} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <input
-                          value={typeof m === 'string' ? m : m.name}
-                          onChange={(e) => setModel(i, j, e.target.value, typeof m === 'object' ? m.context_window : undefined)}
-                          placeholder="model-name"
-                          style={{ ...cardInput, flex: 1, minWidth: 0 }}
-                        />
-                        <input
-                          value={(typeof m === 'object' && m.context_window) || ''}
-                          onChange={(e) => {
-                            const n = parseInt(e.target.value, 10)
-                            setModel(i, j, typeof m === 'string' ? m : m.name, Number.isFinite(n) && n > 0 ? n : undefined)
-                          }}
-                          placeholder={t('providers.field.contextWindow')}
-                          style={{ ...cardInput, width: 150, flexShrink: 0 }}
-                        />
-                        <button
-                          onClick={() => removeModel(i, j)}
-                          style={{ cursor: 'pointer', background: 'transparent', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 8px', fontSize: fontSizes.sm, flexShrink: 0 }}
-                        >
-                          ✕
-                        </button>
+                    {(Array.isArray(p.models) ? p.models : []).map((m: any, j: number) => {
+                      const f = modelFields(m)
+                      return (
+                      <div key={j} style={{ display: 'flex', flexDirection: 'column', gap: 6, border: '1px solid ' + colors.border, borderRadius: 3, padding: '6px 8px' }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <input
+                            value={f.name}
+                            onChange={(e) => setModel(i, j, { name: e.target.value })}
+                            placeholder="model-name"
+                            style={{ ...cardInput, flex: 1, minWidth: 0 }}
+                          />
+                          <input
+                            value={f.context_window || ''}
+                            onChange={(e) => {
+                              const n = parseInt(e.target.value, 10)
+                              setModel(i, j, { context_window: Number.isFinite(n) && n > 0 ? n : undefined })
+                            }}
+                            placeholder={t('providers.field.contextWindow')}
+                            style={{ ...cardInput, width: 150, flexShrink: 0 }}
+                          />
+                          <input
+                            value={f.max_output || ''}
+                            onChange={(e) => {
+                              const n = parseInt(e.target.value, 10)
+                              setModel(i, j, { max_output: Number.isFinite(n) && n > 0 ? n : undefined })
+                            }}
+                            placeholder={t('providers.field.maxOutput')}
+                            style={{ ...cardInput, width: 140, flexShrink: 0 }}
+                          />
+                          <button
+                            onClick={() => removeModel(i, j)}
+                            style={{ cursor: 'pointer', background: 'transparent', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 8px', fontSize: fontSizes.sm, flexShrink: 0 }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: fontSizes.xs, color: colors.textDim, flexWrap: 'wrap' }}>
+                          <span>{t('providers.field.inputs')}</span>
+                          {(['image', 'audio', 'video'] as const).map((mod) => {
+                            const label = {
+                              image: 'providers.modality.image',
+                              audio: 'providers.modality.audio',
+                              video: 'providers.modality.video',
+                            } as const
+                            const types = f.input_types ?? []
+                            const on = types.includes(mod) || types.includes('multimodal')
+                            return (
+                              <label key={mod} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', userSelect: 'none' }}>
+                                <input type="checkbox" checked={on} onChange={() => toggleModality(i, j, m, mod)} />
+                                {t(label[mod])}
+                              </label>
+                            )
+                          })}
+                          <span style={{ color: colors.textDimmed }}>{t('providers.field.inputsHint')}</span>
+                        </div>
                       </div>
-                    ))}
+                      )
+                    })}
                     <span
                       onClick={() => addModel(i)}
                       style={{ cursor: 'pointer', color: colors.accent, fontSize: fontSizes.sm, textDecoration: 'underline dotted', userSelect: 'none' }}

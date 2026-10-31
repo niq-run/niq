@@ -163,23 +163,21 @@ const listModelsTimeout = 3 * time.Second
 // non-empty configured model list is authoritative: the user explicitly pinned
 // the offered models (some providers report unwieldy lists), so the provider's
 // API is not queried at all. Only when no models are configured does it fall
-// back to a live API query. ContextWindow comes from the per-model spec or,
-// failing that, the provider's configured context_window.
+// back to a live API query. Per-model metadata (context window, max output,
+// input modalities) comes from the model spec or, failing that, the provider
+// level defaults.
 func (s *providerSources) modelsFor(p Entry) []llm.ModelInfo {
 	// Configured list wins over discovery: serve it as-is, no API call.
 	if len(p.Models) > 0 {
 		details := make([]llm.ModelInfo, 0, len(p.Models))
 		for _, ms := range p.Models {
-			cw := ms.ContextWindow
-			if cw == 0 {
-				cw = p.ContextWindow
-			}
 			details = append(details, llm.ModelInfo{
 				ID:            ms.Name,
 				Name:          ms.Name,
 				Provider:      p.Type,
-				ContextWindow: cw,
-				InputTypes:    ms.InputTypes,
+				ContextWindow: firstPositive(ms.ContextWindow, p.ContextWindow),
+				MaxOutput:     firstPositive(ms.MaxOutput, p.MaxOutput),
+				InputTypes:    firstNonEmpty(ms.InputTypes, p.InputTypes),
 			})
 		}
 		return details
@@ -199,12 +197,28 @@ func (s *providerSources) modelsFor(p Entry) []llm.ModelInfo {
 	}
 	details := make([]llm.ModelInfo, 0, len(apiModels))
 	for _, m := range apiModels {
-		// Prefer the API-reported window; fall back to the provider config.
-		if m.ContextWindow == 0 {
-			m.ContextWindow = p.ContextWindow
-		}
+		// Prefer the API-reported metadata; fall back to the provider config.
+		m.ContextWindow = firstPositive(m.ContextWindow, p.ContextWindow)
+		m.MaxOutput = firstPositive(m.MaxOutput, p.MaxOutput)
+		m.InputTypes = firstNonEmpty(m.InputTypes, p.InputTypes)
 		m.Provider = p.Type
 		details = append(details, m)
 	}
 	return details
+}
+
+// firstPositive returns v when set, else the fallback.
+func firstPositive(v, fallback int) int {
+	if v > 0 {
+		return v
+	}
+	return fallback
+}
+
+// firstNonEmpty returns v when it declares anything, else the fallback.
+func firstNonEmpty(v, fallback []string) []string {
+	if len(v) > 0 {
+		return v
+	}
+	return fallback
 }

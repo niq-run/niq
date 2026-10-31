@@ -124,6 +124,7 @@ func (w *BaseReasonWorker) setActiveProvider(name, model string) error {
 	w.providerName = name
 	w.providerModel = model
 	w.resolveContextWindow()
+	w.resolveMaxOutput()
 	return nil
 }
 
@@ -163,6 +164,34 @@ func (w *BaseReasonWorker) resolveContextWindow() {
 		for _, m := range info.ModelDetails {
 			if m.ID == model && m.ContextWindow > 0 {
 				w.contextWindow = m.ContextWindow
+				return
+			}
+		}
+	}
+}
+
+// resolveMaxOutput sets w.maxOutput from the selected model's declared output
+// cap (0 = unknown, which leaves Context.MaxTokens nil so the adapter applies
+// its own default). Like the context window it is re-derived on every switch:
+// the cap belongs to the model, and reusing the previous model's number would
+// either truncate a capable model or ask a small one for more than it allows.
+// Expects w.mu held.
+func (w *BaseReasonWorker) resolveMaxOutput() {
+	w.maxOutput = 0
+	if w.providerSources == nil {
+		return
+	}
+	for _, info := range w.providerSources.List() {
+		if info.Name != w.providerName {
+			continue
+		}
+		model := w.providerModel
+		if model == "" {
+			model = info.Default
+		}
+		for _, m := range info.ModelDetails {
+			if m.ID == model && m.MaxOutput > 0 {
+				w.maxOutput = m.MaxOutput
 				return
 			}
 		}
