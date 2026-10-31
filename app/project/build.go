@@ -24,8 +24,8 @@ import (
 	"github.com/niq-run/niq/core/impl/workers/mcp"
 	"github.com/niq-run/niq/core/impl/workers/niw"
 	programworker "github.com/niq-run/niq/core/impl/workers/program"
-	"github.com/niq-run/niq/core/impl/workers/program/jsexec"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
+	"github.com/niq-run/niq/core/impl/workers/program/quickjsexec"
 	"github.com/niq-run/niq/core/impl/workers/reason"
 	"github.com/niq-run/niq/core/impl/workers/timer"
 	"github.com/niq-run/niq/core/impl/workers/workspace"
@@ -740,25 +740,14 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 		// No roster is tracked here: target validation asks the directory worker
 		// (see program.checkTarget), so only discovery is consumed.
 		subAllowFromParams(p, []string{"worker.discover"}))
-	// script_executor_args overrides the executor command prefix (default: the
-	// node binary). E.g. ["bun", "run"], or a sandbox wrapper
-	// (sandbox-exec / bwrap / a container).
-	var execArgs []string
-	if raw, ok := p["script_executor_args"].([]any); ok {
-		for _, v := range raw {
-			if s, ok := v.(string); ok {
-				execArgs = append(execArgs, s)
-			}
-		}
-	}
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return programworker.New(programworker.Config{
 			ID:  id,
 			Bus: ch,
-			// The whole program environment: a filesystem Store plus the local
-			// subprocess Executor. Either half is swappable (a QuickJS sandbox, a
-			// remote gateway, an object-store Store) without the worker changing.
-			Backend: programpkg.Compose(pgbackend.New(abs), jsexec.New(jsexec.Options{Args: execArgs})),
+			// The whole program environment: a filesystem Store plus the in-process
+			// QuickJS Executor. Either half is swappable (a remote gateway, an
+			// object-store Store) without the worker changing.
+			Backend: programpkg.Compose(pgbackend.New(abs), quickjsexec.New(quickjsexec.Options{})),
 		})
 	}
 	cfg.ID = id
