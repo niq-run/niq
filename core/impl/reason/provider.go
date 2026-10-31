@@ -124,23 +124,32 @@ func (w *BaseReasonWorker) setActiveProvider(name, model string) error {
 	w.providerName = name
 	w.providerModel = model
 	w.resolveContextWindow()
+	w.resolveMaxOutput()
 	return nil
 }
 
 // resolveContextWindow sets w.contextWindow to the effective context-window size
 // for the currently selected provider/model. An explicit params.context_window
-// (already loaded into w.contextWindow) always wins; otherwise the window is
-// taken from the selected model's reported metadata. Called at init and on
-// every provider switch. Expects w.mu held.
+// (contextWindowExplicit) always wins; otherwise the window is re-derived from
+// the selected model's reported metadata. Called at init and on every provider
+// switch. Expects w.mu held.
+//
+// The derivation must run on EVERY switch, not just when the field is still
+// zero: the window is model-specific, and a previous resolution (say 1024k from
+// the startup model) would otherwise survive a switch to a 262k model and keep
+// reporting — and budgeting against — the old size. Only the explicit user
+// override is sticky, which is why it is tracked separately.
 //
 // Only the exact selected model is consulted. Models on the same provider can
 // have very different windows, so borrowing another model's would silently
 // apply a wrong budget. If the selected model reports no window,
 // w.contextWindow stays 0 and budget handling remains disabled.
 func (w *BaseReasonWorker) resolveContextWindow() {
-	if w.contextWindow > 0 {
-		return // explicit override wins
+	if w.contextWindowExplicit > 0 {
+		w.contextWindow = w.contextWindowExplicit
+		return
 	}
+	w.contextWindow = 0
 	if w.providerSources == nil {
 		return
 	}
@@ -155,6 +164,34 @@ func (w *BaseReasonWorker) resolveContextWindow() {
 		for _, m := range info.ModelDetails {
 			if m.ID == model && m.ContextWindow > 0 {
 				w.contextWindow = m.ContextWindow
+				return
+			}
+		}
+	}
+}
+
+// resolveMaxOutput sets w.maxOutput from the selected model's declared output
+// cap (0 = unknown, which leaves Context.MaxTokens nil so the adapter applies
+// its own default). Like the context window it is re-derived on every switch:
+// the cap belongs to the model, and reusing the previous model's number would
+// either truncate a capable model or ask a small one for more than it allows.
+// Expects w.mu held.
+func (w *BaseReasonWorker) resolveMaxOutput() {
+	w.maxOutput = 0
+	if w.providerSources == nil {
+		return
+	}
+	for _, info := range w.providerSources.List() {
+		if info.Name != w.providerName {
+			continue
+		}
+		model := w.providerModel
+		if model == "" {
+			model = info.Default
+		}
+		for _, m := range info.ModelDetails {
+			if m.ID == model && m.MaxOutput > 0 {
+				w.maxOutput = m.MaxOutput
 				return
 			}
 		}

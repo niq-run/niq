@@ -65,9 +65,15 @@ func (s *Store) migrate() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_events_worker_time ON events(worker_id, timestamp DESC);
 	CREATE INDEX IF NOT EXISTS idx_events_target_time ON events(target_worker_id, timestamp DESC);
-	-- Bare timestamp index: serves chronological pagination of "all history"
-	-- (no worker filter), which the worker-scoped indexes can't be used for at scale.
-	CREATE INDEX IF NOT EXISTS idx_events_time ON events(timestamp DESC);
+	-- Chronological pagination of "all history" (no worker filter). The ORDER BY
+	-- is (timestamp, id) — id is the tiebreak that makes same-second events page
+	-- without skips — so the index carries id too: without it every page needed
+	-- a temp b-tree over the whole range instead of a seek.
+	CREATE INDEX IF NOT EXISTS idx_events_time_id ON events(timestamp DESC, id DESC);
+	-- The older timestamp-only index is a prefix of the one above: keep it and
+	-- every insert pays for two overlapping entries. Dropping an index is cheap
+	-- (no table rewrite), so old stores are cleaned on the next open.
+	DROP INDEX IF EXISTS idx_events_time;
 
 	-- Recipients, normalized: one row per (event, delivered-to worker). The
 	-- recipients JSON column stays as the display source of truth, but queries
@@ -111,10 +117,21 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if !hasRequestID {
-		_, err = s.db.Exec(`ALTER TABLE events ADD COLUMN request_id TEXT`)
-		return err
+		if _, err = s.db.Exec(`ALTER TABLE events ADD COLUMN request_id TEXT`); err != nil {
+			return err
+		}
 	}
-	return nil
+
+	// Request → reply pairing: the WebUI asks a worker a question and polls
+	// "all events carrying this request_id" until request.completed lands.
+	// Without this index that query has no equality column to seek on, so it
+	// walks every row — and cannot stop early, since a LIMIT counts matches and
+	// there are only one or two. On a 1.2M-row store every poll took ~2s, which
+	// the UI showed as a reply that "arrived late" long after the worker had
+	// already answered. Created after the column exists: an old store gains it
+	// by the ALTER above, and indexing it before that fails.
+	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_events_request_id ON events(request_id)`)
+	return err
 }
 
 // backfillRecipients copies the recipients JSON of every existing event into
@@ -246,26 +263,30 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 		// false-matched substring ids like niq vs niq-workspace).
 		sent := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, store.RoleSent)
 		received := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, store.RoleReceived)
-		const recvMatch = `target_worker_id = ? OR EXISTS (
-			SELECT 1 FROM event_recipients er WHERE er.event_rowid = events.rowid AND er.worker_id = ?)`
-		var conds []string
+		var branches []string
 		for _, wid := range opts.WorkerIDs {
 			switch {
 			case sent && received:
-				conds = append(conds, "(worker_id = ? OR ("+recvMatch+"))")
+				branches = append(branches, `SELECT rowid FROM events WHERE worker_id = ?
+					UNION SELECT rowid FROM events WHERE target_worker_id = ?
+					UNION SELECT event_rowid FROM event_recipients WHERE worker_id = ?`)
 				args = append(args, wid, wid, wid)
 			case sent:
-				conds = append(conds, "worker_id = ?")
+				branches = append(branches, "SELECT rowid FROM events WHERE worker_id = ?")
 				args = append(args, wid)
 			default: // received only
-				conds = append(conds, "("+recvMatch+")")
+				branches = append(branches, `SELECT rowid FROM events WHERE target_worker_id = ?
+					UNION SELECT event_rowid FROM event_recipients WHERE worker_id = ?`)
 				args = append(args, wid, wid)
 			}
 		}
-		query += " AND (" + strings.Join(conds, " OR ") + ")"
+		query += " AND rowid IN (" + strings.Join(branches, " UNION ") + ")"
 	} else if workerID != "*" && workerID != "" {
-		query += " AND (worker_id = ? OR target_worker_id = ? OR recipients LIKE ?)"
-		args = append(args, workerID, workerID, "%"+workerID+"%")
+		query += ` AND rowid IN (
+			SELECT rowid FROM events WHERE worker_id = ?
+			UNION SELECT rowid FROM events WHERE target_worker_id = ?
+			UNION SELECT event_rowid FROM event_recipients WHERE worker_id = ?)`
+		args = append(args, workerID, workerID, workerID)
 	}
 	if opts.TraceID != "" {
 		query += " AND trace_id = ?"
@@ -327,15 +348,20 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 	// the "before" cursor never advance). The composite key (timestamp, id) is
 	// deterministic and total (ids are unique), with id as the tiebreak so
 	// same-second events (e.g. thinking then response) page without skips.
+	//
+	// Written as a row-value comparison, not as an OR of two timestamp tests:
+	// SQLite only turns the anchor into an index range bound when it can see a
+	// single ordered comparison. The OR form made it collect the whole index
+	// and sort it (1.2M rows / ~2s on a store of this size) before answering
+	// the first page; the row-value form seeks straight to the anchor and
+	// reads only the page (53 rows / <1ms).
 	if opts.AfterID != "" {
-		query += ` AND (timestamp > (SELECT timestamp FROM events WHERE id = ?)
-				OR (timestamp = (SELECT timestamp FROM events WHERE id = ?) AND id > ?))`
-		args = append(args, opts.AfterID, opts.AfterID, opts.AfterID)
+		query += " AND (timestamp, id) > (SELECT timestamp, id FROM events WHERE id = ?)"
+		args = append(args, opts.AfterID)
 	}
 	if opts.BeforeID != "" {
-		query += ` AND (timestamp < (SELECT timestamp FROM events WHERE id = ?)
-				OR (timestamp = (SELECT timestamp FROM events WHERE id = ?) AND id < ?))`
-		args = append(args, opts.BeforeID, opts.BeforeID, opts.BeforeID)
+		query += " AND (timestamp, id) < (SELECT timestamp, id FROM events WHERE id = ?)"
+		args = append(args, opts.BeforeID)
 	}
 	if opts.Desc {
 		query += " ORDER BY timestamp DESC, id DESC"

@@ -35,6 +35,12 @@ and exposes no general-purpose tools.
 ## Callable capability
 
 - worker.readme {} — this guide.
+- approval.request { action, … } — ask the human to approve an action. action
+  names what is being approved; every other field is the requester's own
+  context for the human and is carried through untouched. Advertised in this
+  worker's worker.ready "watch" like any other capability, with the envelope
+  schema. Not a request/reply pair: there is no request.completed, the verdict
+  arrives later as approval.decision.
 
 ## What it does
 
@@ -63,4 +69,6 @@ reply. The requester waits for approval.decision.
 
 - The UI drives HIW through its Go API (SendInput / SendEvent /
   SendApprovalDecision); those are not bus-callable events.
-- HIW subscribes to nothing. Everything it receives is directed to it.`
+- HIW subscribes only to worker.discover, so the fleet's "who is here?"
+  broadcast reaches it and it can answer with this contract. Everything else
+  it receives is directed (approval.request is delivered as a direct send).`

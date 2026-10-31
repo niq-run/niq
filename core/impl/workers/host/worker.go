@@ -127,12 +127,10 @@ func (w *HostWorker) watch(ctx context.Context, busCh <-chan event.Event) {
 func (w *HostWorker) process(evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
-		if evt.WorkerId != w.ID() {
-			// Answer the discoverer directly (no broadcast re-announce — a
-			// discover storm must not fan O(N²) ready broadcasts). The
-			// directory worker owns the roster; host only says what it serves.
-			w.AnnounceReadyTo(evt.WorkerId, "host", nil, false)
-		}
+		// Answer the discoverer directly (no broadcast re-announce — a
+		// discover storm must not fan O(N²) ready broadcasts). The
+		// directory worker owns the roster; host only says what it serves.
+		w.AnswerDiscover(evt, "host", nil, false)
 	case event.TypeRequestCancel:
 		callID := evt.RequestId
 		log.Printf("[host %s] cancel requested for %s (best-effort)", w.ID(), callID)

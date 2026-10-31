@@ -13,13 +13,13 @@ It differs from the generic reason worker in exactly two places.
 
 | Mode | Tool list | How tools are used |
 |---|---|---|
-| `normal` (default) | the reason worker's tool list, unchanged: `message`, `request`, `run_program` | discover with `request(directory, "search")`, then call with `request(target, event, args)` |
-| `ptc` | `message` + `run_program` | discover **and** act from inside a script: `sdk.call("directory", "search", …)`, then `sdk.call(target, event, args)` |
+| `normal` (default) | the reason worker's tool list, unchanged: `message`, `request`, `run` | discover with `request(directory, "search")`, then call with `request(target, event, args)` |
+| `ptc` | `message` + `run` | discover **and** act from inside a script: `sdk.call("directory", "search", …)`, then `sdk.call(target, event, args)` |
 
 Normal mode does not widen the list because the worker writes code: a coding
 agent calls the bus exactly like any reason worker. The one coding-specific
 policy is PTC, which drops `request` so that **every** event send — discovery
-included — happens inside a script that `run_program` executes (`source` for a
+included — happens inside a script that `run` executes (`source` for a
 one-off, or `write` + run by path to reuse). No capability is lost, only the
 route: peer tools that normal mode would call directly become
 `sdk.call(target, event, args)` in the script. In PTC mode the worker seeds a
@@ -35,8 +35,8 @@ peer-supplied is exposed by default any more — discovery is a `request` away:
 
 | Mode | Scope |
 |---|---|
-| `normal` | `DefaultToolScope` — `Own: message, request, run_program` |
-| `ptc` | `Own: message, run_program` |
+| `normal` | `DefaultToolScope` — `Own: message, request, run` |
+| `ptc` | `Own: message, run` |
 
 Two properties fall out of the model instead of out of a list to maintain:
 
@@ -46,7 +46,7 @@ Two properties fall out of the model instead of out of a list to maintain:
   `context.compress`, `program.*` and `provider.*` stay **registered** — peers,
   the WebUI and the control plane still call them (the detail panel's provider
   switcher works) — they simply are not in `Own`.
-- **PTC drops `request` by omission.** `message` and `run_program` are in `Own`,
+- **PTC drops `request` by omission.** `message` and `run` are in `Own`,
   `request` is not, so every capability call goes through a script rather than an
   ad-hoc event send.
 

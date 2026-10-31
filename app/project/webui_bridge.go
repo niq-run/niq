@@ -127,6 +127,19 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 // must be non-empty (no "//", no leading/trailing slash). Description is free
 // text but trimmed; empty values are dropped.
 func validateWorkerMeta(wc WorkerConfig) error {
+	// Label is a display name shown in place of the id, so it only needs to
+	// stay one short, printable line — the id remains the identity.
+	if label := strings.TrimSpace(wc.Label); label != wc.Label {
+		return fmt.Errorf("label may not have leading or trailing whitespace")
+	}
+	if n := len([]rune(wc.Label)); n > 64 {
+		return fmt.Errorf("label is %d characters, at most 64 are allowed", n)
+	}
+	for _, r := range wc.Label {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("label may not contain control characters")
+		}
+	}
 	for _, t := range wc.Tags {
 		t = strings.TrimSpace(t)
 		if t == "" {
@@ -178,10 +191,10 @@ func workerMetaFromDecl(workers []WorkerConfig) map[string]webui.WorkerMeta {
 	}
 	m := make(map[string]webui.WorkerMeta, len(workers))
 	for _, wc := range workers {
-		if wc.Tags == nil && wc.Description == "" {
+		if wc.Label == "" && wc.Tags == nil && wc.Description == "" {
 			continue
 		}
-		m[wc.ID] = webui.WorkerMeta{Tags: wc.Tags, Description: wc.Description}
+		m[wc.ID] = webui.WorkerMeta{Label: wc.Label, Tags: wc.Tags, Description: wc.Description}
 	}
 	return m
 }
@@ -219,7 +232,7 @@ func (u webuiMetaUpdater) UpdateWorkerMeta(id string, meta webui.WorkerMeta) err
 	if u.projectID == "" {
 		return fmt.Errorf("worker metadata update requires a project")
 	}
-	return UpdateWorkerMeta(u.projectID, id, meta.Tags, meta.Description)
+	return UpdateWorkerMeta(u.projectID, id, meta.Label, meta.Tags, meta.Description)
 }
 
 // webuiParamsUpdater implements webui.WorkerParamsUpdater: a params edit lands

@@ -72,7 +72,7 @@ func TestHandleSendMessageSendsAppendInput(t *testing.T) {
 }
 
 // TestCoreToolPolicy verifies the reason worker's tool list is exactly the three
-// built-in sends — message, request, run_program — and nothing else. Everything
+// built-in sends — message, request, run — and nothing else. Everything
 // else (capability workers' tools, the directory's lookups, the worker's own meta
 // events) is reachable only through request.
 func TestCoreToolPolicy(t *testing.T) {
@@ -109,7 +109,7 @@ func TestCoreToolPolicy(t *testing.T) {
 	for _, d := range w.LLMToolDefs() {
 		got[d.Name] = true
 	}
-	for _, want := range []string{"message", "request", "run_program"} {
+	for _, want := range []string{"message", "request", "run"} {
 		if !got[want] {
 			t.Fatalf("expected %q in LLM tool list, got %v", want, keysOf(got))
 		}

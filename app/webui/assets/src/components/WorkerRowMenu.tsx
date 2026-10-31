@@ -17,6 +17,8 @@ interface WorkerRowMenuProps {
   onDetail?: () => void
   // Deep-links the detail panel's Readme tab (same entry the talk badge menu has).
   onReadme?: () => void
+  // Rename (备注名): turns the row's name into an inline input.
+  onRename?: () => void
   onTogglePin: () => void
   onToggleSleep: () => void
   onClose: () => void
@@ -27,7 +29,7 @@ interface WorkerRowMenuProps {
 // (sleep) for a worker row. The view entries read exactly like the talk badge
 // menu's, so right-clicking the same worker means the same thing in both places.
 // Closes on outside click / Escape.
-export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMention, onDetail, onReadme, onTogglePin, onToggleSleep, onClose }: WorkerRowMenuProps) {
+export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMention, onDetail, onReadme, onRename, onTogglePin, onToggleSleep, onClose }: WorkerRowMenuProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
@@ -56,9 +58,9 @@ export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMent
       onClick={(e) => e.stopPropagation()}
       style={{
         position: 'fixed', left: Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : x) - 140),
-        // Up to five rows (mention / details / readme / pin / sleep); keep the
-        // panel inside the viewport when the click lands near the bottom.
-        top: Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : y) - 150),
+        // Up to six rows (mention / details / readme / rename / pin / sleep);
+        // keep the panel inside the viewport when the click lands near the bottom.
+        top: Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : y) - 180),
         zIndex: 300, background: colors.bgLight, border: '1px solid ' + colors.border,
         borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.18)', padding: '3px 0',
       }}
@@ -76,6 +78,11 @@ export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMent
       {onReadme && (
         <div className="btn-hover" style={item} onClick={() => { onReadme(); onClose() }}>
           {t('badge.menu.readme')}
+        </div>
+      )}
+      {onRename && (
+        <div className="btn-hover" style={item} onClick={() => { onRename(); onClose() }}>
+          {t('sidebar.rename')}
         </div>
       )}
       <div className="btn-hover" style={item} onClick={() => { onTogglePin(); onClose() }}>

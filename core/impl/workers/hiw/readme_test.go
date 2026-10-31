@@ -7,18 +7,17 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
-// TestUnservedTrafficIsDrained verifies HIW never answers traffic it does not
-// serve: most importantly a request.completed response to an event HIW
-// published (it carries a request id), which must not be answered with
-// request.failed.
-func TestUnservedTrafficIsDrained(t *testing.T) {
+// TestReplyTrafficIsDrained verifies HIW never answers traffic that answers a
+// request: a request.completed response to an event HIW published carries a
+// request id, and replying to it would restart the reply ping-pong.
+func TestReplyTrafficIsDrained(t *testing.T) {
 	ch := &stubChannel{}
 	w := New(Config{ID: "webui-hiw", Bus: ch})
 
 	resp := event.New(event.TypeRequestCompleted, "ws-1", map[string]any{"result": "ok"})
 	resp.RequestId = "call-1"
-	if w.dispatchRegistered(resp) {
-		t.Fatal("unserved traffic was dispatched")
+	if w.DispatchExtension(resp) {
+		t.Fatal("a reply event was dispatched")
 	}
 	if len(ch.sent) != 0 {
 		t.Fatalf("drained traffic got a reply: %+v", ch.sent)
@@ -26,7 +25,7 @@ func TestUnservedTrafficIsDrained(t *testing.T) {
 
 	read := event.New(event.TypeWorkerReadme, "peer", nil)
 	read.RequestId = "r1"
-	if !w.dispatchRegistered(read) {
+	if !w.DispatchExtension(read) {
 		t.Fatal("worker.readme is not dispatched")
 	}
 }
@@ -67,7 +66,7 @@ func TestReadmeIsServedAndAnnounced(t *testing.T) {
 		t.Fatalf("expected one request.completed, got %+v", ch.sent)
 	}
 
-	w.publishReady()
+	w.AnnounceReady("hiw", hiwPublishes)
 	ready := ch.broadcasts[len(ch.broadcasts)-1]
 	watch, _ := ready.Payload["watch"].([]map[string]any)
 	found := false

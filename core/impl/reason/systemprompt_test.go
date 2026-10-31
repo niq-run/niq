@@ -16,13 +16,13 @@ func TestBuildInstructionEmpty(t *testing.T) {
 		t.Fatalf("prompt should mention worker ID r1, got: %q", s)
 	}
 	// The prompt names the three built-in sends and the discovery chain instead
-	// of enumerating every capability a worker might hold.
-	// Case-insensitive: the prompt opens sentences with these words.
+	// of enumerating every capability a worker might hold. Case-insensitive: the
+	// prompt opens sentences with these words.
 	lower := strings.ToLower(s)
 	for _, want := range []string{
-		"request", "message", "run_program",
+		"request", "message", "run",
 		"search", "describe",
-		"worker.readme", "worker.help",
+		"readme",
 		"program", "directory",
 		"program.attach",
 	} {

@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/niq-run/niq/app/niqhome"
 	"github.com/niq-run/niq/core/impl/provider/anthropic"
@@ -63,6 +62,12 @@ type Entry struct {
 	// when the model API does not report one. It backs the reason worker's
 	// context-budget thresholds.
 	ContextWindow int `json:"context_window,omitempty"`
+	// MaxOutput is the default cap on generated tokens, applied to models that
+	// do not declare their own and when the model API does not report one.
+	MaxOutput int `json:"max_output,omitempty"`
+	// InputTypes is the provider-wide default input modalities (text / image /
+	// audio / video), applied to models that do not declare their own.
+	InputTypes []string `json:"input_types,omitempty"`
 	// Headers are extra HTTP headers sent on every provider request, applied
 	// after the built-in auth headers so they may override them. Values (and
 	// api_key) support ${VAR} / $VAR environment-variable expansion.
@@ -76,12 +81,13 @@ type Entry struct {
 type ModelSpec struct {
 	Name          string `json:"name"`
 	ContextWindow int    `json:"context_window,omitempty"`
-	// InputTypes declares the model's accepted input modalities (e.g.
-	// ["text", "image"], or just ["text"] for a text-only model). It backs
-	// the reason worker's image-input gate: a model whose InputTypes exclude
-	// image gets its image content blocks downgraded to a textual hint before
-	// being sent. Empty means "unknown" — the reason worker then defaults to
-	// assuming the model accepts images.
+	// MaxOutput is the model's cap on generated tokens. Zero means
+	// "unspecified" and defers to the provider's MaxOutput, then the model API.
+	MaxOutput int `json:"max_output,omitempty"`
+	// InputTypes declares the model's accepted input modalities: "text",
+	// "image", "audio", "video" (aliases such as "vision" and "multimodal" are
+	// recognized). An empty list means "unknown" — the reader then defaults to
+	// accepting every modality and lets the provider reject what it cannot eat.
 	InputTypes []string `json:"input_types,omitempty"`
 }
 
@@ -114,7 +120,7 @@ func (m *Models) UnmarshalJSON(data []byte) error {
 func (m Models) MarshalJSON() ([]byte, error) {
 	hasMeta := false
 	for _, s := range m {
-		if s.ContextWindow != 0 {
+		if s.ContextWindow != 0 || s.MaxOutput != 0 || len(s.InputTypes) > 0 {
 			hasMeta = true
 			break
 		}
@@ -271,20 +277,6 @@ func Find(name string) (Entry, bool) {
 	return findByName(cfg, name)
 }
 
-// FindByType returns the first provider with the given type.
-func FindByType(typ string) (Entry, bool) {
-	cfg, err := Load()
-	if err != nil {
-		return Entry{}, false
-	}
-	for _, p := range cfg.Providers {
-		if strings.EqualFold(p.Type, typ) {
-			return p, true
-		}
-	}
-	return Entry{}, false
-}
-
 // Write persists a provider config.
 func Write(cfg *Config) error {
 	path := Path()
@@ -304,7 +296,7 @@ func Write(cfg *Config) error {
 
 // Build constructs an llm.LLMProvider from a provider Entry. The model used is
 // the entry's default model (see ResolveDefaultModel); a caller that wants
-// another model from Models should pass it via BuildWithOverrides.
+// another model from Models sets Entry.Model before calling.
 func Build(p Entry) llm.LLMProvider {
 	if resolved := p.ResolveDefaultModel(); resolved != "" {
 		p.Model = resolved
@@ -386,21 +378,6 @@ func Build(p Entry) llm.LLMProvider {
 			Headers: headers,
 		})
 	}
-}
-
-// BuildWithOverrides constructs a provider but lets caller-supplied values win
-// over values from provider.json.
-func BuildWithOverrides(p Entry, apiKey, baseURL, model string) llm.LLMProvider {
-	if apiKey != "" {
-		p.APIKey = apiKey
-	}
-	if baseURL != "" {
-		p.BaseURL = baseURL
-	}
-	if model != "" {
-		p.Model = model
-	}
-	return Build(p)
 }
 
 func findByName(cfg *Config, name string) (Entry, bool) {

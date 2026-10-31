@@ -65,6 +65,9 @@ type WorkerConfig struct {
 	// Description is a short human-readable purpose note for the worker.
 	// Display metadata only, not a construction param.
 	Description string `json:"description,omitempty"`
+	// Label is the worker's display name (备注名): what the UI shows instead
+	// of the id. Display metadata only — the id stays the identity on the bus.
+	Label string `json:"label,omitempty"`
 }
 
 // SpawnSpec describes how to construct and connect a managed worker.

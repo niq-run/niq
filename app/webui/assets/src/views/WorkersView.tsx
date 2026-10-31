@@ -53,7 +53,7 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
     (typeFilter === '' || w.type === typeFilter) &&
     (tagFilter === '' || (w.tags || []).includes(tagFilter)) &&
     (onlineFilter === '' || (onlineFilter === 'online' ? w.online !== false : w.online === false)) &&
-    (query === '' || [w.id, w.type, w.description, ...(w.tags || [])]
+    (query === '' || [w.id, w.label, w.type, w.description, ...(w.tags || [])]
       .some(v => (v || '').toLowerCase().includes(query)))
   )
 
@@ -168,10 +168,11 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
           {t('workerPicker.empty')}
         </div>
       ) : (
-      <table style={{ width: '100%', minWidth: 640, borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', fontSize: fontSizes.md }}>
+      <table style={{ width: '100%', minWidth: 780, borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', fontSize: fontSizes.md }}>
         <thead>
           <tr style={{ textAlign: 'left', color: colors.textDimmed, fontSize: fontSizes.xs }}>
-            <th style={{ padding: '6px 6px', width: 170, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>{t('workers.col.workerId')}</th>
+            <th style={{ padding: '6px 6px', width: 160, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>{t('workers.col.workerId')}</th>
+            <th style={{ padding: '6px 6px', width: 140, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('workers.col.label.tooltip')}>{t('workers.col.label')}</th>
             <th style={{ padding: '6px 6px', width: 110, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }}>{t('workers.col.type')}</th>
             <th style={{ padding: '6px 6px', width: 200, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('workers.col.description.tooltip')}>{t('workers.col.description')}</th>
             <th style={{ padding: '6px 6px', width: 90, position: 'sticky', top: 0, background: colors.bg, zIndex: 1, boxShadow: 'inset 0 -1px 0 ' + colors.border }} title={t('workers.col.connection.tooltip')}>{t('workers.col.connection')}</th>
@@ -206,6 +207,14 @@ export default function WorkersView({ workers, selectedId, onSelect, onOpenEvent
                   >
                     {w.id}
                   </span>
+                </td>
+                {/* Display name (备注名): what the UI shows in place of the id. */}
+                <td style={cell}>
+                  {w.label ? (
+                    <span title={w.label} style={{ color: colors.textDim }}>{w.label}</span>
+                  ) : (
+                    <span style={{ color: colors.textDimmed }}>{'\u2014'}</span>
+                  )}
                 </td>
                 <td style={cell}>
                   {w.type ? (

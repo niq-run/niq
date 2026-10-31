@@ -18,6 +18,7 @@ import ResizablePanel from './components/ResizablePanel'
 import { useTheme, fontSizes } from './theme'
 import { useI18n } from './i18n'
 import { usePolling } from './hooks/usePolling'
+import { useApprovalNotifications } from './hooks/useApprovalNotifications'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
@@ -188,6 +189,13 @@ export default function App() {
     const root = document.getElementById('root')
     if (root) root.style.background = colors.bg
   }, [colors.bg])
+
+  // Mirror the theme onto <html> as well: styles.css keys off [data-theme],
+  // and portaled UI (context menus, pickers) mounts outside .app-shell, so the
+  // attribute has to live on the root for those subtree rules to apply.
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  }, [dark])
 
   // ── State ──
   const [events, setEvents] = useState<EventPayload[]>([])
@@ -759,16 +767,31 @@ export default function App() {
   // app polls them for the nav badge and passes them to the approvals view and
   // the talk view's inline quick-approve.
   const [approvals, setApprovals] = useState<ApprovalEntry[]>([])
+  // Browser notifications for newly arrived approval requests. The scope is
+  // the attached project, so switching projects does not announce the other
+  // project's backlog.
+  const notifyScope = mode === 'project' ? projectBase : ''
+  const {
+    permission: notifyPermission,
+    on: notifyOn,
+    toggle: toggleNotify,
+    announce: announceApprovals,
+  } = useApprovalNotifications(notifyScope, view, () => selectView('approvals'))
   useEffect(() => {
     if (mode !== 'project') { setApprovals([]); return }
     let alive = true
     const load = () => fetchApprovals()
-      .then(r => { if (alive) setApprovals(r.approvals ?? []) })
+      .then(r => {
+        if (!alive) return
+        const list = r.approvals ?? []
+        setApprovals(list)
+        announceApprovals(list)
+      })
       .catch(() => { /* next poll retries */ })
     load()
     const t = setInterval(load, 5000)
     return () => { alive = false; clearInterval(t) }
-  }, [mode, projectBase])
+  }, [mode, projectBase, announceApprovals])
 
   const pendingApprovalCount = approvals.filter(a => !a.decision).length
 
@@ -778,8 +801,16 @@ export default function App() {
     try {
       await decideApproval(id, approved, note)
     } catch { /* surfaced via the entry's state on next poll */ }
-    fetchApprovals().then(r => setApprovals(r.approvals ?? [])).catch(() => {})
-  }, [])
+    // The refresh goes through the same path as the poll, so a request that
+    // arrived meanwhile is announced right away instead of on the next tick.
+    fetchApprovals()
+      .then(r => {
+        const list = r.approvals ?? []
+        setApprovals(list)
+        announceApprovals(list)
+      })
+      .catch(() => {})
+  }, [announceApprovals])
 
   // A talk partner by id — the workers a message can be addressed to.
   const isPartnerId = useCallback((id: string) => {
@@ -1218,6 +1249,16 @@ export default function App() {
     return map
   }, [workers])
 
+  // Declared display names (备注名). Talk rows render them in place of the id,
+  // so a renamed worker reads the same everywhere; the id stays the identity.
+  const workerLabels = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const w of workers) {
+      if (w.label && w.label.trim()) map[w.id] = w.label.trim()
+    }
+    return map
+  }, [workers])
+
   // Latest worker.ready "watch" per worker: every announced capability
   // (event type + parameter schema) the human UI can drive. Largely derived by
   // taking the most recent worker.ready broadcast for each worker id.
@@ -1299,10 +1340,14 @@ export default function App() {
         onSelectPanel={setPanel}
         archived={archived}
         pendingApprovals={pendingApprovalCount}
+        notifyPermission={notifyPermission}
+        notifyOn={notifyOn}
+        onToggleNotify={toggleNotify}
         isMobile={isMobile}
         open={sidebarOpen}
         onMention={handleMention}
         onOpenDetail={openWorkerDetail}
+        onRefreshWorkers={refreshWorkers}
         onNavigate={() => setSidebarOpen(false)}
       />
 
@@ -1403,12 +1448,15 @@ export default function App() {
               onFocusWorker={filterOnlyWorker}
               deliveries={deliveries}
               workerTypes={workerTypes}
+              workerLabels={workerLabels}
               thinkingExpanded={viewSettings.thinkingExpanded}
               compactMode={viewSettings.compactMode}
               streamingMode={viewSettings.streamingMode}
               responseOnly={viewSettings.responseOnly}
               isMobile={isMobile}
               onDecide={handleDecide}
+              pendingApprovals={pendingApprovalCount}
+              onOpenApprovals={() => selectView('approvals')}
               scrollToBottomSignal={sendPulse}
               onFollowChange={setActiveFollowing}
             />
@@ -1504,7 +1552,7 @@ export default function App() {
                           workers' events to show. Both checked = default. */}
                       {(['sent', 'received'] as const).map(role => (
                         <label key={role} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 12, cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm }}>
-                          <input type="checkbox" checked={filterRoles.has(role)} onChange={() => toggleFilterRole(role)} style={{ margin: 0, accentColor: colors.accent }} />
+                          <input type="checkbox" checked={filterRoles.has(role)} onChange={() => toggleFilterRole(role)} style={{ margin: 0 }} />
                           {t(role === 'sent' ? 'events.role.sent' : 'events.role.received')}
                         </label>
                       ))}

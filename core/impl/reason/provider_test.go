@@ -368,3 +368,135 @@ func TestStatusQueryCurrent(t *testing.T) {
 		t.Fatalf("current = %v/%v, want b/m3", current.Provider, current.Model)
 	}
 }
+
+// TestSwitchRecomputesContextWindow verifies a provider switch re-derives the
+// context window from the newly selected model instead of keeping the one the
+// startup model happened to have: the window is per-model (a 262k model must
+// report and budget 262k), and the startup resolution must not be mistaken for
+// a user override.
+func TestSwitchRecomputesContextWindow(t *testing.T) {
+	pa, pb := &staticProvider{}, &staticProvider{}
+	fake := &fakeSources{
+		infos: []ProviderInfo{
+			{Name: "a", Default: "big", Models: []string{"big"},
+				ModelDetails: []llm.ModelInfo{{ID: "big", ContextWindow: 1024000}}},
+			{Name: "b", Default: "small", Models: []string{"small"},
+				ModelDetails: []llm.ModelInfo{{ID: "small", ContextWindow: 262000}}},
+		},
+		provs: map[string]llm.LLMProvider{"a": pa, "b": pb},
+	}
+	w := NewBaseReasonWorker(Config{
+		ID:              "r1",
+		ProviderSources: fake,
+		ProviderName:    "a",
+		ProviderModel:   "big",
+		Bus:             newTestChannel(),
+	})
+	if w.contextWindow != 1024000 {
+		t.Fatalf("initial context window = %d, want the startup model's 1024000", w.contextWindow)
+	}
+
+	w.mu.Lock()
+	err := w.setActiveProvider("b", "small")
+	w.mu.Unlock()
+	if err != nil {
+		t.Fatalf("setActiveProvider: %v", err)
+	}
+	if w.contextWindow != 262000 {
+		t.Fatalf("context window after switch = %d, want 262000 (the new model's)", w.contextWindow)
+	}
+}
+
+// TestExplicitContextWindowSurvivesSwitch verifies params.context_window (the
+// manual override) still wins over the selected model's reported window, even
+// across a provider switch.
+func TestExplicitContextWindowSurvivesSwitch(t *testing.T) {
+	pa, pb := &staticProvider{}, &staticProvider{}
+	fake := &fakeSources{
+		infos: []ProviderInfo{
+			{Name: "a", Default: "big", ModelDetails: []llm.ModelInfo{{ID: "big", ContextWindow: 1024000}}},
+			{Name: "b", Default: "small", ModelDetails: []llm.ModelInfo{{ID: "small", ContextWindow: 262000}}},
+		},
+		provs: map[string]llm.LLMProvider{"a": pa, "b": pb},
+	}
+	w := NewBaseReasonWorker(Config{
+		ID:              "r1",
+		ProviderSources: fake,
+		ProviderName:    "a",
+		ProviderModel:   "big",
+		ContextWindow:   500000, // explicit override
+		Bus:             newTestChannel(),
+	})
+	if w.contextWindow != 500000 {
+		t.Fatalf("initial context window = %d, want the explicit 500000", w.contextWindow)
+	}
+
+	w.mu.Lock()
+	err := w.setActiveProvider("b", "small")
+	w.mu.Unlock()
+	if err != nil {
+		t.Fatalf("setActiveProvider: %v", err)
+	}
+	if w.contextWindow != 500000 {
+		t.Fatalf("explicit override lost on switch: %d", w.contextWindow)
+	}
+}
+
+// maxOutputSources returns canned sources whose two models declare different
+// output caps (a: 64k, b: 8k).
+func maxOutputSources() *fakeSources {
+	return &fakeSources{
+		infos: []ProviderInfo{
+			{Name: "a", Default: "big", ModelDetails: []llm.ModelInfo{{ID: "big", MaxOutput: 64000}}},
+			{Name: "b", Default: "small", ModelDetails: []llm.ModelInfo{{ID: "small", MaxOutput: 8000}}},
+		},
+		provs: map[string]llm.LLMProvider{"a": &staticProvider{}, "b": &staticProvider{}},
+	}
+}
+
+// TestSwitchRecomputesMaxOutput verifies the output cap follows the selected
+// model: it is derived at construction and re-derived on every switch, so a
+// small model is never asked for the big model's budget (and vice versa).
+func TestSwitchRecomputesMaxOutput(t *testing.T) {
+	w := NewBaseReasonWorker(Config{
+		ID:              "r1",
+		ProviderSources: maxOutputSources(),
+		ProviderName:    "a",
+		ProviderModel:   "big",
+		Bus:             newTestChannel(),
+	})
+	if w.maxOutput != 64000 {
+		t.Fatalf("initial max output = %d, want 64000", w.maxOutput)
+	}
+
+	w.mu.Lock()
+	err := w.setActiveProvider("b", "small")
+	w.mu.Unlock()
+	if err != nil {
+		t.Fatalf("setActiveProvider: %v", err)
+	}
+	if w.maxOutput != 8000 {
+		t.Fatalf("max output after switch = %d, want 8000", w.maxOutput)
+	}
+}
+
+// TestPrepareReasoningAppliesMaxOutput verifies the resolved cap is handed to
+// the provider as Context.MaxTokens, and that an unknown cap (0) leaves it nil
+// so the adapter's own default applies.
+func TestPrepareReasoningAppliesMaxOutput(t *testing.T) {
+	w := NewBaseReasonWorker(Config{
+		ID:              "r1",
+		ProviderSources: maxOutputSources(),
+		ProviderName:    "a",
+		ProviderModel:   "big",
+		Bus:             newTestChannel(),
+	})
+	if _, req := w.prepareReasoning(); req.Context.MaxTokens == nil || *req.Context.MaxTokens != 64000 {
+		t.Fatalf("MaxTokens = %v, want 64000", req.Context.MaxTokens)
+	}
+
+	plain := newTestWorker(nil, nil) // no provider sources -> no cap
+	if _, req := plain.prepareReasoning(); req.Context.MaxTokens != nil {
+		t.Fatalf("unknown cap should leave MaxTokens nil, got %d", *req.Context.MaxTokens)
+	}
+}

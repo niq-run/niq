@@ -144,10 +144,15 @@ func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, 
 	}
 	p := cfg.Params
 
+	// The provider is a NAME in provider.json; model is one of its models.
+	// Endpoint and credentials live on that entry — a worker carries neither.
 	provider, _ := p["provider"].(string)
-	apiKey, _ := p["api_key"].(string)
-	baseURL, _ := p["base_url"].(string)
 	model, _ := p["model"].(string)
+	if provider != "" {
+		if _, ok := providerpkg.Find(provider); !ok {
+			return nil, fmt.Errorf("%s: provider %q is not configured in provider.json", typ, provider)
+		}
+	}
 
 	// SubscribeAllow: only broadcast delivery needs listing. Directed events
 	// (tool calls, their request.* replies, timer.timeout, management
@@ -201,8 +206,8 @@ func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, 
 	// collaborators: absent = unrestricted; present (even []) = whitelist.
 	collaborators := pStrings(p, "collaborators")
 
-	providerSources := providerpkg.NewProviderSources(provider, apiKey, baseURL, model)
-	pname, pmodel := providerpkg.InitialProviderInfo(provider, apiKey, baseURL, model)
+	providerSources := providerpkg.NewProviderSources(provider, model)
+	pname, pmodel := providerpkg.InitialProviderInfo(provider, model)
 
 	return &reasonFamilyIn{
 		id:               id,
@@ -561,12 +566,22 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	}
 	// PublishAllow: a `*` grant so the human UI (acting as HIW) can send a
 	// worker any event in its "watch" contract, driving its behaviour/state on
-	// the bus through the normal ACL path. Subscribes to nothing.
+	// the bus through the normal ACL path.
+	//
+	// SubscribeAllow: worker.discover — so a broadcast "who is online?" reaches
+	// HIW and it can answer with its own contract. Without this grant HIW is
+	// invisible to the fleet roster: it is the first worker up, so the ready it
+	// broadcasts reaches nobody, and it never hears the discover the directory
+	// sends. Everything else still arrives directed (approval.request does) —
+	// the bus delivers a directed send regardless of the receiver's subscribe
+	// list; SubscribeAllow only gates broadcast delivery.
 	connect := specConnect(ctx, id, "hiw",
 		[]event.PublishPattern{
 			event.NewPublishPattern("*"),
 		},
-		nil)
+		[]event.EventPattern{
+			event.NewPattern(event.TypeWorkerDiscover),
+		})
 	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
 		return hiw.New(hiw.Config{ID: id, Bus: ch,
 			// The HIW owns the approval entries the UI displays; a decision or

@@ -158,9 +158,7 @@ func (w *DirectoryWorker) process(evt event.Event) {
 			w.dirMu.Unlock()
 		}
 	case event.TypeWorkerDiscover:
-		if evt.WorkerId != w.ID() {
-			w.AnnounceReadyTo(evt.WorkerId, "directory", nil, false)
-		}
+		w.AnswerDiscover(evt, "directory", nil, false)
 	default:
 		if !w.DispatchExtension(evt) {
 			log.Printf("[directory %s] no extension for event %s", w.ID(), evt.Type)
@@ -290,6 +288,8 @@ func (w *DirectoryWorker) registerExtensions() {
 		tc := baseworker.ParseToolCall(evt)
 		w.handleDescribe(evt, tc)
 	})
+
+	w.registerHelp()
 }
 
 // directoryReadme is the agent-facing usage guide returned by worker.readme.

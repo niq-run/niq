@@ -221,3 +221,54 @@ html, body {
   font-style: normal;
   font-display: swap;
 }
+
+/* ── Native checkboxes ── */
+/* The UA default draws a bright white box, which reads as a hole punched in
+   the dark theme (and as a foreign control in the light one). Draw them like
+   the sidebar's selector CheckBox: a 13px bordered square that fills with the
+   accent and shows a white mark when checked. Themed via the same
+   [data-theme] attribute the rest of this file uses. */
+input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  flex: none;
+  display: inline-grid;
+  place-content: center;
+  background: transparent;
+  border: 1px solid var(--cb-border);
+  border-radius: 3px;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background 0.12s, border-color 0.12s;
+}
+input[type='checkbox']:checked {
+  background: var(--cb-accent);
+  border-color: var(--cb-accent);
+}
+input[type='checkbox']::after {
+  content: '';
+  width: 3px;
+  height: 6px;
+  border: solid #fff;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg) translate(-0.5px, -0.5px);
+  opacity: 0;
+}
+input[type='checkbox']:checked::after {
+  opacity: 1;
+}
+input[type='checkbox']:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+[data-theme='dark'] {
+  --cb-border: #525252;
+  --cb-accent: rgb(60, 120, 180);
+}
+[data-theme='light'] {
+  --cb-border: #b0b0b0;
+  --cb-accent: rgb(60, 120, 180);
+}

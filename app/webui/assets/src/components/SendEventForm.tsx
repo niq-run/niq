@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import type { EventPayload, WatchEntry } from '../types'
@@ -83,8 +83,12 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
   const [error, setError] = useState('')
   const [done, setDone] = useState('')
   // The last sent exchange, shown below the form: the sent event + the
-  // worker's request.completed / request.failed reply (correlated by request id).
-  const [sent, setSent] = useState<{ type: string; payload: Record<string, any>; reply?: EventPayload } | null>(null)
+  // worker's reply correlated by request id.
+  const [sent, setSent] = useState<{ type: string; reqId: string; payload: Record<string, any>; reply?: EventPayload } | null>(null)
+  // Invalidates an in-flight reply poll when the form unmounts or another event
+  // is sent: the loop is a background tail, not part of the send.
+  const pollToken = useRef(0)
+  useEffect(() => () => { pollToken.current++ }, [])
 
   const entry = watch.find((w) => w.event === selected)
   // Schema: entries declare parameters as an object schema
@@ -97,6 +101,14 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
     return p
   }, [entry])
 
+  // An open schema (additionalProperties: true) carries fields the worker does
+  // not enumerate — approval.request is the canonical case: only `action` is
+  // fixed, the rest is whatever context the sender wants the human to see. The
+  // form then takes a free-form JSON object instead of inventing per-kind
+  // controls.
+  const open = entry?.parameters?.additionalProperties === true
+  const [extra, setExtra] = useState('')
+
   const inputStyle: React.CSSProperties = {
     flex: 1,
     minWidth: 0,
@@ -108,14 +120,24 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
     borderRadius: 4,
   }
 
-  const pollReply = async (reqId: string): Promise<EventPayload | undefined> => {
-    for (let i = 0; i < 12; i++) {
-      await new Promise((r) => setTimeout(r, 300))
+  // watchReply follows the request id in the background and fills the reply in
+  // when it lands. It is decoupled from the send: the send is done once the
+  // event is delivered, so the form shows what was sent and a waiting hint
+  // instead of holding the button hostage. Any event carrying this request id
+  // other than the request itself is the answer.
+  const watchReply = async (reqId: string, token: number) => {
+    for (let i = 0; i < 61; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, 1000))
+      if (token !== pollToken.current) return
       const evts = await fetchEventsByRequest(reqId).catch(() => [] as EventPayload[])
-      const reply = evts.find((e) => e.type === 'request.completed' || e.type === 'request.failed')
-      if (reply) return reply
+      if (token !== pollToken.current) return
+      const reply = evts.find((e) => e.id !== reqId && (e.type === 'request.completed' || e.type === 'request.failed'))
+        ?? evts.find((e) => e.id !== reqId)
+      if (reply) {
+        setSent((s) => (s && s.reqId === reqId ? { ...s, reply } : s))
+        return
+      }
     }
-    return undefined
   }
 
   const submit = async () => {
@@ -123,12 +145,26 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
     setError('')
     setDone('')
     setSent(null)
+    const token = ++pollToken.current
     try {
-      const reqId = await sendWorkerEvent(workerId, selected, form)
+      let payload: Record<string, any> = { ...form }
+      if (open && extra.trim() !== '') {
+        let parsed: any
+        try {
+          parsed = JSON.parse(extra)
+        } catch {
+          throw new Error(t('wd.eventExtraObject'))
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error(t('wd.eventExtraObject'))
+        }
+        payload = { ...payload, ...parsed }
+      }
+      const reqId = await sendWorkerEvent(workerId, selected, payload)
       setDone(t('wd.eventSent'))
       if (reqId) {
-        const reply = await pollReply(reqId)
-        setSent({ type: selected, payload: { ...form }, reply })
+        setSent({ type: selected, reqId, payload })
+        void watchReply(reqId, token)
       }
     } catch (e) {
       setError((e as Error)?.message || 'send failed')
@@ -147,7 +183,7 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
         {watch.map((w) => (
           <span
             key={w.event}
-            onClick={() => { setSelected(w.event); setForm({}); setError(''); setDone(''); setSent(null) }}
+            onClick={() => { setSelected(w.event); setForm({}); setExtra(''); setError(''); setDone(''); setSent(null) }}
             title={w.desc}
             style={{
               cursor: 'pointer', display: 'inline-block', padding: '4px 10px', borderRadius: 2, fontSize: fontSizes.sm, lineHeight: '18px',
@@ -164,12 +200,26 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
       {entry && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {entry.desc && <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed, marginBottom: 4 }}>{entry.desc}</div>}
-          {Object.keys(properties).length === 0 ? (
+          {Object.keys(properties).length === 0 && !open ? (
             <div style={{ fontSize: fontSizes.sm, color: colors.textDimmed }}>{t('wd.eventNoParams')}</div>
           ) : (
             Object.entries(properties).map(([k, schema]) =>
               controlForParam(k, schema, form[k], (v) => setForm((f) => ({ ...f, [k]: v })), colors, inputStyle),
             )
+          )}
+          {open && (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+              <span style={{ color: colors.textDim, fontSize: fontSizes.sm }}>
+                {t('wd.eventExtra')} <span style={{ color: colors.textDimmed }}>{t('wd.eventExtraHint')}</span>
+              </span>
+              <textarea
+                value={extra}
+                onChange={(e) => setExtra(e.target.value)}
+                placeholder={'{\n  "path": "/tmp/demo"\n}'}
+                rows={4}
+                style={{ ...inputStyle, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', resize: 'vertical' }}
+              />
+            </label>
           )}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <span
@@ -193,7 +243,10 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
                   <CollapsibleCode code={JSON.stringify(sent.payload, null, 2)} language="json" />
                 </div>
               )}
-              <div style={{ fontSize: fontSizes.sm, color: colors.textDim }}>{t('wd.eventResponse')}:</div>
+              <div style={{ fontSize: fontSizes.sm, color: colors.textDim }}>
+                {t('wd.eventResponse')}
+                {sent.reply ? <span style={{ color: colors.textDimmed }}> · {sent.reply.type}</span> : null}:
+              </div>
               {sent.reply ? (
                 <div style={{ minWidth: 0 }}>
                   <CollapsibleCode

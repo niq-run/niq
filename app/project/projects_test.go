@@ -399,3 +399,52 @@ func TestBuiltinPlaybookIsLoadable(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdateWorkerMetaLabel verifies the display name (备注名) persists to the
+// declaration and is validated: it is one short printable line, and an empty
+// value clears it (the UI then falls back to the worker id).
+func TestUpdateWorkerMetaLabel(t *testing.T) {
+	setupProjectsRoot(t)
+	if _, err := CreateProject("gamma", "", fakeTemplate()); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	if err := UpdateWorkerMeta("gamma", "niq", "值班机器人", []string{"ops"}, "nightly"); err != nil {
+		t.Fatalf("UpdateWorkerMeta: %v", err)
+	}
+	p, err := LoadProject("gamma")
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	wc, ok := FindWorker(p, "niq")
+	if !ok {
+		t.Fatal("worker niq missing")
+	}
+	if wc.Label != "值班机器人" || wc.Description != "nightly" || len(wc.Tags) != 1 {
+		t.Fatalf("declaration after update = %+v", wc)
+	}
+
+	// Invalid labels are rejected and leave the stored value untouched.
+	for _, bad := range []string{" padded", "two\nlines", strings.Repeat("x", 65)} {
+		if err := UpdateWorkerMeta("gamma", "niq", bad, nil, ""); err == nil {
+			t.Fatalf("label %q was accepted", bad)
+		}
+	}
+	if p, err = LoadProject("gamma"); err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if wc, _ = FindWorker(p, "niq"); wc.Label != "值班机器人" {
+		t.Fatalf("rejected edit changed the label: %q", wc.Label)
+	}
+
+	// Empty clears the label (falls back to the id in the UI).
+	if err := UpdateWorkerMeta("gamma", "niq", "", nil, ""); err != nil {
+		t.Fatalf("clear label: %v", err)
+	}
+	if p, err = LoadProject("gamma"); err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if wc, _ = FindWorker(p, "niq"); wc.Label != "" {
+		t.Fatalf("label not cleared: %q", wc.Label)
+	}
+}

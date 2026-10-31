@@ -395,7 +395,8 @@ export interface UsageMeta {
   total: number
   cacheRead: number
   contextWindow: number
-  // contextPercent is 0..100 of total/contextWindow, or 0 when unknown.
+  // contextPercent is 0..100 of total/contextWindow, unrounded so small
+  // occupancies survive; 0 when the window is unknown.
   contextPercent: number
 }
 
@@ -412,7 +413,7 @@ export function getUsageMeta(evt: EventPayload): UsageMeta | undefined {
   const cacheRead = Number(u.cache_read_tokens) || 0
   const contextWindow = Number(u.context_window) || 0
   const contextPercent = contextWindow > 0
-    ? Math.round((total / contextWindow) * 100)
+    ? (total / contextWindow) * 100
     : 0
   return { input, output, total, cacheRead, contextWindow, contextPercent }
 }
@@ -423,6 +424,12 @@ export function getUsageMeta(evt: EventPayload): UsageMeta | undefined {
 export function formatCompact(n: number): string {
   if (n < 1000) return String(n)
   return Math.round(n / 1000) + 'K'
+}
+
+// formatPercent renders a 0..100 occupancy without collapsing a small value to
+// "0": below 10% it keeps one decimal (0.3), otherwise it rounds (15).
+export function formatPercent(p: number): string {
+  return p < 10 ? p.toFixed(1) : String(Math.round(p))
 }
 
 // UsageParts is the usage label split ready for rendering with a drawn
@@ -439,8 +446,8 @@ export interface UsageParts {
 export function getUsageParts(evt: EventPayload, t: (key: any, vars?: Record<string, string | number>) => string): UsageParts {
   const m = getUsageMeta(evt)
   if (!m) return { left: '', right: '' }
-  const left = (m.contextPercent > 0 && m.contextWindow > 0)
-    ? t('talk.usage.window', { window: formatCompact(m.contextWindow), pct: m.contextPercent })
+  const left = m.contextWindow > 0
+    ? t('talk.usage.window', { window: formatCompact(m.contextWindow), pct: formatPercent(m.contextPercent) })
     : ''
   const right = [
     t('talk.usage.in', { n: formatCompact(m.input) }),

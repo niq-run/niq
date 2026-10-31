@@ -25,7 +25,7 @@ type ToolCaller func(ctx context.Context, target string, eventType event.EventTy
 // SDK's message(target, text) sends a worker.input note, waits for nothing from
 // the target, and returns once the event is on the bus (an error means it never
 // got there — an unknown target, a refused send). It exists so the three built-in
-// sends a reason worker has — request, message, run_program — are the same three
+// sends a reason worker has — request, message, run — are the same three
 // inside a script, instead of message decaying into call(target, "worker.input").
 type MessageSender func(ctx context.Context, target, text string) error
 

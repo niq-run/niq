@@ -96,6 +96,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
   const filtered = q
     ? onlineMatched.filter(w =>
         w.id.toLowerCase().includes(q) ||
+        (w.label || '').toLowerCase().includes(q) ||
         (w.type || '').toLowerCase().includes(q) ||
         (w.description || '').toLowerCase().includes(q) ||
         (w.tags || []).some(tag => tag.toLowerCase().includes(q)))
@@ -338,8 +339,8 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
                   {/* Line 1: worker name, tags right after it (no wrap). */}
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    <span style={{ color: isActive ? colors.accent : colors.text, fontSize: fontSizes.base, fontWeight: isActive ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '0 1 auto', minWidth: 0 }}>
-                      {w.id}
+                    <span title={w.id} style={{ color: isActive ? colors.accent : colors.text, fontSize: fontSizes.base, fontWeight: isActive ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '0 1 auto', minWidth: 0 }}>
+                      {w.label || w.id}
                     </span>
                     {(w.tags || []).map(tag => (
                       <span key={tag} style={{ fontSize: fontSizes.xs, color: colors.textDim, background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 8, padding: '0 6px', lineHeight: '15px', whiteSpace: 'nowrap', flexShrink: 0 }}>{'#' + tag}</span>

@@ -409,7 +409,7 @@ func TestMetaCapabilitiesAreNeverTools(t *testing.T) {
 	for _, d := range defs {
 		got[d.Name] = true
 	}
-	if !got["message"] || !got["run_program"] || !got["directory__search"] {
+	if !got["message"] || !got["run"] || !got["directory__search"] {
 		t.Fatalf("scope dropped a real capability: %v", got)
 	}
 	for _, unwanted := range []string{
@@ -468,7 +468,7 @@ func TestCollaborationScopeHidesOutOfScopeReasonPeers(t *testing.T) {
 	}
 }
 
-// TestRunProgramForwardsToProgramWorker verifies the built-in run_program tool:
+// TestRunProgramForwardsToProgramWorker verifies the built-in run tool:
 // it resolves the program worker by announced type (not by a hardcoded id), sends
 // the program worker's own "run" event with the model's arguments, and reuses the
 // call id as the request id so the reply pairs back through the normal tracker.
@@ -493,7 +493,7 @@ func TestRunProgramForwardsToProgramWorker(t *testing.T) {
 
 	w.mu.Lock()
 	w.handleToolCalls(context.Background(), []llm.ContentBlock{
-		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "run_program",
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "run",
 			ToolArguments: `{"source":"sdk.result(1)"}`},
 	}, "trace1")
 
@@ -523,7 +523,7 @@ func TestRunProgramWithoutProgramWorkerFails(t *testing.T) {
 
 	w.mu.Lock()
 	w.handleToolCalls(context.Background(), []llm.ContentBlock{
-		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "run_program",
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "run",
 			ToolArguments: `{"source":"1"}`},
 	}, "trace1")
 

@@ -14,8 +14,8 @@ func exportTemplate() *TemplateConfig {
 	return &TemplateConfig{Workers: []WorkerConfig{
 		{
 			Type: "reason", ID: "niq",
-			Instruction: "do the thing",
-			Provider:    "volcan-ark", APIKey: "sk-secret", BaseURL: "https://api.example.com",
+			Instruction:   "do the thing",
+			Provider:      "volcan-ark",
 			Model:         "deepseek-v4-flash",
 			Subscriptions: []SubscriptionSpec{{Type: "worker.input", Source: "timer"}},
 			Publish:       []PublishSpec{{Type: "reason.response"}},
@@ -65,7 +65,7 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 		t.Fatalf("exported %d workers, want 2 (archived skipped): %+v", len(out.Workers), out.Workers)
 	}
 
-	// Managed worker: expressible fields round-trip, api_key does not.
+	// Managed worker: expressible fields round-trip.
 	var niq WorkerConfig
 	for _, w := range out.Workers {
 		if w.ID == "niq" {
@@ -77,8 +77,7 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 	}
 	want := src.Workers[0]
 	if niq.Instruction != want.Instruction || niq.Provider != want.Provider ||
-		niq.BaseURL != want.BaseURL || niq.Model != want.Model ||
-		niq.Approver != want.Approver {
+		niq.Model != want.Model || niq.Approver != want.Approver {
 		t.Fatalf("niq fields drifted:\n got %+v\nwant %+v", niq, want)
 	}
 	if len(niq.Mounts) != 1 || niq.Mounts[0] != want.Mounts[0] {
@@ -89,9 +88,6 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 	}
 	if len(niq.Publish) != 1 || niq.Publish[0] != want.Publish[0] {
 		t.Fatalf("niq publish = %+v, want %+v", niq.Publish, want.Publish)
-	}
-	if niq.APIKey != "" {
-		t.Fatal("api_key must not enter the exported template")
 	}
 	if niq.Managed != nil && !*niq.Managed {
 		t.Fatal("managed worker must stay managed")

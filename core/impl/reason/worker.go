@@ -171,26 +171,27 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	}
 
 	w := &BaseReasonWorker{
-		BaseWorker:      baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
-		llmProvider:     initialProvider,
-		providerSources: cfg.ProviderSources,
-		providerName:    cfg.ProviderName,
-		providerModel:   cfg.ProviderModel,
-		transcript:      cfg.Transcript,
-		eventConverters: cfg.EventConverters,
-		programs:        cfg.Programs,
-		requestTracker:  requesttracker.NewRequestTracker(),
-		toolListBuilder: toolListBuilder,
-		contextWindow:   cfg.ContextWindow,
-		budgetSoft:      cfg.BudgetSoft,
-		budgetHard:      cfg.BudgetHard,
-		tailTokens:      cfg.TailTokens,
-		rotateRounds:    cfg.RotateRounds,
-		reasoningEffort: cfg.ReasoningEffort,
-		readme:          cfg.Readme,
-		workerType:      workerTypeOrDefault(cfg.WorkerType),
-		collaborators:   collaborators,
-		excludedPeers:   make(map[string]bool),
+		BaseWorker:            baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
+		llmProvider:           initialProvider,
+		providerSources:       cfg.ProviderSources,
+		providerName:          cfg.ProviderName,
+		providerModel:         cfg.ProviderModel,
+		transcript:            cfg.Transcript,
+		eventConverters:       cfg.EventConverters,
+		programs:              cfg.Programs,
+		requestTracker:        requesttracker.NewRequestTracker(),
+		toolListBuilder:       toolListBuilder,
+		contextWindow:         cfg.ContextWindow,
+		contextWindowExplicit: cfg.ContextWindow,
+		budgetSoft:            cfg.BudgetSoft,
+		budgetHard:            cfg.BudgetHard,
+		tailTokens:            cfg.TailTokens,
+		rotateRounds:          cfg.RotateRounds,
+		reasoningEffort:       cfg.ReasoningEffort,
+		readme:                cfg.Readme,
+		workerType:            workerTypeOrDefault(cfg.WorkerType),
+		collaborators:         collaborators,
+		excludedPeers:         make(map[string]bool),
 	}
 	// Durable-change signalling is the base's machinery (baseworker); the
 	// mechanism only decides when to raise it (see handleSetLLMProvider).
@@ -207,8 +208,10 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 
 	// Resolve the context window for the selected provider/model so the budget
 	// thresholds use the real size (API-reported or configured) instead of the
-	// manual fallback (0 = disabled).
+	// manual fallback (0 = disabled), and the model's output cap so requests
+	// are not silently held to an adapter default.
 	w.resolveContextWindow()
+	w.resolveMaxOutput()
 
 	return w
 }
@@ -536,13 +539,22 @@ type BaseReasonWorker struct {
 	cancelRun    context.CancelFunc
 
 	// Context budget state; guarded by w.mu
-	contextWindow   int
-	budgetSoft      float64
-	budgetHard      float64
-	tailTokens      int
-	rotateRounds    int
-	lastUsageTokens int
-	budgetReminded  bool
+	contextWindow int
+	// maxOutput is the selected model's declared cap on generated tokens
+	// (0 = unknown). Applied as Context.MaxTokens, so a model that reports a
+	// large cap is no longer silently held to an adapter default.
+	maxOutput int
+	// contextWindowExplicit is the params.context_window override (0 = none).
+	// Kept apart from the effective window so a provider switch can re-derive
+	// the window from the newly selected model instead of inheriting the last
+	// model's size.
+	contextWindowExplicit int
+	budgetSoft            float64
+	budgetHard            float64
+	tailTokens            int
+	rotateRounds          int
+	lastUsageTokens       int
+	budgetReminded        bool
 }
 
 // workerTypeOrDefault returns the worker's announced type, defaulting to the

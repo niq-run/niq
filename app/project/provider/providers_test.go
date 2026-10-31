@@ -142,3 +142,60 @@ func TestModelsForPropagatesInputTypes(t *testing.T) {
 		t.Errorf("details[2].InputTypes = %v, want empty (unknown)", got)
 	}
 }
+
+// TestInitialProviderInfoNamesOnly verifies a worker selects its provider by
+// NAME and its model by name: no endpoint or credential is involved, an empty
+// model falls back to the entry's default, and an unknown name resolves to
+// nothing (the builder rejects it before a worker exists).
+func TestInitialProviderInfoNamesOnly(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "provider.json")
+	t.Setenv("NIQ_PROVIDER_CONFIG", cfgPath)
+	if err := Write(&Config{Active: "a", Providers: []Entry{
+		{Name: "a", Type: "deepseek", APIKey: "k1", Model: "m1"},
+		{Name: "b", Type: "openai-compatible", BaseURL: "https://b.example", APIKey: "k2", Model: "m2"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct{ provider, model, wantName, wantModel string }{
+		{"b", "m2", "b", "m2"}, // explicit pair
+		{"b", "", "b", "m2"},   // name only: the entry's default model
+		{"", "m1", "a", "m1"},  // model only: config's active provider
+		{"", "", "a", "m1"},    // nothing: config default
+		{"gone", "m1", "", ""}, // unknown name resolves to nothing
+	}
+	for _, c := range cases {
+		gotName, gotModel := InitialProviderInfo(c.provider, c.model)
+		if gotName != c.wantName || gotModel != c.wantModel {
+			t.Fatalf("InitialProviderInfo(%q,%q) = %q/%q, want %q/%q",
+				c.provider, c.model, gotName, gotModel, c.wantName, c.wantModel)
+		}
+	}
+}
+
+// TestModelsForCarriesModelLimits verifies the per-model metadata a worker
+// reads through provider.list: max output and input modalities come from the
+// model entry, falling back to the provider-level defaults when the model does
+// not declare its own.
+func TestModelsForCarriesModelLimits(t *testing.T) {
+	p := Entry{
+		Name:       "p",
+		Type:       "openai-compatible",
+		MaxOutput:  4096,
+		InputTypes: []string{"text"},
+		Models: Models{
+			{Name: "inherits"},
+			{Name: "declared", MaxOutput: 16384, InputTypes: []string{"text", "image", "video"}},
+		},
+	}
+	got := (&providerSources{}).modelsFor(p)
+	if len(got) != 2 {
+		t.Fatalf("models = %+v", got)
+	}
+	if got[0].MaxOutput != 4096 || len(got[0].InputTypes) != 1 || got[0].InputTypes[0] != "text" {
+		t.Fatalf("inherited model limits = %+v", got[0])
+	}
+	if got[1].MaxOutput != 16384 || len(got[1].InputTypes) != 3 || got[1].InputTypes[2] != "video" {
+		t.Fatalf("declared model limits = %+v", got[1])
+	}
+}

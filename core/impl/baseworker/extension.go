@@ -153,7 +153,7 @@ func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 		return false
 	}
 	if reg.ext.Internal && evt.WorkerId != w.id {
-		if evt.RequestId != "" && w.Channel != nil {
+		if evt.RequestId != "" && w.Channel != nil && !isReplyEvent(evt.Type) {
 			w.ReplyRejected(evt.WorkerId, evt.RequestId,
 				"internal capability: only "+w.id+" may invoke it", evt.TraceID)
 		}
@@ -163,6 +163,23 @@ func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 	}
 	reg.handler(evt)
 	return true
+}
+
+// isReplyEvent reports whether an event type ANSWERS a request rather than
+// asking one. A reply carries the requester's RequestId like any other directed
+// event, which is why the distinction has to be made by type: without it a
+// worker that receives a failure reply it has no handler for answers it with
+// another failure reply, and two such workers bounce error events forever.
+//
+// request.cancel is deliberately NOT here: the caller sends it TO a worker to
+// abandon a pending call, so it may legitimately be rejected or fail.
+func isReplyEvent(t event.EventType) bool {
+	switch t {
+	case event.TypeRequestCompleted, event.TypeRequestFailed,
+		event.TypeRequestRejected, event.TypeRequestProgressed:
+		return true
+	}
+	return false
 }
 
 // replyNoHandler answers a request for an event this worker does not serve, so
@@ -175,6 +192,13 @@ func (w *BaseWorker) DispatchExtension(evt event.Event) bool {
 // caller-visible contract (Internal events only for the owner), so what it shows
 // is exactly what that caller may send.
 func (w *BaseWorker) replyNoHandler(evt event.Event) {
+	// A reply is never a request: nothing is waiting for an answer to it, so
+	// there is nothing to answer. Replying anyway is how two workers that both
+	// lack a handler end up feeding each other's failure replies — once seen
+	// running at ~1900 events/second for ten minutes and writing 1.17M rows.
+	if isReplyEvent(evt.Type) {
+		return
+	}
 	if evt.RequestId == "" || w.Channel == nil {
 		return
 	}
@@ -261,6 +285,31 @@ func (w *BaseWorker) AnnounceReady(workerType string, publishes []map[string]any
 	presence.ExcludeWorkerID = w.ID()
 	presence.Transient = true // presence: delivered live, not durable history
 	_ = w.Channel.Broadcast(context.Background(), presence)
+}
+
+// AnswerDiscover replies to a worker.discover with this worker's contract,
+// addressed to the asker. A discover is a question ("who is here?"), so the
+// answer goes to the asker alone: a broadcast re-announce would fan O(N²)
+// ready events across the fleet.
+//
+// The discover a worker broadcasts itself comes back to it (a broadcast
+// reaches the sender too, unless it excluded itself), and that self-echo is
+// not answered — the worker knows its own contract. A discover DIRECTED at
+// this worker is always answered, even when the sender is this worker
+// itself: the WebUI drives the bus through HIW's identity, so its ask about
+// HIW arrives carrying HIW's own id.
+//
+// includeInternal mirrors WatchEntries: false sends the peer-facing contract
+// (Internal left out, for replying to a peer discover); true sends the full
+// contract including Internal (for a worker learning its own capabilities).
+func (w *BaseWorker) AnswerDiscover(evt event.Event, workerType string, publishes []map[string]any, includeInternal bool) {
+	if evt.WorkerId == "" {
+		return // nobody to answer
+	}
+	if evt.TargetWorkerID == "" && evt.WorkerId == w.ID() {
+		return // our own broadcast, echoed back
+	}
+	w.AnnounceReadyTo(evt.WorkerId, workerType, publishes, includeInternal)
 }
 
 // AnnounceReadyTo sends this worker's presence (worker.ready) directly to a

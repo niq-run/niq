@@ -302,9 +302,7 @@ func (w *Worker) watch(ctx context.Context, busCh <-chan event.Event) {
 func (w *Worker) process(evt event.Event) {
 	switch evt.Type {
 	case event.TypeWorkerDiscover:
-		if evt.WorkerId != w.ID() {
-			w.AnnounceReadyTo(evt.WorkerId, "mcp", nil, false)
-		}
+		w.AnswerDiscover(evt, "mcp", nil, false)
 	default:
 		if !w.DispatchExtension(evt) {
 			log.Printf("[mcp %s] no extension for event %s", w.ID(), evt.Type)
