@@ -182,13 +182,18 @@ export default function ResponseBlock({ evt, quotedText, quotedWorker, quotedEvt
 			  textOverflow: 'ellipsis',
 			}}
 		  >
-			<div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+			<div style={{ display: 'flex', gap: 6, alignItems: 'baseline', minWidth: 0 }}>
 			  {quotedWorker && (
 				<span style={{ color: colors.accent, fontWeight: 'bold', flexShrink: 0, fontStyle: 'normal' }}>
 				  @{quotedWorker}
 				</span>
 			  )}
-			  <span>{quoted && quoted.content ? oneLine(quoted.content, 200) : oneLine(quotedText ?? '', 200)}</span>
+			  {/* The ellipsis must live on the text span itself: text-overflow
+			      does not reach into a flex child, so putting it on the box
+			      only clipped the quote mid-glyph with no "…". */}
+			  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+			    {quoted && quoted.content ? oneLine(quoted.content, 200) : oneLine(quotedText ?? '', 200)}
+			  </span>
 			</div>
 		  </div>
 

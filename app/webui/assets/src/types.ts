@@ -212,9 +212,12 @@ export type InputContent =
 // localStorage across sessions.
 export interface ViewSettings {
   thinkingExpanded: boolean
-  compactMode: boolean
   streamingMode: boolean
   responseOnly: boolean
+  // Folds runs of process events (thinking, tool cards, interruptions) that
+  // sit between responses into one collapsed row, so a turn reads as
+  // input → [12 process events] → response.
+  collapseEvents: boolean
 }
 export type ViewSettingKey = keyof ViewSettings
 

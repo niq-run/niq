@@ -10,24 +10,23 @@ import type { EventPayload } from '../types'
 interface ThinkingBlockProps {
   evt: EventPayload
   defaultExpanded?: boolean
-  compact?: boolean
 }
 
-export default function ThinkingBlock({ evt, defaultExpanded = true, compact = false }: ThinkingBlockProps) {
+export default function ThinkingBlock({ evt, defaultExpanded = true }: ThinkingBlockProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   const [collapsed, setCollapsed] = useState(!defaultExpanded)
   const text = getContentText(evt)
 
-  const tPad = compact ? '4px 8px' : '6px 12px'
-  const tFontSize = compact ? fontSizes.xs : fontSizes.base
+  const tPad = '6px 12px'
+  const tFontSize = fontSizes.base
   const tBorder = '1px solid ' + colors.border
 
   return (
     <div
       className={collapsed ? 'block-card' : undefined}
       style={{
-        marginBottom: compact ? 8 : 12,
+        marginBottom: 12,
         borderTop: tBorder,
         borderRight: tBorder,
         borderBottom: tBorder,

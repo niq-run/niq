@@ -20,9 +20,9 @@ The worker is the home of Programs, and it has a backend for each axis:
 
 | Backend | Interface | Responsibility | Built-in implementation |
 |---|---|---|---|
-| **Backend (whole environment)** | `program.ProgramBackend` = `program.Store` + `program.Executor` | One value to swap: where content lives and how a script program runs | `program.Compose(pgbackend, jsexec)` |
+| **Backend (whole environment)** | `program.ProgramBackend` = `program.Store` + `program.Executor` | One value to swap: where content lives and how a script program runs | `program.Compose(pgbackend, quickjsexec)` |
 | Store half | `program.Store` | Program content List/Read/Upsert/Write/Edit/Remove | `pgbackend` (filesystem: a directory per Program, `PROGRAM.md`/`SKILL.md` entry, YAML frontmatter + body) |
-| Executor half | `program.Executor` | Run a `FormType:script` program in a separate process | `jsexec` (local `node` + embedded launcher) |
+| Executor half | `program.Executor` | Run a `FormType:script` program | `quickjsexec` (in-process QuickJS VM per session) |
 
 Both are swappable: a remote object store can back storage, and a local/remote
 sandbox can back execution, without the worker or the scripts changing.
@@ -37,11 +37,11 @@ result. The sandbox never holds a bus channel or credentials.
 ```
 LLM/peer ── program.run{name|source, args} ──▶ program worker
   worker: load source (storage backend) → executor.Start(src, args, callTool)
-    executor: spawn sandbox; embedded launcher compiles the script in memory and
-              injects a minimal SDK (call/log/result/args); stdout = protocol JSONL
-    script.call(target,event,args) ──▶ launcher ──▶ executor.handleCall
+    executor: new VM; evaluate the embedded prelude (the SDK facade), then the
+              script as an async function body; drive its jobs until it settles
+    script.call(target,event,args) ──▶ prelude ──▶ __niq_send ──▶ executor relay
         ──▶ worker.callTool: mint request id, send request event to target
-        ◀── request.completed/failed ── resolveReply ── call_result ──▶ script
+        ◀── request.completed/failed ── resolveReply ── settle promise ──▶ script
     script.result(payload) ──▶ executor.Result() ──▶ program.run request.completed
 ```
 
@@ -52,7 +52,7 @@ LLM/peer ── program.run{name|source, args} ──▶ program worker
 - `source` — run inline JavaScript directly, nothing persisted; ad-hoc.
 
 Plus optional `args` (exposed to the script as `sdk.args`) and
-`timeout_seconds` (default 120s; the sandbox is killed on expiry).
+`timeout_seconds` (default 120s; the VM is interrupted on expiry).
 
 > **Exposure / ACL note.** The relayed calls carry the target's own event type
 > (`bash`, ...), which is dynamic, so the program worker's `PublishAllow`
@@ -67,7 +67,7 @@ Plus optional `args` (exposed to the script as `sdk.args`) and
 | `tools.go` | the tool event types (`search` / `read` / `edit` / `touch` / `update` / `write` / `delete` / `run`) + `registerExtensions` + the per-tool handlers (`handleSearch` / `handleRead` / `handleEdit` / `handleTouch` / `handleUpdate` / `handleWrite` / `handleDelete`) |
 | `execute.go` | script-program execution and its reply shaping: `handleRun` (both modes, timeout, log collection), `callTool`/`relay` (the `ToolCaller` — mint id, send `request`, await reply), `resolveReply` (route `request.*` replies to the waiting call), `checkTarget` (ask the directory worker), and the `sdk.log` tail buffer + 20 KiB result cap that decide what the reply text looks like |
 | `pgbackend/` | the filesystem store (one `program.Store` implementation) |
-| `jsexec/` | the local subprocess executor (one `program.Executor` implementation; `node` by default, `script_executor_args` to change it) + the embedded `launcher.mjs` (trusted bootstrap: in-memory compile, minimal SDK injection, error-location mapping) |
+| `quickjsexec/` | the in-process executor (one `program.Executor` implementation): `executor.go` (options + `Start`), `session.go` (the VM's owner goroutine, the job loop, host functions, cancellation), `errors.go` (line mapping from `<eval>` frames), `prelude.js` (the embedded SDK facade) |
 
 Related, outside this package:
 
@@ -77,12 +77,11 @@ Related, outside this package:
 
 ## The script SDK
 
-A script runs in a separate, short-lived subprocess and may only reach the
-world through `sdk`. **Sandbox contract:** no imports of any kind (`import`,
-`export`, dynamic `import(...)`, `require`) — there is no module resolution and
-no package dependencies, only the JavaScript language builtins — and no
-filesystem, process or network APIs (`fs`, `child_process`, `process`,
-`fetch`, sockets, `Deno`/`Bun` globals). Anything that needs files, a shell,
+A script runs in a fresh in-process QuickJS VM (no subprocess, no `node`) and
+may only reach the world through `sdk`. **Sandbox contract:** the engine is not
+a module system — `import`, `export`, dynamic `import(...)` and `require` do not
+exist — and neither do filesystem, process or network globals (`process`,
+`fetch`, `Deno`/`Bun` globals, sockets). Anything that needs files, a shell,
 environment variables or the network goes through another worker via
 `sdk.call` (e.g. the workspace worker's `bash`).
 
@@ -108,6 +107,9 @@ Inside a run the script is handed a minimal `sdk`:
   object, array …); the last call wins, and a top-level `return` is used only when
   `sdk.result` was never called (neither → the empty string).
 - `sdk.args` — the `program.run` `args` (always an object, defaults to `{}`).
+- `console.log/info/warn/error/debug` — the engine has no console; the prelude
+  maps it onto `sdk.log`, so a stray console call shows up in the run's log
+  instead of throwing.
 
 The reply of `program.run` is an OBJECT (so it travels as the payload itself):
 
@@ -128,16 +130,17 @@ of the user's own source.
 The old text reply was the result plus — when the script logged — a `--- script log ---`
 section.
 
-The script body is compiled in memory as an async function body: top-level
-`await` works and static `import` syntax does not parse, so a normal script
-cannot pull in modules. **This is accident containment, not a security
-boundary**: the script runs in a plain `node` process, so a
-runtime `await import("node:fs")` or a global like `fetch` is reachable, and it
-runs as the same OS user. That is by design — the goal is to stop a script from
-misbehaving by mistake, not to withstand one that attacks on purpose (scripts
-are the local model's own code). Real isolation is a different Executor:
-QuickJS (planned), a wrapper command via `script_executor_args` (sandbox-exec /
-bwrap / container), or a remote execution backend.
+The script body is appended to the embedded prelude as the body of an async
+arrow function, so top-level `await` and a top-level `return` both work. The
+VM's globals are only what the prelude installs (`sdk`, `console`, and the
+standard JavaScript objects), which makes the contract above a property of the
+environment rather than a rule a script is asked to follow. **It is still not a
+security boundary**: the engine is a large C program compiled to Go and living
+in niq's address space, so a bug in it is a bug in niq. What it does bound is
+misuse — a per-run `SetMemoryLimit`, a call-depth limit, and a watchdog that
+interrupts a script which never yields. A harder boundary is a different
+Executor: the wazero/QuickJS wasm runtime, a container, or a remote execution
+backend.
 
 ## Relationship to the reason worker
 

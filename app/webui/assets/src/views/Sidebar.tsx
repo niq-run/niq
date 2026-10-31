@@ -902,9 +902,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             <>
               <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
               <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.viewSettings')}</strong>
-              <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
-              <ToggleRow label={t('view.toggle.compactMode')} on={viewSettings.compactMode} onToggle={() => onToggleViewSetting('compactMode')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
               <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+              <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+              <ToggleRow label={t('view.toggle.collapseEvents')} on={viewSettings.collapseEvents} onToggle={() => onToggleViewSetting('collapseEvents')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
               <ToggleRow label={t('view.toggle.responseOnly')} on={viewSettings.responseOnly} onToggle={() => onToggleViewSetting('responseOnly')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
             </>
           )}

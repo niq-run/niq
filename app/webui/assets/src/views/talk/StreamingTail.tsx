@@ -26,7 +26,7 @@ export default function StreamingTail({ traces, responseOnly, ctx }: {
   ctx: RowCtx
 }) {
   if (responseOnly || traces.length === 0) return null
-  const { colors, bubbleMax, humanId, isReason, isPartner, onMention, onOpenDetail, displayName, thinkingExpanded, compactMode } = ctx
+  const { colors, bubbleMax, humanId, isReason, isPartner, onMention, onOpenDetail, displayName, thinkingExpanded } = ctx
   return (
     <>
       {traces.map(({ traceId, thinking, text, workerId, lastTs, thinkingDone, textDone }) => {
@@ -57,7 +57,7 @@ export default function StreamingTail({ traces, responseOnly, ctx }: {
                 through both growth and a pinned trim (no frame interleave). */}
             {showThinking && (
               <GrowingHeight>
-                <ThinkingBlock evt={synthetic('reason.thinking', thinking)} defaultExpanded={thinkingExpanded} compact={compactMode} />
+                <ThinkingBlock evt={synthetic('reason.thinking', thinking)} defaultExpanded={thinkingExpanded} />
               </GrowingHeight>
             )}
             {showText && (

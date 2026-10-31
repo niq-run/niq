@@ -72,18 +72,6 @@ chmod +x "$INSTALL_DIR/niq"
 log "installed: $INSTALL_DIR/niq"
 "$INSTALL_DIR/niq" --version || true
 
-# --- runtime check: node ---
-# Script programs (PTC) run through a local node process, so a host without node
-# can manage programs but cannot execute them. Not fatal: everything else works,
-# and the executor can be pointed elsewhere via script_executor_args.
-if command -v node >/dev/null 2>&1; then
-  log "node found: $(node --version)"
-else
-  log "warning: node not found — script programs (program.run) will fail until a"
-  log "         JS runtime is available (install node, or set the program worker's"
-  log "         script_executor_args to e.g. [\"bun\", \"run\"])"
-fi
-
 # --- PATH setup: make `niq` callable in new shells ---
 if [ "${NIQ_NO_MODIFY_PATH:-}" = "1" ]; then
   log "NIQ_NO_MODIFY_PATH=1 — skipped PATH setup. Make sure $INSTALL_DIR is on your PATH."

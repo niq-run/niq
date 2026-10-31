@@ -12,7 +12,8 @@ export interface RowCtx {
   colors: Palette
   t: (key: StringKey, vars?: Record<string, string | number>) => string
   isMobile: boolean
-  compactMode: boolean
+  // Folds consecutive process rows into one collapsed group (see TalkRows).
+  collapseEvents: boolean
   thinkingExpanded: boolean
   bubbleMax: string
   tPad: string
