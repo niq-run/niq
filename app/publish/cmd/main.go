@@ -5,7 +5,7 @@
 //	niq                     — start the control plane in the background (default :9527)
 //	niq control [-f]        — start it in the foreground instead
 //	niq status              — report whether it is running and where
-//	niq stop                — stop the background control plane
+//	niq stop [--all]        — stop the background control plane (-all: + projects)
 //	niq restart             — stop and start it again
 //	niq project list        — list projects and their ports
 //	niq project create <id> — create a project from a template
@@ -13,6 +13,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -49,7 +50,7 @@ func main() {
 	case len(os.Args) > 1 && os.Args[1] == "project":
 		err = runProject(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "stop":
-		err = stopControl()
+		err = runStop(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "restart":
 		err = restartControl()
 	case len(os.Args) > 1 && os.Args[1] == "status":
@@ -78,7 +79,7 @@ func runControl(args []string) error {
 	foreground := fs.Bool("foreground", false, "Run attached to this terminal instead of in the background")
 	fs.BoolVar(foreground, "f", false, "Shorthand for --foreground")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return helpOrErr(err) // --help already printed the usage
 	}
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unknown command %q (try: niq --help)", fs.Arg(0))
@@ -87,6 +88,24 @@ func runControl(args []string) error {
 		return runControlForeground(*addr, *auth)
 	}
 	return startBackground(*addr, *auth)
+}
+
+func runStop(args []string) error {
+	fs := flag.NewFlagSet("niq stop", flag.ContinueOnError)
+	all := fs.Bool("all", false, "Also stop every running project instance")
+	if err := fs.Parse(args); err != nil {
+		return helpOrErr(err)
+	}
+	return stopControl(*all)
+}
+
+// helpOrErr keeps --help from being reported as a failure: flag has already
+// printed the usage text by the time it returns ErrHelp.
+func helpOrErr(err error) error {
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	return err
 }
 
 func runProject(args []string) error {
@@ -187,7 +206,9 @@ Usage:
                             /p/<id>/. Closing the terminal does not stop it.
   niq control --foreground  (or -f) run it attached to this terminal instead
   niq status                show the control plane and each project's run state
-  niq stop                  stop the background control plane
+  niq stop                  stop the background control plane; projects it
+                            serves are separate processes and keep running
+  niq stop --all            also stop every running project instance
   niq restart               restart it on the address it was started with
   niq --addr :9527 --auth user:pass
                             start on another address, locking non-localhost

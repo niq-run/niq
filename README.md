@@ -64,7 +64,8 @@ niq control is running in the background (pid 4711)
 
 `niq status` reports the process, address and log, plus each project's run
 state and URL (a refused port means that instance is not running); `niq stop`
-shuts it down;
+shuts it down — projects are their own processes, so they keep serving unless
+you add `--all`;
 `niq restart` brings it back on the same address. Put the flags anywhere a
 start goes (`niq --addr :8080 --auth alice:s3cret`, `niq restart` reuses the
 recorded address). To keep it attached to the terminal — systemd, a container,

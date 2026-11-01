@@ -206,7 +206,22 @@ func runControlForeground(addr, auth string) error {
 	return err
 }
 
-func stopControl() error {
+// stopControl stops the control plane and, when all is set, every project
+// instance too. Projects are their own processes: they outlive the plane that
+// proxied them, so a plain stop leaves them serving on their loopback ports.
+func stopControl(all bool) error {
+	if err := stopControlPlane(); err != nil {
+		return err
+	}
+	if all {
+		return stopProjects()
+	}
+	reportRunningProjects()
+	return nil
+}
+
+// stopControlPlane stops the recorded control plane, if there is one.
+func stopControlPlane() error {
 	st, ok := readControlState()
 	if !ok {
 		fmt.Println("niq control is not running")
@@ -234,12 +249,91 @@ func stopControl() error {
 	return nil
 }
 
+// runningProjectIDs lists the projects whose persisted WebUI port answers,
+// i.e. the instances a plain `niq stop` leaves alone.
+func runningProjectIDs() []string {
+	projects, err := project.ListProjects()
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for _, p := range projects {
+		if projectRunning(p) {
+			ids = append(ids, p.ID)
+		}
+	}
+	return ids
+}
+
+func projectRunning(p project.Project) bool {
+	return p.Ports.WebUI != 0 && isServing(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
+}
+
+// reportRunningProjects keeps a plain `niq stop` honest: the plane is down but
+// these instances still hold their ports, and an agent session may still be
+// running in them.
+func reportRunningProjects() {
+	ids := runningProjectIDs()
+	if len(ids) == 0 {
+		return
+	}
+	fmt.Printf("\n%d project instance(s) still running (%s); `niq stop --all` stops them too.\n",
+		len(ids), strings.Join(ids, ", "))
+}
+
+// stopProjects interrupts every running project instance. SIGINT is the same
+// graceful path Ctrl+C takes — 'niq project run' snapshots its state — and it
+// reaches both instances this control plane launched and ones started by hand
+// in another terminal (they are found by their WebUI port).
+func stopProjects() error {
+	projects, err := project.ListProjects()
+	if err != nil {
+		return err
+	}
+	var running []project.Project
+	for _, p := range projects {
+		if projectRunning(p) {
+			running = append(running, p)
+		}
+	}
+	if len(running) == 0 {
+		fmt.Println("no project instances running")
+		return nil
+	}
+	var ids []string
+	for _, p := range running {
+		if project.InterruptPortHolders(p.Ports.WebUI) > 0 {
+			ids = append(ids, p.ID)
+		}
+	}
+	// Shutdown is asynchronous: wait for the ports to close, so "stopped" is
+	// true by the time the command returns.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var left []string
+		for _, p := range running {
+			if projectRunning(p) {
+				left = append(left, p.ID)
+			}
+		}
+		if len(left) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("project instance(s) %s did not exit within 10s", strings.Join(left, ", "))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	fmt.Printf("stopped %d project instance(s): %s\n", len(ids), strings.Join(ids, ", "))
+	return nil
+}
+
 func restartControl() error {
 	addr := ":9527"
 	if st, ok := readControlState(); ok {
 		addr = st.Addr // keep the port the user originally chose
 		if isRunning(st) {
-			if err := stopControl(); err != nil {
+			if err := stopControl(false); err != nil {
 				return err
 			}
 		} else {
@@ -289,14 +383,11 @@ func printProjectStatus(controlURL string) {
 	fmt.Println("\nprojects")
 	for _, p := range projects {
 		state, url := "stopped", "-"
-		if p.Ports.WebUI != 0 {
-			loopback := fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
-			if isServing(loopback) {
-				state = "running"
-				url = project.LocalhostURL(loopback)
-				if controlURL != "" {
-					url = strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/"
-				}
+		if projectRunning(p) {
+			state = "running"
+			url = project.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
+			if controlURL != "" {
+				url = strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/"
 			}
 		}
 		fmt.Printf("  %-14s %-8s %s\n", p.ID, state, url)
