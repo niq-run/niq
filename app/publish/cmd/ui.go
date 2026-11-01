@@ -32,11 +32,10 @@ func paint(code, s string) string {
 	return "\x1b[" + code + "m" + s + "\x1b[0m"
 }
 
-func bold(s string) string   { return paint("1", s) }
-func dim(s string) string    { return paint("2", s) }
-func green(s string) string  { return paint("32", s) }
-func yellow(s string) string { return paint("33", s) }
-func cyan(s string) string   { return paint("36", s) }
+func bold(s string) string  { return paint("1", s) }
+func dim(s string) string   { return paint("2", s) }
+func green(s string) string { return paint("32", s) }
+func cyan(s string) string  { return paint("36", s) }
 
 // stateDot marks a running/stopped instance. It is the same glyph in the status
 // report and in the picker, so "am I looking at the same thing?" never costs a

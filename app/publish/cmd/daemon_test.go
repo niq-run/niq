@@ -35,7 +35,6 @@ func TestControlStateRoundTrip(t *testing.T) {
 		PID:     os.Getpid(),
 		Addr:    ":9527",
 		Bound:   "[::]:9527",
-		Version: "test",
 		Started: "2026-01-01T00:00:00Z",
 	}
 	writeControlState(st)
@@ -43,7 +42,7 @@ func TestControlStateRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("state not readable after write")
 	}
-	if got.PID != st.PID || got.Addr != st.Addr || got.Bound != st.Bound || got.Version != st.Version {
+	if got.PID != st.PID || got.Addr != st.Addr || got.Bound != st.Bound {
 		t.Fatalf("state round-trip = %+v, want %+v", got, st)
 	}
 

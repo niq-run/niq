@@ -119,7 +119,9 @@ Output is colored when it goes to a terminal and plain otherwise (or with
 
 Each project serves its own WebUI on a loopback-only port, so it is never
 exposed by accident: open it through the control plane at
-**http://localhost:9527/p/&lt;id&gt;/**, which proxies to that project. Ports are
+**http://localhost:9527/p/&lt;id&gt;/**, which proxies to that project. That address
+works whether or not the instance is running — a stopped project answers with a
+start page instead of an error. Ports are
 assigned dynamically on first run and then persisted per project, so they stay
 stable across restarts (`--bus` / `--webui` override). `niq project list` shows
 each project's `webui` and `bus` ports.
@@ -147,10 +149,10 @@ Basic auth sends the credentials on every request, so terminate TLS in front (or
 tunnel through SSH/WireGuard) before exposing niq to the open internet — niq
 itself speaks plain HTTP.
 
-After upgrading the binary, `niq restart` the control plane (`niq status` warns
-when the running process is an older version) and restart the running projects:
-their page and static assets are served by the control plane, and an old project
-process may reference asset files the new binary no longer contains.
+After upgrading the binary, `niq restart` the control plane and restart the
+running projects: their page and static assets are served by the control plane,
+and an old project process may reference asset files the new binary no longer
+contains.
 
 ### Model provider
 

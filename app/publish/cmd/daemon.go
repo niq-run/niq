@@ -30,7 +30,6 @@ type controlState struct {
 	PID     int    `json:"pid"`
 	Addr    string `json:"addr"`    // address as requested; reused by restart
 	Bound   string `json:"bound"`   // address actually bound; dialed for liveness
-	Version string `json:"version"` // binary that started it
 	Started string `json:"started"` // RFC3339
 }
 
@@ -191,7 +190,6 @@ func runControlForeground(addr, auth string) error {
 				PID:     os.Getpid(),
 				Addr:    addr,
 				Bound:   bound,
-				Version: version,
 				Started: time.Now().Format(time.RFC3339),
 			})
 		},
@@ -356,10 +354,6 @@ func statusControl() error {
 	}
 	printControlRunning(st)
 	printProjectStatus(project.LocalhostURL(st.Bound))
-	if st.Version != version {
-		fmt.Printf("\n%s running niq %s, this binary is %s — %s picks it up.\n",
-			yellow("▲"), st.Version, version, bold("niq restart"))
-	}
 	return nil
 }
 
@@ -399,14 +393,23 @@ func printProjectStatus(controlURL string) {
 	if err != nil || len(projects) == 0 {
 		return
 	}
+	// Every project gets an address, running or not: /p/<id>/ renders a start
+	// page when the instance is down, so the link is worth clicking either way.
 	url := func(p project.Project) string {
-		if !projectRunning(p) {
+		target := ""
+		switch {
+		case controlURL != "":
+			target = strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/"
+		case p.Ports.WebUI != 0:
+			target = project.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
+		}
+		if target == "" {
 			return ""
 		}
-		if controlURL != "" {
-			return cyan(strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/")
+		if !projectRunning(p) {
+			return dim(target)
 		}
-		return cyan(project.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)))
+		return cyan(target)
 	}
 	fmt.Println()
 	printProjectTable(projects, url)
