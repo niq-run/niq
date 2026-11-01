@@ -180,20 +180,39 @@ function composeInput(text: string, attachments: StagedAttachment[], targets: st
   return content
 }
 
-// panelFromLocation reads ?panel= (the open management tab).
-function panelFromLocation(): 'projects' | 'templates' | 'providers' | null {
+// The two kinds of page a project URL can show: a management tab that talks to
+// the control plane (?panel=projects|templates|providers), or one of the
+// project's own views (?view=events|approvals|workers|mcp|programs; talk is the
+// default and stays out of the URL). They are mutually exclusive.
+type Panel = 'projects' | 'templates' | 'providers'
+
+const VIEWS: ViewMode[] = ['talk', 'events', 'approvals', 'workers', 'mcp', 'programs']
+
+function panelFromLocation(): Panel | null {
   const q = new URLSearchParams(window.location.search).get('panel')
   return q === 'projects' || q === 'templates' || q === 'providers' ? q : null
 }
 
-// pushPanel rewrites the address bar for a panel switch: one entry per tab, so
-// Back walks the tabs you visited instead of leaving the page.
-function pushPanel(from: string | null, to: string | null) {
-  if (from === to) return
+function viewFromLocation(): ViewMode | null {
+  const q = new URLSearchParams(window.location.search).get('view')
+  return VIEWS.includes(q as ViewMode) ? (q as ViewMode) : null
+}
+
+// pushLocation rewrites the address bar to match what is on screen, one history
+// entry per switch, so Back/Forward walk the pages you visited (and a reload
+// lands where you were). panel and view are exclusive; talk is the default view
+// and is left out, which keeps a project's plain URL its plain URL.
+function pushLocation(panel: Panel | null, view: ViewMode | null) {
   const url = new URL(window.location.href)
-  if (to) url.searchParams.set('panel', to)
+  if (panel) url.searchParams.set('panel', panel)
   else url.searchParams.delete('panel')
-  window.history.pushState({ panel: to }, '', url.pathname + url.search + url.hash)
+  if (view && view !== 'talk') url.searchParams.set('view', view)
+  else url.searchParams.delete('view')
+
+  const next = url.pathname + url.search + url.hash
+  const current = window.location.pathname + window.location.search + window.location.hash
+  if (next === current) return
+  window.history.pushState({ panel, view }, '', next)
 }
 
 export default function App() {
@@ -220,7 +239,7 @@ export default function App() {
   // ── State ──
   const [events, setEvents] = useState<EventPayload[]>([])
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
-  const [view, setView] = useState<ViewMode>('talk')
+  const [view, setView] = useState<ViewMode>(() => viewFromLocation() ?? 'talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
   // ?start=<id>: a stopped project's /p/<id>/ redirects here so the projects
   // list can ask "start it?" with the SPA's own dialog. Stripped from the URL
@@ -243,7 +262,10 @@ export default function App() {
   // Back/Forward walk the panel history: the URL is the source of truth, so a
   // popstate re-derives the open tab instead of leaving the view behind.
   useEffect(() => {
-    const onPop = () => setPanel(panelFromLocation())
+    const onPop = () => {
+      setPanel(panelFromLocation())
+      setView(viewFromLocation() ?? 'talk')
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
@@ -394,9 +416,9 @@ export default function App() {
   // URL (?panel=<tab>), so the address always says which surface is showing and
   // reload / back behave like pages. Leaving the panels drops the parameter
   // again.
-  const selectPanel = (next: 'projects' | 'templates' | 'providers') => {
+  const selectPanel = (next: Panel) => {
     setPanel(next)
-    pushPanel(panel, next)
+    pushLocation(next, null)
   }
   const projectBase = getApiBase()
   const projectName = context.project
@@ -497,9 +519,9 @@ export default function App() {
   // Picking a View (talk/events/workers) leaves the management panels and
   // closes the mobile drawer.
   const selectView = (v: ViewMode) => {
-    if (panel) pushPanel(panel, null)
     setPanel(null)
     setView(v)
+    pushLocation(null, v)
     setSidebarOpen(false)
   }
 
@@ -1079,6 +1101,7 @@ export default function App() {
   const handleTraceClick = useCallback((traceId: string) => {
     setTraceFilter(traceId)
     setView('events')
+    pushLocation(null, 'events')
   }, [])
 
   // Mentioning a worker from a talk badge appends @id to the input — an explicit
@@ -1162,6 +1185,7 @@ export default function App() {
   const handleSelectWorker = useCallback((id: string) => {
     setFilterWorkers(new Set([id]))
     setView('events')
+    pushLocation(null, 'events')
   }, [])
 
   // Toggle one traffic role (sent/received) in the events filter. Both roles
@@ -1479,7 +1503,7 @@ export default function App() {
           </div>
         )}
         {mode !== 'project' ? (
-          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => setPanel('providers')} focusStart={startTarget} onFocusDone={() => setStartTarget(null)} />
+          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => selectPanel('providers')} focusStart={startTarget} onFocusDone={() => setStartTarget(null)} />
         ) : panel === 'templates' ? (
           <TemplatesView isMobile={isMobile} />
         ) : panel === 'providers' ? (
