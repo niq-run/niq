@@ -48,6 +48,13 @@ func ProjectDir(id string) string { return filepath.Join(ProjectsRoot(), sanitiz
 // ProjectPath returns the project.json path for a project id.
 func ProjectPath(id string) string { return filepath.Join(ProjectDir(id), "project.json") }
 
+// LogPath is where a project process writes its log. The date in the filename
+// gives free daily rotation: a new day starts a new file, same-day restarts
+// append.
+func LogPath(id string) string {
+	return filepath.Join(ProjectDir(id), "logs", "niq-"+time.Now().Format("2006-01-02")+".log")
+}
+
 // CreateProject creates a project directory + project.json and seeds each
 // template worker declaration (the {project} placeholder in mount paths is
 // resolved against the new project id). templateName names the source template

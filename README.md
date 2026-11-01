@@ -86,6 +86,11 @@ niq project create my-project
 niq project run my-project
 ```
 
+`niq project` on its own opens an arrow-key picker over every project — `↑`/`↓`
+to move, `enter` to pick, then stop or restart the chosen instance (restart
+goes through the running control plane, or starts the instance directly when
+there is none).
+
 Each project serves its own WebUI on a loopback-only port, so it is never
 exposed by accident: open it through the control plane at
 **http://localhost:9527/p/&lt;id&gt;/**, which proxies to that project. Ports are

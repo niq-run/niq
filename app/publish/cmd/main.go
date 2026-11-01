@@ -8,7 +8,8 @@
 //	niq status              — report whether it is running and where
 //	niq stop [--all]        — stop the background control plane (-all: + projects)
 //	niq restart             — stop and start it again
-//	niq project list        — list projects and their ports
+//	niq project             — pick a project, then stop or restart it
+//	niq project list        — list projects, their ports and run state
 //	niq project create <id> — create a project from a template
 //	niq project run <id>    — run a project instance in this process
 package main
@@ -21,7 +22,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/niq-run/niq/app/project"
 )
@@ -121,6 +121,9 @@ func helpOrErr(err error) error {
 }
 
 func runProject(args []string) error {
+	if len(args) == 0 {
+		return runProjectPicker()
+	}
 	fs := flag.NewFlagSet("niq project", flag.ContinueOnError)
 	switch {
 	case len(args) >= 1 && args[0] == "list":
@@ -128,13 +131,7 @@ func runProject(args []string) error {
 		if err != nil {
 			return err
 		}
-		if len(projects) == 0 {
-			fmt.Println("(no projects)")
-			return nil
-		}
-		for _, p := range projects {
-			fmt.Printf("%-24s webui=%d bus=%d\n", p.ID, p.Ports.WebUI, p.Ports.Bus)
-		}
+		printProjectList(projects)
 		return nil
 
 	case len(args) >= 2 && args[0] == "create":
@@ -174,8 +171,32 @@ func runProject(args []string) error {
 			WebUIAuth: *webUIAuth,
 		})
 
+	case args[0] == "help" || args[0] == "-h" || args[0] == "--help":
+		fmt.Print(`niq project - create, list and manage project instances
+
+  niq project                      pick a project (↑/↓), then stop or restart it
+  niq project list                 list projects, their ports and run state
+  niq project create <id> [--template <name>]
+                                   create a project from a template
+  niq project run <id> [--bus :0] [--webui :0] [--webui-auth user:pass]
+                                   run an instance in this terminal
+`)
+		return nil
+
 	default:
-		return fmt.Errorf("usage: niq project list | niq project create <id> [--template <name>] | niq project run <id> [--bus :0] [--webui :0]")
+		return fmt.Errorf("usage: niq project [list | create <id> | run <id>] (see: niq project --help)")
+	}
+}
+
+// printProjectList is the plain listing: `niq project list`, and what a bare
+// `niq project` degrades to when stdin is not a terminal.
+func printProjectList(projects []project.Project) {
+	if len(projects) == 0 {
+		fmt.Println("(no projects)")
+		return
+	}
+	for _, p := range projects {
+		fmt.Printf("%-24s webui=%-6d bus=%-6d %s\n", p.ID, p.Ports.WebUI, p.Ports.Bus, projectState(p))
 	}
 }
 
@@ -196,10 +217,9 @@ func setupLogging() {
 // ~/.niq/projects/<id>/logs/niq-YYYY-MM-DD.log. The date in the filename gives
 // free daily rotation: a new day starts a new file, same-day restarts append.
 func setupProjectLogging(id string) {
-	logDir := filepath.Join(project.ProjectDir(id), "logs")
-	_ = os.MkdirAll(logDir, 0755)
-	daily := "niq-" + time.Now().Format("2006-01-02") + ".log"
-	f, err := os.OpenFile(filepath.Join(logDir, daily), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	path := project.LogPath(id)
+	_ = os.MkdirAll(filepath.Dir(path), 0755)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.SetOutput(io.Discard)
 		return
@@ -229,7 +249,8 @@ Usage:
                             start on another address, locking non-localhost
                             access behind basic auth (saved to
                             ~/.niq/common/auth.json, reused on later runs)
-  niq project list          list projects and their ports
+  niq project               pick a project (↑/↓), then stop or restart it
+  niq project list          list projects, their ports and run state
   niq project create <id> [--template <name>]
                             create a project from a template
   niq project run <id> [--bus :0] [--webui :0] [--webui-auth user:pass]
