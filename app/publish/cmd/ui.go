@@ -65,8 +65,14 @@ func logoChip() string {
 	if !truecolor {
 		bg, fg = "\x1b[48;5;67m", "\x1b[1;38;5;255m"
 	}
-	return bg + fg + " niq " + "\x1b[0m"
+	// 8 columns wide so the version starts in the same column as the values
+	// under it ("running", the URL, the commands) — the chip reads as the label
+	// of the first row instead of hanging short of the table.
+	return bg + fg + "  niq   " + "\x1b[0m"
 }
+
+// logoWidth is the chip's width in columns.
+const logoWidth = 8
 
 // versionNumber is the build version without git describe's leading "v", so the
 // banner can read "version-0.13.0-…" instead of "version-v0.13.0-…".
@@ -88,7 +94,8 @@ func printBanner(b banner) {
 	if chip := logoChip(); chip != "" {
 		fmt.Printf("  %s %s\n", chip, b.version)
 	} else {
-		fmt.Printf("  %s  %s\n", bold("niq"), b.version)
+		// Same column as the chip, so the report lines up with or without colour.
+		fmt.Printf("  %s%s %s\n", bold("niq"), strings.Repeat(" ", logoWidth-len("niq")), b.version)
 	}
 	if b.tagline != "" {
 		fmt.Printf("  %s\n", b.tagline)
