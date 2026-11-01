@@ -1,7 +1,10 @@
-// Interactive project picker: `niq project` lists every project, lets you move
-// with the arrow keys, then asks what to do with the chosen one (stop or
-// restart). It is deliberately a few dozen lines of escape codes instead of a
-// TUI dependency — the whole UI is two short menus drawn in place.
+// Project views and the interactive picker: `niq project` lists every project
+// (state, ports, directory), lets you move with the arrow keys, then offers the
+// actions that make sense for that instance — start when it is stopped, stop or
+// restart when it is running.
+//
+// The menu is a few dozen lines of escape codes rather than a TUI dependency:
+// two short blocks, redrawn in place.
 package main
 
 import (
@@ -84,7 +87,7 @@ func (m *menu) draw(out io.Writer) {
 	for i, opt := range m.options {
 		marker := "   "
 		if i == m.cursor {
-			marker = " > "
+			marker = cyan(" > ")
 		}
 		fmt.Fprintf(out, "\x1b[2K%s%s\r\n", marker, opt)
 	}
@@ -139,26 +142,26 @@ func readKey(in *bufio.Reader) key {
 	return keyOther
 }
 
-// runProjectPicker is what a bare `niq project` does: pick an instance, then an
-// action. Without a terminal it degrades to the plain listing, so piping the
-// command still means something.
+// runProjectPicker is what `niq project` (and `niq project list`) does: pick an
+// instance, then an action. Without a terminal it degrades to the plain table,
+// so piping the command still means something.
 func runProjectPicker() error {
 	projects, err := project.ListProjects()
 	if err != nil {
 		return err
 	}
 	if len(projects) == 0 {
-		fmt.Println("(no projects)")
+		fmt.Println(dim("(no projects)"))
+		fmt.Printf("\n%s\n", dim("create one with `niq project create <id>`"))
 		return nil
 	}
 
 	chosen, err := (&menu{
-		title:   "select a project  (↑/↓ move, enter select, q quit)",
-		options: projectMenuOptions(projects),
+		title:   pickerTitle(),
+		options: projectRows(projects, projectDirCell),
 	}).run()
 	if errors.Is(err, errNotTerminal) {
-		printProjectList(projects)
-		fmt.Println("\n(the picker needs a terminal)")
+		printProjectTable(projects, projectDirCell)
 		return nil
 	}
 	if err != nil {
@@ -167,34 +170,77 @@ func runProjectPicker() error {
 	if chosen < 0 {
 		return nil
 	}
-	p := projects[chosen]
+	return actOnProject(projects[chosen])
+}
 
-	action, err := (&menu{
-		title:   fmt.Sprintf("%s is %s — what next?  (↑/↓ move, enter run, q cancel)", p.ID, projectState(p)),
-		options: []string{"Stop", "Restart"},
-	}).run()
-	if err != nil || action < 0 {
+func pickerTitle() string {
+	return versionTag() + "\n" + dim("↑/↓ move · enter select · q quit")
+}
+
+// actOnProject asks what to do with one instance. The choice follows its state:
+// a stopped project can be started, a running one stopped or restarted.
+func actOnProject(p project.Project) error {
+	running := projectRunning(p)
+	options := []string{"Restart", "Stop"}
+	if !running {
+		options = []string{"Start"}
+	}
+	title := versionTag() + "\n" +
+		fmt.Sprintf("%s %s %s", stateDot(running), bold(p.ID), stateWord(running))
+	chosen, err := (&menu{title: title, options: options}).run()
+	if err != nil || chosen < 0 {
 		return err
 	}
-	if action == 0 {
+
+	switch options[chosen] {
+	case "Start":
+		return startProjectInstance(p)
+	case "Stop":
 		return stopProjectInstance(p)
+	default:
+		return restartProjectInstance(p)
 	}
-	return restartProjectInstance(p)
 }
 
-func projectMenuOptions(projects []project.Project) []string {
-	opts := make([]string, len(projects))
+// projectRow is the shared line shape: state dot, id, state, ports, and one
+// trailing cell — the WebUI URL in `niq status`, the project directory in the
+// picker and listing.
+func projectRow(p project.Project, idWidth int, trailing string) string {
+	running := projectRunning(p)
+	row := fmt.Sprintf("%s %s  %s  %s %-5s  %s %-5s  %s",
+		stateDot(running),
+		bold(fmt.Sprintf("%-*s", idWidth, p.ID)),
+		stateWord(running),
+		dim("webui"), portCell(p.Ports.WebUI),
+		dim("bus"), portCell(p.Ports.Bus),
+		trailing,
+	)
+	return strings.TrimRight(row, " ")
+}
+
+func projectRows(projects []project.Project, trailing func(project.Project) string) []string {
+	idWidth := 2
+	for _, p := range projects {
+		if len(p.ID) > idWidth {
+			idWidth = len(p.ID)
+		}
+	}
+	rows := make([]string, len(projects))
 	for i, p := range projects {
-		opts[i] = fmt.Sprintf("%-16s %s", p.ID, projectState(p))
+		rows[i] = projectRow(p, idWidth, trailing(p))
 	}
-	return opts
+	return rows
 }
 
-func projectState(p project.Project) string {
-	if projectRunning(p) {
-		return "running"
+func projectDirCell(p project.Project) string { return dim(shortPath(project.ProjectDir(p.ID))) }
+
+// printProjectTable is the non-interactive view: `niq project` without a
+// terminal.
+func printProjectTable(projects []project.Project, trailing func(project.Project) string) {
+	fmt.Println(dim("projects"))
+	for _, row := range projectRows(projects, trailing) {
+		fmt.Printf("  %s\n", row)
 	}
-	return "stopped"
 }
 
 // stopProjectInstance interrupts the instance (SIGINT: it snapshots on the way
@@ -203,7 +249,7 @@ func projectState(p project.Project) string {
 // hand, too.
 func stopProjectInstance(p project.Project) error {
 	if !projectRunning(p) {
-		fmt.Printf("%s is not running\n", p.ID)
+		fmt.Printf("%s is %s\n", bold(p.ID), dim("not running"))
 		return nil
 	}
 	if project.InterruptPortHolders(p.Ports.WebUI) == 0 {
@@ -212,8 +258,20 @@ func stopProjectInstance(p project.Project) error {
 	if err := waitPortClosed(p.Ports.WebUI, 15*time.Second); err != nil {
 		return fmt.Errorf("%s: %w", p.ID, err)
 	}
-	fmt.Printf("%s stopped\n", p.ID)
+	fmt.Printf("%s %s\n", bold(p.ID), green("stopped"))
 	return nil
+}
+
+// startProjectInstance brings a stopped project up, through the control plane
+// when there is one (so it owns the instance) and otherwise directly.
+func startProjectInstance(p project.Project) error {
+	if st, ok := readControlState(); ok && isRunning(st) {
+		if err := startProjectViaControl(st, p); err != nil {
+			return err
+		}
+		return nil
+	}
+	return startProjectDetached(p)
 }
 
 // restartProjectInstance restarts through the control plane when it is up (the
@@ -221,7 +279,7 @@ func stopProjectInstance(p project.Project) error {
 // otherwise does the same work locally: stop, wait for the port, start detached.
 func restartProjectInstance(p project.Project) error {
 	if st, ok := readControlState(); ok && isRunning(st) {
-		return restartProjectViaControl(st, p.ID)
+		return restartProjectViaControl(st, p)
 	}
 	if projectRunning(p) {
 		if err := stopProjectInstance(p); err != nil {
@@ -231,27 +289,53 @@ func restartProjectInstance(p project.Project) error {
 	return startProjectDetached(p)
 }
 
-func restartProjectViaControl(st *controlState, id string) error {
-	url := fmt.Sprintf("http://%s/api/projects/%s/restart", probeAddr(st.Bound), id)
-	client := &http.Client{Timeout: 40 * time.Second} // the handler waits for the new instance
+func startProjectViaControl(st *controlState, p project.Project) error {
+	out, err := controlProjectCall(st, p.ID, "start")
+	if err != nil {
+		return err
+	}
+	if out.WebUIPort == 0 {
+		return fmt.Errorf("%s did not come up; see %s", p.ID, shortPath(project.LogPath(p.ID)))
+	}
+	fmt.Printf("%s %s %s\n", bold(p.ID), green("started"), cyan(projectURL(st, p.ID, out.WebUIPort)))
+	return nil
+}
+
+func restartProjectViaControl(st *controlState, p project.Project) error {
+	out, err := controlProjectCall(st, p.ID, "restart")
+	if err != nil {
+		return err
+	}
+	if out.WebUIPort == 0 {
+		return fmt.Errorf("%s did not come back up; see %s", p.ID, shortPath(project.LogPath(p.ID)))
+	}
+	fmt.Printf("%s %s %s\n", bold(p.ID), green("restarted"), cyan(projectURL(st, p.ID, out.WebUIPort)))
+	return nil
+}
+
+// controlProjectPort is the slice of the control plane's project answer the CLI
+// cares about.
+type controlProjectPort struct {
+	WebUIPort int `json:"webui_port"`
+}
+
+// controlProjectCall posts to /api/projects/<id>/<action> and decodes the port
+// the answer reports. Both handlers block until the instance is serving.
+func controlProjectCall(st *controlState, id, action string) (controlProjectPort, error) {
+	var out controlProjectPort
+	url := fmt.Sprintf("http://%s/api/projects/%s/%s", probeAddr(st.Bound), id, action)
+	client := &http.Client{Timeout: 40 * time.Second}
 	resp, err := client.Post(url, "application/json", nil)
 	if err != nil {
-		return fmt.Errorf("control: %w", err)
+		return out, fmt.Errorf("control: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("control: %s", strings.TrimSpace(string(body)))
-	}
-	var out struct {
-		WebUIPort int `json:"webui_port"`
+		return out, fmt.Errorf("control: %s", strings.TrimSpace(string(body)))
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
-	if out.WebUIPort == 0 { // the handler answers 200 even when the launch failed
-		return fmt.Errorf("%s did not come back up; see %s", id, project.LogPath(id))
-	}
-	fmt.Printf("%s restarted at %s\n", id, projectURL(st, id, out.WebUIPort))
-	return nil
+	return out, nil
 }
 
 // startProjectDetached starts an instance of its own, for when there is no
@@ -273,22 +357,23 @@ func startProjectDetached(p project.Project) error {
 	for {
 		if cur, err := project.LoadProject(p.ID); err == nil && cur.Ports.WebUI != 0 &&
 			isServing(fmt.Sprintf("127.0.0.1:%d", cur.Ports.WebUI)) {
-			fmt.Printf("%s started at http://localhost:%d\n", p.ID, cur.Ports.WebUI)
+			fmt.Printf("%s %s %s\n", bold(p.ID), green("started"),
+				cyan(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI)))
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not start within 20s; see %s", p.ID, project.LogPath(p.ID))
+			return fmt.Errorf("%s did not start within 20s; see %s", p.ID, shortPath(project.LogPath(p.ID)))
 		}
 		select {
 		case err := <-exited:
-			return fmt.Errorf("%s exited during startup: %v; see %s", p.ID, err, project.LogPath(p.ID))
+			return fmt.Errorf("%s exited during startup: %v; see %s", p.ID, err, shortPath(project.LogPath(p.ID)))
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }
 
 // projectURL prefers the control plane's proxied address, which is the one that
-// works from elsewhere; the loopback port is the fallback when it is down.
+// works from elsewhere.
 func projectURL(st *controlState, id string, webuiPort int) string {
 	if st != nil {
 		return strings.TrimSuffix(project.LocalhostURL(st.Bound), "/") + "/p/" + id + "/"

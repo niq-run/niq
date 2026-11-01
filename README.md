@@ -86,10 +86,35 @@ niq project create my-project
 niq project run my-project
 ```
 
-`niq project` on its own opens an arrow-key picker over every project — `↑`/`↓`
-to move, `enter` to pick, then stop or restart the chosen instance (restart
-goes through the running control plane, or starts the instance directly when
-there is none).
+`niq project` on its own (or `niq project list`) is an arrow-key picker over
+every project — state, ports and directory per row: `↑`/`↓` to move, `enter` to
+pick, then start (if stopped) or stop / restart (if running). Start and restart
+go through the running control plane so it owns the instance, and fall back to
+starting one directly when there is none. Without a terminal it prints the same
+table; `--ids` prints just the ids.
+
+| command | |
+| --- | --- |
+| `niq` | start the control plane in the background, or report on it when it is already running |
+| `niq -f`, `niq --foreground` | run the control plane in this terminal |
+| `niq status` | the control plane and every project instance |
+| `niq stop [--all]` | stop the control plane (`--all` also stops the project instances) |
+| `niq restart` | restart it on the address it was started with |
+| `niq project` | pick a project: start, stop or restart it |
+| `niq project create` / `niq project run` | create a project / run one in this terminal |
+| `niq completion <shell>` | completion for bash, zsh or fish |
+
+```sh
+# bash
+source <(niq completion bash)
+# zsh
+niq completion zsh > "${fpath[1]}/_niq"
+# fish
+niq completion fish | source
+```
+
+Output is colored when it goes to a terminal and plain otherwise (or with
+`NO_COLOR` set), so piping and logging stay readable.
 
 Each project serves its own WebUI on a loopback-only port, so it is never
 exposed by accident: open it through the control plane at

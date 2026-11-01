@@ -22,6 +22,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/niq-run/niq/app/project"
 )
@@ -36,7 +37,7 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "--version", "-v", "version":
-			fmt.Println("niq", version)
+			fmt.Println(versionTag())
 			return
 		case "--help", "-h", "help":
 			printUsage()
@@ -56,6 +57,8 @@ func main() {
 		err = restartControl()
 	case len(os.Args) > 1 && os.Args[1] == "status":
 		err = statusControl()
+	case len(os.Args) > 1 && (os.Args[1] == "completion" || os.Args[1] == "complete"):
+		err = runCompletion(os.Args[2:])
 	case len(os.Args) > 1:
 		err = runControl(os.Args[1:])
 	default:
@@ -126,13 +129,24 @@ func runProject(args []string) error {
 	}
 	fs := flag.NewFlagSet("niq project", flag.ContinueOnError)
 	switch {
-	case len(args) >= 1 && args[0] == "list":
-		projects, err := project.ListProjects()
-		if err != nil {
-			return err
+	case args[0] == "list":
+		// `list` is the picker, like bare `niq project`; --ids is the
+		// machine-readable form shell completion calls.
+		ids := fs.Bool("ids", false, "Print project ids, one per line")
+		if err := fs.Parse(args[1:]); err != nil {
+			return helpOrErr(err)
 		}
-		printProjectList(projects)
-		return nil
+		if *ids {
+			projects, err := project.ListProjects()
+			if err != nil {
+				return err
+			}
+			for _, p := range projects {
+				fmt.Println(p.ID)
+			}
+			return nil
+		}
+		return runProjectPicker()
 
 	case len(args) >= 2 && args[0] == "create":
 		id := args[1]
@@ -172,31 +186,11 @@ func runProject(args []string) error {
 		})
 
 	case args[0] == "help" || args[0] == "-h" || args[0] == "--help":
-		fmt.Print(`niq project - create, list and manage project instances
-
-  niq project                      pick a project (↑/↓), then stop or restart it
-  niq project list                 list projects, their ports and run state
-  niq project create <id> [--template <name>]
-                                   create a project from a template
-  niq project run <id> [--bus :0] [--webui :0] [--webui-auth user:pass]
-                                   run an instance in this terminal
-`)
+		printProjectUsage()
 		return nil
 
 	default:
 		return fmt.Errorf("usage: niq project [list | create <id> | run <id>] (see: niq project --help)")
-	}
-}
-
-// printProjectList is the plain listing: `niq project list`, and what a bare
-// `niq project` degrades to when stdin is not a terminal.
-func printProjectList(projects []project.Project) {
-	if len(projects) == 0 {
-		fmt.Println("(no projects)")
-		return
-	}
-	for _, p := range projects {
-		fmt.Printf("%-24s webui=%-6d bus=%-6d %s\n", p.ID, p.Ports.WebUI, p.Ports.Bus, projectState(p))
 	}
 }
 
@@ -229,33 +223,58 @@ func setupProjectLogging(id string) {
 }
 
 func printUsage() {
-	fmt.Print(`niq - neural interface quantum
+	fmt.Printf("%s  %s\n\n", versionTag(), dim("neural interface quantum"))
+	fmt.Println(bold("usage"))
+	printUsageRows([][2]string{
+		{"niq", "start the control plane in the background, or report on it when it is already running"},
+		{"niq -f, --foreground", "run the control plane in this terminal"},
+		{"niq status", "the control plane and every project instance"},
+		{"niq stop [--all]", "stop the control plane (--all also stops the project instances)"},
+		{"niq restart", "restart the control plane on the address it was started with"},
+		{"niq project", "pick a project, then start, stop or restart it"},
+		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
+		{"niq project create <id> [--template <name>]", "create a project from a template"},
+		{"niq project run <id> [--bus :0] [--webui :0]", "run an instance in this terminal"},
+		{"niq completion <shell>", "print a completion script: bash, zsh or fish"},
+		{"niq --version", "print the version"},
+	})
 
-Usage:
-  niq                       start the control plane (default :9527) in the
-                            background, print its WebUI address, and return to
-                            the prompt; if it is already running, show the same
-                            report as 'niq status'. Its WebUI also serves every
-                            project at /p/<id>/. Closing the terminal does not
-                            stop it.
-  niq control --foreground  (or -f) run it attached to this terminal instead
-  niq status                show the control plane and each project's run state
-                            (bare 'niq' does this once the plane is up)
-  niq stop                  stop the background control plane; projects it
-                            serves are separate processes and keep running
-  niq stop --all            also stop every running project instance
-  niq restart               restart it on the address it was started with
-  niq --addr :9527 --auth user:pass
-                            start on another address, locking non-localhost
-                            access behind basic auth (saved to
-                            ~/.niq/common/auth.json, reused on later runs)
-  niq project               pick a project (↑/↓), then stop or restart it
-  niq project list          list projects, their ports and run state
-  niq project create <id> [--template <name>]
-                            create a project from a template
-  niq project run <id> [--bus :0] [--webui :0] [--webui-auth user:pass]
-                            run a project instance in this process (webui-auth
-                            locks non-localhost WebUI access behind basic auth)
-  niq --version             print version
-`)
+	fmt.Printf("\n%s\n", bold("start flags"))
+	printUsageRows([][2]string{
+		{"--addr <host:port>", "listen address, default :9527"},
+		{"--auth <user:pass>", "basic auth for non-localhost access; saved to ~/.niq/common/auth.json"},
+	})
+
+	fmt.Printf("\n%s\n", bold("shell completion"))
+	printUsageRows([][2]string{
+		{"bash", "source <(niq completion bash)"},
+		{"zsh", "niq completion zsh > \"${fpath[1]}/_niq\""},
+		{"fish", "niq completion fish | source"},
+	})
+}
+
+// printUsageRows lays out command/description pairs: a fixed column keeps the
+// table aligned, and a command too long for it gets its description on the next
+// line instead of pushing the whole table right.
+func printUsageRows(rows [][2]string) {
+	const col = 30
+	for _, r := range rows {
+		if len(r[0]) <= col {
+			fmt.Printf("  %s  %s\n", bold(fmt.Sprintf("%-*s", col, r[0])), dim(r[1]))
+			continue
+		}
+		fmt.Printf("  %s\n", bold(r[0]))
+		fmt.Printf("  %s  %s\n", strings.Repeat(" ", col), dim(r[1]))
+	}
+}
+
+func printProjectUsage() {
+	fmt.Printf("%s  %s\n\n", versionTag(), dim("project instances"))
+	fmt.Println(bold("usage"))
+	printUsageRows([][2]string{
+		{"niq project", "pick a project (↑/↓, enter), then start, stop or restart it"},
+		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
+		{"niq project create <id> [--template <name>]", "create a project from a template"},
+		{"niq project run <id> [--bus :0] [--webui :0] [--webui-auth user:pass]", "run an instance in this terminal (webui-auth locks non-localhost access)"},
+	})
 }

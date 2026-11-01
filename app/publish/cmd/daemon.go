@@ -164,16 +164,15 @@ func startBackground(addr, auth string) error {
 }
 
 // reportAlreadyRunning answers a start request when a control plane is already
-// up: same address is a no-op, a different one is a conflict the user must
-// resolve (two planes would fight over the single exposed port anyway).
+// up: same address is a no-op that reports instead, a different one is a
+// conflict the user must resolve (two planes would fight over the single
+// exposed port anyway).
 func reportAlreadyRunning(st *controlState, addr string) error {
 	if project.PortOf(st.Bound) != project.PortOf(addr) {
 		return fmt.Errorf("niq control is already running (pid %d) at %s; stop it with `niq stop` before starting on %s",
-			st.PID, project.LocalhostURL(st.Bound), addr)
+			st.PID, cyan(project.LocalhostURL(st.Bound)), addr)
 	}
-	fmt.Printf("niq control is already running (pid %d, since %s)\n\n", st.PID, st.Started)
-	printControlHints(st.Bound)
-	return nil
+	return statusControl()
 }
 
 // runControlForeground runs the control plane attached to this terminal (the
@@ -199,7 +198,7 @@ func runControlForeground(addr, auth string) error {
 	})
 	clearControlState(os.Getpid())
 	if err == nil {
-		fmt.Println("niq control stopped")
+		fmt.Printf("%s %s\n", bold("niq control"), green("stopped"))
 	} else {
 		// The background starter's only channel back to the user is this log
 		// (its stderr is the null device), so a startup failure — a taken port,
@@ -227,12 +226,12 @@ func stopControl(all bool) error {
 func stopControlPlane() error {
 	st, ok := readControlState()
 	if !ok {
-		fmt.Println("niq control is not running")
+		fmt.Printf("%s %s\n", bold("niq control"), dim("not running"))
 		return nil
 	}
 	if !isRunning(st) {
 		clearControlState(st.PID)
-		fmt.Println("niq control is not running (cleared a stale record)")
+		fmt.Printf("%s %s\n", bold("niq control"), dim("not running (cleared a stale record)"))
 		return nil
 	}
 	if err := terminateProcess(st.PID); err != nil {
@@ -248,7 +247,7 @@ func stopControlPlane() error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	clearControlState(st.PID)
-	fmt.Printf("niq control stopped (pid %d)\n", st.PID)
+	fmt.Printf("%s %s %s\n", bold("niq control"), green("stopped"), dim(fmt.Sprintf("pid %d", st.PID)))
 	return nil
 }
 
@@ -280,8 +279,8 @@ func reportRunningProjects() {
 	if len(ids) == 0 {
 		return
 	}
-	fmt.Printf("\n%d project instance(s) still running (%s); `niq stop --all` stops them too.\n",
-		len(ids), strings.Join(ids, ", "))
+	fmt.Printf("\n%s %d project instance(s) still running (%s); %s stops them too.\n",
+		dim("note:"), len(ids), strings.Join(ids, ", "), bold("niq stop --all"))
 }
 
 // stopProjects interrupts every running project instance. SIGINT is the same
@@ -327,7 +326,7 @@ func stopProjects() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	fmt.Printf("stopped %d project instance(s): %s\n", len(ids), strings.Join(ids, ", "))
+	fmt.Printf("%s %d project instance(s): %s\n", green("stopped"), len(ids), strings.Join(ids, ", "))
 	return nil
 }
 
@@ -351,63 +350,72 @@ func restartControl() error {
 func statusControl() error {
 	st, ok := readControlState()
 	if !ok || !isRunning(st) {
-		fmt.Println("niq control is not running")
-		fmt.Println()
-		fmt.Println("Start it with `niq` (background) or `niq control --foreground`.")
+		printControlStopped()
 		printProjectStatus("")
 		return nil
 	}
-	fmt.Printf("niq control is running (pid %d, since %s)\n\n", st.PID, st.Started)
-	printControlHints(st.Bound)
+	printControlRunning(st)
 	printProjectStatus(project.LocalhostURL(st.Bound))
 	if st.Version != version {
-		fmt.Printf("\nStarted by niq %s; this binary is %s — run `niq restart` to pick it up.\n", st.Version, version)
+		fmt.Printf("\n%s running niq %s, this binary is %s — %s picks it up.\n",
+			yellow("▲"), st.Version, version, bold("niq restart"))
 	}
 	return nil
+}
+
+// printControlRunning is the control-plane half of `niq status`: identity,
+// state, address and the commands that act on it. Started/status/already-running
+// all print it, so the service always looks the same no matter which command
+// you used to ask.
+func printControlRunning(st *controlState) {
+	fmt.Printf("%s\n\n", versionTag())
+	fmt.Printf("%s %s %s  %s\n",
+		stateDot(true), bold("control"), stateWord(true),
+		dim(fmt.Sprintf("pid %d · since %s", st.PID, shortTime(st.Started))))
+	fmt.Printf("  %s %s\n", label("webui", 8), cyan(project.LocalhostURL(st.Bound)))
+	fmt.Printf("  %s %s\n", label("log", 8), shortPath(controlLogPath()))
+	fmt.Printf("  %s %s\n", label("stop", 8), "niq stop")
+	fmt.Printf("  %s %s\n", label("restart", 8), "niq restart")
+}
+
+func printControlStopped() {
+	fmt.Printf("%s\n\n", versionTag())
+	fmt.Printf("%s %s %s\n\n", stateDot(false), bold("control"), stateWord(false))
+	fmt.Printf("  %s %s  %s\n", label("start", 8), "niq", dim("background"))
+	fmt.Printf("  %s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))
 }
 
 // printProjectStatus lists every project with the state of its instance, so
 // `niq status` answers "what is actually up right now?" without opening the
 // WebUI — the dev loop's usual question when a project page stops responding.
 // A project's ports are persisted, so a refused dial means that instance is not
-// running (stopped, or died and was never restarted): niq therefore reports it
-// as stopped even though the control plane still proxies its old port.
+// running: niq reports it as stopped even though the control plane still
+// proxies its old port.
 //
 // controlURL, when the control plane is up, is the address that reaches the
 // project from outside; otherwise the loopback URL is shown.
 func printProjectStatus(controlURL string) {
 	projects, err := project.ListProjects()
-	if err != nil {
+	if err != nil || len(projects) == 0 {
 		return
 	}
-	if len(projects) == 0 {
-		return
-	}
-	fmt.Println("\nprojects")
-	for _, p := range projects {
-		state, url := "stopped", "-"
-		if projectRunning(p) {
-			state = "running"
-			url = project.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
-			if controlURL != "" {
-				url = strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/"
-			}
+	url := func(p project.Project) string {
+		if !projectRunning(p) {
+			return ""
 		}
-		fmt.Printf("  %-14s %-8s %s\n", p.ID, state, url)
+		if controlURL != "" {
+			return cyan(strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/")
+		}
+		return cyan(project.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)))
 	}
+	fmt.Println()
+	printProjectTable(projects, url)
 }
 
 func printControlStarted(st *controlState) {
-	fmt.Printf("niq control is running in the background (pid %d)\n\n", st.PID)
-	printControlHints(st.Bound)
-	fmt.Printf("\nRun it attached to the terminal with `niq control --foreground`.\n")
-}
-
-func printControlHints(bound string) {
-	fmt.Printf("  WebUI    %s\n", project.LocalhostURL(bound))
-	fmt.Printf("  Log      %s\n", controlLogPath())
-	fmt.Printf("  Stop     niq stop\n")
-	fmt.Printf("  Restart  niq restart\n")
+	printControlRunning(st)
+	printProjectStatus(project.LocalhostURL(st.Bound))
+	fmt.Printf("\n%s\n", dim("`niq -f` runs it in this terminal instead"))
 }
 
 // logTail returns the last n lines of the control-plane log, so a failed start
