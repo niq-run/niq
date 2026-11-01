@@ -273,8 +273,9 @@ func pickAction(p project.Project) (string, error) {
 		options, actions = []string{"Start"}, []string{"start"}
 	}
 	// No identity line here: this menu replaces the list for a moment, and the
-	// project it is about is the whole heading.
-	title := fmt.Sprintf("%s %s", brandBold("["+p.ID+"]"), stateWord(running))
+	// project it is about is the whole heading. The trailing newline is the blank
+	// line that separates a heading from its options, as in the list.
+	title := fmt.Sprintf("%s %s\n", brandBold("["+p.ID+"]"), stateWord(running))
 	m := &menu{title: title}
 	if len(options) == 1 {
 		// Nothing to choose between, so say what the key does.
