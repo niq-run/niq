@@ -4,6 +4,11 @@
 // own process on its own dynamically-assigned bus/WebUI ports; the user is then
 // redirected to the project's WebUI.
 //
+// Project instances are not children of this process in any way that matters:
+// an instance is identified by the ports persisted in its project.json, so one
+// the plane launched, one started by hand and one that outlived a previous
+// plane are the same thing. Every lifecycle action goes through those ports.
+//
 // File layout: the service shell + routing live here; project lifecycle
 // handlers are in projects.go and template CRUD is in templates.go.
 package control
@@ -18,7 +23,6 @@ import (
 	"net/http/httputil"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -78,9 +82,6 @@ type Control struct {
 
 	authUser string // basic-auth user for non-loopback access ("" = disabled)
 	authPass string
-
-	mu    sync.Mutex
-	procs map[string]*os.Process // project id -> the running 'niq project run' process
 }
 
 // NewControl creates a control-plane service bound to addr (":9527" when empty).
@@ -91,7 +92,6 @@ func NewControl(addr string) *Control {
 	return &Control{
 		addr:  addr,
 		proxy: newProjectProxy(),
-		procs: map[string]*os.Process{},
 	}
 }
 

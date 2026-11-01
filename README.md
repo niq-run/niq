@@ -88,10 +88,11 @@ niq project run my-project
 
 `niq project` on its own (or `niq project list`) is an arrow-key picker over
 every project — state, ports and directory per row: `↑`/`↓` to move, `enter` to
-pick, then start (if stopped) or stop / restart (if running). Start and restart
-go through the running control plane so it owns the instance, and fall back to
-starting one directly when there is none. Without a terminal it prints the same
-table; `--ids` prints just the ids.
+pick, then start (if stopped) or stop / restart (if running). An instance is
+identified by its ports, so the CLI, the WebUI and a project started by hand in
+a terminal all act on the same thing — the control plane keeps no list of what
+it launched. Without a terminal the picker prints the same table; `--ids` prints
+just the ids.
 
 | command | |
 | --- | --- |

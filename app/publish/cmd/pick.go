@@ -9,11 +9,9 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -262,80 +260,28 @@ func stopProjectInstance(p project.Project) error {
 	return nil
 }
 
-// startProjectInstance brings a stopped project up, through the control plane
-// when there is one (so it owns the instance) and otherwise directly.
+// startProjectInstance brings a stopped project up. It does not go through the
+// control plane: an instance is identified by its ports, so starting one is the
+// same operation whether the plane is running or not — and the plane picks it
+// up on the next probe.
 func startProjectInstance(p project.Project) error {
-	if st, ok := readControlState(); ok && isRunning(st) {
-		if err := startProjectViaControl(st, p); err != nil {
-			return err
-		}
+	if projectRunning(p) {
+		fmt.Printf("%s is %s %s\n", bold(p.ID), green("already running"),
+			cyan(fmt.Sprintf("http://localhost:%d", p.Ports.WebUI)))
 		return nil
 	}
 	return startProjectDetached(p)
 }
 
-// restartProjectInstance restarts through the control plane when it is up (the
-// instance then belongs to it, and the WebUI's own restart keeps working), and
-// otherwise does the same work locally: stop, wait for the port, start detached.
+// restartProjectInstance stops the instance through its port and starts a new
+// one on the same addresses — exactly what the WebUI's restart does.
 func restartProjectInstance(p project.Project) error {
-	if st, ok := readControlState(); ok && isRunning(st) {
-		return restartProjectViaControl(st, p)
-	}
 	if projectRunning(p) {
 		if err := stopProjectInstance(p); err != nil {
 			return err
 		}
 	}
 	return startProjectDetached(p)
-}
-
-func startProjectViaControl(st *controlState, p project.Project) error {
-	out, err := controlProjectCall(st, p.ID, "start")
-	if err != nil {
-		return err
-	}
-	if out.WebUIPort == 0 {
-		return fmt.Errorf("%s did not come up; see %s", p.ID, shortPath(project.LogPath(p.ID)))
-	}
-	fmt.Printf("%s %s %s\n", bold(p.ID), green("started"), cyan(projectURL(st, p.ID, out.WebUIPort)))
-	return nil
-}
-
-func restartProjectViaControl(st *controlState, p project.Project) error {
-	out, err := controlProjectCall(st, p.ID, "restart")
-	if err != nil {
-		return err
-	}
-	if out.WebUIPort == 0 {
-		return fmt.Errorf("%s did not come back up; see %s", p.ID, shortPath(project.LogPath(p.ID)))
-	}
-	fmt.Printf("%s %s %s\n", bold(p.ID), green("restarted"), cyan(projectURL(st, p.ID, out.WebUIPort)))
-	return nil
-}
-
-// controlProjectPort is the slice of the control plane's project answer the CLI
-// cares about.
-type controlProjectPort struct {
-	WebUIPort int `json:"webui_port"`
-}
-
-// controlProjectCall posts to /api/projects/<id>/<action> and decodes the port
-// the answer reports. Both handlers block until the instance is serving.
-func controlProjectCall(st *controlState, id, action string) (controlProjectPort, error) {
-	var out controlProjectPort
-	url := fmt.Sprintf("http://%s/api/projects/%s/%s", probeAddr(st.Bound), id, action)
-	client := &http.Client{Timeout: 40 * time.Second}
-	resp, err := client.Post(url, "application/json", nil)
-	if err != nil {
-		return out, fmt.Errorf("control: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return out, fmt.Errorf("control: %s", strings.TrimSpace(string(body)))
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&out)
-	return out, nil
 }
 
 // startProjectDetached starts an instance of its own, for when there is no
@@ -370,15 +316,6 @@ func startProjectDetached(p project.Project) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-}
-
-// projectURL prefers the control plane's proxied address, which is the one that
-// works from elsewhere.
-func projectURL(st *controlState, id string, webuiPort int) string {
-	if st != nil {
-		return strings.TrimSuffix(project.LocalhostURL(st.Bound), "/") + "/p/" + id + "/"
-	}
-	return fmt.Sprintf("http://localhost:%d", webuiPort)
 }
 
 func waitPortClosed(port int, timeout time.Duration) error {

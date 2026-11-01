@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/niq-run/niq/app/project"
@@ -32,7 +31,7 @@ func (c *Control) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Reques
 	}
 	views := make([]projectView, 0, len(projects))
 	for _, p := range projects {
-		views = append(views, projectView{Project: p, Running: c.isRunning(p.ID)})
+		views = append(views, projectView{Project: p, Running: isRunning(p.ID)})
 	}
 	json.NewEncoder(w).Encode(views)
 }
@@ -99,52 +98,38 @@ func (c *Control) handleLinkProject(w stdhttp.ResponseWriter, r *stdhttp.Request
 		stdhttp.Error(w, err.Error(), 400)
 		return
 	}
-	json.NewEncoder(w).Encode(projectView{Project: *p, Running: c.isRunning(p.ID)})
+	json.NewEncoder(w).Encode(projectView{Project: *p, Running: isRunning(p.ID)})
 }
 
-// isRunning reports whether a project is actually up. A tracked subprocess is
-// the authoritative signal for one this control plane started; otherwise we probe
-// the project's persisted WebUI port, so a project started manually from the CLI
-// (outside the control plane) is still shown as running.
-func (c *Control) isRunning(id string) bool {
-	// 1) Live process that this control plane launched?
-	c.mu.Lock()
-	proc, ok := c.procs[id]
-	if ok && proc != nil {
-		err := proc.Signal(syscall.Signal(0))
-		if err != nil {
-			delete(c.procs, id)
-		} else {
-			c.mu.Unlock()
-			return true
-		}
-	}
-	c.mu.Unlock()
-
-	// 2) Fall back to probing the persisted WebUI port (catches manual starts).
+// isRunning reports whether a project is actually up: its persisted WebUI port
+// answers, whoever started the process. The control plane keeps no list of the
+// children it spawned — a project it launched, one started by hand in a
+// terminal, and one that outlived a previous control plane are the same thing
+// here, and are managed the same way.
+func isRunning(id string) bool {
 	p, err := project.LoadProject(id)
 	if err != nil || p.Ports.WebUI == 0 {
 		return false
 	}
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI), 300*time.Millisecond)
+	return probePort(p.Ports.WebUI)
+}
+
+// probePort reports whether something accepts connections on the project's
+// loopback WebUI port.
+func probePort(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 300*time.Millisecond)
 	if err != nil {
-		return false // nothing listening on the last-known WebUI port
+		return false
 	}
 	conn.Close()
 	return true
 }
 
-// handleRestartProject gracefully stops a running project and relaunches it on
-// its reused ports. It waits for the old process to release the port before
-// spawning the new one so the two never contend for the persisted ports;
-// launchProject then blocks until the new WebUI port is actually listening, so
-// the response reflects a ready project.
-//
-// "Stops" covers both kinds of instance: a child this control plane spawned,
-// and one it merely inherited — the plane was restarted while its projects kept
-// running, or the instance was started by hand. The second kind is found
-// through its WebUI port; without that, the relaunch saw it "already running"
-// and restart was a silent no-op.
+// handleRestartProject stops the running instance and relaunches it on its
+// reused ports. The instance is found through the port it holds — the control
+// plane does not track pids, so one it spawned and one started elsewhere take
+// exactly this path — and the launch waits for that port to be released, so the
+// two never contend for the persisted address.
 func (c *Control) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
 	p, err := project.LoadProject(id)
@@ -152,23 +137,7 @@ func (c *Control) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Requ
 		stdhttp.Error(w, "project not found", 404)
 		return
 	}
-
-	c.mu.Lock()
-	proc := c.procs[id]
-	delete(c.procs, id)
-	c.mu.Unlock()
-
-	if proc != nil {
-		_ = proc.Signal(os.Interrupt) // graceful shutdown + snapshot
-		exited := make(chan struct{})
-		go func() { _, _ = proc.Wait(); close(exited) }()
-		select {
-		case <-exited:
-		case <-time.After(8 * time.Second):
-		}
-	} else {
-		project.InterruptPortHolders(p.Ports.WebUI)
-	}
+	project.InterruptPortHolders(p.Ports.WebUI)
 	waitPortFree(p.Ports.WebUI)
 	c.launchProject(w, id)
 }
@@ -192,28 +161,12 @@ func waitPortFree(port int) {
 	}
 }
 
-// handleStopProject terminates a running project. A project this control plane
-// launched is signalled directly. One started manually from the CLI (outside
-// the control plane, so untracked) is stopped by finding whoever listens on its
-// persisted WebUI port and interrupting them — the same port-holder idea as the
-// project's own startup port reclaim.
+// handleStopProject terminates a running project by interrupting whoever
+// listens on its persisted WebUI port — the same port-holder idea as the
+// project's own startup port reclaim, and the reason a project started by hand
+// stops exactly like one this control plane spawned.
 func (c *Control) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
-
-	c.mu.Lock()
-	proc, tracked := c.procs[id]
-	if tracked && proc != nil {
-		_ = proc.Signal(os.Interrupt) // graceful: the project snapshots on shutdown
-		delete(c.procs, id)
-	}
-	c.mu.Unlock()
-	if tracked && proc != nil {
-		w.WriteHeader(stdhttp.StatusAccepted)
-		return
-	}
-
-	// Not tracked here: it may have been started outside the control plane, in
-	// which case stopping it means interrupting its WebUI-port holder.
 	p, err := project.LoadProject(id)
 	if err != nil {
 		stdhttp.Error(w, "project not found", 404)
@@ -268,7 +221,7 @@ func (c *Control) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Reques
 // does NOT spawn a duplicate — that would collide on the persisted ports and
 // force the fallback to a fresh random port each start (the visible "jumping").
 func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
-	if c.isRunning(id) {
+	if isRunning(id) {
 		p, err := project.LoadProject(id)
 		var webui string
 		if err == nil && p.Ports.WebUI != 0 {
@@ -295,24 +248,16 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 		stdhttp.Error(w, "control: start project: "+err.Error(), 500)
 		return
 	}
-	// Track the process and drop it when it exits.
-	c.mu.Lock()
-	c.procs[id] = cmd.Process
-	c.mu.Unlock()
+	// Reap the child so its exit is observable: a project killed by an eventbus
+	// panic exits with code 2 (Go's panic) and no shutdown seq, and discarding
+	// cmd.Wait() hid exactly that in the field. Nothing is remembered about the
+	// process — it is an instance like any other, identified by its ports.
 	go func() {
-		// Record the child's exit so a crash is observable: a project killed by
-		// an eventbus panic exits with code 2 (Go's panic) and no shutdown seq —
-		// discarding cmd.Wait() hid exactly that in the field.
 		if werr := cmd.Wait(); werr != nil {
 			log.Printf("[control] project %s exited abnormally: %v", id, werr)
 		} else {
 			log.Printf("[control] project %s exited cleanly", id)
 		}
-		c.mu.Lock()
-		if cur, ok := c.procs[id]; ok && cur == cmd.Process {
-			delete(c.procs, id)
-		}
-		c.mu.Unlock()
 	}()
 
 	// Wait until the new process is actually serving on its WebUI port, so the
