@@ -382,7 +382,7 @@ func restartControl(withProjects bool) error {
 		fmt.Printf("\n%s\n", dim("no project instance was running"))
 		return nil
 	}
-	fmt.Printf("\n  %s\n", bracketed("projects"))
+	fmt.Printf("\n%s\n", bracketed("projects"))
 	restartProjectInstances(running)
 	return nil
 }
@@ -402,15 +402,15 @@ func restartProjectInstances(ids []string) {
 	for _, id := range ids {
 		p, err := project.LoadProject(id)
 		if err != nil {
-			fmt.Printf("  %s %s\n", bold(id), red(err.Error()))
+			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
 			continue
 		}
 		line, err := restartProjectInstance(*p)
 		if err != nil {
-			fmt.Printf("  %s %s\n", bold(id), red(err.Error()))
+			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
 			continue
 		}
-		fmt.Printf("  %s\n", line)
+		fmt.Printf("%s\n", line)
 	}
 }
 
@@ -436,10 +436,10 @@ func printControlRunning(st *controlState) {
 		state: bracketed("control") + " " + stateWord(true) +
 			dim(fmt.Sprintf("  pid %d · since %s", st.PID, shortTime(st.Started))),
 	})
-	fmt.Printf("  %s %s\n", label("webui", 8), brand(project.LocalhostURL(st.Bound)))
-	fmt.Printf("  %s %s\n", label("log", 8), shortPath(controlLogPath()))
-	fmt.Printf("  %s %s\n", label("stop", 8), "niq stop")
-	fmt.Printf("  %s %s\n", label("restart", 8), "niq restart")
+	fmt.Printf("%s %s\n", label("webui", 8), brand(project.LocalhostURL(st.Bound)))
+	fmt.Printf("%s %s\n", label("log", 8), shortPath(controlLogPath()))
+	fmt.Printf("%s %s\n", label("stop", 8), "niq stop")
+	fmt.Printf("%s %s\n", label("restart", 8), "niq restart")
 }
 
 func printControlStopped() {
@@ -447,8 +447,8 @@ func printControlStopped() {
 		version: dim("version-") + brand(versionNumber()),
 		state:   bracketed("control") + " " + stateWord(false),
 	})
-	fmt.Printf("  %s %s  %s\n", label("start", 8), "niq", dim("background"))
-	fmt.Printf("  %s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))
+	fmt.Printf("%s %s  %s\n", label("start", 8), "niq", dim("background"))
+	fmt.Printf("%s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))
 }
 
 // printProjectStatus lists every project with the state of its instance, so

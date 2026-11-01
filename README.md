@@ -56,12 +56,17 @@ session) no longer stops it. Running `niq` again reports on the service instead
 up?".
 
 ```
-niq control is running in the background (pid 4711)
+ - niq -  version-0.14.0
 
-  WebUI    http://localhost:9527
-  Log      ~/.niq/niq.log
-  Stop     niq stop
-  Restart  niq restart
+[control] running  pid 4711 · since 2026-11-01 23:57
+webui    http://localhost:9527
+log      ~/.niq/niq.log
+stop     niq stop
+restart  niq restart
+
+[projects]  niq project to start, stop or restart one
+● pin   running  webui 57609  bus 57608  http://localhost:9527/p/pin/
+○ notes stopped  webui 57621  bus 57620  http://localhost:9527/p/notes/
 ```
 
 `niq status` reports the process, address and log, plus each project's run

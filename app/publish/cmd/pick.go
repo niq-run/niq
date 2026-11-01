@@ -299,13 +299,13 @@ func projectDirCell(p project.Project) string { return dim(shortPath(project.Pro
 // the heading — the status report uses it to say where the list can be acted on,
 // which the picker itself does not need to explain.
 func printProjectTable(projects []project.Project, trailing func(project.Project) string, note string) {
-	head := "  " + bracketed("projects")
+	head := bracketed("projects")
 	if note != "" {
 		head += "  " + note
 	}
 	fmt.Println(head)
 	for _, row := range projectRows(projects, trailing) {
-		fmt.Printf("  %s\n", row)
+		fmt.Printf("%s\n", row)
 	}
 }
 

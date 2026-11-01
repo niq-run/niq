@@ -253,7 +253,7 @@ func setupProjectLogging(id string) {
 func printUsage() {
 	printBanner(banner{version: dim("version-") + brand(versionNumber()), tagline: dim("neural interface quantum")})
 	fmt.Println()
-	fmt.Printf("  %s\n", bracketed("usage"))
+	fmt.Printf("%s\n", bracketed("usage"))
 	printUsageRows([][2]string{
 		{"niq", "start the control plane in the background, or report on it when it is already running"},
 		{"niq -f, --foreground", "run the control plane in this terminal"},
@@ -268,13 +268,13 @@ func printUsage() {
 		{"niq --version", "print the version"},
 	})
 
-	fmt.Printf("\n  %s\n", bracketed("start flags"))
+	fmt.Printf("\n%s\n", bracketed("start flags"))
 	printUsageRows([][2]string{
 		{"--addr <host:port>", "listen address, default :9527"},
 		{"--auth <user:pass>", "basic auth for non-localhost access; saved to ~/.niq/common/auth.json"},
 	})
 
-	fmt.Printf("\n  %s\n", bracketed("shell completion"))
+	fmt.Printf("\n%s\n", bracketed("shell completion"))
 	printUsageRows([][2]string{
 		{"bash", "source <(niq completion bash)"},
 		{"zsh", "niq completion zsh > \"${fpath[1]}/_niq\""},
@@ -289,18 +289,18 @@ func printUsageRows(rows [][2]string) {
 	const col = 30
 	for _, r := range rows {
 		if len(r[0]) <= col {
-			fmt.Printf("  %s  %s\n", bold(fmt.Sprintf("%-*s", col, r[0])), dim(r[1]))
+			fmt.Printf("%s  %s\n", bold(fmt.Sprintf("%-*s", col, r[0])), dim(r[1]))
 			continue
 		}
-		fmt.Printf("  %s\n", bold(r[0]))
-		fmt.Printf("  %s  %s\n", strings.Repeat(" ", col), dim(r[1]))
+		fmt.Printf("%s\n", bold(r[0]))
+		fmt.Printf("%s  %s\n", strings.Repeat(" ", col), dim(r[1]))
 	}
 }
 
 func printProjectUsage() {
 	printBanner(banner{version: dim("version-") + brand(versionNumber()), tagline: dim("project instances")})
 	fmt.Println()
-	fmt.Printf("  %s\n", bracketed("usage"))
+	fmt.Printf("%s\n", bracketed("usage"))
 	printUsageRows([][2]string{
 		{"niq project", "pick a project (↑/↓, enter), then start, stop or restart it"},
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},

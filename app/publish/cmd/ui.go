@@ -103,15 +103,15 @@ type banner struct {
 // so the first line leads with it instead.
 func printBanner(b banner) {
 	if chip := logoChip(); chip != "" {
-		fmt.Printf("  %s %s\n", chip, b.version)
+		fmt.Printf("%s %s\n", chip, b.version)
 	} else {
-		fmt.Printf("  %s  %s\n", "niq", b.version)
+		fmt.Printf("%s  %s\n", "niq", b.version)
 	}
 	if b.tagline != "" {
-		fmt.Printf("  %s\n", b.tagline)
+		fmt.Printf("%s\n", b.tagline)
 	}
 	if b.state != "" {
-		fmt.Printf("\n  %s\n", b.state)
+		fmt.Printf("\n%s\n", b.state)
 	}
 }
 
