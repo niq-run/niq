@@ -364,7 +364,7 @@ func statusControl() error {
 func printControlRunning(st *controlState) {
 	printBanner(banner{
 		version: dim("version-") + brand(versionNumber()),
-		state: bold("control") + "  " + stateWord(true) +
+		state: bracketed("control") + " " + stateWord(true) +
 			dim(fmt.Sprintf("  pid %d · since %s", st.PID, shortTime(st.Started))),
 	})
 	fmt.Printf("  %s %s\n", label("webui", 8), brand(project.LocalhostURL(st.Bound)))
@@ -376,7 +376,7 @@ func printControlRunning(st *controlState) {
 func printControlStopped() {
 	printBanner(banner{
 		version: dim("version-") + brand(versionNumber()),
-		state:   bold("control") + "  " + stateWord(false),
+		state:   bracketed("control") + " " + stateWord(false),
 	})
 	fmt.Printf("  %s %s  %s\n", label("start", 8), "niq", dim("background"))
 	fmt.Printf("  %s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))

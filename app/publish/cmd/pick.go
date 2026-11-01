@@ -242,7 +242,7 @@ func pickAction(p project.Project) (string, error) {
 		options, actions = []string{"Start"}, []string{"start"}
 	}
 	title := versionTag() + "\n" +
-		fmt.Sprintf("%s %s %s", stateDot(running), bold(p.ID), stateWord(running))
+		fmt.Sprintf("%s %s %s", stateDot(running), bracketed(p.ID), stateWord(running))
 	chosen, err := (&menu{title: title, options: options}).run()
 	if err != nil || chosen < 0 {
 		return "", err
@@ -267,9 +267,12 @@ func runAction(p project.Project, action string) (string, error) {
 // picker and listing.
 func projectRow(p project.Project, idWidth int, trailing string) string {
 	running := projectRunning(p)
-	row := fmt.Sprintf("%s %s  %s  %s %-5s  %s %-5s  %s",
+	// The bracket closes right after the name; the padding that keeps the
+	// columns aligned goes after it, so short ids do not read "[pin ]".
+	pad := strings.Repeat(" ", idWidth+2-len(p.ID)-2)
+	row := fmt.Sprintf("%s %s%s  %s  %s %-5s  %s %-5s  %s",
 		stateDot(running),
-		bold(fmt.Sprintf("%-*s", idWidth, p.ID)),
+		bracketed(p.ID), pad,
 		stateWord(running),
 		dim("webui"), portCell(p.Ports.WebUI),
 		dim("bus"), portCell(p.Ports.Bus),

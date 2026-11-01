@@ -115,6 +115,12 @@ func printBanner(b banner) {
 	}
 }
 
+// bracketed renders a name inside dim square brackets: the product uses them to
+// mark "this is a thing you can act on" in states, handlers and project rows.
+func bracketed(name string) string {
+	return brandBold("[") + bold(name) + brandBold("]")
+}
+
 // stateDot marks a running/stopped instance. It is the same glyph in the status
 // report and in the picker, so "am I looking at the same thing?" never costs a
 // thought.
