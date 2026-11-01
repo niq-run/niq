@@ -48,8 +48,23 @@ type menu struct {
 	status string
 	// keep leaves the block on screen when a choice is made: the project list
 	// stays up while the action it opens is chosen.
-	keep  bool
-	drawn bool // the block is on screen; only then is the cursor-up meaningful
+	keep bool
+	// bare options already show which one is current (the project list brackets
+	// its selected row), so no cursor glyph is drawn beside them.
+	bare bool
+	// refresh rebuilds bare options when the cursor moves: the selection is part
+	// of the row text, so moving means repainting the rows, not just the marker.
+	refresh func(cursor int) []string
+	drawn   bool // the block is on screen; only then is the cursor-up meaningful
+}
+
+// move steps the cursor (wrapping) and, for a self-labelling list, rebuilds the
+// rows so the brackets follow it.
+func (m *menu) move(delta int) {
+	m.cursor = (m.cursor + delta + len(m.options)) % len(m.options)
+	if m.refresh != nil {
+		m.options = m.refresh(m.cursor)
+	}
 }
 
 // run returns the chosen index, or -1 when the user quits (q, Esc, Ctrl+C).
@@ -69,10 +84,10 @@ func (m *menu) run() (int, error) {
 	for {
 		switch readKey(in) {
 		case keyUp:
-			m.cursor = (m.cursor - 1 + len(m.options)) % len(m.options)
+			m.move(-1)
 			m.draw(os.Stdout)
 		case keyDown:
-			m.cursor = (m.cursor + 1) % len(m.options)
+			m.move(+1)
 			m.draw(os.Stdout)
 		case keyEnter:
 			if !m.keep {
@@ -99,9 +114,13 @@ func (m *menu) draw(out io.Writer) {
 		fmt.Fprintf(out, "\x1b[2K%s\r\n", line)
 	}
 	for i, opt := range m.options {
-		marker := "   "
-		if i == m.cursor {
+		marker := ""
+		switch {
+		case m.bare:
+		case i == m.cursor:
 			marker = brandBold(" > ")
+		default:
+			marker = "   "
 		}
 		fmt.Fprintf(out, "\x1b[2K%s%s\r\n", marker, opt)
 	}
@@ -177,7 +196,7 @@ func runProjectPicker() error {
 	// dropped — the status line is the report.
 	log.SetOutput(io.Discard)
 
-	list := &menu{title: pickerTitle(), keep: true}
+	list := &menu{title: pickerTitle(), keep: true, bare: true}
 	for {
 		projects, err := project.ListProjects()
 		if err != nil {
@@ -191,7 +210,8 @@ func runProjectPicker() error {
 		if list.cursor >= len(projects) {
 			list.cursor = len(projects) - 1
 		}
-		list.options = projectRows(projects, projectDirCell)
+		list.options = projectRows(projects, projectDirCell, list.cursor)
+		list.refresh = func(c int) []string { return projectRows(projects, projectDirCell, c) }
 		chosen, err := list.run()
 		if errors.Is(err, errNotTerminal) {
 			// Nothing to interact with: the table is the whole answer.
@@ -226,8 +246,11 @@ func runProjectPicker() error {
 	}
 }
 
+// pickerTitle is the block's header: the same identity line every other screen
+// prints, a blank line (the list is the content, not part of the header), then
+// the keys.
 func pickerTitle() string {
-	return versionTag() + "\n" +
+	return versionTag() + "\n\n" +
 		bold("↑/↓") + dim(" or ") + bold("⌃n/⌃p") + dim(" move · enter select · q quit")
 }
 
@@ -241,8 +264,9 @@ func pickAction(p project.Project) (string, error) {
 	if !running {
 		options, actions = []string{"Start"}, []string{"start"}
 	}
-	title := versionTag() + "\n" +
-		fmt.Sprintf("%s %s %s", stateDot(running), bold(p.ID), stateWord(running))
+	// No identity line here: this menu replaces the list for a moment, and the
+	// project it is about is the whole heading.
+	title := fmt.Sprintf("%s %s", brandBold("["+p.ID+"]"), stateWord(running))
 	chosen, err := (&menu{title: title, options: options}).run()
 	if err != nil || chosen < 0 {
 		return "", err
@@ -262,14 +286,33 @@ func runAction(p project.Project, action string) (string, error) {
 	}
 }
 
-// projectRow is the shared line shape: state dot, id, state, ports, and one
+// projectRow is the shared line shape: cursor dot, id, state, ports, and one
 // trailing cell — the WebUI URL in `niq status`, the project directory in the
 // picker and listing.
-func projectRow(p project.Project, idWidth int, trailing string) string {
+//
+// cursor is the row under the picker's cursor, or -1 for a plain listing. The
+// leading dot is the cursor itself, not the run state: filled in the theme
+// colour on the selected row, a dim ring on the others. A listing has no
+// cursor, so it has no dot either — the state is the word after the name.
+func projectRow(p project.Project, idWidth int, trailing string, cursor int, selected bool) string {
 	running := projectRunning(p)
-	row := fmt.Sprintf("%s %s  %s  %s %-5s  %s %-5s  %s",
-		stateDot(running),
-		bold(fmt.Sprintf("%-*s", idWidth, p.ID)),
+	dot := ""
+	if cursor >= 0 {
+		dot = dim("○") + " "
+		if selected {
+			dot = brand("●") + " "
+		}
+	}
+	// The selected row is bracketed and takes the theme colour. The brackets
+	// cost two columns, so every name cell is idWidth+2 wide either way and the
+	// state and the ports stay in one column.
+	name := bold(p.ID) + strings.Repeat(" ", idWidth-len(p.ID)+2)
+	if selected {
+		name = brandBold("["+p.ID+"]") + strings.Repeat(" ", idWidth-len(p.ID))
+	}
+	row := fmt.Sprintf("%s%s  %s  %s %-5s  %s %-5s  %s",
+		dot,
+		name,
 		stateWord(running),
 		dim("webui"), portCell(p.Ports.WebUI),
 		dim("bus"), portCell(p.Ports.Bus),
@@ -278,7 +321,9 @@ func projectRow(p project.Project, idWidth int, trailing string) string {
 	return strings.TrimRight(row, " ")
 }
 
-func projectRows(projects []project.Project, trailing func(project.Project) string) []string {
+// projectRows builds the table. cursor is the row under the picker's cursor;
+// printProjectTable passes -1, which draws no cursor column at all.
+func projectRows(projects []project.Project, trailing func(project.Project) string, cursor int) []string {
 	idWidth := 2
 	for _, p := range projects {
 		if len(p.ID) > idWidth {
@@ -287,7 +332,7 @@ func projectRows(projects []project.Project, trailing func(project.Project) stri
 	}
 	rows := make([]string, len(projects))
 	for i, p := range projects {
-		rows[i] = projectRow(p, idWidth, trailing(p))
+		rows[i] = projectRow(p, idWidth, trailing(p), cursor, i == cursor)
 	}
 	return rows
 }
@@ -304,7 +349,7 @@ func printProjectTable(projects []project.Project, trailing func(project.Project
 		head += "  " + note
 	}
 	fmt.Println(head)
-	for _, row := range projectRows(projects, trailing) {
+	for _, row := range projectRows(projects, trailing, -1) {
 		fmt.Printf("%s\n", row)
 	}
 }

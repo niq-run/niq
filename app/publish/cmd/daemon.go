@@ -432,7 +432,6 @@ func statusControl() error {
 // you used to ask.
 func printControlRunning(st *controlState) {
 	printBanner(banner{
-		version: dim("version-") + brand(versionNumber()),
 		state: bracketed("control") + " " + stateWord(true) +
 			dim(fmt.Sprintf("  pid %d · since %s", st.PID, shortTime(st.Started))),
 	})
@@ -444,8 +443,7 @@ func printControlRunning(st *controlState) {
 
 func printControlStopped() {
 	printBanner(banner{
-		version: dim("version-") + brand(versionNumber()),
-		state:   bracketed("control") + " " + stateWord(false),
+		state: bracketed("control") + " " + stateWord(false),
 	})
 	fmt.Printf("%s %s  %s\n", label("start", 8), "niq", dim("background"))
 	fmt.Printf("%s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))

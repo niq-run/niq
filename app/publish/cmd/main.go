@@ -251,7 +251,7 @@ func setupProjectLogging(id string) {
 }
 
 func printUsage() {
-	printBanner(banner{version: dim("version-") + brand(versionNumber()), tagline: dim("neural interface quantum")})
+	printBanner(banner{tagline: dim("neural interface quantum")})
 	fmt.Println()
 	fmt.Printf("%s\n", bracketed("usage"))
 	printUsageRows([][2]string{
@@ -298,7 +298,7 @@ func printUsageRows(rows [][2]string) {
 }
 
 func printProjectUsage() {
-	printBanner(banner{version: dim("version-") + brand(versionNumber()), tagline: dim("project instances")})
+	printBanner(banner{tagline: dim("project instances")})
 	fmt.Println()
 	fmt.Printf("%s\n", bracketed("usage"))
 	printUsageRows([][2]string{
