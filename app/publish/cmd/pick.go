@@ -48,6 +48,9 @@ type menu struct {
 	// statusLine reserves it (the list keeps it, a one-shot menu does not).
 	status     string
 	statusLine bool
+	// hint is a dim line under the options, for menus whose one option needs a
+	// word of explanation ("press enter to start").
+	hint string
 	// keep leaves the block on screen when a choice is made: the project list
 	// stays up while the action it opens is chosen.
 	keep bool
@@ -116,6 +119,9 @@ func (m *menu) draw(out io.Writer) {
 	for _, opt := range m.options {
 		fmt.Fprintf(out, "\x1b[2K%s\r\n", opt)
 	}
+	if m.hint != "" {
+		fmt.Fprintf(out, "\x1b[2K%s\r\n", m.hint)
+	}
 	if m.statusLine {
 		fmt.Fprintf(out, "\x1b[2K\r\n")             // blank line before the status
 		fmt.Fprintf(out, "\x1b[2K%s\r\n", m.status) // status starts at the left edge
@@ -133,6 +139,9 @@ func (m *menu) erase(out io.Writer) {
 // cursor-up in erase share it, so a redraw lands exactly on the first line.
 func (m *menu) height() int {
 	h := len(m.options) + 1 + strings.Count(m.title, "\n")
+	if m.hint != "" {
+		h++
+	}
 	if m.statusLine {
 		h += 2 // blank + status
 	}
@@ -249,7 +258,8 @@ func runProjectPicker() error {
 // the keys.
 func pickerTitle() string {
 	return versionTag() + "\n\n" +
-		bold("↑/↓") + dim(" or ") + bold("⌃n/⌃p") + dim(" move · enter select · q quit")
+		bold("↑/↓") + dim(", ") + bold("⌃n/⌃p") + dim(" or ") + bold("j/k") +
+		dim(" move · enter select · q quit")
 }
 
 // pickAction asks what to do with one instance. The choice follows its state: a
@@ -266,6 +276,10 @@ func pickAction(p project.Project) (string, error) {
 	// project it is about is the whole heading.
 	title := fmt.Sprintf("%s %s", brandBold("["+p.ID+"]"), stateWord(running))
 	m := &menu{title: title}
+	if len(options) == 1 {
+		// Nothing to choose between, so say what the key does.
+		m.hint = dim("press enter to start the project")
+	}
 	m.options = actionRows(options, m.cursor)
 	m.refresh = func(c int) []string { return actionRows(options, c) }
 	chosen, err := m.run()
@@ -276,16 +290,27 @@ func pickAction(p project.Project) (string, error) {
 }
 
 // actionRows renders the actions the way the project list renders projects:
-// every item bracketed, the one under the cursor in the theme colour.
+// the cursor dot, then the bracketed name, with the one under the cursor in the
+// theme colour.
 func actionRows(options []string, cursor int) []string {
 	rows := make([]string, len(options))
 	for i, opt := range options {
-		rows[i] = bold("[" + opt + "]")
+		name := bold("[" + opt + "]")
 		if i == cursor {
-			rows[i] = brandBold("[" + opt + "]")
+			name = brandBold("[" + opt + "]")
 		}
+		rows[i] = cursorDot(i == cursor) + name
 	}
 	return rows
+}
+
+// cursorDot is the leading marker both menus use: filled in the theme colour
+// for the row under the cursor, a dim ring for the rest.
+func cursorDot(selected bool) string {
+	if selected {
+		return brand("●") + " "
+	}
+	return dim("○") + " "
 }
 
 // runAction performs one action and returns the line the picker shows for it.
@@ -312,10 +337,7 @@ func projectRow(p project.Project, idWidth int, trailing string, cursor int, sel
 	running := projectRunning(p)
 	dot := ""
 	if cursor >= 0 {
-		dot = dim("○") + " "
-		if selected {
-			dot = brand("●") + " "
-		}
+		dot = cursorDot(selected)
 	}
 	// Every name is bracketed — the brackets are part of the row, not a cursor
 	// — and the selected one alone takes the theme colour. The cell is
