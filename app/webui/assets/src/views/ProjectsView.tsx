@@ -13,9 +13,13 @@ import type { ProjectInfo } from '../types'
 // the control plane serves both this page and every /p/<id>/ project page.
 interface ProjectsViewProps {
   onGoToProviders?: () => void
+  // focusStart asks the user to start this project on arrival — the target of
+  // the redirect a stopped project's /p/<id>/ hands to this page.
+  focusStart?: string | null
+  onFocusDone?: () => void
 }
 
-export default function ProjectsView({ onGoToProviders }: ProjectsViewProps) {
+export default function ProjectsView({ onGoToProviders, focusStart, onFocusDone }: ProjectsViewProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const [projects, setProjects] = useState<ProjectInfo[]>([])
@@ -40,6 +44,11 @@ export default function ProjectsView({ onGoToProviders }: ProjectsViewProps) {
   // 'create anyway' consumes this: the next create skips the provider check.
   const bypassProvCheck = useRef(false)
   const [error, setError] = useState('')
+  // Start prompt (opened from /?start=<id>): the project whose address was
+  // opened while it was down. Dismissing it leaves this list in place, which is
+  // the point — the user still sees what is actually running.
+  const [startPrompt, setStartPrompt] = useState<string | null>(null)
+  const [startPromptErr, setStartPromptErr] = useState('')
 
   // Refresh the project list periodically so ports / running state stay fresh
   // (projects are launched/unlaunched from this or another WebUI).
@@ -105,6 +114,34 @@ export default function ProjectsView({ onGoToProviders }: ProjectsViewProps) {
       setError(t('projects.error.restart', { id }))
     }
     setBusy(null)
+  }
+
+  useEffect(() => {
+    if (!focusStart) return
+    setStartPrompt(focusStart)
+    setStartPromptErr('')
+    onFocusDone?.()
+  }, [focusStart])
+
+  const promptTarget = startPrompt ? projects.find((p) => p.id === startPrompt) : undefined
+
+  // runPrompt starts the pending project (or opens it if it is already up) and
+  // continues to the address the user originally asked for.
+  const runPrompt = async () => {
+    if (!startPrompt) return
+    const id = startPrompt
+    const open = () => { window.location.href = '/p/' + encodeURIComponent(id) + '/' }
+    if (promptTarget?.running) { open(); return }
+    setBusy({ id, op: 'start' })
+    setStartPromptErr('')
+    try {
+      await startProject(id)
+    } catch {
+      setStartPromptErr(t('projects.error.start', { id }))
+      setBusy(null)
+      return
+    }
+    open()
   }
 
   // Force an immediate project-list refresh (the 3s poll would otherwise leave a
@@ -448,6 +485,61 @@ export default function ProjectsView({ onGoToProviders }: ProjectsViewProps) {
         </div>
       )}
       </div>
+
+      {/* Start prompt: the /?start=<id> handoff from a stopped project's URL. */}
+      {startPrompt && (
+        <>
+          <div
+            onClick={() => setStartPrompt(null)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 90 }}
+          />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: 'fixed',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: 'min(420px, calc(100vw - 32px))',
+              background: colors.bgLight,
+              border: '1px solid ' + colors.border,
+              borderRadius: 6,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              zIndex: 91,
+              padding: '18px 20px',
+            }}
+          >
+            <div style={{ color: colors.text, fontSize: fontSizes.md, marginBottom: 8 }}>
+              {t('projects.prompt.title', { id: startPrompt })}
+            </div>
+            <div style={{ color: colors.textDim, fontSize: fontSizes.sm, marginBottom: 16 }}>
+              {promptTarget?.running ? t('projects.prompt.running') : t('projects.prompt.body')}
+            </div>
+            {startPromptErr && (
+              <div style={{ color: colors.toolFailed, fontSize: fontSizes.sm, marginBottom: 12 }}>{startPromptErr}</div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <span
+                className="btn-hover"
+                onClick={() => setStartPrompt(null)}
+                style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, border: '1px solid ' + colors.border, borderRadius: 2, padding: '5px 14px', userSelect: 'none' }}
+              >
+                {t('projects.prompt.cancel')}
+              </span>
+              <span
+                className="btn-hover"
+                onClick={runPrompt}
+                style={{ cursor: busy?.id === startPrompt ? 'default' : 'pointer', opacity: busy?.id === startPrompt ? 0.6 : 1, display: 'inline-flex', alignItems: 'center', gap: 6, color: colors.accent, fontSize: fontSizes.sm, border: '1px solid ' + colors.accent, borderRadius: 2, padding: '5px 14px', userSelect: 'none' }}
+              >
+                {busy?.id === startPrompt && (
+                  <span className="niq-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
+                )}
+                {promptTarget?.running ? t('projects.prompt.open') : busy?.id === startPrompt ? t('projects.starting') : t('projects.start')}
+              </span>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

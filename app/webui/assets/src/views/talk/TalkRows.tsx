@@ -11,6 +11,7 @@ import {
 import type { EventPayload } from '../../types'
 import WorkerBadge from './WorkerBadge'
 import type { RowCtx } from './RowCtx'
+import { AT_BOTTOM_PX, TALK_SCROLL_CLASS } from './useChatScroll'
 import {
   InputRow, AbortRow, TimeoutRow,
   CancelRow, InterruptedRow, ThinkingRow, ResponseRow, ApprovalRow, ToolRow,
@@ -180,13 +181,18 @@ export default function TalkRows({ relevantEvents, allEvents, responseOnly, talk
   // it after the commit: the row the finger is on stays where it was.
   const anchorTopRef = useRef<number | null>(null)
   const anchorElRef = useRef<HTMLElement | null>(null)
+  // True when the reader was already at the bottom on click: the follow pin
+  // owns the scroll then, and anchoring the chip would fight it (the view would
+  // settle at the chip instead of the newest row).
+  const anchorFollowRef = useRef(false)
   useLayoutEffect(() => {
     const top = anchorTopRef.current
     const chip = anchorElRef.current
     anchorTopRef.current = null
     if (top === null || !chip) return
-    const scroller = chip.closest('.talk-scroll') as HTMLElement | null
+    const scroller = chip.closest('.' + TALK_SCROLL_CLASS) as HTMLElement | null
     if (!scroller) return
+    if (anchorFollowRef.current) return
     const delta = chip.getBoundingClientRect().top - top
     if (delta !== 0) scroller.scrollTop += delta
   })
@@ -331,6 +337,9 @@ export default function TalkRows({ relevantEvents, allEvents, responseOnly, talk
           ctx={ctx}
           badge={<RowBadge ctx={ctx} workerId={head.evt.worker_id} showBadge={head.showBadge} extraPad />}
           onToggle={(chip) => {
+            const scroller = chip.closest('.' + TALK_SCROLL_CLASS) as HTMLElement | null
+            anchorFollowRef.current = !!scroller &&
+              scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= AT_BOTTOM_PX
             anchorTopRef.current = chip.getBoundingClientRect().top
             anchorElRef.current = chip
             setOpenGroups((g) => ({ ...g, [key]: !g[key] }))

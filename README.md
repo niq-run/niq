@@ -45,8 +45,36 @@ worker injects: no `process`, `require`, `fetch`, or dynamic `import()`.
 niq has two layers: a **control plane**, and **projects** — each project is an isolated agent instance with its own event bus, worker set and WebUI on its own ports.
 
 ```sh
-# start the control plane (default :9527)
+# start the control plane (default :9527) in the background
 niq
+```
+
+`niq` starts the control plane detached from the terminal, prints where it is
+reachable, and returns to the prompt — closing the shell (or losing an SSH
+session) no longer stops it. Running `niq` again reports on the service instead
+(it is exactly `niq status`), so one command covers both "start it" and "is it
+up?".
+
+```
+niq control is running in the background (pid 4711)
+
+  WebUI    http://localhost:9527
+  Log      ~/.niq/niq.log
+  Stop     niq stop
+  Restart  niq restart
+```
+
+`niq status` reports the process, address and log, plus each project's run
+state and URL (a refused port means that instance is not running); `niq stop`
+shuts it down — projects are their own processes, so they keep serving unless
+you add `--all`;
+`niq restart` brings it back on the same address. Put the flags anywhere a
+start goes (`niq --addr :8080 --auth alice:s3cret`, `niq restart` reuses the
+recorded address). To keep it attached to the terminal — systemd, a container,
+`docker run`, or just to watch it — pass `--foreground` (or `-f`):
+
+```sh
+niq control --foreground
 ```
 
 Open **http://localhost:9527** — the control plane's WebUI lists your projects and can create and start one from a template, no terminal needed.
@@ -58,9 +86,43 @@ niq project create my-project
 niq project run my-project
 ```
 
+`niq project` on its own (or `niq project list`) is an arrow-key picker over
+every project — state, ports and directory per row: `↑`/`↓` to move, `enter` to
+pick, then start (if stopped) or stop / restart (if running). An instance is
+identified by its ports, so the CLI, the WebUI and a project started by hand in
+a terminal all act on the same thing — the control plane keeps no list of what
+it launched. Without a terminal the picker prints the same table; `--ids` prints
+just the ids.
+
+| command | |
+| --- | --- |
+| `niq` | start the control plane in the background, or report on it when it is already running |
+| `niq -f`, `niq --foreground` | run the control plane in this terminal |
+| `niq status` | the control plane and every project instance |
+| `niq stop [--all]` | stop the control plane (`--all` also stops the project instances) |
+| `niq restart` | restart it on the address it was started with |
+| `niq project` | pick a project: start, stop or restart it |
+| `niq project create` / `niq project run` | create a project / run one in this terminal |
+| `niq completion <shell>` | completion for bash, zsh or fish |
+
+```sh
+# bash
+source <(niq completion bash)
+# zsh
+niq completion zsh > "${fpath[1]}/_niq"
+# fish
+niq completion fish | source
+```
+
+Output is colored when it goes to a terminal and plain otherwise (or with
+`NO_COLOR` set), so piping and logging stay readable.
+
 Each project serves its own WebUI on a loopback-only port, so it is never
 exposed by accident: open it through the control plane at
-**http://localhost:9527/p/&lt;id&gt;/**, which proxies to that project. Ports are
+**http://localhost:9527/p/&lt;id&gt;/**, which proxies to that project. That address
+works whether or not the instance is running — opening a stopped project's
+address lands on the projects list with a start prompt instead of an error
+page. Ports are
 assigned dynamically on first run and then persisted per project, so they stay
 stable across restarts (`--bus` / `--webui` override). `niq project list` shows
 each project's `webui` and `bus` ports.
@@ -88,9 +150,11 @@ Basic auth sends the credentials on every request, so terminate TLS in front (or
 tunnel through SSH/WireGuard) before exposing niq to the open internet — niq
 itself speaks plain HTTP.
 
-After upgrading the binary, restart the running projects: their page and static
-assets are served by the control plane, and an old project process may reference
-asset files the new binary no longer contains.
+After upgrading the binary, `niq restart` the control plane and restart the
+running projects: every process serves the page and assets it was built with
+(asset URLs are relative, so a project page loads its own bundle through
+`/p/<id>/`), which means an older project keeps rendering the older UI until it
+is restarted.
 
 ### Model provider
 

@@ -9,12 +9,6 @@ export interface PickerOption {
   hint?: string
   // Optional short description rendered as a dimmed second line.
   description?: string
-  // isGroup marks a non-selectable group header (e.g. a tag group in the
-  // worker target picker). Group headers are inert rows for structure only.
-  isGroup?: boolean
-  // indent is the left padding depth for nesting under a group, mapping
-  // slash-path tag depth to visual indentation.
-  indent?: number
 }
 
 interface PickerDropdownProps {
@@ -36,6 +30,11 @@ interface PickerDropdownProps {
   searchValue?: string
   onSearchValueChange?: (v: string) => void
   searchPlaceholder?: string
+  // Optional "open the full dialog" affordance in the header: the dropdown is
+  // a compact list, and a worker set that has outgrown it needs the room of a
+  // centered dialog (WorkerPickerModal).
+  onExpand?: () => void
+  expandLabel?: string
 }
 
 // Reusable option dropdown (used for the talk target picker, the @mention
@@ -55,6 +54,8 @@ export default function PickerDropdown({
   searchValue,
   onSearchValueChange,
   searchPlaceholder,
+  onExpand,
+  expandLabel,
 }: PickerDropdownProps) {
   const { colors } = useTheme()
   const isMobile = useIsMobile()
@@ -152,9 +153,35 @@ export default function PickerDropdown({
       >
       <div
         className="picker-header"
-        style={{ padding: isMobile ? '12px 12px 4px 12px' : '8px 10px 3px 10px', fontSize: isMobile ? fontSizes.sm : fontSizes.xs, color: colors.textDimmed }}
+        style={{
+          // A roomier top edge: the header's text sat almost on the panel's
+          // border, which read as cramped on a panel that drops down over the
+          // conversation.
+          padding: isMobile ? '16px 12px 4px 12px' : '12px 10px 4px 10px',
+          fontSize: isMobile ? fontSizes.base : fontSizes.sm,
+          color: colors.textDimmed,
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}
       >
-        {header}
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{header}</span>
+        {onExpand && (
+          /* A labelled button rather than an icon: the compact dropdown is the
+             only place this entry point exists, and a glyph there went
+             unnoticed. Sized like the input's other inline buttons. */
+          <span
+            role="button"
+            className="btn-hover"
+            onClick={onExpand}
+            style={{
+              cursor: 'pointer', userSelect: 'none', flexShrink: 0,
+              color: colors.textDim, border: '1px solid ' + colors.border,
+              borderRadius: 2, padding: '0 8px', lineHeight: '20px',
+              fontSize: isMobile ? fontSizes.base : fontSizes.sm, whiteSpace: 'nowrap',
+            }}
+          >
+            {expandLabel}
+          </span>
+        )}
       </div>
       {searchable && (
         <div style={{ padding: isMobile ? '6px 12px 8px 12px' : '4px 10px 6px 10px' }}>
@@ -176,31 +203,6 @@ export default function PickerDropdown({
       {options.map((opt, i) => {
         const selected = selectedIds ? selectedIds.includes(opt.id) : (selectedId !== undefined && selectedId === opt.id)
         const active = activeIndex === i
-        // Group headers are inert structural rows: no selection, no hover
-        // affordance, no check column.
-        if (opt.isGroup) {
-          return (
-            <div
-              key={opt.id}
-              className="picker-group"
-              style={{
-                padding: '8px 12px 2px 12px',
-                fontSize: fontSizes.xs,
-                color: colors.textDimmed,
-                fontWeight: 600,
-                letterSpacing: '0.02em',
-                textTransform: 'uppercase',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                userSelect: 'none',
-              }}
-            >
-              {opt.label}
-            </div>
-          )
-        }
-        const padLeft = 12 + (opt.indent ?? 0) * 12
         return (
           <div
             key={opt.id}
@@ -210,7 +212,7 @@ export default function PickerDropdown({
             onClick={() => onSelect(opt.id)}
             onMouseEnter={() => onActivate?.(i)}
             style={{
-              padding: isMobile ? `12px 12px 12px ${padLeft}px` : `7px 12px 7px ${padLeft}px`,
+              padding: isMobile ? '12px' : '7px 12px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -231,12 +233,17 @@ export default function PickerDropdown({
                 textAlign: 'left',
               }}
             >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, textAlign: 'left' }}>
-                <span style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <span style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0, textAlign: 'left' }}>
+                {/* The label hugs its sublabel instead of growing: an id should
+                    sit right after the name it belongs to, not be flung to the
+                    far edge of the row. */}
+                <span style={{ flex: '0 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {highlight(opt.label)}
                 </span>
                 {opt.sublabel && (
-                  <span style={{ flexShrink: 0, color: colors.textDimmed, fontStyle: 'italic', fontSize: fontSizes.sm }}>
+                  // Reads as a second identity, not as prose: dim, small, and
+                  // tight against the label it qualifies.
+                  <span style={{ flexShrink: 0, color: colors.textDimmed, fontSize: fontSizes.xs, whiteSpace: 'nowrap' }}>
                     {opt.sublabel}
                   </span>
                 )}

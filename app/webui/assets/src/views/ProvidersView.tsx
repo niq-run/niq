@@ -3,6 +3,7 @@ import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { fetchProviders, updateProviders } from '../services/api'
 import JsonEditor from '../components/JsonEditor'
+import { formStyles } from '../components/Form'
 import ViewHeader from '../components/ViewHeader'
 import BufferedInput, { envToText, textToMap } from '../components/BufferedInput'
 
@@ -127,18 +128,7 @@ export default function ProvidersView() {
     }
   }
 
-  const cardInput: React.CSSProperties = {
-    width: '100%',
-    boxSizing: 'border-box',
-    padding: '5px 8px',
-    fontSize: fontSizes.sm,
-    background: colors.bgLight,
-    color: colors.text,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-    outline: 'none',
-  }
-  const cardLabel: React.CSSProperties = { display: 'block', fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4 }
+  const { inputOnCard: cardInput, label: cardLabel } = formStyles(colors)
   const field = (label: string, node: any, key?: string, style?: React.CSSProperties) => (
     <div key={key} style={style}>
       <label style={cardLabel}>{label}</label>

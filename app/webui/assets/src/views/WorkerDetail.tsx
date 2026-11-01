@@ -11,6 +11,7 @@ import DetailRow from '../components/DetailRow'
 import CollapsibleCode from '../components/CollapsibleCode'
 import { makeMdComponents } from '../components/MarkdownComponents'
 import { PublishAllowRows, SubscribeAllowRows, type PublishRow, type SubscribeRow } from '../components/AllowEditors'
+import { formStyles } from '../components/Form'
 import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, sendWorkerEvent, fetchEventsByRequest, updateWorkerAllow, updateWorkerMeta, updateWorkerParams } from '../services/api'
 
 interface WorkerDetailProps {
@@ -191,6 +192,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
     border: '1px solid ' + typeColor + '55',
   }
 
+  const fs = formStyles(colors)
   // The action status line: dim while the request is in flight, green once it
   // succeeded, red on failure. Rendered from every branch of the actions card.
   const umNoteColor = umKind === 'done' ? colors.toolCompleted : umKind === 'error' ? colors.toolFailed : colors.textDimmed
@@ -287,7 +289,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                     value={draftLabel}
                     onChange={e => setDraftLabel(e.target.value)}
                     placeholder={t('wd.label.placeholder')}
-                    style={{ width: '100%', boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', color: colors.text, fontSize: fontSizes.sm, outline: 'none' }}
+                    style={fs.input}
                   />
                   <div style={{ fontSize: fontSizes.xs, color: colors.detailLabel, marginTop: 3, lineHeight: 1.4 }}>{t('wd.label.hint')}</div>
                 </div>
@@ -297,7 +299,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                     value={draftTags}
                     onChange={e => setDraftTags(e.target.value)}
                     placeholder="ops/backup, work"
-                    style={{ width: '100%', boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', color: colors.text, fontSize: fontSizes.sm, outline: 'none' }}
+                    style={fs.input}
                   />
                   <div style={{ fontSize: fontSizes.xs, color: colors.detailLabel, marginTop: 3, lineHeight: 1.4 }}>{t('wd.meta.tags.hint')}</div>
                 </div>
@@ -306,7 +308,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                   <input
                     value={draftDesc}
                     onChange={e => setDraftDesc(e.target.value)}
-                    style={{ width: '100%', boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '5px 8px', color: colors.text, fontSize: fontSizes.sm, outline: 'none' }}
+                    style={fs.input}
                   />
                 </div>
                 <div style={{ marginBottom: 8 }}>
@@ -316,7 +318,7 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
                     onChange={e => setDraftParams(e.target.value)}
                     spellCheck={false}
                     rows={10}
-                    style={{ width: '100%', boxSizing: 'border-box', background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, padding: '6px 8px', color: colors.text, fontSize: fontSizes.xs, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', lineHeight: 1.5, outline: 'none', resize: 'vertical' }}
+                    style={fs.textarea}
                   />
                   <div style={{ fontSize: fontSizes.xs, color: colors.detailLabel, marginTop: 3, lineHeight: 1.4 }}>{t('wd.meta.params.hint')}</div>
                 </div>
@@ -941,16 +943,7 @@ function MountsSection({ workerId }: { workerId: string }) {
     if (path.trim() !== '' && busy === '') applyMount('add', path.trim())
   }
 
-  const inputStyle: React.CSSProperties = {
-    flex: 1,
-    minWidth: 0,
-    padding: '5px 8px',
-    fontSize: fontSizes.sm,
-    background: colors.bgLight,
-    color: colors.text,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-  }
+  const inputStyle: React.CSSProperties = formStyles(colors).inlineInput
 
   return (
     <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6 }}>

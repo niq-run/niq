@@ -258,7 +258,7 @@ function ApprovalRowImpl({ evt, alignRight, showBadge, decision, ctx }: { evt: E
   return (
     <div key={evt.id} data-evt-id={evt.id} style={{ marginTop: 16, marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
-      <div className={!isExpanded ? 'block-card' : undefined} style={{ maxWidth: ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', border: '1px solid ' + colors.accent, padding: '6px 12px', fontSize: fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
+      <div data-block="" className={!isExpanded ? 'block-card' : undefined} style={{ maxWidth: ctx.bubbleMax, display: alignRight ? 'inline-block' : undefined, textAlign: 'left', boxSizing: 'border-box', border: '1px solid ' + colors.accent, padding: '6px 12px', fontSize: fontSizes.base, lineHeight: 1.5, color: colors.textDim }}>
         <div onClick={() => ctx.toggleExpanded(evt.id)} style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ width: 8, height: 8, borderRadius: 4, background: statusColor, flexShrink: 0, opacity: 0.5 }} />
           <span style={{ color: colors.text, fontWeight: 600 }}>{t('talk.approval.title')}</span>
@@ -320,6 +320,7 @@ function ToolRowImpl({ evt, alignRight, showBadge, resultEvt, partial, ctx }: { 
     <div key={evt.id} style={{ marginBottom: 12, textAlign: alignRight ? 'right' : 'left' }}>
       <RowBadge ctx={ctx} workerId={evt.worker_id} showBadge={showBadge} alignRight={alignRight} extraPad />
       <div
+        data-block=""
         className={!isExpanded ? 'block-card' : undefined}
         style={{
           maxWidth: ctx.bubbleMax,

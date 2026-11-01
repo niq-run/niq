@@ -10,6 +10,7 @@ import (
 	"log"
 	stdhttp "net/http"
 	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -50,9 +51,31 @@ func newProjectProxy() *httputil.ReverseProxy {
 		ErrorHandler: func(w stdhttp.ResponseWriter, r *stdhttp.Request, err error) {
 			t, _ := r.Context().Value(proxyTargetKey{}).(proxyTarget)
 			log.Printf("[control] proxy %s p=%s %s: %v", t.addr, t.id, r.URL.RequestURI(), err)
+			// A navigation goes to the projects list with a start prompt (the SPA
+			// owns that UI); the SPA's own fetch/stream calls keep the plain 502
+			// they know how to report.
+			if wantsHTML(r) {
+				redirectToStartPrompt(w, r, t.id)
+				return
+			}
 			stdhttp.Error(w, fmt.Sprintf("project WebUI at %s is unreachable: %v", t.addr, err), stdhttp.StatusBadGateway)
 		},
 	}
+}
+
+// wantsHTML reports whether the request is a browser navigation, as opposed to
+// the SPA's own fetch/EventSource calls, which want the plain error.
+func wantsHTML(r *stdhttp.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+// redirectToStartPrompt sends a browser that opened a stopped project's address
+// to the control plane's project list, where the SPA asks whether to start it.
+// The list stays visible behind the prompt, so dismissing it still lands the
+// user somewhere useful — and the prompt is drawn by the same UI as everything
+// else instead of being a second, server-rendered page.
+func redirectToStartPrompt(w stdhttp.ResponseWriter, r *stdhttp.Request, id string) {
+	stdhttp.Redirect(w, r, "/?start="+url.QueryEscape(id), stdhttp.StatusFound)
 }
 
 // handleProjectProxy serves /p/{id}/* from the project's own WebUI. The target
@@ -66,6 +89,12 @@ func (c *Control) handleProjectProxy(w stdhttp.ResponseWriter, r *stdhttp.Reques
 		return
 	}
 	if p.Ports.WebUI == 0 {
+		// Never started, so there is no address to proxy to — same prompt, which
+		// is exactly the "click the link, start the project" flow.
+		if wantsHTML(r) {
+			redirectToStartPrompt(w, r, id)
+			return
+		}
 		stdhttp.Error(w, "project "+id+" is not running: no WebUI port assigned yet", stdhttp.StatusBadGateway)
 		return
 	}

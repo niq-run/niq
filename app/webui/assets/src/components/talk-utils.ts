@@ -4,24 +4,60 @@ import type { EventPayload } from '../types'
 
 // ── Input addressing (@mentions) ──
 
-// resolveMentionId resolves a raw @token to a known worker id, dropping the
-// sentence punctuation that rides along in prose: "@ops." is the worker ops
-// followed by a period. Ids use [\w.-], so `.` is the only character that can
-// be either id or punctuation; a token that resolves as-is is never trimmed.
-export function resolveMentionId(raw: string, isKnown: (id: string) => boolean): string | null {
-  let id = raw
-  while (id !== '' && !isKnown(id) && id.endsWith('.')) id = id.slice(0, -1)
-  return isKnown(id) ? id : null
+// MentionTarget is what an @mention needs: a worker's id, plus the declared
+// display name (备注名) when it has one.
+export interface MentionTarget {
+  id: string
+  label?: string
+}
+
+// mentionName is how a worker reads in an @mention: the display name when it
+// has one, the id otherwise. It is what the picker shows, what the recipient
+// chip lists, and what a pick writes into the draft — so a renamed worker is
+// addressed by the name the reader knows, not by an internal id.
+export function mentionName(w: MentionTarget): string {
+  return (w.label || '').trim() || w.id
+}
+
+// mentionNames maps every spelling that addresses a worker to its id, longest
+// first. Labels are free text (spaces, Chinese, punctuation), so matching is by
+// prefix-longest rather than by a token charset: "@前端 agent 帮我看下" resolves
+// the whole label and leaves the sentence alone, while a label that is a prefix
+// of another ("ops" / "ops backup") never steals the longer one. The id stays
+// addressable even when a label exists, so older drafts keep working.
+function mentionNames(workers: MentionTarget[]): { name: string; id: string }[] {
+  const out: { name: string; id: string }[] = []
+  for (const w of workers) {
+    const name = mentionName(w)
+    out.push({ name, id: w.id })
+    if (name !== w.id) out.push({ name: w.id, id: w.id })
+  }
+  return out.sort((a, b) => b.name.length - a.name.length)
+}
+
+// matchAt returns the worker addressed at text[from] (just past the "@").
+function matchAt(text: string, from: number, names: { name: string; id: string }[]) {
+  for (const n of names) {
+    if (n.name && text.startsWith(n.name, from)) return { id: n.id, length: n.name.length }
+  }
+  return null
 }
 
 // mentionsIn lists the workers @-mentioned in a message, in first-appearance
 // order and de-duplicated. Unresolved/@-in-prose tokens do not count, and an @
 // glued to a word (an email like a@b.c) is prose, not addressing.
-export function mentionsIn(text: string, isKnown: (id: string) => boolean): string[] {
+export function mentionsIn(text: string, workers: MentionTarget[]): string[] {
+  const names = mentionNames(workers)
+  if (names.length === 0) return []
   const out: string[] = []
-  for (const m of text.matchAll(/(?<![\w.-])@([\w.-]+)/g)) {
-    const id = resolveMentionId(m[1], isKnown)
-    if (id && !out.includes(id)) out.push(id)
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '@') continue
+    const prev = text[i - 1]
+    if (prev && /[\w.-]/.test(prev)) continue
+    const hit = matchAt(text, i + 1, names)
+    if (!hit) continue
+    if (!out.includes(hit.id)) out.push(hit.id)
+    i += hit.length
   }
   return out
 }
@@ -39,17 +75,21 @@ export function mergeTargets(base: string[], extra: string[]): string[] {
 }
 
 // leadingMentions splits the addressing prefix off a message: the run of
-// @-tokens at its head, plus the body that follows. This is structural — it
-// takes any @token, without consulting the worker list — so a body can be
-// recovered before the workers have loaded.
-export function leadingMentions(text: string): { ids: string[]; rest: string } {
+// @-mentions at its head, plus the body that follows. It matches the same
+// names mentionsIn does (labels included), so addressing a worker by display
+// name keeps the prefix out of the message body.
+export function leadingMentions(text: string, workers: MentionTarget[]): { ids: string[]; rest: string } {
+  const names = mentionNames(workers)
   const ids: string[] = []
   let rest = text
   for (;;) {
-    const m = rest.match(/^\s*@([\w.-]+)(?:[ \t]+|$)/)
+    const m = rest.match(/^\s*@/)
     if (!m) break
-    ids.push(m[1])
-    rest = rest.slice(m[0].length)
+    const at = m[0].length
+    const hit = matchAt(rest, at, names)
+    if (!hit) break
+    ids.push(hit.id)
+    rest = rest.slice(at + hit.length).replace(/^[ \t]+/, '')
   }
   return { ids, rest }
 }

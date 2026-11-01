@@ -4,7 +4,7 @@ import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { isToolResult } from '../components/talk-utils'
 import { isReasonFamilyType, isTalkPartnerType, type EventPayload, type WorkerDetailTab } from '../types'
-import { useChatScroll } from './talk/useChatScroll'
+import { useChatScroll, TALK_SCROLL_CLASS } from './talk/useChatScroll'
 import TalkRows from './talk/TalkRows'
 import StreamingTail from './talk/StreamingTail'
 import ScrollToBottomButton from './talk/ScrollToBottomButton'
@@ -309,22 +309,24 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
             bubbles really span the screen instead of losing width twice. */}
         <div
           ref={scrollRef}
-          className="talk-scroll"
+          className={TALK_SCROLL_CLASS}
           onScroll={handleScroll}
           onWheel={markManual}
           onPointerDown={markManual}
           onTouchStart={markManual}
           onClick={(e) => {
-            // Clicking blank space collapses any expanded tool/approval blocks.
-            // Tool cards are a single-open accordion; approvals are their own set.
+            // A click anywhere outside a card closes the open ones: tool cards
+            // are a single-open accordion, approvals are their own set. The
+            // test is "did this land in a card", not "was this the scroller" —
+            // the latter only matched the padding and row wrappers, so blank
+            // space anywhere else (to the right of a bubble, between rows) did
+            // nothing. Clicks inside a card are left alone: its header toggles
+            // it and its body must stay selectable.
             if (expandedContent.size === 0 && openToolId === null) return
             const el = e.target as Element
-            const scroller = scrollRef.current
-            if (!scroller) return
-            if (el === scroller || el.parentElement === scroller) {
-              setExpandedContent(new Set())
-              setOpenToolId(null)
-            }
+            if (el?.closest?.('[data-block]')) return
+            setExpandedContent(new Set())
+            setOpenToolId(null)
           }}
           style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: isMobile ? '0 12px 60px' : '0 24px 60px', overflowAnchor: 'none' }}
         >

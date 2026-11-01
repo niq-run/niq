@@ -4,6 +4,11 @@
 // own process on its own dynamically-assigned bus/WebUI ports; the user is then
 // redirected to the project's WebUI.
 //
+// Project instances are not children of this process in any way that matters:
+// an instance is identified by the ports persisted in its project.json, so one
+// the plane launched, one started by hand and one that outlived a previous
+// plane are the same thing. Every lifecycle action goes through those ports.
+//
 // File layout: the service shell + routing live here; project lifecycle
 // handlers are in projects.go and template CRUD is in templates.go.
 package control
@@ -18,7 +23,6 @@ import (
 	"net/http/httputil"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -30,6 +34,11 @@ import (
 type ControlOptions struct {
 	Addr string // default ":9527"
 	Auth string // optional user:pass basic-auth spec (non-localhost access; empty disables)
+	// OnReady, when set, runs once the listen socket is bound and before
+	// serving starts. It receives the resolved address (e.g. "[::]:9527") so a
+	// launcher can record where the daemon actually landed instead of guessing
+	// the port from the requested address.
+	OnReady func(resolved string)
 }
 
 // RunControl runs the control-plane service until ctx is cancelled (e.g. Ctrl+C).
@@ -46,7 +55,17 @@ func RunControl(opts ControlOptions) error {
 		c.SetBasicAuth(user, pass)
 		log.Printf("[control] WebUI remote access protected with basic auth (localhost stays open)")
 	} else if warning != "" {
+		// Also into the service log: a background start has no stderr to show.
+		log.Printf("[control] %s", warning)
 		fmt.Fprintln(os.Stderr, warning)
+	}
+	// Bind here rather than inside Start so OnReady can report the resolved
+	// address; Start reuses the already-bound listener.
+	if _, err := c.Bind(); err != nil {
+		return err
+	}
+	if opts.OnReady != nil {
+		opts.OnReady(c.ResolvedAddr())
 	}
 	return c.Start(ctx)
 }
@@ -63,9 +82,6 @@ type Control struct {
 
 	authUser string // basic-auth user for non-loopback access ("" = disabled)
 	authPass string
-
-	mu    sync.Mutex
-	procs map[string]*os.Process // project id -> the running 'niq project run' process
 }
 
 // NewControl creates a control-plane service bound to addr (":9527" when empty).
@@ -76,7 +92,6 @@ func NewControl(addr string) *Control {
 	return &Control{
 		addr:  addr,
 		proxy: newProjectProxy(),
-		procs: map[string]*os.Process{},
 	}
 }
 

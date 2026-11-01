@@ -41,10 +41,14 @@ const TALK_KEEP = ['worker.input', 'worker.abort', 'worker.ready', 'worker.help'
 // were removed/re-added), we let the live list grow up to TRIM_HIGH while the
 // user follows, then trim once down to TRIM_LOW. That makes trims rare and big
 // instead of constant and small. Trims only ever run while following (so a
-// scrolled-up reader is never shifted); a trim is also triggered when the input
-// box gains focus, so typing never contends with a huge DOM.
-const TRIM_HIGH = 50
-const TRIM_LOW = 50
+// scrolled-up reader is never shifted), and the thresholds sit well above one
+// history page so a loaded page is never cut back immediately.
+//
+// Trimming on input focus used to exist "so typing stays crisp"; it threw away
+// the conversation the reader had paged in, and the view jumped every time the
+// box was clicked. The list is bounded anyway — typing does not need it.
+const TRIM_HIGH = 400
+const TRIM_LOW = 200
 
 // Per-reason-worker input mode, persisted to localStorage. The default is
 // append (level 2): the gentle mode that supplements the ongoing thought
@@ -176,6 +180,41 @@ function composeInput(text: string, attachments: StagedAttachment[], targets: st
   return content
 }
 
+// The two kinds of page a project URL can show: a management tab that talks to
+// the control plane (?panel=projects|templates|providers), or one of the
+// project's own views (?view=events|approvals|workers|mcp|programs; talk is the
+// default and stays out of the URL). They are mutually exclusive.
+type Panel = 'projects' | 'templates' | 'providers'
+
+const VIEWS: ViewMode[] = ['talk', 'events', 'approvals', 'workers', 'mcp', 'programs']
+
+function panelFromLocation(): Panel | null {
+  const q = new URLSearchParams(window.location.search).get('panel')
+  return q === 'projects' || q === 'templates' || q === 'providers' ? q : null
+}
+
+function viewFromLocation(): ViewMode | null {
+  const q = new URLSearchParams(window.location.search).get('view')
+  return VIEWS.includes(q as ViewMode) ? (q as ViewMode) : null
+}
+
+// pushLocation rewrites the address bar to match what is on screen, one history
+// entry per switch, so Back/Forward walk the pages you visited (and a reload
+// lands where you were). panel and view are exclusive; talk is the default view
+// and is left out, which keeps a project's plain URL its plain URL.
+function pushLocation(panel: Panel | null, view: ViewMode | null) {
+  const url = new URL(window.location.href)
+  if (panel) url.searchParams.set('panel', panel)
+  else url.searchParams.delete('panel')
+  if (view && view !== 'talk') url.searchParams.set('view', view)
+  else url.searchParams.delete('view')
+
+  const next = url.pathname + url.search + url.hash
+  const current = window.location.pathname + window.location.search + window.location.hash
+  if (next === current) return
+  window.history.pushState({ panel, view }, '', next)
+}
+
 export default function App() {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
@@ -200,9 +239,36 @@ export default function App() {
   // ── State ──
   const [events, setEvents] = useState<EventPayload[]>([])
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
-  const [view, setView] = useState<ViewMode>('talk')
+  const [view, setView] = useState<ViewMode>(() => viewFromLocation() ?? 'talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
-  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(null)
+  // ?start=<id>: a stopped project's /p/<id>/ redirects here so the projects
+  // list can ask "start it?" with the SPA's own dialog. Stripped from the URL
+  // once read, so a reload does not ask again.
+  const [startTarget, setStartTarget] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get('start'),
+  )
+  useEffect(() => {
+    if (!window.location.search.includes('start=')) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('start')
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+  }, [])
+  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(() => {
+    // ?panel=<tab> keeps the open management tab in the address bar, so a reload
+    // (or a link) lands on the tab you were looking at instead of back in the
+    // project's talk view.
+    return panelFromLocation()
+  })
+  // Back/Forward walk the panel history: the URL is the source of truth, so a
+  // popstate re-derives the open tab instead of leaving the view behind.
+  useEffect(() => {
+    const onPop = () => {
+      setPanel(panelFromLocation())
+      setView(viewFromLocation() ?? 'talk')
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
   const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
   // Input mode is remembered per reason worker (the @ target the message is
@@ -337,12 +403,6 @@ export default function App() {
   // while the list isn't pinned to the bottom.
   const [eventsAtBottom, setEventsAtBottom] = useState(true)
 
-  // Trim on input focus: as soon as the user is about to type, reclaim the list
-  // down to TRIM_LOW so typing never contends with a huge DOM.
-  const handleInputFocus = useCallback(() => {
-    if (activeFollowingRef.current && eventsRef.current.length > TRIM_LOW) scheduleTrim(0)
-  }, [scheduleTrim])
-
   // ── Mode: control (no project attached) vs project. In control mode only the
   // projects surface is usable; talk/events/workers need an attached project, so
   // they are hidden and their SSE + polling are disabled. The control plane
@@ -350,6 +410,16 @@ export default function App() {
   // at /p/<id>/ — so project management APIs live at the root (CONTROL) while a
   // project's own APIs carry the /p/<id> base (see services/api.ts).
   const mode = context.mode
+
+  // selectPanel opens a management tab in place — you keep the project you are
+  // in while checking its providers or templates — but records the tab in the
+  // URL (?panel=<tab>), so the address always says which surface is showing and
+  // reload / back behave like pages. Leaving the panels drops the parameter
+  // again.
+  const selectPanel = (next: Panel) => {
+    setPanel(next)
+    pushLocation(next, null)
+  }
   const projectBase = getApiBase()
   const projectName = context.project
 
@@ -367,6 +437,9 @@ export default function App() {
   const [startProjErr, setStartProjErr] = useState('')
   usePolling<ProjectInfo[]>(CONTROL + '/api/projects', 5000, (list) => {
     if (mode !== 'project' || !projectName) return
+    // A management panel shows control-plane data; the project's event stream is
+    // not on screen, so it is not opened (and cannot drop behind one).
+    if (panel) return
     const p = list.find((x: ProjectInfo) => x.id === projectName)
     setProjRunning(p ? !!p.running : false)
   }, mode === 'project' && projectName !== '')
@@ -448,6 +521,7 @@ export default function App() {
   const selectView = (v: ViewMode) => {
     setPanel(null)
     setView(v)
+    pushLocation(null, v)
     setSidebarOpen(false)
   }
 
@@ -506,8 +580,14 @@ export default function App() {
 	const talkExcludePrefix = ['worker.']
 
   useEffect(() => {
-    // No project → no event stream.
-    if (mode !== 'project') return
+    // No project → no event stream. This also has to wait for the project name:
+    // context starts out optimistically as "project" before /api/context
+    // answers, so guarding on the mode alone opened a stream on the control
+    // page, whose 404 then lit the "stream dropped" banner there for good.
+    if (mode !== 'project' || !projectName) return
+    // A management panel shows control-plane data; the project's event stream is
+    // not on screen, so it is not opened (and cannot drop behind one).
+    if (panel) return
     // The SSE is a project-level subscription; its filter follows the active
     // view. The events view scopes by its worker/trace filter; the talk view
     // scopes to the selected conversation worker(s) (worker_id OR target OR
@@ -741,9 +821,11 @@ export default function App() {
       if (es) es.close()
     }
     // Re-run whenever the filter changes (events view), or the selected talk
-    // conversation changes — both are captured in streamKey. `view` itself is
-    // intentionally not a dep; it is already encoded by streamKey.
-  }, [streamKey, mode, projectBase])
+    // conversation changes — both are captured in streamKey — and when the
+    // project name arrives (it is undefined until /api/context answers, and the
+    // stream must not open before then). `view` itself is intentionally not a
+    // dep; it is already encoded by streamKey.
+  }, [streamKey, mode, projectName, panel, projectBase])
 
   // ── Polling (only meaningful when a project is attached). The URL carries the
   // project base so a project page reached through /p/<id>/ hits that project's
@@ -859,7 +941,7 @@ export default function App() {
   const activeWorker = useMemo(() => {
     const reasons = workers.filter(w => isTalkPartnerType(w.type))
     const isReason = (id: string) => reasons.some(r => r.id === id)
-    const addressed = mentionsIn(input, isReason)
+    const addressed = mentionsIn(input, reasons)
     if (addressed.length > 0) return addressed[0]
     if (mentionTarget && isReason(mentionTarget)) return mentionTarget
     const sel = [...talkWorkers].filter(isReason)
@@ -883,9 +965,8 @@ export default function App() {
     // resolves to nobody is refused: with no addressee there is nowhere for it
     // to go (no broadcast path).
     const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
-    const isKnown = (id: string) => reasonWorkers.some(r => r.id === id)
-    const msgTargets = mergeTargets(targets, mentionsIn(input, isKnown))
-    const msgText = leadingMentions(input).rest.trim()
+    const msgTargets = mergeTargets(targets, mentionsIn(input, reasonWorkers))
+    const msgText = leadingMentions(input, reasonWorkers).rest.trim()
     if (msgTargets.length === 0 || (!msgText && attachments.length === 0)) return
     setSending(true)
     // Returning to the live bottom: bump the signal TalkView listens for.
@@ -915,7 +996,7 @@ export default function App() {
     // to — the target set plus whatever the draft @-mentions. With neither,
     // fall back to the last addressee, then a selected worker, then the first
     // reason worker.
-    const addressed = mergeTargets(targets, mentionsIn(input, isReason))
+    const addressed = mergeTargets(targets, mentionsIn(input, reasonWorkers))
     let stopTargets = addressed
     if (stopTargets.length === 0) {
       const fallback = isReason(mentionTarget)
@@ -1020,6 +1101,7 @@ export default function App() {
   const handleTraceClick = useCallback((traceId: string) => {
     setTraceFilter(traceId)
     setView('events')
+    pushLocation(null, 'events')
   }, [])
 
   // Mentioning a worker from a talk badge appends @id to the input — an explicit
@@ -1103,6 +1185,7 @@ export default function App() {
   const handleSelectWorker = useCallback((id: string) => {
     setFilterWorkers(new Set([id]))
     setView('events')
+    pushLocation(null, 'events')
   }, [])
 
   // Toggle one traffic role (sent/received) in the events filter. Both roles
@@ -1337,7 +1420,7 @@ export default function App() {
         onProjectStop={stopCurrentProject}
         onProjectRestart={restartCurrentProject}
         panel={panel}
-        onSelectPanel={setPanel}
+        onSelectPanel={selectPanel}
         archived={archived}
         pendingApprovals={pendingApprovalCount}
         notifyPermission={notifyPermission}
@@ -1385,7 +1468,7 @@ export default function App() {
             </strong>
           </div>
         )}
-        {mode === 'project' && projectName && projRunning === false && (
+        {mode === 'project' && !panel && projectName && projRunning === false && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight, flexShrink: 0 }}>
             <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>●</span>
             <span style={{ flex: 1, color: colors.text, fontSize: fontSizes.sm }}>
@@ -1404,7 +1487,7 @@ export default function App() {
             </span>
           </div>
         )}
-        {streamDropped && (
+        {mode === 'project' && !panel && streamDropped && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight, flexShrink: 0 }}>
             <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>●</span>
             <span style={{ flex: 1, color: colors.text, fontSize: fontSizes.sm }}>
@@ -1420,7 +1503,7 @@ export default function App() {
           </div>
         )}
         {mode !== 'project' ? (
-          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => setPanel('providers')} />
+          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => selectPanel('providers')} focusStart={startTarget} onFocusDone={() => setStartTarget(null)} />
         ) : panel === 'templates' ? (
           <TemplatesView isMobile={isMobile} />
         ) : panel === 'providers' ? (
@@ -1477,7 +1560,6 @@ export default function App() {
               isMobile={isMobile}
               attachments={attachments}
               onAttachmentsChange={setAttachments}
-              onFocus={handleInputFocus}
             />
           </div>
         ) : view === 'approvals' ? (
