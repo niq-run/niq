@@ -56,7 +56,7 @@ session) no longer stops it. Running `niq` again reports on the service instead
 up?".
 
 ```
- - niq -  version-0.14.0
+ - niq -  version: 0.14.0
 
 [control] running  pid 4711 · since 2026-11-01 23:57
 webui    http://localhost:9527

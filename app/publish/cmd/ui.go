@@ -86,7 +86,7 @@ func logoChip() string {
 }
 
 // versionNumber is the build version without git describe's leading "v", so the
-// banner can read "version-0.13.0-…" instead of "version-v0.13.0-…".
+// banner can read "version: 0.13.0-…" instead of "version: v0.13.0-…".
 func versionNumber() string { return strings.TrimPrefix(version, "v") }
 
 // banner is the identity block printed under the mark: an optional one-liner
@@ -167,7 +167,7 @@ func portCell(n int) string {
 // mark followed by the version, and without colour (no mark) the name stands in
 // for the mark.
 func versionTag() string {
-	tag := dim("version-") + brand(versionNumber())
+	tag := dim("version: ") + brand(versionNumber())
 	if chip := logoChip(); chip != "" {
 		return chip + " " + tag
 	}
