@@ -75,14 +75,14 @@ func logoChip() string {
 	if !ansi {
 		return ""
 	}
-	bg, fg, rule := "\x1b[48;2;60;120;180m", "\x1b[1;38;2;238;238;238m", "\x1b[38;2;169;205;235m"
+	bg, fg, rule := "\x1b[48;2;60;120;180m", "\x1b[38;2;238;238;238m", "\x1b[38;2;169;205;235m"
 	if !truecolor {
-		bg, fg, rule = "\x1b[48;5;67m", "\x1b[1;38;5;255m", "\x1b[38;5;153m"
+		bg, fg, rule = "\x1b[48;5;67m", "\x1b[38;5;255m", "\x1b[38;5;153m"
 	}
-	// A rule either side, flush with the box edges, with the wordmark in solid
-	// light type between them. Nothing resets until the end, so the background
-	// covers the whole box.
-	return bg + rule + "- " + fg + "niq" + rule + " -" + "\x1b[0m"
+	// A rule either side of the wordmark, with a little air between each rule
+	// and the box edge. Nothing resets until the end, so the background covers
+	// the whole box.
+	return bg + rule + " - " + fg + "niq" + rule + " - " + "\x1b[0m"
 }
 
 // versionNumber is the build version without git describe's leading "v", so the
@@ -105,7 +105,7 @@ func printBanner(b banner) {
 	if chip := logoChip(); chip != "" {
 		fmt.Printf("  %s %s\n", chip, b.version)
 	} else {
-		fmt.Printf("  %s  %s\n", bold("niq"), b.version)
+		fmt.Printf("  %s  %s\n", "niq", b.version)
 	}
 	if b.tagline != "" {
 		fmt.Printf("  %s\n", b.tagline)
