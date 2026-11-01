@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { fontSizes, type Palette } from '../theme'
 import { useI18n } from '../i18n'
+import { formStyles } from './Form'
 
 // Small presentational pieces shared by the MCP roster and its detail panel.
 // They live here so the two views agree on button/chip/section styling.
@@ -184,17 +185,7 @@ export function hintStyle(colors: Palette): CSSProperties {
 }
 
 export function inputStyle(colors: Palette): CSSProperties {
-  return {
-    width: '100%',
-    boxSizing: 'border-box',
-    background: colors.bg,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-    padding: '5px 8px',
-    color: colors.text,
-    fontSize: fontSizes.sm,
-    outline: 'none',
-  }
+  return formStyles(colors).input
 }
 
 export function preStyle(colors: Palette): CSSProperties {

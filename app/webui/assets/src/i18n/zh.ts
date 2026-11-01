@@ -410,7 +410,6 @@ export const zh: Record<StringKey, string> = {
   'worker.filter.search': '搜索工作单元…',
   'workers.create.allow': '订阅发布管理',
   'workers.create.allow.button': '权限管理',
-  'workers.create.allow.collapse': '收起',
   'workers.create.allow.summary': '{p} 发布 / {s} 订阅',
   'workers.create.subscriptions.default': '已按该类型的后端默认值预填；可自行增删，清空则回退到相同的默认值。',
   'workers.create.publish.default': '已按该类型的后端默认值预填；可自行增删，清空则回退到相同的默认值。',

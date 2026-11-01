@@ -4,6 +4,7 @@ import { useI18n } from '../i18n'
 import type { EventPayload, WatchEntry } from '../types'
 import { fetchEventsByRequest, sendWorkerEvent } from '../services/api'
 import CollapsibleCode from './CollapsibleCode'
+import { formStyles } from './Form'
 
 interface SendEventFormProps {
   workerId: string
@@ -109,16 +110,7 @@ export default function SendEventForm({ workerId, watch }: SendEventFormProps) {
   const open = entry?.parameters?.additionalProperties === true
   const [extra, setExtra] = useState('')
 
-  const inputStyle: React.CSSProperties = {
-    flex: 1,
-    minWidth: 0,
-    padding: '5px 8px',
-    fontSize: fontSizes.sm,
-    background: colors.bgLight,
-    color: colors.text,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-  }
+  const inputStyle: React.CSSProperties = formStyles(colors).inlineInput
 
   // watchReply follows the request id in the background and fills the reply in
   // when it lands. It is decoupled from the send: the send is done once the

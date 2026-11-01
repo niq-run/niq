@@ -4,6 +4,7 @@ import { useI18n } from '../i18n'
 import { createWorker } from '../services/api'
 import { isReasonFamilyType, type CreateWorkerResult, type WorkerInfo } from '../types'
 import PermissionPanel from '../components/PermissionPanel'
+import { formStyles, buttonStyles } from '../components/Form'
 import type { PublishRow, SubscribeRow } from '../components/AllowEditors'
 import { defaultAllow, samePublish, sameSubscribe, type AllowDefaults, type WorkerCreateMode } from '../allowDefaults'
 
@@ -127,24 +128,8 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const isManaged = mode === 'managed'
   const effType = effectiveType
 
-  const input: React.CSSProperties = {
-    width: '100%',
-    boxSizing: 'border-box',
-    background: colors.bg,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-    padding: '5px 8px',
-    color: colors.text,
-    fontSize: fontSizes.sm,
-    outline: 'none',
-  }
-  const label: React.CSSProperties = {
-    display: 'block',
-    fontSize: fontSizes.xs,
-    color: colors.textDimmed,
-    marginBottom: 4,
-  }
-  const field: React.CSSProperties = { marginBottom: 10 }
+  const { input, label, field } = formStyles(colors)
+  const btn = buttonStyles(colors)
   const pill = (active: boolean): React.CSSProperties => ({
     cursor: 'pointer',
     userSelect: 'none',
@@ -641,7 +626,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         )}
 
         {/* Subscription / publish grants: one module for all three worker
-            kinds, collapsed to a single 权限管理 button until opened. */}
+            kinds, behind a single 权限管理 button that opens its own dialog. */}
         <div style={field}>
           <PermissionPanel
             publish={publish}
@@ -715,14 +700,14 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
 	    <span
 	      onClick={submit}
 	      className="btn-hover"
-	      style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, border: '1px solid ' + colors.accent, borderRadius: 4, padding: '4px 14px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+	      style={{ ...btn.accent, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}
 	    >
 	      {busy ? t('workers.create.saving') : onBuild ? t('templates.addWorker.submit') : isRemote ? t('workers.create.submitRemote') : t('workers.create.submit')}
 	    </span>
 	    <span
 	      onClick={onClose}
 	      className="btn-hover"
-	      style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 14px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+	      style={btn.ghost}
 	    >
 	      {t('wd.cancel')}
 	    </span>

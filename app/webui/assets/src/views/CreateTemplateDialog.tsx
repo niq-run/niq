@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { createTemplate, fetchTemplatePreview, importTemplate } from '../services/api'
+import { formStyles, buttonStyles } from '../components/Form'
 
 interface CreateTemplateDialogProps {
   open: boolean
@@ -36,24 +37,8 @@ export default function CreateTemplateDialog({ open, templates, projects, onClos
 
   if (!open) return null
 
-  const input: React.CSSProperties = {
-    width: '100%',
-    boxSizing: 'border-box',
-    background: colors.bg,
-    border: '1px solid ' + colors.border,
-    borderRadius: 4,
-    padding: '5px 8px',
-    color: colors.text,
-    fontSize: fontSizes.sm,
-    outline: 'none',
-  }
-  const label: React.CSSProperties = {
-    display: 'block',
-    fontSize: fontSizes.xs,
-    color: colors.textDimmed,
-    marginBottom: 4,
-  }
-  const field: React.CSSProperties = { marginBottom: 10 }
+  const { input, label, field, hint } = formStyles(colors)
+  const btn = buttonStyles(colors)
   const pill = (active: boolean): React.CSSProperties => ({
     cursor: 'pointer',
     userSelect: 'none',
@@ -221,14 +206,14 @@ export default function CreateTemplateDialog({ open, templates, projects, onClos
           <span
             onClick={submit}
             className="btn-hover"
-            style={{ cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, border: '1px solid ' + colors.accent, borderRadius: 4, padding: '4px 14px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+            style={{ ...btn.accent, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}
           >
             {busy ? t('templates.create.saving') : t('templates.create.submit')}
           </span>
           <span
             onClick={onClose}
             className="btn-hover"
-            style={{ cursor: 'pointer', border: '1px solid ' + colors.border, borderRadius: 2, padding: '4px 14px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+            style={btn.ghost}
           >
             {t('wd.cancel')}
           </span>

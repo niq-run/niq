@@ -419,7 +419,6 @@ export const en = {
   'worker.filter.search': 'Search workers…',
   'workers.create.allow': 'subscriptions / publish',
   'workers.create.allow.button': 'permissions',
-  'workers.create.allow.collapse': 'collapse',
   'workers.create.allow.summary': '{p} publish / {s} subscribe',
   'workers.create.subscriptions.default': 'Pre-filled with the defaults the backend applies to this worker type; edit them freely — an empty list falls back to the same defaults.',
   'workers.create.publish.default': 'Pre-filled with the defaults the backend applies to this worker type; edit them freely — an empty list falls back to the same defaults.',
