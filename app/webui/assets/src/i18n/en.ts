@@ -9,6 +9,7 @@ export const en = {
   'nav.mcp': 'MCP',
   'sidebar.projectViews': 'Project views',
   'sidebar.projectResources': 'Project resources',
+  'sidebar.selector.resize': 'drag to resize · double-click to reset',
   'sidebar.workerSelector': 'Worker Selector',
   'sidebar.rename': 'Display name',
   'sidebar.rename.hint': 'Enter saves, Escape cancels; empty falls back to the worker id',
