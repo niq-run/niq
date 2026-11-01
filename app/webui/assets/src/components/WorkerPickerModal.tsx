@@ -5,7 +5,6 @@ import { useI18n } from '../i18n'
 import { isTalkPartnerType, type WorkerInfo, type WorkerDetailTab } from '../types'
 import TagFilterDropdown from './TagFilterDropdown'
 import WorkerRowMenu from './WorkerRowMenu'
-import PinMark from './PinMark'
 import ContextMenuSurface from './ContextMenuSurface'
 import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker } from '../pinnedWorkers'
 
@@ -27,11 +26,12 @@ interface WorkerPickerModalProps {
 }
 
 // A row in the modal's grouped list.
-interface Row { kind: 'group' | 'worker'; key: string; group: string; indent?: number; w?: WorkerInfo }
+interface Row { kind: 'group' | 'worker'; key: string; group: string; w?: WorkerInfo }
 
 // WorkerPickerModal is the expanded worker selector: a centered dialog with a
-// search box, tag-grouped rows (slash tags nest by depth) and per-row toggle.
-// It is where you pick when the sidebar's inline checklist gets crowded.
+// search box, tag-grouped rows and per-row toggle. It is where you pick when
+// the sidebar's inline checklist gets crowded — and the talk input's recipient
+// chip reuses it for the same job, so the two pickers behave alike.
 export default function WorkerPickerModal({ title, workers, selected, onToggle, onClose, isMobile, onMention, onOpenDetail }: WorkerPickerModalProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
@@ -125,9 +125,8 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
         .slice().sort((a, b) => a.tags![0].localeCompare(b.tags![0]))
       const untagged = list.filter(w => !w.tags?.length)
       for (const w of tagged) {
-        const segs = w.tags![0].split('/')
-        emit(segs[0])
-        out.push({ kind: 'worker', key: w.id, group: w.tags![0], indent: Math.min(segs.length - 1, 3), w })
+        emit(w.tags![0].split('/')[0])
+        out.push({ kind: 'worker', key: w.id, group: w.tags![0], w })
       }
       if (untagged.length) {
         emit(t('picker.group.untagged'))
@@ -144,7 +143,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
       out.push({ kind: 'group', key: '__grp_selected', group: t('picker.group.selected') })
       lastGroup = t('picker.group.selected')
       for (const w of selectedList) {
-        out.push({ kind: 'worker', key: w.id, group: t('picker.group.selected'), indent: (w.tags?.[0]?.split('/').length ?? 1) - 1, w })
+        out.push({ kind: 'worker', key: w.id, group: t('picker.group.selected'), w })
       }
     }
     if (pinnedIds.length) {
@@ -154,7 +153,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
         out.push({ kind: 'group', key: '__grp_pinned', group: t('pinned.header') })
         lastGroup = t('pinned.header')
         for (const w of pinned) {
-          out.push({ kind: 'worker', key: w.id, group: t('pinned.header'), indent: (w.tags?.[0]?.split('/').length ?? 1) - 1, w })
+          out.push({ kind: 'worker', key: w.id, group: t('pinned.header'), w })
         }
       }
     }
@@ -282,12 +281,25 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
               {t('workerPicker.empty')}
             </div>
           )}
-          {rows.map(row => {
+          {rows.map((row, i) => {
             if (row.kind === 'group') {
               return (
                 <div
                   key={row.key}
-                  style={{ padding: '10px 16px 3px 16px', fontSize: fontSizes.xs, color: colors.textDimmed, fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase', userSelect: 'none' }}
+                  style={{
+                    padding: i === 0 ? '6px 16px 3px 16px' : '12px 16px 3px 16px',
+                    marginTop: i === 0 ? 0 : 4,
+                    // A hairline between groups: the headers are small caps in
+                    // dim type, and without a rule the next group reads as more
+                    // rows of the previous one.
+                    borderTop: i === 0 ? undefined : '1px solid ' + colors.border,
+                    fontSize: fontSizes.xs,
+                    color: colors.textDimmed,
+                    fontWeight: 600,
+                    letterSpacing: '0.03em',
+                    textTransform: 'uppercase',
+                    userSelect: 'none',
+                  }}
                 >
                   {row.group}
                 </div>
@@ -296,7 +308,6 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
             const w = row.w!
             const isActive = selected.has(w.id)
             const isSlept = sleptIds.includes(w.id)
-            const padLeft = 16 + (row.indent ?? 0) * 14
             return (
               <ContextMenuSurface
                 key={row.key}
@@ -307,9 +318,12 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
                 style={{
                   cursor: 'pointer',
                   display: 'flex',
-                  alignItems: 'center',
+                  // Top-aligned, not centred: a row with a description is two
+                  // lines tall, and centring parked the checkbox between them
+                  // instead of on the name's line.
+                  alignItems: 'flex-start',
                   gap: 8,
-                  padding: `7px ${14}px 7px ${padLeft}px`,
+                  padding: '7px 14px',
                   // The dialog sits on bgLight, so the hover band steps one
                   // shade further out (bgLighter) to stay visible under it; a
                   // selected row keeps its chip colour.
@@ -323,6 +337,8 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
                     width: 13,
                     height: 13,
                     flexShrink: 0,
+                    // Optically centred on the name's line (14px type).
+                    marginTop: 2,
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -337,22 +353,25 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
                   {isActive ? '✓' : ''}
                 </span>
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
-                  {/* Line 1: worker name, tags right after it (no wrap). */}
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  {/* Line 1: the display name, with the id beside it when they
+                      differ — the name is how you recognise a worker, the id is
+                      what the bus, the logs and the declaration use. */}
+                  <span style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
                     <span title={w.id} style={{ color: isActive ? colors.accent : colors.text, fontSize: fontSizes.base, fontWeight: isActive ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '0 1 auto', minWidth: 0 }}>
                       {w.label || w.id}
                     </span>
-                    {(w.tags || []).map(tag => (
-                      <span key={tag} style={{ fontSize: fontSizes.xs, color: colors.textDim, background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 8, padding: '0 6px', lineHeight: '15px', whiteSpace: 'nowrap', flexShrink: 0 }}>{'#' + tag}</span>
-                    ))}
+                    {w.label && (
+                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '0 1 auto', minWidth: 0 }}>
+                        {w.id}
+                      </span>
+                    )}
                   </span>
                   {/* Line 2: one-line description. */}
                   {w.description && (
                     <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.4 }}>{w.description}</span>
                   )}
                 </span>
-                {pinnedIds.includes(w.id) && <PinMark colors={colors} color={isActive ? colors.accent : colors.textDimmed} style={{ paddingLeft: 0 }} />}
-                <span style={{ flexShrink: 0, color: w.online === false ? colors.textDimmed : colors.toolCompleted, fontSize: fontSizes.sm }}>
+                <span style={{ flexShrink: 0, marginTop: 1, color: w.online === false ? colors.textDimmed : colors.toolCompleted, fontSize: fontSizes.sm }}>
                   {w.online === false ? t('worker.offline') : t('worker.online')}
                 </span>
               </ContextMenuSurface>

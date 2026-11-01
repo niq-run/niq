@@ -24,6 +24,7 @@ export default function ThinkingBlock({ evt, defaultExpanded = true }: ThinkingB
 
   return (
     <div
+      data-block=""
       className={collapsed ? 'block-card' : undefined}
       style={{
         marginBottom: 12,

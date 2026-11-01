@@ -857,7 +857,7 @@ export default function App() {
   const activeWorker = useMemo(() => {
     const reasons = workers.filter(w => isTalkPartnerType(w.type))
     const isReason = (id: string) => reasons.some(r => r.id === id)
-    const addressed = mentionsIn(input, isReason)
+    const addressed = mentionsIn(input, reasons)
     if (addressed.length > 0) return addressed[0]
     if (mentionTarget && isReason(mentionTarget)) return mentionTarget
     const sel = [...talkWorkers].filter(isReason)
@@ -881,9 +881,8 @@ export default function App() {
     // resolves to nobody is refused: with no addressee there is nowhere for it
     // to go (no broadcast path).
     const reasonWorkers = workers.filter(w => isTalkPartnerType(w.type))
-    const isKnown = (id: string) => reasonWorkers.some(r => r.id === id)
-    const msgTargets = mergeTargets(targets, mentionsIn(input, isKnown))
-    const msgText = leadingMentions(input).rest.trim()
+    const msgTargets = mergeTargets(targets, mentionsIn(input, reasonWorkers))
+    const msgText = leadingMentions(input, reasonWorkers).rest.trim()
     if (msgTargets.length === 0 || (!msgText && attachments.length === 0)) return
     setSending(true)
     // Returning to the live bottom: bump the signal TalkView listens for.
@@ -913,7 +912,7 @@ export default function App() {
     // to — the target set plus whatever the draft @-mentions. With neither,
     // fall back to the last addressee, then a selected worker, then the first
     // reason worker.
-    const addressed = mergeTargets(targets, mentionsIn(input, isReason))
+    const addressed = mergeTargets(targets, mentionsIn(input, reasonWorkers))
     let stopTargets = addressed
     if (stopTargets.length === 0) {
       const fallback = isReason(mentionTarget)

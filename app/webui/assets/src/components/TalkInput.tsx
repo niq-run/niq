@@ -2,9 +2,10 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import PickerDropdown, { type PickerOption } from './PickerDropdown'
+import WorkerPickerModal from './WorkerPickerModal'
 import { uploadFile } from '../services/api'
 import { isTalkPartnerType, type StagedAttachment, type WorkerInfo } from '../types'
-import { mentionsIn, leadingMentions, mergeTargets } from './talk-utils'
+import { mentionsIn, leadingMentions, mergeTargets, mentionName } from './talk-utils'
 
 // Attachment limits: images ride inline as base64, files go through
 // /api/upload and only their path enters the input.
@@ -140,6 +141,10 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const [pickerQuery, setPickerQuery] = useState('')
   const [mentionIndex, setMentionIndex] = useState(0)
   const [modeOpen, setModeOpen] = useState(false)
+  // The expanded recipient picker: the chip's dropdown is compact, so a long
+  // fleet gets the same centered dialog shape as the sidebar's selector. Both
+  // edit the same recipient set.
+  const [targetModalOpen, setTargetModalOpen] = useState(false)
   const [uploading, setUploading] = useState(0)
   const [attachNote, setAttachNote] = useState('')
   // Drag-and-drop: tracks whether a file is being dragged over the input so
@@ -319,12 +324,13 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     const val = e.target.value
     onInputChange(val)
 
-    // Detect if we're typing an @mention. Worker ids may contain `-`, `.`, `_`
-    // (the same charset used when declaring workers), so the token is /[\w.-]/,
-    // not just /\w/.
+    // Detect if we're typing an @mention. The token runs to the next space
+    // rather than over the id charset: a mention may be a display name (Chinese,
+    // punctuation), and only the pick's own name list can tell how much of it is
+    // the name.
     const cursorPos = e.target.selectionStart
     const beforeCursor = val.slice(0, cursorPos)
-    const atMatch = beforeCursor.match(/@([\w.-]*)$/)
+    const atMatch = beforeCursor.match(/@([^\s@]*)$/)
     if (atMatch) {
       setPickerFor('text')
       setPickerOpen(true)
@@ -338,8 +344,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   // mentioned is the @-addressed workers present in the input, in
   // first-appearance order. They are the message's recipients, so the chip can
   // show exactly who will receive it and the picker can check them off.
-  const isPartnerId = useCallback((id: string) => partners.some(w => w.id === id), [partners])
-  const mentioned = useMemo(() => mentionsIn(input, isPartnerId), [input, isPartnerId])
+  const mentioned = useMemo(() => mentionsIn(input, partners), [input, partners])
 
   // Recipients: the target set plus whatever the draft @-mentions. Typing an @
   // appends to the set (de-duplicated) instead of replacing it, so the chip
@@ -362,18 +367,22 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     noTargetTimer.current = window.setTimeout(() => setNoTargetHint(false), 2600)
   }, [])
 
-  // insertMention puts "@id " at the caret. A trailing "@query" being typed is
-  // replaced by the pick; otherwise (chip pick on an already-complete token) it
-  // simply inserts at the caret, so picks accumulate into a multi-mention.
+  // insertMention puts "@name " at the caret — the display name when the worker
+  // has one, so the draft reads with the name the reader knows. A trailing
+  // "@query" being typed is replaced by the pick; otherwise (chip pick on an
+  // already-complete token) it simply inserts at the caret, so picks accumulate
+  // into a multi-mention.
   const insertMention = (id: string) => {
+    const w = partners.find(p => p.id === id)
+    const name = w ? mentionName(w) : id
     const cursorPos = textareaRef.current?.selectionStart ?? input.length
     const beforeCursor = input.slice(0, cursorPos)
     const afterCursor = input.slice(cursorPos)
-    const atMatch = beforeCursor.match(/^(.*)@[\w.-]*$/)
+    const atMatch = beforeCursor.match(/^(.*)@[^\s@]*$/)
     const head = atMatch ? atMatch[1] : beforeCursor
     // Keep one space between existing text and the inserted mention.
     const sep = head && !/\s$/.test(head) ? ' ' : ''
-    const prefix = head + sep + '@' + id + ' '
+    const prefix = head + sep + '@' + name + ' '
     onInputChange(prefix + afterCursor)
     requestAnimationFrame(() => {
       const ta = textareaRef.current
@@ -384,11 +393,18 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     })
   }
 
-  // removeMention takes one addressee back out (the picker row toggles). The id
-  // charset is [\w.-], so `.` is the only regex-special character to escape.
+  // removeMention takes one addressee back out (the picker row toggles). The
+  // draft may hold the display name, the id, or both across edits, so every
+  // spelling is removed. A mention ends at whitespace or at sentence
+  // punctuation — "@ops." is ops followed by a period.
   const removeMention = (id: string) => {
-    const token = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const next = input.replace(new RegExp('(^|\\s)@' + token + '(?![\\w.-])\\s?', 'g'), '$1')
+    const w = partners.find(p => p.id === id)
+    const spellings = new Set([w ? mentionName(w) : id, id])
+    let next = input
+    for (const sp of spellings) {
+      const token = sp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      next = next.replace(new RegExp('(^|\\s)@' + token + '(?=$|[\\s,.;:!?，。；：！？])', 'g'), '$1')
+    }
     onInputChange(next.trimStart())
   }
 
@@ -425,16 +441,24 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     setPickerQuery('')
   }
 
+  // Toggle one recipient in place, without closing anything: the expanded
+  // dialog stays open while several workers are checked. Removing takes the id
+  // out of both the target set and the draft (one uncheck really drops it);
+  // adding extends the target set only.
+  const toggleRecipient = (id: string) => {
+    if (recipients.includes(id)) removeTarget(id)
+    else addTarget(id)
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // IME composition: keys (esp. Enter to confirm pinyin) must not trigger
     // send or mention navigation while composing.
     const composing = e.nativeEvent.isComposing || e.keyCode === 229
 
     if (pickerOpen && !composing) {
-      // Use the same pickable set the dropdown renders (archived/suspended reason
-      // workers excluded, group headers inert), so Enter commits exactly the
-      // highlighted option.
-      const list = pickerGroup.workers
+      // Use the same pickable set the dropdown renders (archived/suspended
+      // reason workers excluded), so Enter commits exactly the highlighted row.
+      const list = pickerWorkers
       // Arrow/ctrl+n/p cycle through the options (wrapping at both ends).
       if (list.length > 0) {
         const n = list.length
@@ -494,116 +518,67 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   }, [mentionKey])
 
   // Archived or suspended reason workers are not mentionable / targetable.
-  const pickableWorkers = partners.filter(w => !archived.has(w.id) && w.state !== 'suspended')
-  // The dropdown's search box filters by worker id across both modes; an empty
-  // query keeps everything.
-  const pickableShown = pickableWorkers.filter(w =>
-    pickerQuery.trim() === '' || w.id.toLowerCase().includes(pickerQuery.trim().toLowerCase()))
+  const pickableWorkers = useMemo(
+    () => partners.filter(w => !archived.has(w.id) && w.state !== 'suspended'),
+    [partners, archived],
+  )
+  // The dropdown's search box matches the display name, the id, the
+  // description and the tags; an empty query keeps everything.
+  const pickableShown = useMemo(() => {
+    const q = pickerQuery.trim().toLowerCase()
+    if (!q) return pickableWorkers
+    return pickableWorkers.filter(w =>
+      w.id.toLowerCase().includes(q) ||
+      mentionName(w).toLowerCase().includes(q) ||
+      (w.description || '').toLowerCase().includes(q) ||
+      (w.tags || []).some(tag => tag.toLowerCase().includes(q)))
+  }, [pickableWorkers, pickerQuery])
 
-  // Build the picker's option list. While searching it is one flat list with
-  // the best hit first: an exact id match outranks a prefix hit, which outranks
-  // a substring hit, so spelling a worker's name puts it on top — where the
-  // default highlight (and Enter) lands. With no query, reason workers are
-  // grouped by their primary (first) tag's top-level path segment — a slash tag
-  // nests visually via indentation, so "ops/backup" and "ops/analytics" sit
-  // under an "ops" header at the right depth — and workers without tags fall
-  // into a trailing "other" group. Group headers are inert; they never consume
-  // the keyboard-active slot, so navigation stays on the worker rows only.
-  const pickerGroup = useMemo(() => {
-    const opts: PickerOption[] = []
-    const workers: WorkerInfo[] = []
-    let lastGroup: string | null = null
-    const emitGroup = (g: string) => {
-      if (g !== lastGroup) {
-        opts.push({ id: '__grp_' + g, label: g, isGroup: true })
-        lastGroup = g
-      }
-    }
-    const query = pickerQuery.trim().toLowerCase()
-    if (query) {
+  // The picker's option list: one flat list, no tag groups. While searching the
+  // best hit comes first — exact name, then prefix, then substring — so
+  // spelling what you want puts it where the default highlight (and Enter)
+  // lands. With no query, the recipients already addressed lead (in the chip's
+  // order, so the two line up), then everyone else by display name.
+  const pickerWorkers = useMemo(() => {
+    const q = pickerQuery.trim().toLowerCase()
+    if (q) {
       const rank = (w: WorkerInfo) => {
+        const name = mentionName(w).toLowerCase()
         const id = w.id.toLowerCase()
-        return id === query ? 0 : id.startsWith(query) ? 1 : 2
+        if (name === q || id === q) return 0
+        return name.startsWith(q) || id.startsWith(q) ? 1 : 2
       }
-      // Stable ranking: equal ranks keep the workers' natural order, so the list
-      // does not shuffle while the query grows.
-      pickableShown
-        .map((w, i) => ({ w, i }))
-        .sort((a, b) => rank(a.w) - rank(b.w) || a.i - b.i)
-        .forEach(({ w }) => {
-          const secondary = w.description || w.tags?.[0]
-          opts.push({ id: w.id, label: w.id, sublabel: w.type, hint: secondary, description: secondary })
-          workers.push(w)
-        })
-    } else {
-      // In the recipient picker the workers already addressed come first, under
-      // a "selected" header (in the chip's order, so the two line up) — unchecking
-      // one should not mean hunting for it among the tag groups below.
-      const picked = pickerFor === 'target'
-        ? checkedTargets
-            .map(id => pickableShown.find(w => w.id === id))
-            .filter((w): w is WorkerInfo => !!w)
-        : []
-      if (picked.length > 0) {
-        emitGroup(t('picker.group.selected'))
-        for (const w of picked) {
-          const primary = w.tags?.[0]
-          const secondary = w.description || primary
-          opts.push({
-            id: w.id,
-            label: w.id,
-            sublabel: w.type,
-            indent: primary ? Math.min(primary.split('/').length - 1, 3) : undefined,
-            hint: secondary,
-            description: secondary,
-          })
-          workers.push(w)
-        }
-      }
-      const pickedIds = new Set(picked.map(w => w.id))
-      const rest = pickableShown.filter(w => !pickedIds.has(w.id))
-      const tagged = rest.filter(w => (w.tags?.length ?? 0) > 0)
-        .slice().sort((a, b) => a.tags![0].localeCompare(b.tags![0]))
-      const untagged = rest.filter(w => !w.tags?.length)
-      for (const w of tagged) {
-        const primary = w.tags![0]
-        const segs = primary.split('/')
-        emitGroup(segs[0])
-        const indent = Math.min(segs.length - 1, 3)
-        const secondary = w.description || primary
-        opts.push({
-          id: w.id,
-          label: w.id,
-          sublabel: w.type,
-          indent,
-          hint: secondary,
-          description: secondary,
-        })
-        workers.push(w)
-      }
-      if (untagged.length) {
-        emitGroup(t('picker.group.untagged'))
-        for (const w of untagged) {
-          opts.push({ id: w.id, label: w.id, sublabel: w.type, description: w.description })
-          workers.push(w)
-        }
-      }
+      return pickableShown.slice().sort((a, b) => rank(a) - rank(b))
     }
-    // The highlighted worker row's index within the option list (group
-    // headers don't count for keyboard navigation). The index is clamped into
-    // the list: it can go stale when the query narrows the options, and the
-    // highlight must stay on a real row — the same row Enter would take.
-    let activeOptionIndex = -1
-    if (workers.length > 0) {
-      const idx = Math.min(Math.max(mentionIndex, 0), workers.length - 1)
-      activeOptionIndex = opts.findIndex(o => !o.isGroup && o.id === workers[idx].id)
-    }
-    return { opts, workers, activeOptionIndex }
-  }, [pickableShown, pickerQuery, mentionIndex, pickerFor, checkedTargets, t])
-  const pickList = pickerGroup.opts
+    const picked = pickerFor === 'target'
+      ? checkedTargets.map(id => pickableShown.find(w => w.id === id)).filter((w): w is WorkerInfo => !!w)
+      : []
+    const pickedIds = new Set(picked.map(w => w.id))
+    const rest = pickableShown
+      .filter(w => !pickedIds.has(w.id))
+      .slice()
+      .sort((a, b) => mentionName(a).localeCompare(mentionName(b)))
+    return [...picked, ...rest]
+  }, [pickableShown, pickerQuery, pickerFor, checkedTargets])
+
+  // Rows read by display name, with the original id right after it when the
+  // two differ. No worker type in this list: it is identity metadata nobody
+  // picks by, and it crowded the one thing the row is for.
+  const pickList: PickerOption[] = pickerWorkers.map(w => ({
+    id: w.id,
+    label: mentionName(w),
+    sublabel: w.label ? w.id : undefined,
+    // One line per worker: name + id. The description stays in the tooltip (and
+    // in the expanded picker), where it can be read without turning every row
+    // into a two-line block.
+    hint: w.description,
+  }))
+  const activeOptionIndex = pickerWorkers.length > 0
+    ? Math.min(Math.max(mentionIndex, 0), pickerWorkers.length - 1)
+    : -1
 
   // Recipients: the target set plus whatever the draft @-mentions.
-  const body = leadingMentions(input).rest.trim()
+  const body = leadingMentions(input, partners).rest.trim()
   const canSend = recipients.length > 0 && (body !== '' || attachments.length > 0)
   // Chip content: one token per recipient, capped so a big selection cannot
   // stretch the action row (the overflow becomes "+N"). The tooltip always
@@ -611,8 +586,14 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
   const maxTokens = isMobile ? 1 : 2
   const shownTargets = recipients.slice(0, maxTokens)
   const hiddenTargets = recipients.length - shownTargets.length
+  // Recipients read by display name (备注名) everywhere: the chip's tokens and
+  // its tooltip. The id stays the identity behind them.
+  const nameOf = useCallback((id: string) => {
+    const w = partners.find(p => p.id === id)
+    return w ? mentionName(w) : id
+  }, [partners])
   const targetsLabel = recipients.length > 0
-    ? recipients.map(id => '@' + id).join(' · ')
+    ? recipients.map(id => '@' + nameOf(id)).join(' · ')
     : t('talk.input.noTarget')
   // A recipient appearing (typed @, or a worker checked in the sidebar) answers
   // the refusal hint, so it goes away at once.
@@ -749,7 +730,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
                       lineHeight: '18px', whiteSpace: 'nowrap',
                     }}
                   >
-                    <span style={{ color: colors.textDimmed }}>@</span>{id}
+                    <span style={{ color: colors.textDimmed }}>@</span>{nameOf(id)}
                   </span>
                 ))}
                 {hiddenTargets > 0 && (
@@ -786,14 +767,12 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
               header={pickerFor === 'target' ? t('picker.targets') : t('picker.mention')}
               options={pickList}
               selectedIds={checkedTargets}
-              activeIndex={pickerGroup.activeOptionIndex}
+              activeIndex={activeOptionIndex}
               onSelect={commitPicker}
-              width={isMobile ? 480 : 240}
-              onActivate={(i) => {
-                // Map the option index back to the worker it selects: group
-                // headers are skipped (they are inert structure).
-                setMentionIndex(pickerGroup.opts.slice(0, i + 1).filter(o => !o.isGroup).length - 1)
-              }}
+              width={isMobile ? 480 : 280}
+              onActivate={setMentionIndex}
+              onExpand={pickerFor === 'target' ? () => { setPickerOpen(false); setTargetModalOpen(true) } : undefined}
+              expandLabel={t('sidebar.workerSelector.expandShort')}
               searchValue={pickerQuery}
               onSearchValueChange={setPickerQuery}
               searchPlaceholder={t('workerPicker.search')}
@@ -1066,6 +1045,20 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           {t('talk.input.send')}
         </button>
       </div>
+      {targetModalOpen && (
+        // The sidebar's expanded picker, reused: same dialog, same search /
+        // tag / online filters, and it toggles the same recipient set the
+        // dropdown edits.
+        <WorkerPickerModal
+          title={t('sidebar.workerSelector')}
+          workers={pickableWorkers}
+          selected={new Set(recipients)}
+          onToggle={toggleRecipient}
+          onMention={(id) => { setTargetModalOpen(false); insertMention(id) }}
+          onClose={() => setTargetModalOpen(false)}
+          isMobile={isMobile}
+        />
+      )}
     </div>
   )
 }
