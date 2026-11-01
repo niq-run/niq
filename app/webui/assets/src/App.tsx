@@ -180,6 +180,22 @@ function composeInput(text: string, attachments: StagedAttachment[], targets: st
   return content
 }
 
+// panelFromLocation reads ?panel= (the open management tab).
+function panelFromLocation(): 'projects' | 'templates' | 'providers' | null {
+  const q = new URLSearchParams(window.location.search).get('panel')
+  return q === 'projects' || q === 'templates' || q === 'providers' ? q : null
+}
+
+// pushPanel rewrites the address bar for a panel switch: one entry per tab, so
+// Back walks the tabs you visited instead of leaving the page.
+function pushPanel(from: string | null, to: string | null) {
+  if (from === to) return
+  const url = new URL(window.location.href)
+  if (to) url.searchParams.set('panel', to)
+  else url.searchParams.delete('panel')
+  window.history.pushState({ panel: to }, '', url.pathname + url.search + url.hash)
+}
+
 export default function App() {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
@@ -219,11 +235,18 @@ export default function App() {
     window.history.replaceState({}, '', url.pathname + url.search + url.hash)
   }, [])
   const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(() => {
-    // ?panel=<tab> is how a project page hands a management tab over to the
-    // control plane (see selectPanel): the tab belongs to "/", not to /p/<id>/.
-    const q = new URLSearchParams(window.location.search).get('panel')
-    return q === 'templates' || q === 'providers' ? q : null
+    // ?panel=<tab> keeps the open management tab in the address bar, so a reload
+    // (or a link) lands on the tab you were looking at instead of back in the
+    // project's talk view.
+    return panelFromLocation()
   })
+  // Back/Forward walk the panel history: the URL is the source of truth, so a
+  // popstate re-derives the open tab instead of leaving the view behind.
+  useEffect(() => {
+    const onPop = () => setPanel(panelFromLocation())
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
   const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
   // Input mode is remembered per reason worker (the @ target the message is
@@ -366,17 +389,14 @@ export default function App() {
   // project's own APIs carry the /p/<id> base (see services/api.ts).
   const mode = context.mode
 
-  // selectPanel opens a management tab. Those tabs read the control plane, not
-  // the attached project, so from inside a project page they move the browser to
-  // "/" instead of rendering in place: the URL stays honest about which project
-  // you are in (leaving it also drops that project's event stream, so a stopped
-  // project no longer reports a broken stream on a page that is not its own).
+  // selectPanel opens a management tab in place — you keep the project you are
+  // in while checking its providers or templates — but records the tab in the
+  // URL (?panel=<tab>), so the address always says which surface is showing and
+  // reload / back behave like pages. Leaving the panels drops the parameter
+  // again.
   const selectPanel = (next: 'projects' | 'templates' | 'providers') => {
-    if (mode === 'project') {
-      window.location.href = next === 'projects' ? '/' : '/?panel=' + next
-      return
-    }
     setPanel(next)
+    pushPanel(panel, next)
   }
   const projectBase = getApiBase()
   const projectName = context.project
@@ -395,6 +415,9 @@ export default function App() {
   const [startProjErr, setStartProjErr] = useState('')
   usePolling<ProjectInfo[]>(CONTROL + '/api/projects', 5000, (list) => {
     if (mode !== 'project' || !projectName) return
+    // A management panel shows control-plane data; the project's event stream is
+    // not on screen, so it is not opened (and cannot drop behind one).
+    if (panel) return
     const p = list.find((x: ProjectInfo) => x.id === projectName)
     setProjRunning(p ? !!p.running : false)
   }, mode === 'project' && projectName !== '')
@@ -474,6 +497,7 @@ export default function App() {
   // Picking a View (talk/events/workers) leaves the management panels and
   // closes the mobile drawer.
   const selectView = (v: ViewMode) => {
+    if (panel) pushPanel(panel, null)
     setPanel(null)
     setView(v)
     setSidebarOpen(false)
@@ -539,6 +563,9 @@ export default function App() {
     // answers, so guarding on the mode alone opened a stream on the control
     // page, whose 404 then lit the "stream dropped" banner there for good.
     if (mode !== 'project' || !projectName) return
+    // A management panel shows control-plane data; the project's event stream is
+    // not on screen, so it is not opened (and cannot drop behind one).
+    if (panel) return
     // The SSE is a project-level subscription; its filter follows the active
     // view. The events view scopes by its worker/trace filter; the talk view
     // scopes to the selected conversation worker(s) (worker_id OR target OR
@@ -776,7 +803,7 @@ export default function App() {
     // project name arrives (it is undefined until /api/context answers, and the
     // stream must not open before then). `view` itself is intentionally not a
     // dep; it is already encoded by streamKey.
-  }, [streamKey, mode, projectName, projectBase])
+  }, [streamKey, mode, projectName, panel, projectBase])
 
   // ── Polling (only meaningful when a project is attached). The URL carries the
   // project base so a project page reached through /p/<id>/ hits that project's
@@ -1417,7 +1444,7 @@ export default function App() {
             </strong>
           </div>
         )}
-        {mode === 'project' && projectName && projRunning === false && (
+        {mode === 'project' && !panel && projectName && projRunning === false && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight, flexShrink: 0 }}>
             <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>●</span>
             <span style={{ flex: 1, color: colors.text, fontSize: fontSizes.sm }}>
@@ -1436,7 +1463,7 @@ export default function App() {
             </span>
           </div>
         )}
-        {mode === 'project' && streamDropped && (
+        {mode === 'project' && !panel && streamDropped && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight, flexShrink: 0 }}>
             <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>●</span>
             <span style={{ flex: 1, color: colors.text, fontSize: fontSizes.sm }}>
