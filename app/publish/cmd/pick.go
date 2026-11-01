@@ -303,10 +303,10 @@ func projectRow(p project.Project, idWidth int, trailing string, cursor int, sel
 			dot = brand("●") + " "
 		}
 	}
-	// The selected row is bracketed and takes the theme colour. The brackets
-	// cost two columns, so every name cell is idWidth+2 wide either way and the
-	// state and the ports stay in one column.
-	name := bold(p.ID) + strings.Repeat(" ", idWidth-len(p.ID)+2)
+	// Every name is bracketed — the brackets are part of the row, not a cursor
+	// — and the selected one alone takes the theme colour. The cell is
+	// idWidth+2 wide either way, so the state and ports stay in one column.
+	name := bold("["+p.ID+"]") + strings.Repeat(" ", idWidth-len(p.ID))
 	if selected {
 		name = brandBold("["+p.ID+"]") + strings.Repeat(" ", idWidth-len(p.ID))
 	}
