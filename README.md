@@ -72,7 +72,7 @@ restart  niq restart
 `niq status` reports the process, address and log, plus each project's run
 state and URL (a refused port means that instance is not running); `niq stop`
 shuts it down — projects are their own processes, so they keep serving unless
-you add `--all`;
+you add `-p`;
 `niq restart` brings it back on the same address. Put the flags anywhere a
 start goes (`niq --addr :8080 --auth alice:s3cret`, `niq restart` reuses the
 recorded address). To keep it attached to the terminal — systemd, a container,
@@ -104,7 +104,7 @@ just the ids.
 | `niq` | start the control plane in the background, or report on it when it is already running |
 | `niq -f`, `niq --foreground` | run the control plane in this terminal |
 | `niq status` | the control plane and every project instance |
-| `niq stop [--all]` | stop the control plane (`--all` also stops the project instances) |
+| `niq stop [-p]` | stop the control plane (`-p` also stops the running projects) |
 | `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
 | `niq project` | pick a project: start, stop or restart it |
 | `niq project create` / `niq project run` | create a project / run one in this terminal |

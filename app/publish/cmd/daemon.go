@@ -281,7 +281,7 @@ func reportRunningProjects() {
 		return
 	}
 	fmt.Printf("\n%s %d project instance(s) still running (%s); %s stops them too.\n",
-		dim("note:"), len(ids), strings.Join(ids, ", "), bold("niq stop --all"))
+		dim("note:"), len(ids), strings.Join(ids, ", "), bold("niq stop -p"))
 }
 
 // stopProjects interrupts every running project instance. SIGINT is the same
@@ -289,6 +289,12 @@ func reportRunningProjects() {
 // reaches both instances this control plane launched and ones started by hand
 // in another terminal (they are found by their WebUI port).
 func stopProjects() error {
+	// The project package logs the signal it sends to a port holder; on a
+	// report like this it would land between the control line and the summary.
+	prev := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(prev)
+
 	projects, err := project.ListProjects()
 	if err != nil {
 		return err

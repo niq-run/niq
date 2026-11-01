@@ -6,7 +6,7 @@
 //	                          or show its status when it is already running
 //	niq control [-f]        — start it in the foreground instead
 //	niq status              — report whether it is running and where
-//	niq stop [--all]        — stop the background control plane (-all: + projects)
+//	niq stop [-p]           — stop the background control plane (-p: the projects too)
 //	niq restart [-p]        — stop and start it again (-p: the projects too)
 //	niq project             — pick a project, then stop or restart it
 //	niq project list        — list projects, their ports and run state
@@ -135,11 +135,13 @@ func runRestart(args []string) error {
 
 func runStop(args []string) error {
 	fs := flag.NewFlagSet("niq stop", flag.ContinueOnError)
-	all := fs.Bool("all", false, "Also stop every running project instance")
+	var projects bool
+	fs.BoolVar(&projects, "projects", false, "Also stop every running project instance")
+	fs.BoolVar(&projects, "p", false, "Shorthand for --projects")
 	if err := fs.Parse(args); err != nil {
 		return helpOrErr(err)
 	}
-	return stopControl(*all)
+	return stopControl(projects)
 }
 
 // helpOrErr keeps --help from being reported as a failure: flag has already
@@ -258,7 +260,7 @@ func printUsage() {
 		{"niq", "start the control plane in the background, or report on it when it is already running"},
 		{"niq -f, --foreground", "run the control plane in this terminal"},
 		{"niq status", "the control plane and every project instance"},
-		{"niq stop [--all]", "stop the control plane (--all also stops the project instances)"},
+		{"niq stop [-p]", "stop the control plane; -p also stops the running projects"},
 		{"niq restart [-p]", "restart the control plane; -p also restarts the running projects"},
 		{"niq project", "pick a project, then start, stop or restart it"},
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
