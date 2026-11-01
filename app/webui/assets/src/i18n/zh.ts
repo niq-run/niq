@@ -458,7 +458,6 @@ export const zh: Record<StringKey, string> = {
   'projects.empty': '还没有项目。从模板创建一个，例如 {cmd}。',
   'projects.running': '运行中',
   'projects.stopped': '已停止',
-  'projects.statusUnknown': '状态未知 — 仍可重启/停止',
   'projects.noProvider': '未检测到可用的模型供应商（api_key 为空），请先完成配置。',
   'projects.goConfigure': '去配置模型供应商',
   'projects.createAnyway': '仍要创建',

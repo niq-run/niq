@@ -468,7 +468,6 @@ export const en = {
   'projects.empty': 'No projects yet. Create one from a template, e.g. {cmd}.',
   'projects.running': 'running',
   'projects.stopped': 'stopped',
-  'projects.statusUnknown': 'status unavailable — restart/stop still work',
   'projects.noProvider': 'No usable model provider configured (api_key empty) — set one up first.',
   'projects.goConfigure': 'Configure providers',
   'projects.createAnyway': 'create anyway',

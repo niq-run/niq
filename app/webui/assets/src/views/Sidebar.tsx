@@ -1007,9 +1007,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             </div>
             {/* Lifecycle menu, opening upward from the footer. Mirrors the
                 projects page rows: running → restart/stop, stopped → start,
-                with a spinner while an op is in flight and inline errors. When
-                the control-plane poll has not answered yet, restart/stop stay
-                available and the menu says the state is unknown. */}
+                with a spinner while an op is in flight and inline errors. Before
+                the control-plane poll has answered, restart/stop stay available
+                and the menu simply claims no state. */}
             {projMenuOpen && (
               <div
                 onClick={(e) => e.stopPropagation()}
@@ -1039,11 +1039,6 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                     <span onClick={onProjectStop} className="btn-hover" style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.toolFailed, borderRadius: 2, padding: '3px 8px', userSelect: 'none' }}>
                       {t('projects.stop')}
                     </span>
-                    {projRunning === undefined && (
-                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, padding: '2px 8px' }}>
-                        {t('projects.statusUnknown')}
-                      </span>
-                    )}
                   </>
                 )}
                 {projActionErr && (
