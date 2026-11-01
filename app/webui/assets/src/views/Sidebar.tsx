@@ -595,6 +595,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const [selectorHeight, setSelectorHeight] = useState<number | null>(loadSelectorHeight)
   const selectorH = selectorHeight ?? workerListMax
   const [selectorResizing, setSelectorResizing] = useState(false)
+  const [selectorHandleHover, setSelectorHandleHover] = useState(false)
   const startSelectorResize = (e: ReactMouseEvent) => {
     e.preventDefault()
     const startY = e.clientY
@@ -622,6 +623,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   }
   // Hidden in the views that hide the selector, so no stray handle is left.
   const selectorShown = view !== 'workers' && view !== 'programs' && view !== 'mcp'
+  // Visible grip on that divider: a small pill of three dots sitting on the
+  // line, so the drag target reads as one. It lights up on hover and while
+  // dragging; otherwise it stays the divider's own colour.
+  const selectorHandleActive = selectorResizing || selectorHandleHover
   const selectorDivider = selectorShown ? (
     <div
       role="separator"
@@ -629,9 +634,34 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       title={t('sidebar.selector.resize')}
       onMouseDown={startSelectorResize}
       onDoubleClick={resetSelectorHeight}
-      style={{ margin: '11px ' + hrX + 'px 5px', padding: '4px 0', cursor: 'ns-resize', userSelect: 'none' }}
+      onMouseEnter={() => setSelectorHandleHover(true)}
+      onMouseLeave={() => setSelectorHandleHover(false)}
+      style={{
+        position: 'relative', margin: '10px ' + hrX + 'px 4px', padding: '5px 0',
+        cursor: 'ns-resize', userSelect: 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
     >
-      <div style={{ borderTop: '1px solid ' + (selectorResizing ? colors.accent : colors.border), transition: 'border-color 0.12s' }} />
+      <span style={{
+        position: 'absolute', left: 0, right: 0, top: '50%',
+        borderTop: '1px solid ' + (selectorHandleActive ? colors.accent : colors.border),
+        transition: 'border-color 0.12s',
+      }} />
+      <span style={{
+        position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+        width: 34, height: 12, borderRadius: 6,
+        background: colors.bg,
+        border: '1px solid ' + (selectorHandleActive ? colors.accent : colors.border),
+        transition: 'border-color 0.12s',
+      }}>
+        {[0, 1, 2].map((i) => (
+          <span key={i} style={{
+            width: 3, height: 3, borderRadius: 2,
+            background: selectorHandleActive ? colors.accent : colors.textDimmed,
+            transition: 'background 0.12s',
+          }} />
+        ))}
+      </span>
     </div>
   ) : null
   // Inter-row gap for the options list. Kept at 0 so the rows sit flush: with
