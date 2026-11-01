@@ -133,9 +133,9 @@ func readKey(in *bufio.Reader) key {
 		return keyQuit
 	case '\r', '\n':
 		return keyEnter
-	case 'k':
+	case 'k', 16: // k, Ctrl+P (readline/Emacs "previous")
 		return keyUp
-	case 'j':
+	case 'j', 14: // j, Ctrl+N
 		return keyDown
 	case 0x1b:
 		// Arrows arrive as ESC [ A / ESC [ B in a single burst, but a lone Esc
@@ -227,7 +227,8 @@ func runProjectPicker() error {
 }
 
 func pickerTitle() string {
-	return versionTag() + "\n" + bold("↑/↓") + dim(" move · enter select · q quit")
+	return versionTag() + "\n" +
+		bold("↑/↓") + dim(" or ") + bold("⌃n/⌃p") + dim(" move · enter select · q quit")
 }
 
 // pickAction asks what to do with one instance. The choice follows its state: a
