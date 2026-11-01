@@ -54,21 +54,23 @@ func brand(s string) string {
 	return "\x1b[38;5;67m" + s + "\x1b[0m"
 }
 
-// logoBadge is the niq mark: the blue square with the wordmark knocked out,
-// three lines tall, matching the logo the web UI ships. Empty when colour is
-// off — a banner made of spaces helps nobody.
-func logoBadge() [3]string {
+// logoChip is the niq mark on one line: the wordmark knocked out of the
+// product's blue, the same mark the web UI ships, sized to sit inline with the
+// version. Empty when colour is off — a banner made of spaces helps nobody.
+func logoChip() string {
 	if !ansi {
-		return [3]string{}
+		return ""
 	}
 	bg, fg := "\x1b[48;2;60;120;180m", "\x1b[38;2;238;238;238m"
 	if !truecolor {
 		bg, fg = "\x1b[48;5;67m", "\x1b[38;5;255m"
 	}
-	blank := bg + strings.Repeat(" ", 9) + "\x1b[0m"
-	mark := bg + fg + "   niq   " + "\x1b[0m"
-	return [3]string{blank, mark, blank}
+	return bg + fg + " niq " + "\x1b[0m"
 }
+
+// versionNumber is the build version without git describe's leading "v", so the
+// banner can read "version-0.13.0-…" instead of "version-v0.13.0-…".
+func versionNumber() string { return strings.TrimPrefix(version, "v") }
 
 // banner is the identity block printed beside the mark: version, an optional
 // one-liner, and the state. The mark already carries the product name, so the
@@ -79,26 +81,20 @@ type banner struct {
 	state   string
 }
 
-// printBanner prints the mark beside those three rows. Without colour there is
-// no mark to carry the name, so the first row leads with it instead.
+// printBanner prints the mark inline with the version, then the tagline and the
+// state on their own lines. Without colour there is no mark to carry the name,
+// so the first line leads with it instead.
 func printBanner(b banner) {
-	rows := [3]string{b.version, b.tagline, b.state}
-	badge := logoBadge()
-	for i, line := range rows {
-		if badge[i] == "" {
-			if i == 0 {
-				line = bold("niq") + "  " + line
-			}
-			if line != "" {
-				fmt.Printf("  %s\n", line)
-			}
-			continue
-		}
-		if line == "" {
-			fmt.Printf("  %s\n", badge[i])
-			continue
-		}
-		fmt.Printf("  %s  %s\n", badge[i], line)
+	if chip := logoChip(); chip != "" {
+		fmt.Printf("  %s %s\n", chip, b.version)
+	} else {
+		fmt.Printf("  %s  %s\n", bold("niq"), b.version)
+	}
+	if b.tagline != "" {
+		fmt.Printf("  %s\n", b.tagline)
+	}
+	if b.state != "" {
+		fmt.Printf("\n  %s\n", b.state)
 	}
 }
 
@@ -162,5 +158,5 @@ func portCell(n int) string {
 // versionTag is the one place the CLI prints its identity: `niq status`, the
 // start banner, the picker and --help all lead with it.
 func versionTag() string {
-	return bold("niq") + " " + brand(version)
+	return bold("niq") + "  " + dim("version-") + brand(versionNumber())
 }
