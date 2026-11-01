@@ -70,6 +70,9 @@ _niq() {
 	stop)
 		COMPREPLY=( $(compgen -W "--all" -- "$cur") )
 		;;
+	restart)
+		COMPREPLY=( $(compgen -W "-p --projects" -- "$cur") )
+		;;
 	completion|complete)
 		COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") )
 		;;
@@ -140,6 +143,9 @@ _niq() {
 	stop)
 		_values 'option' '--all[also stop the project instances]'
 		;;
+	restart)
+		_values 'option' '-p[also restart the running projects]' '--projects[also restart the running projects]'
+		;;
 	completion|complete)
 		_values 'shell' bash zsh fish
 		;;
@@ -177,6 +183,7 @@ complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcomm
 
 complete -c niq -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 complete -c niq -n '__fish_seen_subcommand_from stop' -l all -d 'also stop the project instances'
+complete -c niq -n '__fish_seen_subcommand_from restart' -l projects -s p -d 'also restart the running projects'
 complete -c niq -l addr -d 'listen address'
 complete -c niq -l auth -d 'basic auth user:pass'
 complete -c niq -l foreground -s f -d 'run attached to this terminal'

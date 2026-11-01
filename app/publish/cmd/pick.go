@@ -335,7 +335,7 @@ func startProjectInstance(p project.Project) (string, error) {
 		return fmt.Sprintf("%s is %s %s", bold(p.ID), green("already running"),
 			brand(fmt.Sprintf("http://localhost:%d", p.Ports.WebUI))), nil
 	}
-	return startProjectDetached(p)
+	return startProjectDetached(p, "started")
 }
 
 // restartProjectInstance stops the instance through its port and starts a new
@@ -346,12 +346,13 @@ func restartProjectInstance(p project.Project) (string, error) {
 			return "", err
 		}
 	}
-	return startProjectDetached(p)
+	return startProjectDetached(p, "restarted")
 }
 
-// startProjectDetached starts an instance of its own, for when there is no
-// control plane to ask.
-func startProjectDetached(p project.Project) (string, error) {
+// startProjectDetached starts an instance of its own (the control plane picks
+// it up on its next probe) and waits for its WebUI to answer. verb is what the
+// resulting line calls it — "started" or "restarted".
+func startProjectDetached(p project.Project, verb string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("resolve executable: %w", err)
@@ -368,7 +369,7 @@ func startProjectDetached(p project.Project) (string, error) {
 	for {
 		if cur, err := project.LoadProject(p.ID); err == nil && cur.Ports.WebUI != 0 &&
 			isServing(fmt.Sprintf("127.0.0.1:%d", cur.Ports.WebUI)) {
-			return fmt.Sprintf("%s %s %s", bold(p.ID), green("started"),
+			return fmt.Sprintf("%s %s %s", bold(p.ID), green(verb),
 				brand(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI))), nil
 		}
 		if time.Now().After(deadline) {

@@ -100,7 +100,7 @@ just the ids.
 | `niq -f`, `niq --foreground` | run the control plane in this terminal |
 | `niq status` | the control plane and every project instance |
 | `niq stop [--all]` | stop the control plane (`--all` also stops the project instances) |
-| `niq restart` | restart it on the address it was started with |
+| `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
 | `niq project` | pick a project: start, stop or restart it |
 | `niq project create` / `niq project run` | create a project / run one in this terminal |
 | `niq completion <shell>` | completion for bash, zsh or fish |
