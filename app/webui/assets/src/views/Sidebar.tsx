@@ -623,9 +623,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   }
   // Hidden in the views that hide the selector, so no stray handle is left.
   const selectorShown = view !== 'workers' && view !== 'programs' && view !== 'mcp'
-  // Visible grip on that divider: a small pill of three dots sitting on the
-  // line, so the drag target reads as one. It lights up on hover and while
-  // dragging; otherwise it stays the divider's own colour.
+  // Visible grip on that divider, drawn exactly like the sidebar's width grip
+  // (a 5px rounded pill riding the divider line, dimmed until hovered) so the
+  // two handles read as the same affordance in different directions.
   const selectorHandleActive = selectorResizing || selectorHandleHover
   const selectorDivider = selectorShown ? (
     <div
@@ -642,26 +642,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
+      <span style={{ position: 'absolute', left: 0, right: 0, top: '50%', borderTop: '1px solid ' + colors.border }} />
       <span style={{
-        position: 'absolute', left: 0, right: 0, top: '50%',
-        borderTop: '1px solid ' + (selectorHandleActive ? colors.accent : colors.border),
-        transition: 'border-color 0.12s',
+        position: 'relative', width: 30, height: 5, borderRadius: 3,
+        background: selectorHandleActive ? colors.textDim : colors.textDimmed,
+        transition: 'background 0.15s',
       }} />
-      <span style={{
-        position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 3,
-        width: 34, height: 12, borderRadius: 6,
-        background: colors.bg,
-        border: '1px solid ' + (selectorHandleActive ? colors.accent : colors.border),
-        transition: 'border-color 0.12s',
-      }}>
-        {[0, 1, 2].map((i) => (
-          <span key={i} style={{
-            width: 3, height: 3, borderRadius: 2,
-            background: selectorHandleActive ? colors.accent : colors.textDimmed,
-            transition: 'background 0.12s',
-          }} />
-        ))}
-      </span>
     </div>
   ) : null
   // Inter-row gap for the options list. Kept at 0 so the rows sit flush: with
