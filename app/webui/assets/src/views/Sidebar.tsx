@@ -985,18 +985,25 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 ...(projMenuOpen ? { background: colors.bgLight } : {}),
               }}
             >
-              {showProjectName ? (
-                <span style={{
-                  flexShrink: 0, display: 'inline-block', whiteSpace: 'nowrap',
-                  fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace",
-                  fontSize: fontSizes.lg, fontWeight: 'bold', lineHeight: 1,
-                  color: colors.accent,
-                }}>
-                  <LogoWordmark />
-                </span>
-              ) : (
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
-              )}
+              {/* One box for both states: the wordmark is larger type than the
+                  name, and a bigger inline-block grows the line box it sits in,
+                  so switching the logo used to change the height of the whole
+                  footer row. A fixed-height flex row keeps the trigger the same
+                  size whichever of the two is showing. */}
+              <span style={{ display: 'flex', alignItems: 'center', height: 20, minWidth: 0 }}>
+                {showProjectName ? (
+                  <span style={{
+                    flexShrink: 0, whiteSpace: 'nowrap',
+                    fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace",
+                    fontSize: fontSizes.lg, fontWeight: 'bold', lineHeight: 1,
+                    color: colors.accent,
+                  }}>
+                    <LogoWordmark />
+                  </span>
+                ) : (
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
+                )}
+              </span>
             </div>
             {/* Lifecycle menu, opening upward from the footer. Mirrors the
                 projects page rows: running → restart/stop, stopped → start,
