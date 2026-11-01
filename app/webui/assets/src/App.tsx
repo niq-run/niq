@@ -218,7 +218,12 @@ export default function App() {
     url.searchParams.delete('start')
     window.history.replaceState({}, '', url.pathname + url.search + url.hash)
   }, [])
-  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(null)
+  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(() => {
+    // ?panel=<tab> is how a project page hands a management tab over to the
+    // control plane (see selectPanel): the tab belongs to "/", not to /p/<id>/.
+    const q = new URLSearchParams(window.location.search).get('panel')
+    return q === 'templates' || q === 'providers' ? q : null
+  })
   const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
   // Input mode is remembered per reason worker (the @ target the message is
@@ -360,6 +365,19 @@ export default function App() {
   // at /p/<id>/ — so project management APIs live at the root (CONTROL) while a
   // project's own APIs carry the /p/<id> base (see services/api.ts).
   const mode = context.mode
+
+  // selectPanel opens a management tab. Those tabs read the control plane, not
+  // the attached project, so from inside a project page they move the browser to
+  // "/" instead of rendering in place: the URL stays honest about which project
+  // you are in (leaving it also drops that project's event stream, so a stopped
+  // project no longer reports a broken stream on a page that is not its own).
+  const selectPanel = (next: 'projects' | 'templates' | 'providers') => {
+    if (mode === 'project') {
+      window.location.href = next === 'projects' ? '/' : '/?panel=' + next
+      return
+    }
+    setPanel(next)
+  }
   const projectBase = getApiBase()
   const projectName = context.project
 
@@ -1351,7 +1369,7 @@ export default function App() {
         onProjectStop={stopCurrentProject}
         onProjectRestart={restartCurrentProject}
         panel={panel}
-        onSelectPanel={setPanel}
+        onSelectPanel={selectPanel}
         archived={archived}
         pendingApprovals={pendingApprovalCount}
         notifyPermission={notifyPermission}
