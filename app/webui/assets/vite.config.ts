@@ -3,6 +3,15 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  // Relative asset URLs. The same index.html is served from two places — the
+  // control plane at "/" and each project's WebUI at "/p/<id>/" — so a
+  // hard-coded /assets/… resolves against the control origin even on a project
+  // page. That ties every running project's HTML to the control binary's
+  // current bundle name: upgrade control (or a project) and any older page
+  // requests a hashed file nobody serves any more, which the browser refuses
+  // as a text/plain module. "./assets/…" keeps each page loading the bundle
+  // shipped by the process that served it.
+  base: './',
   server: {
     port: 5173,
     proxy: {

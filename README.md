@@ -151,9 +151,10 @@ tunnel through SSH/WireGuard) before exposing niq to the open internet — niq
 itself speaks plain HTTP.
 
 After upgrading the binary, `niq restart` the control plane and restart the
-running projects: their page and static assets are served by the control plane,
-and an old project process may reference asset files the new binary no longer
-contains.
+running projects: every process serves the page and assets it was built with
+(asset URLs are relative, so a project page loads its own bundle through
+`/p/<id>/`), which means an older project keeps rendering the older UI until it
+is restarted.
 
 ### Model provider
 
