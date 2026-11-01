@@ -2,7 +2,8 @@
 //
 // Usage:
 //
-//	niq                     — start the control plane in the background (default :9527)
+//	niq                     — start the control plane in the background (default :9527),
+//	                          or show its status when it is already running
 //	niq control [-f]        — start it in the foreground instead
 //	niq status              — report whether it is running and where
 //	niq stop [--all]        — stop the background control plane (-all: + projects)
@@ -58,12 +59,23 @@ func main() {
 	case len(os.Args) > 1:
 		err = runControl(os.Args[1:])
 	default:
-		err = runControl(nil)
+		err = runDefault()
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runDefault makes a bare `niq` idempotent: it starts the control plane when
+// nothing is running, and reports on it (exactly what `niq status` prints) when
+// it is. Repeating the command is therefore how you check on the service, and
+// no flags means "the default address", never "a second instance".
+func runDefault() error {
+	if st, ok := readControlState(); ok && isRunning(st) {
+		return statusControl()
+	}
+	return startBackground(defaultAddr, "")
 }
 
 func runControl(args []string) error {
@@ -74,7 +86,7 @@ func runControl(args []string) error {
 		args = args[1:]
 	}
 	fs := flag.NewFlagSet("niq", flag.ContinueOnError)
-	addr := fs.String("addr", ":9527", "Control-plane listen address")
+	addr := fs.String("addr", defaultAddr, "Control-plane listen address")
 	auth := fs.String("auth", "", "Basic auth 'user:pass' for non-localhost access; persists to ~/.niq/common/auth.json (empty = read that file)")
 	foreground := fs.Bool("foreground", false, "Run attached to this terminal instead of in the background")
 	fs.BoolVar(foreground, "f", false, "Shorthand for --foreground")
@@ -202,10 +214,13 @@ func printUsage() {
 Usage:
   niq                       start the control plane (default :9527) in the
                             background, print its WebUI address, and return to
-                            the prompt; its WebUI also serves every project at
-                            /p/<id>/. Closing the terminal does not stop it.
+                            the prompt; if it is already running, show the same
+                            report as 'niq status'. Its WebUI also serves every
+                            project at /p/<id>/. Closing the terminal does not
+                            stop it.
   niq control --foreground  (or -f) run it attached to this terminal instead
   niq status                show the control plane and each project's run state
+                            (bare 'niq' does this once the plane is up)
   niq stop                  stop the background control plane; projects it
                             serves are separate processes and keep running
   niq stop --all            also stop every running project instance

@@ -51,7 +51,9 @@ niq
 
 `niq` starts the control plane detached from the terminal, prints where it is
 reachable, and returns to the prompt — closing the shell (or losing an SSH
-session) no longer stops it.
+session) no longer stops it. Running `niq` again reports on the service instead
+(it is exactly `niq status`), so one command covers both "start it" and "is it
+up?".
 
 ```
 niq control is running in the background (pid 4711)

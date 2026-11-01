@@ -34,6 +34,9 @@ type controlState struct {
 	Started string `json:"started"` // RFC3339
 }
 
+// defaultAddr is where the control plane listens unless --addr says otherwise.
+const defaultAddr = ":9527"
+
 func controlStatePath() string { return filepath.Join(niqhome.Root(), "control.json") }
 
 func controlLogPath() string { return filepath.Join(niqhome.Root(), "niq.log") }
@@ -329,7 +332,7 @@ func stopProjects() error {
 }
 
 func restartControl() error {
-	addr := ":9527"
+	addr := defaultAddr
 	if st, ok := readControlState(); ok {
 		addr = st.Addr // keep the port the user originally chose
 		if isRunning(st) {
