@@ -42,6 +42,7 @@ type menu struct {
 	title   string
 	options []string
 	cursor  int
+	drawn   bool // the block is on screen; only then is the cursor-up meaningful
 }
 
 // run returns the chosen index, or -1 when the user quits (q, Esc, Ctrl+C).
@@ -81,7 +82,10 @@ func (m *menu) run() (int, error) {
 // is why the title is split rather than printed as-is; ERASE_LINE (\x1b[2K)
 // wipes the previous, longer text before the new one is written.
 func (m *menu) draw(out io.Writer) {
-	fmt.Fprintf(out, "\x1b[%dA\r", m.height()) // back to the title line
+	if m.drawn {
+		fmt.Fprintf(out, "\x1b[%dA\r", m.height()) // back to the title line
+	}
+	m.drawn = true
 	for _, line := range strings.Split(m.title, "\n") {
 		fmt.Fprintf(out, "\x1b[2K%s\r\n", line)
 	}
@@ -150,31 +154,48 @@ func readKey(in *bufio.Reader) key {
 // instance, then an action. Without a terminal it degrades to the plain table,
 // so piping the command still means something.
 func runProjectPicker() error {
-	projects, err := project.ListProjects()
-	if err != nil {
-		return err
-	}
-	if len(projects) == 0 {
-		fmt.Println(dim("(no projects)"))
-		fmt.Printf("\n%s\n", dim("create one with `niq project create <id>`"))
-		return nil
-	}
+	// The list stays up after an action: acting on one project is rarely the
+	// whole errand, and quitting to run the command again just to stop a second
+	// one is noise. Each round reloads the list so the states are current, and
+	// the cursor stays on the project that was just acted on.
+	selected := 0
+	first := true
+	for {
+		projects, err := project.ListProjects()
+		if err != nil {
+			return err
+		}
+		if len(projects) == 0 {
+			fmt.Println(dim("(no projects)"))
+			fmt.Printf("\n%s\n", dim("create one with `niq project create <id>`"))
+			return nil
+		}
+		if selected >= len(projects) {
+			selected = len(projects) - 1
+		}
+		if !first {
+			fmt.Println()
+		}
 
-	chosen, err := (&menu{
-		title:   pickerTitle(),
-		options: projectRows(projects, projectDirCell),
-	}).run()
-	if errors.Is(err, errNotTerminal) {
-		printProjectTable(projects, projectDirCell)
-		return nil
+		m := &menu{title: pickerTitle(), options: projectRows(projects, projectDirCell), cursor: selected}
+		chosen, err := m.run()
+		if errors.Is(err, errNotTerminal) {
+			// Nothing to interact with: the table is the whole answer.
+			printProjectTable(projects, projectDirCell)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if chosen < 0 {
+			return nil
+		}
+		selected, first = chosen, false
+
+		if err := actOnProject(projects[chosen]); err != nil {
+			fmt.Printf("  %s\n", red(err.Error()))
+		}
 	}
-	if err != nil {
-		return err
-	}
-	if chosen < 0 {
-		return nil
-	}
-	return actOnProject(projects[chosen])
 }
 
 func pickerTitle() string {
@@ -253,7 +274,7 @@ func printProjectTable(projects []project.Project, trailing func(project.Project
 // hand, too.
 func stopProjectInstance(p project.Project) error {
 	if !projectRunning(p) {
-		fmt.Printf("%s is %s\n", bold(p.ID), dim("not running"))
+		fmt.Printf("  %s is %s\n", bold(p.ID), dim("not running"))
 		return nil
 	}
 	if project.InterruptPortHolders(p.Ports.WebUI) == 0 {
@@ -262,7 +283,7 @@ func stopProjectInstance(p project.Project) error {
 	if err := waitPortClosed(p.Ports.WebUI, 15*time.Second); err != nil {
 		return fmt.Errorf("%s: %w", p.ID, err)
 	}
-	fmt.Printf("%s %s\n", bold(p.ID), green("stopped"))
+	fmt.Printf("  %s %s\n", bold(p.ID), green("stopped"))
 	return nil
 }
 
@@ -272,7 +293,7 @@ func stopProjectInstance(p project.Project) error {
 // up on the next probe.
 func startProjectInstance(p project.Project) error {
 	if projectRunning(p) {
-		fmt.Printf("%s is %s %s\n", bold(p.ID), green("already running"),
+		fmt.Printf("  %s is %s %s\n", bold(p.ID), green("already running"),
 			brand(fmt.Sprintf("http://localhost:%d", p.Ports.WebUI)))
 		return nil
 	}
@@ -309,7 +330,7 @@ func startProjectDetached(p project.Project) error {
 	for {
 		if cur, err := project.LoadProject(p.ID); err == nil && cur.Ports.WebUI != 0 &&
 			isServing(fmt.Sprintf("127.0.0.1:%d", cur.Ports.WebUI)) {
-			fmt.Printf("%s %s %s\n", bold(p.ID), green("started"),
+			fmt.Printf("  %s %s %s\n", bold(p.ID), green("started"),
 				brand(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI)))
 			return nil
 		}

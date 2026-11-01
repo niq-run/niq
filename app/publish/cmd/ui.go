@@ -41,6 +41,7 @@ func paint(code, s string) string {
 func bold(s string) string  { return paint("1", s) }
 func dim(s string) string   { return paint("2", s) }
 func green(s string) string { return paint("32", s) }
+func red(s string) string   { return paint("31", s) }
 
 // brand is the product's theme colour, #3C78B4 — the square of the web UI logo.
 // Anything that is "niq" rather than a state uses it.
