@@ -2,7 +2,11 @@
 //
 // Usage:
 //
-//	niq                     — start the control plane (default :9527)
+//	niq                     — start the control plane in the background (default :9527)
+//	niq control [-f]        — start it in the foreground instead
+//	niq status              — report whether it is running and where
+//	niq stop                — stop the background control plane
+//	niq restart             — stop and start it again
 //	niq project list        — list projects and their ports
 //	niq project create <id> — create a project from a template
 //	niq project run <id>    — run a project instance in this process
@@ -17,8 +21,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/niq-run/niq/app/control"
-	"github.com/niq-run/niq/app/niqhome"
 	"github.com/niq-run/niq/app/project"
 )
 
@@ -40,32 +42,51 @@ func main() {
 		}
 	}
 
-	// Detect subcommand: "niq project ..."
-	if len(os.Args) > 1 && os.Args[1] == "project" {
-		if err := runProject(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		return
+	// Dispatch subcommands. Everything else (bare "niq", flags, the explicit
+	// "control" word) is a control-plane start.
+	var err error
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "project":
+		err = runProject(os.Args[2:])
+	case len(os.Args) > 1 && os.Args[1] == "stop":
+		err = stopControl()
+	case len(os.Args) > 1 && os.Args[1] == "restart":
+		err = restartControl()
+	case len(os.Args) > 1 && os.Args[1] == "status":
+		err = statusControl()
+	case len(os.Args) > 1:
+		err = runControl(os.Args[1:])
+	default:
+		err = runControl(nil)
 	}
-
-	// "niq control ..." — explicit control-plane start; bare "niq" is the
-	// shorthand for the same thing.
-	if err := runControl(os.Args[1:]); err != nil {
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func runControl(args []string) error {
+	// Accept the explicit "control" / "start" word, which for historical
+	// reasons can precede the flags; flag.Parse would otherwise stop there and
+	// silently ignore --addr/--auth.
+	if len(args) > 0 && (args[0] == "control" || args[0] == "start") {
+		args = args[1:]
+	}
 	fs := flag.NewFlagSet("niq", flag.ContinueOnError)
 	addr := fs.String("addr", ":9527", "Control-plane listen address")
 	auth := fs.String("auth", "", "Basic auth 'user:pass' for non-localhost access; persists to ~/.niq/common/auth.json (empty = read that file)")
+	foreground := fs.Bool("foreground", false, "Run attached to this terminal instead of in the background")
+	fs.BoolVar(foreground, "f", false, "Shorthand for --foreground")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	setupLogging()
-	return control.RunControl(control.ControlOptions{Addr: *addr, Auth: *auth})
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unknown command %q (try: niq --help)", fs.Arg(0))
+	}
+	if *foreground {
+		return runControlForeground(*addr, *auth)
+	}
+	return startBackground(*addr, *auth)
 }
 
 func runProject(args []string) error {
@@ -129,9 +150,9 @@ func runProject(args []string) error {
 
 // setupLogging sends control-plane logs to <niq root>/niq.log.
 func setupLogging() {
-	logDir := niqhome.Root()
-	os.MkdirAll(logDir, 0755)
-	f, err := os.OpenFile(filepath.Join(logDir, "niq.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	path := controlLogPath()
+	os.MkdirAll(filepath.Dir(path), 0755)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err == nil {
 		log.SetOutput(f)
 	} else {
@@ -160,11 +181,16 @@ func printUsage() {
 	fmt.Print(`niq - neural interface quantum
 
 Usage:
-  niq                       start the control plane (default :9527); its WebUI
-                            also serves every project at /p/<id>/
-  niq control --addr :9527  start the control plane explicitly
-  niq control --addr :9527 --auth user:pass
-                            start the control plane, locking non-localhost
+  niq                       start the control plane (default :9527) in the
+                            background, print its WebUI address, and return to
+                            the prompt; its WebUI also serves every project at
+                            /p/<id>/. Closing the terminal does not stop it.
+  niq control --foreground  (or -f) run it attached to this terminal instead
+  niq status                show whether it is running, and where
+  niq stop                  stop the background control plane
+  niq restart               restart it on the address it was started with
+  niq --addr :9527 --auth user:pass
+                            start on another address, locking non-localhost
                             access behind basic auth (saved to
                             ~/.niq/common/auth.json, reused on later runs)
   niq project list          list projects and their ports

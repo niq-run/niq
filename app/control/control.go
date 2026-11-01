@@ -30,6 +30,11 @@ import (
 type ControlOptions struct {
 	Addr string // default ":9527"
 	Auth string // optional user:pass basic-auth spec (non-localhost access; empty disables)
+	// OnReady, when set, runs once the listen socket is bound and before
+	// serving starts. It receives the resolved address (e.g. "[::]:9527") so a
+	// launcher can record where the daemon actually landed instead of guessing
+	// the port from the requested address.
+	OnReady func(resolved string)
 }
 
 // RunControl runs the control-plane service until ctx is cancelled (e.g. Ctrl+C).
@@ -46,7 +51,17 @@ func RunControl(opts ControlOptions) error {
 		c.SetBasicAuth(user, pass)
 		log.Printf("[control] WebUI remote access protected with basic auth (localhost stays open)")
 	} else if warning != "" {
+		// Also into the service log: a background start has no stderr to show.
+		log.Printf("[control] %s", warning)
 		fmt.Fprintln(os.Stderr, warning)
+	}
+	// Bind here rather than inside Start so OnReady can report the resolved
+	// address; Start reuses the already-bound listener.
+	if _, err := c.Bind(); err != nil {
+		return err
+	}
+	if opts.OnReady != nil {
+		opts.OnReady(c.ResolvedAddr())
 	}
 	return c.Start(ctx)
 }

@@ -45,8 +45,31 @@ worker injects: no `process`, `require`, `fetch`, or dynamic `import()`.
 niq has two layers: a **control plane**, and **projects** — each project is an isolated agent instance with its own event bus, worker set and WebUI on its own ports.
 
 ```sh
-# start the control plane (default :9527)
+# start the control plane (default :9527) in the background
 niq
+```
+
+`niq` starts the control plane detached from the terminal, prints where it is
+reachable, and returns to the prompt — closing the shell (or losing an SSH
+session) no longer stops it.
+
+```
+niq control is running in the background (pid 4711)
+
+  WebUI    http://localhost:9527
+  Log      ~/.niq/niq.log
+  Stop     niq stop
+  Restart  niq restart
+```
+
+`niq status` reports the process, address and log; `niq stop` shuts it down;
+`niq restart` brings it back on the same address. Put the flags anywhere a
+start goes (`niq --addr :8080 --auth alice:s3cret`, `niq restart` reuses the
+recorded address). To keep it attached to the terminal — systemd, a container,
+`docker run`, or just to watch it — pass `--foreground` (or `-f`):
+
+```sh
+niq control --foreground
 ```
 
 Open **http://localhost:9527** — the control plane's WebUI lists your projects and can create and start one from a template, no terminal needed.
@@ -88,9 +111,10 @@ Basic auth sends the credentials on every request, so terminate TLS in front (or
 tunnel through SSH/WireGuard) before exposing niq to the open internet — niq
 itself speaks plain HTTP.
 
-After upgrading the binary, restart the running projects: their page and static
-assets are served by the control plane, and an old project process may reference
-asset files the new binary no longer contains.
+After upgrading the binary, `niq restart` the control plane (`niq status` warns
+when the running process is an older version) and restart the running projects:
+their page and static assets are served by the control plane, and an old project
+process may reference asset files the new binary no longer contains.
 
 ### Model provider
 
