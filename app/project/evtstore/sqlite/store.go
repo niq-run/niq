@@ -90,9 +90,6 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(query); err != nil {
 		return err
 	}
-	if err := s.backfillRecipients(); err != nil {
-		return err
-	}
 	// Older databases predate the request_id column: add it so request →
 	// response pairing survives restart (the webui correlates a tool call with
 	// its request.* result by request_id).
@@ -132,61 +129,6 @@ func (s *Store) migrate() error {
 	// by the ALTER above, and indexing it before that fails.
 	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_events_request_id ON events(request_id)`)
 	return err
-}
-
-// backfillRecipients copies the recipients JSON of every existing event into
-// the normalized event_recipients table. Runs on every open; INSERT OR IGNORE
-// makes it idempotent, so after the first run it only costs one scan.
-func (s *Store) backfillRecipients() error {
-	rows, err := s.db.Query(`SELECT rowid, recipients FROM events WHERE recipients IS NOT NULL AND recipients != ''`)
-	if err != nil {
-		return err
-	}
-	type pair struct {
-		rowid int64
-		wid   string
-	}
-	var pairs []pair
-	for rows.Next() {
-		var rowid int64
-		var raw string
-		if err := rows.Scan(&rowid, &raw); err != nil {
-			rows.Close()
-			return err
-		}
-		var ids []string
-		if json.Unmarshal([]byte(raw), &ids) != nil {
-			continue // not a JSON array — nothing to normalize
-		}
-		for _, id := range ids {
-			if id != "" {
-				pairs = append(pairs, pair{rowid, id})
-			}
-		}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(pairs) == 0 {
-		return nil
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO event_recipients (event_rowid, worker_id) VALUES (?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, p := range pairs {
-		if _, err := stmt.Exec(p.rowid, p.wid); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }
 
 // Append implements [store.AppendStore].
