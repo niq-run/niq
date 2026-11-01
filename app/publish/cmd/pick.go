@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -42,7 +43,13 @@ type menu struct {
 	title   string
 	options []string
 	cursor  int
-	drawn   bool // the block is on screen; only then is the cursor-up meaningful
+	// status is the one line under the options. It is replaced in place, never
+	// appended, so a picker that stays up cannot scroll its own output away.
+	status string
+	// keep leaves the block on screen when a choice is made: the project list
+	// stays up while the action it opens is chosen.
+	keep  bool
+	drawn bool // the block is on screen; only then is the cursor-up meaningful
 }
 
 // run returns the chosen index, or -1 when the user quits (q, Esc, Ctrl+C).
@@ -68,7 +75,9 @@ func (m *menu) run() (int, error) {
 			m.cursor = (m.cursor + 1) % len(m.options)
 			m.draw(os.Stdout)
 		case keyEnter:
-			m.erase(os.Stdout)
+			if !m.keep {
+				m.erase(os.Stdout)
+			}
 			return m.cursor, nil
 		case keyQuit:
 			m.erase(os.Stdout)
@@ -96,6 +105,7 @@ func (m *menu) draw(out io.Writer) {
 		}
 		fmt.Fprintf(out, "\x1b[2K%s%s\r\n", marker, opt)
 	}
+	fmt.Fprintf(out, "\x1b[2K%s\r\n", m.status)
 }
 
 // erase removes the block, leaving the cursor where the title started, so the
@@ -104,10 +114,12 @@ func (m *menu) erase(out io.Writer) {
 	fmt.Fprintf(out, "\x1b[%dA\r\x1b[J", m.height())
 }
 
-// height is how many terminal lines the block occupies. The title may be more
-// than one line (version + hint), so both draw and the cursor-up in erase count
-// title lines — otherwise every redraw leaves the top lines behind.
-func (m *menu) height() int { return len(m.options) + 1 + strings.Count(m.title, "\n") }
+// height is how many terminal lines the block occupies: the title (which may be
+// several lines), the options, and the status line under them. draw and the
+// cursor-up in erase share it, so a redraw lands exactly on the first line.
+func (m *menu) height() int {
+	return len(m.options) + 1 + strings.Count(m.title, "\n") + 1
+}
 
 // readKey maps one keypress (or one arrow-key escape sequence) to a key.
 func readKey(in *bufio.Reader) key {
@@ -155,11 +167,16 @@ func readKey(in *bufio.Reader) key {
 // so piping the command still means something.
 func runProjectPicker() error {
 	// The list stays up after an action: acting on one project is rarely the
-	// whole errand, and quitting to run the command again just to stop a second
-	// one is noise. Each round reloads the list so the states are current, and
-	// the cursor stays on the project that was just acted on.
-	selected := 0
-	first := true
+	// whole errand. The block is redrawn in place each round — states reloaded,
+	// cursor kept on the project just acted on — and the result of the last
+	// action sits on the status line at the bottom, replaced rather than
+	// appended, so the screen never scrolls away from the list.
+	// The project package logs to the default logger (port reclaim, signals);
+	// inside the picker those lines would land on top of the menu, so they are
+	// dropped — the status line is the report.
+	log.SetOutput(io.Discard)
+
+	list := &menu{title: pickerTitle(), keep: true}
 	for {
 		projects, err := project.ListProjects()
 		if err != nil {
@@ -170,15 +187,11 @@ func runProjectPicker() error {
 			fmt.Printf("\n%s\n", dim("create one with `niq project create <id>`"))
 			return nil
 		}
-		if selected >= len(projects) {
-			selected = len(projects) - 1
+		if list.cursor >= len(projects) {
+			list.cursor = len(projects) - 1
 		}
-		if !first {
-			fmt.Println()
-		}
-
-		m := &menu{title: pickerTitle(), options: projectRows(projects, projectDirCell), cursor: selected}
-		chosen, err := m.run()
+		list.options = projectRows(projects, projectDirCell)
+		chosen, err := list.run()
 		if errors.Is(err, errNotTerminal) {
 			// Nothing to interact with: the table is the whole answer.
 			printProjectTable(projects, projectDirCell)
@@ -190,10 +203,24 @@ func runProjectPicker() error {
 		if chosen < 0 {
 			return nil
 		}
-		selected, first = chosen, false
 
-		if err := actOnProject(projects[chosen]); err != nil {
-			fmt.Printf("  %s\n", red(err.Error()))
+		// The action menu replaces the list for the moment it is open, then the
+		// list comes back with the new state and status.
+		p := projects[chosen]
+		list.erase(os.Stdout)
+		list.drawn = false
+
+		action, err := pickAction(p)
+		if err != nil {
+			return err
+		}
+		if action == "" {
+			continue
+		}
+		if line, err := runAction(p, action); err != nil {
+			list.status = "  " + red(err.Error())
+		} else {
+			list.status = line
 		}
 	}
 }
@@ -202,25 +229,31 @@ func pickerTitle() string {
 	return versionTag() + "\n" + dim("↑/↓ move · enter select · q quit")
 }
 
-// actOnProject asks what to do with one instance. The choice follows its state:
-// a stopped project can be started, a running one stopped or restarted.
-func actOnProject(p project.Project) error {
+// pickAction asks what to do with one instance. The choice follows its state: a
+// stopped project can be started, a running one stopped or restarted. An empty
+// action means the user cancelled.
+func pickAction(p project.Project) (string, error) {
 	running := projectRunning(p)
 	options := []string{"Restart", "Stop"}
+	actions := []string{"restart", "stop"}
 	if !running {
-		options = []string{"Start"}
+		options, actions = []string{"Start"}, []string{"start"}
 	}
 	title := versionTag() + "\n" +
 		fmt.Sprintf("%s %s %s", stateDot(running), bold(p.ID), stateWord(running))
 	chosen, err := (&menu{title: title, options: options}).run()
 	if err != nil || chosen < 0 {
-		return err
+		return "", err
 	}
+	return actions[chosen], nil
+}
 
-	switch options[chosen] {
-	case "Start":
+// runAction performs one action and returns the line the picker shows for it.
+func runAction(p project.Project, action string) (string, error) {
+	switch action {
+	case "start":
 		return startProjectInstance(p)
-	case "Stop":
+	case "stop":
 		return stopProjectInstance(p)
 	default:
 		return restartProjectInstance(p)
@@ -272,40 +305,37 @@ func printProjectTable(projects []project.Project, trailing func(project.Project
 // out) and waits for the port to be released. Working through the port rather
 // than the control plane's child table keeps it valid for instances started by
 // hand, too.
-func stopProjectInstance(p project.Project) error {
+func stopProjectInstance(p project.Project) (string, error) {
 	if !projectRunning(p) {
-		fmt.Printf("  %s is %s\n", bold(p.ID), dim("not running"))
-		return nil
+		return fmt.Sprintf("  %s is %s", bold(p.ID), dim("not running")), nil
 	}
 	if project.InterruptPortHolders(p.Ports.WebUI) == 0 {
-		return fmt.Errorf("%s: nothing is listening on port %d", p.ID, p.Ports.WebUI)
+		return "", fmt.Errorf("%s: nothing is listening on port %d", p.ID, p.Ports.WebUI)
 	}
 	if err := waitPortClosed(p.Ports.WebUI, 15*time.Second); err != nil {
-		return fmt.Errorf("%s: %w", p.ID, err)
+		return "", fmt.Errorf("%s: %w", p.ID, err)
 	}
-	fmt.Printf("  %s %s\n", bold(p.ID), green("stopped"))
-	return nil
+	return fmt.Sprintf("  %s %s", bold(p.ID), green("stopped")), nil
 }
 
 // startProjectInstance brings a stopped project up. It does not go through the
 // control plane: an instance is identified by its ports, so starting one is the
 // same operation whether the plane is running or not — and the plane picks it
 // up on the next probe.
-func startProjectInstance(p project.Project) error {
+func startProjectInstance(p project.Project) (string, error) {
 	if projectRunning(p) {
-		fmt.Printf("  %s is %s %s\n", bold(p.ID), green("already running"),
-			brand(fmt.Sprintf("http://localhost:%d", p.Ports.WebUI)))
-		return nil
+		return fmt.Sprintf("  %s is %s %s", bold(p.ID), green("already running"),
+			brand(fmt.Sprintf("http://localhost:%d", p.Ports.WebUI))), nil
 	}
 	return startProjectDetached(p)
 }
 
 // restartProjectInstance stops the instance through its port and starts a new
 // one on the same addresses — exactly what the WebUI's restart does.
-func restartProjectInstance(p project.Project) error {
+func restartProjectInstance(p project.Project) (string, error) {
 	if projectRunning(p) {
-		if err := stopProjectInstance(p); err != nil {
-			return err
+		if _, err := stopProjectInstance(p); err != nil {
+			return "", err
 		}
 	}
 	return startProjectDetached(p)
@@ -313,15 +343,15 @@ func restartProjectInstance(p project.Project) error {
 
 // startProjectDetached starts an instance of its own, for when there is no
 // control plane to ask.
-func startProjectDetached(p project.Project) error {
+func startProjectDetached(p project.Project) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("resolve executable: %w", err)
+		return "", fmt.Errorf("resolve executable: %w", err)
 	}
 	cmd := exec.Command(exe, "project", "run", p.ID)
 	cmd.SysProcAttr = detachedProcAttr()
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start %s: %w", p.ID, err)
+		return "", fmt.Errorf("start %s: %w", p.ID, err)
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
@@ -330,16 +360,15 @@ func startProjectDetached(p project.Project) error {
 	for {
 		if cur, err := project.LoadProject(p.ID); err == nil && cur.Ports.WebUI != 0 &&
 			isServing(fmt.Sprintf("127.0.0.1:%d", cur.Ports.WebUI)) {
-			fmt.Printf("  %s %s %s\n", bold(p.ID), green("started"),
-				brand(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI)))
-			return nil
+			return fmt.Sprintf("  %s %s %s", bold(p.ID), green("started"),
+				brand(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI))), nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not start within 20s; see %s", p.ID, shortPath(project.LogPath(p.ID)))
+			return "", fmt.Errorf("%s did not start within 20s; see %s", p.ID, shortPath(project.LogPath(p.ID)))
 		}
 		select {
 		case err := <-exited:
-			return fmt.Errorf("%s exited during startup: %v; see %s", p.ID, err, shortPath(project.LogPath(p.ID)))
+			return "", fmt.Errorf("%s exited during startup: %v; see %s", p.ID, err, shortPath(project.LogPath(p.ID)))
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
