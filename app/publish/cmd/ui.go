@@ -55,6 +55,19 @@ func brand(s string) string {
 	return "\x1b[38;5;67m" + s + "\x1b[0m"
 }
 
+// brandBold is brand() in bold, for glyphs that have to carry the theme colour
+// and the weight at once (nesting paint() would end the bold at the inner
+// reset).
+func brandBold(s string) string {
+	if !ansi {
+		return s
+	}
+	if truecolor {
+		return "\x1b[1;38;2;60;120;180m" + s + "\x1b[0m"
+	}
+	return "\x1b[1;38;5;67m" + s + "\x1b[0m"
+}
+
 // logoChip is the niq mark on one line: the wordmark knocked out of the
 // product's blue, the same mark the web UI ships, sized to sit inline with the
 // version. Empty when colour is off — a banner made of spaces helps nobody.

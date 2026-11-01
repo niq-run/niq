@@ -101,7 +101,7 @@ func (m *menu) draw(out io.Writer) {
 	for i, opt := range m.options {
 		marker := "   "
 		if i == m.cursor {
-			marker = brand(" > ")
+			marker = brandBold(" > ")
 		}
 		fmt.Fprintf(out, "\x1b[2K%s%s\r\n", marker, opt)
 	}
@@ -227,7 +227,7 @@ func runProjectPicker() error {
 }
 
 func pickerTitle() string {
-	return versionTag() + "\n" + dim("↑/↓ move · enter select · q quit")
+	return versionTag() + "\n" + bold("↑/↓") + dim(" move · enter select · q quit")
 }
 
 // pickAction asks what to do with one instance. The choice follows its state: a
