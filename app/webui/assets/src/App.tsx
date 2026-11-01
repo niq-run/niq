@@ -504,8 +504,11 @@ export default function App() {
 	const talkExcludePrefix = ['worker.']
 
   useEffect(() => {
-    // No project → no event stream.
-    if (mode !== 'project') return
+    // No project → no event stream. This also has to wait for the project name:
+    // context starts out optimistically as "project" before /api/context
+    // answers, so guarding on the mode alone opened a stream on the control
+    // page, whose 404 then lit the "stream dropped" banner there for good.
+    if (mode !== 'project' || !projectName) return
     // The SSE is a project-level subscription; its filter follows the active
     // view. The events view scopes by its worker/trace filter; the talk view
     // scopes to the selected conversation worker(s) (worker_id OR target OR
@@ -739,9 +742,11 @@ export default function App() {
       if (es) es.close()
     }
     // Re-run whenever the filter changes (events view), or the selected talk
-    // conversation changes — both are captured in streamKey. `view` itself is
-    // intentionally not a dep; it is already encoded by streamKey.
-  }, [streamKey, mode, projectBase])
+    // conversation changes — both are captured in streamKey — and when the
+    // project name arrives (it is undefined until /api/context answers, and the
+    // stream must not open before then). `view` itself is intentionally not a
+    // dep; it is already encoded by streamKey.
+  }, [streamKey, mode, projectName, projectBase])
 
   // ── Polling (only meaningful when a project is attached). The URL carries the
   // project base so a project page reached through /p/<id>/ hits that project's
@@ -1401,7 +1406,7 @@ export default function App() {
             </span>
           </div>
         )}
-        {streamDropped && (
+        {mode === 'project' && streamDropped && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight, flexShrink: 0 }}>
             <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>●</span>
             <span style={{ flex: 1, color: colors.text, fontSize: fontSizes.sm }}>
