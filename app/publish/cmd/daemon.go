@@ -367,7 +367,6 @@ func printControlRunning(st *controlState) {
 		state: bold("control") + "  " + stateWord(true) +
 			dim(fmt.Sprintf("  pid %d · since %s", st.PID, shortTime(st.Started))),
 	})
-	fmt.Println()
 	fmt.Printf("  %s %s\n", label("webui", 8), brand(project.LocalhostURL(st.Bound)))
 	fmt.Printf("  %s %s\n", label("log", 8), shortPath(controlLogPath()))
 	fmt.Printf("  %s %s\n", label("stop", 8), "niq stop")
@@ -379,7 +378,6 @@ func printControlStopped() {
 		version: dim("version-") + brand(versionNumber()),
 		state:   bold("control") + "  " + stateWord(false),
 	})
-	fmt.Println()
 	fmt.Printf("  %s %s  %s\n", label("start", 8), "niq", dim("background"))
 	fmt.Printf("  %s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))
 }
