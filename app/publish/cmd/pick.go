@@ -242,7 +242,7 @@ func pickAction(p project.Project) (string, error) {
 		options, actions = []string{"Start"}, []string{"start"}
 	}
 	title := versionTag() + "\n" +
-		fmt.Sprintf("%s %s %s", stateDot(running), bracketed(p.ID), stateWord(running))
+		fmt.Sprintf("%s %s %s", stateDot(running), bold(p.ID), stateWord(running))
 	chosen, err := (&menu{title: title, options: options}).run()
 	if err != nil || chosen < 0 {
 		return "", err
@@ -267,12 +267,9 @@ func runAction(p project.Project, action string) (string, error) {
 // picker and listing.
 func projectRow(p project.Project, idWidth int, trailing string) string {
 	running := projectRunning(p)
-	// The bracket closes right after the name; the padding that keeps the
-	// columns aligned goes after it, so short ids do not read "[pin ]".
-	pad := strings.Repeat(" ", idWidth+2-len(p.ID)-2)
-	row := fmt.Sprintf("%s %s%s  %s  %s %-5s  %s %-5s  %s",
+	row := fmt.Sprintf("%s %s  %s  %s %-5s  %s %-5s  %s",
 		stateDot(running),
-		bracketed(p.ID), pad,
+		bold(fmt.Sprintf("%-*s", idWidth, p.ID)),
 		stateWord(running),
 		dim("webui"), portCell(p.Ports.WebUI),
 		dim("bus"), portCell(p.Ports.Bus),
@@ -300,7 +297,7 @@ func projectDirCell(p project.Project) string { return dim(shortPath(project.Pro
 // printProjectTable is the non-interactive view: `niq project` without a
 // terminal.
 func printProjectTable(projects []project.Project, trailing func(project.Project) string) {
-	fmt.Printf("  %s\n", dim("projects"))
+	fmt.Printf("  %s\n", bracketed("projects"))
 	for _, row := range projectRows(projects, trailing) {
 		fmt.Printf("  %s\n", row)
 	}
