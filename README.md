@@ -120,8 +120,9 @@ Output is colored when it goes to a terminal and plain otherwise (or with
 Each project serves its own WebUI on a loopback-only port, so it is never
 exposed by accident: open it through the control plane at
 **http://localhost:9527/p/&lt;id&gt;/**, which proxies to that project. That address
-works whether or not the instance is running — a stopped project answers with a
-start page instead of an error. Ports are
+works whether or not the instance is running — opening a stopped project's
+address lands on the projects list with a start prompt instead of an error
+page. Ports are
 assigned dynamically on first run and then persisted per project, so they stay
 stable across restarts (`--bus` / `--webui` override). `niq project list` shows
 each project's `webui` and `bus` ports.

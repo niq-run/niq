@@ -206,6 +206,18 @@ export default function App() {
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>('talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
+  // ?start=<id>: a stopped project's /p/<id>/ redirects here so the projects
+  // list can ask "start it?" with the SPA's own dialog. Stripped from the URL
+  // once read, so a reload does not ask again.
+  const [startTarget, setStartTarget] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get('start'),
+  )
+  useEffect(() => {
+    if (!window.location.search.includes('start=')) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('start')
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+  }, [])
   const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(null)
   const [archived, setArchived] = useState<Set<string>>(new Set())
   const [input, setInput] = useState('')
@@ -1422,7 +1434,7 @@ export default function App() {
           </div>
         )}
         {mode !== 'project' ? (
-          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => setPanel('providers')} />
+          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => setPanel('providers')} focusStart={startTarget} onFocusDone={() => setStartTarget(null)} />
         ) : panel === 'templates' ? (
           <TemplatesView isMobile={isMobile} />
         ) : panel === 'providers' ? (
