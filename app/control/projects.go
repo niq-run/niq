@@ -134,37 +134,62 @@ func (c *Control) isRunning(id string) bool {
 	return true
 }
 
-// handleRestartProject gracefully stops a running project (if one is tracked)
-// and relaunches it on its reused ports. It waits for the old process to exit
-// before spawning the new one so the two never contend for the persisted
-// ports; launchProject then blocks until the new WebUI port is actually
-// listening, so the response reflects a ready project.
+// handleRestartProject gracefully stops a running project and relaunches it on
+// its reused ports. It waits for the old process to release the port before
+// spawning the new one so the two never contend for the persisted ports;
+// launchProject then blocks until the new WebUI port is actually listening, so
+// the response reflects a ready project.
+//
+// "Stops" covers both kinds of instance: a child this control plane spawned,
+// and one it merely inherited — the plane was restarted while its projects kept
+// running, or the instance was started by hand. The second kind is found
+// through its WebUI port; without that, the relaunch saw it "already running"
+// and restart was a silent no-op.
 func (c *Control) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
-	if _, err := project.LoadProject(id); err != nil {
+	p, err := project.LoadProject(id)
+	if err != nil {
 		stdhttp.Error(w, "project not found", 404)
 		return
 	}
+
 	c.mu.Lock()
-	proc, ok := c.procs[id]
-	if ok && proc != nil {
+	proc := c.procs[id]
+	delete(c.procs, id)
+	c.mu.Unlock()
+
+	if proc != nil {
 		_ = proc.Signal(os.Interrupt) // graceful shutdown + snapshot
-		c.mu.Unlock()
 		exited := make(chan struct{})
 		go func() { _, _ = proc.Wait(); close(exited) }()
 		select {
 		case <-exited:
 		case <-time.After(8 * time.Second):
 		}
-		c.mu.Lock()
-		if cur, ok := c.procs[id]; ok && cur == proc {
-			delete(c.procs, id)
-		}
-		c.mu.Unlock()
 	} else {
-		c.mu.Unlock()
+		project.InterruptPortHolders(p.Ports.WebUI)
 	}
+	waitPortFree(p.Ports.WebUI)
 	c.launchProject(w, id)
+}
+
+// waitPortFree blocks until nothing listens on port (or the deadline lapses),
+// so the relaunch binds the persisted port instead of falling back to a random
+// one — the visible "port jumping".
+func waitPortFree(port int) {
+	if port == 0 {
+		return
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err != nil {
+			return
+		}
+		conn.Close()
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // handleStopProject terminates a running project. A project this control plane
