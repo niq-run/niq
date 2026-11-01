@@ -51,6 +51,10 @@ type menu struct {
 	// hint is a dim line under the options, for menus whose one option needs a
 	// word of explanation ("press enter to start").
 	hint string
+	// disabled marks options that are listed but cannot be chosen — Stop and
+	// Restart on a project that is not running. They stay visible so the menu
+	// always reads the same, and the cursor steps over them.
+	disabled []bool
 	// keep leaves the block on screen when a choice is made: the project list
 	// stays up while the action it opens is chosen.
 	keep bool
@@ -61,10 +65,17 @@ type menu struct {
 	drawn   bool // the block is on screen; only then is the cursor-up meaningful
 }
 
-// move steps the cursor (wrapping) and, for a self-labelling list, rebuilds the
-// rows so the brackets follow it.
+// move steps the cursor (wrapping, stepping over disabled options) and, for a
+// self-labelling list, rebuilds the rows so the brackets follow it.
 func (m *menu) move(delta int) {
-	m.cursor = (m.cursor + delta + len(m.options)) % len(m.options)
+	n := len(m.options)
+	for step := 1; step <= n; step++ {
+		next := ((m.cursor+delta*step)%n + n) % n
+		if next >= len(m.disabled) || !m.disabled[next] {
+			m.cursor = next
+			break
+		}
+	}
 	if m.refresh != nil {
 		m.options = m.refresh(m.cursor)
 	}
@@ -93,6 +104,9 @@ func (m *menu) run() (int, error) {
 			m.move(+1)
 			m.draw(os.Stdout)
 		case keyEnter:
+			if m.cursor < len(m.disabled) && m.disabled[m.cursor] {
+				continue // shown, not offered
+			}
 			if !m.keep {
 				m.erase(os.Stdout)
 			}
@@ -262,27 +276,27 @@ func pickerTitle() string {
 		dim(" move · enter select · q quit")
 }
 
-// pickAction asks what to do with one instance. The choice follows its state: a
-// stopped project can be started, a running one stopped or restarted. An empty
-// action means the user cancelled.
+// pickAction asks what to do with one instance. The three actions are always
+// listed in the same order; on a project that is not running, Stop and Restart
+// are dimmed and the cursor steps over them, so the menu reads the same
+// wherever you are. An empty action means the user cancelled.
 func pickAction(p project.Project) (string, error) {
 	running := projectRunning(p)
-	options := []string{"Restart", "Stop"}
-	actions := []string{"restart", "stop"}
-	if !running {
-		options, actions = []string{"Start"}, []string{"start"}
-	}
+	options := []string{"Start", "Stop", "Restart"}
+	actions := []string{"start", "stop", "restart"}
+	disabled := []bool{false, !running, !running}
+
 	// No identity line here: this menu replaces the list for a moment, and the
 	// project it is about is the whole heading. The trailing newline is the blank
 	// line that separates a heading from its options, as in the list.
 	title := fmt.Sprintf("%s %s\n", brandBold("["+p.ID+"]"), stateWord(running))
-	m := &menu{title: title}
-	if len(options) == 1 {
-		// Nothing to choose between, so say what the key does.
+	m := &menu{title: title, disabled: disabled}
+	if !running {
+		// Only start is on offer, so say what the key does.
 		m.hint = dim("press enter to start the project")
 	}
-	m.options = actionRows(options, m.cursor)
-	m.refresh = func(c int) []string { return actionRows(options, c) }
+	m.options = actionRows(options, disabled, m.cursor)
+	m.refresh = func(c int) []string { return actionRows(options, disabled, c) }
 	chosen, err := m.run()
 	if err != nil || chosen < 0 {
 		return "", err
@@ -292,15 +306,19 @@ func pickAction(p project.Project) (string, error) {
 
 // actionRows renders the actions the way the project list renders projects:
 // the cursor dot, then the bracketed name, with the one under the cursor in the
-// theme colour.
-func actionRows(options []string, cursor int) []string {
+// theme colour. A disabled row is dim throughout and carries a ring instead of
+// the filled dot, so it reads as listed-but-unavailable.
+func actionRows(options []string, disabled []bool, cursor int) []string {
 	rows := make([]string, len(options))
 	for i, opt := range options {
-		name := bold("[" + opt + "]")
-		if i == cursor {
-			name = brandBold("[" + opt + "]")
+		switch {
+		case i < len(disabled) && disabled[i]:
+			rows[i] = dim("○ ") + dim("["+opt+"]")
+		case i == cursor:
+			rows[i] = cursorDot(true) + brandBold("["+opt+"]")
+		default:
+			rows[i] = cursorDot(false) + bold("["+opt+"]")
 		}
-		rows[i] = cursorDot(i == cursor) + name
 	}
 	return rows
 }
