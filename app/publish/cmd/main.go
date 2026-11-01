@@ -186,7 +186,7 @@ Usage:
                             the prompt; its WebUI also serves every project at
                             /p/<id>/. Closing the terminal does not stop it.
   niq control --foreground  (or -f) run it attached to this terminal instead
-  niq status                show whether it is running, and where
+  niq status                show the control plane and each project's run state
   niq stop                  stop the background control plane
   niq restart               restart it on the address it was started with
   niq --addr :9527 --auth user:pass

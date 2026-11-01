@@ -257,14 +257,50 @@ func statusControl() error {
 		fmt.Println("niq control is not running")
 		fmt.Println()
 		fmt.Println("Start it with `niq` (background) or `niq control --foreground`.")
+		printProjectStatus("")
 		return nil
 	}
 	fmt.Printf("niq control is running (pid %d, since %s)\n\n", st.PID, st.Started)
 	printControlHints(st.Bound)
+	printProjectStatus(project.LocalhostURL(st.Bound))
 	if st.Version != version {
 		fmt.Printf("\nStarted by niq %s; this binary is %s — run `niq restart` to pick it up.\n", st.Version, version)
 	}
 	return nil
+}
+
+// printProjectStatus lists every project with the state of its instance, so
+// `niq status` answers "what is actually up right now?" without opening the
+// WebUI — the dev loop's usual question when a project page stops responding.
+// A project's ports are persisted, so a refused dial means that instance is not
+// running (stopped, or died and was never restarted): niq therefore reports it
+// as stopped even though the control plane still proxies its old port.
+//
+// controlURL, when the control plane is up, is the address that reaches the
+// project from outside; otherwise the loopback URL is shown.
+func printProjectStatus(controlURL string) {
+	projects, err := project.ListProjects()
+	if err != nil {
+		return
+	}
+	if len(projects) == 0 {
+		return
+	}
+	fmt.Println("\nprojects")
+	for _, p := range projects {
+		state, url := "stopped", "-"
+		if p.Ports.WebUI != 0 {
+			loopback := fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
+			if isServing(loopback) {
+				state = "running"
+				url = project.LocalhostURL(loopback)
+				if controlURL != "" {
+					url = strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/"
+				}
+			}
+		}
+		fmt.Printf("  %-14s %-8s %s\n", p.ID, state, url)
+	}
 }
 
 func printControlStarted(st *controlState) {
