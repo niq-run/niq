@@ -415,7 +415,9 @@ func printProjectStatus(controlURL string) {
 		return brand(target)
 	}
 	fmt.Println()
-	printProjectTable(projects, url)
+	// The list reports state; acting on it is the picker's job, so the heading
+	// says where that is.
+	printProjectTable(projects, url, bold("niq project")+dim(" to start, stop or restart one"))
 }
 
 func printControlStarted(st *controlState) {

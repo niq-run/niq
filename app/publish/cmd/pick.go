@@ -195,7 +195,7 @@ func runProjectPicker() error {
 		chosen, err := list.run()
 		if errors.Is(err, errNotTerminal) {
 			// Nothing to interact with: the table is the whole answer.
-			printProjectTable(projects, projectDirCell)
+			printProjectTable(projects, projectDirCell, "")
 			return nil
 		}
 		if err != nil {
@@ -295,9 +295,15 @@ func projectRows(projects []project.Project, trailing func(project.Project) stri
 func projectDirCell(p project.Project) string { return dim(shortPath(project.ProjectDir(p.ID))) }
 
 // printProjectTable is the non-interactive view: `niq project` without a
-// terminal.
-func printProjectTable(projects []project.Project, trailing func(project.Project) string) {
-	fmt.Printf("  %s\n", bracketed("projects"))
+// terminal, and the list under `niq status`. note, when set, is printed after
+// the heading — the status report uses it to say where the list can be acted on,
+// which the picker itself does not need to explain.
+func printProjectTable(projects []project.Project, trailing func(project.Project) string, note string) {
+	head := "  " + bracketed("projects")
+	if note != "" {
+		head += "  " + note
+	}
+	fmt.Println(head)
 	for _, row := range projectRows(projects, trailing) {
 		fmt.Printf("  %s\n", row)
 	}
