@@ -61,9 +61,9 @@ func logoChip() string {
 	if !ansi {
 		return ""
 	}
-	bg, fg := "\x1b[48;2;60;120;180m", "\x1b[38;2;238;238;238m"
+	bg, fg := "\x1b[48;2;60;120;180m", "\x1b[1;38;2;238;238;238m"
 	if !truecolor {
-		bg, fg = "\x1b[48;5;67m", "\x1b[38;5;255m"
+		bg, fg = "\x1b[48;5;67m", "\x1b[1;38;5;255m"
 	}
 	return bg + fg + " niq " + "\x1b[0m"
 }

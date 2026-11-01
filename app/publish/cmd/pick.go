@@ -241,7 +241,7 @@ func projectDirCell(p project.Project) string { return dim(shortPath(project.Pro
 // printProjectTable is the non-interactive view: `niq project` without a
 // terminal.
 func printProjectTable(projects []project.Project, trailing func(project.Project) string) {
-	fmt.Println(dim("projects"))
+	fmt.Printf("  %s\n", dim("projects"))
 	for _, row := range projectRows(projects, trailing) {
 		fmt.Printf("  %s\n", row)
 	}
