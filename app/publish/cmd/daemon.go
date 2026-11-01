@@ -169,7 +169,7 @@ func startBackground(addr, auth string) error {
 func reportAlreadyRunning(st *controlState, addr string) error {
 	if project.PortOf(st.Bound) != project.PortOf(addr) {
 		return fmt.Errorf("niq control is already running (pid %d) at %s; stop it with `niq stop` before starting on %s",
-			st.PID, cyan(project.LocalhostURL(st.Bound)), addr)
+			st.PID, brand(project.LocalhostURL(st.Bound)), addr)
 	}
 	return statusControl()
 }
@@ -362,19 +362,24 @@ func statusControl() error {
 // all print it, so the service always looks the same no matter which command
 // you used to ask.
 func printControlRunning(st *controlState) {
-	fmt.Printf("%s\n\n", versionTag())
-	fmt.Printf("%s %s %s  %s\n",
-		stateDot(true), bold("control"), stateWord(true),
-		dim(fmt.Sprintf("pid %d · since %s", st.PID, shortTime(st.Started))))
-	fmt.Printf("  %s %s\n", label("webui", 8), cyan(project.LocalhostURL(st.Bound)))
+	printBanner(banner{
+		version: brand(version),
+		state: stateDot(true) + " " + bold("control") + " " + stateWord(true) +
+			dim(fmt.Sprintf(" pid %d · since %s", st.PID, shortTime(st.Started))),
+	})
+	fmt.Println()
+	fmt.Printf("  %s %s\n", label("webui", 8), brand(project.LocalhostURL(st.Bound)))
 	fmt.Printf("  %s %s\n", label("log", 8), shortPath(controlLogPath()))
 	fmt.Printf("  %s %s\n", label("stop", 8), "niq stop")
 	fmt.Printf("  %s %s\n", label("restart", 8), "niq restart")
 }
 
 func printControlStopped() {
-	fmt.Printf("%s\n\n", versionTag())
-	fmt.Printf("%s %s %s\n\n", stateDot(false), bold("control"), stateWord(false))
+	printBanner(banner{
+		version: brand(version),
+		state:   stateDot(false) + " " + bold("control") + " " + stateWord(false),
+	})
+	fmt.Println()
 	fmt.Printf("  %s %s  %s\n", label("start", 8), "niq", dim("background"))
 	fmt.Printf("  %s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))
 }
@@ -409,7 +414,7 @@ func printProjectStatus(controlURL string) {
 		if !projectRunning(p) {
 			return dim(target)
 		}
-		return cyan(target)
+		return brand(target)
 	}
 	fmt.Println()
 	printProjectTable(projects, url)

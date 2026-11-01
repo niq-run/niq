@@ -223,7 +223,8 @@ func setupProjectLogging(id string) {
 }
 
 func printUsage() {
-	fmt.Printf("%s  %s\n\n", versionTag(), dim("neural interface quantum"))
+	printBanner(banner{version: brand(version), tagline: dim("neural interface quantum")})
+	fmt.Println()
 	fmt.Println(bold("usage"))
 	printUsageRows([][2]string{
 		{"niq", "start the control plane in the background, or report on it when it is already running"},
@@ -269,7 +270,8 @@ func printUsageRows(rows [][2]string) {
 }
 
 func printProjectUsage() {
-	fmt.Printf("%s  %s\n\n", versionTag(), dim("project instances"))
+	printBanner(banner{version: brand(version), tagline: dim("project instances")})
+	fmt.Println()
 	fmt.Println(bold("usage"))
 	printUsageRows([][2]string{
 		{"niq project", "pick a project (↑/↓, enter), then start, stop or restart it"},

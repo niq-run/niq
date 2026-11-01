@@ -18,6 +18,12 @@ import (
 
 var ansi = colorEnabled()
 
+// truecolor reports whether the terminal advertises 24-bit colour; without it
+// the brand colour falls back to the nearest 256-colour entry.
+var truecolor = strings.Contains(os.Getenv("COLORTERM"), "truecolor") ||
+	strings.Contains(os.Getenv("COLORTERM"), "24bit") ||
+	strings.Contains(os.Getenv("TERM"), "truecolor")
+
 func colorEnabled() bool {
 	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
 		return false
@@ -35,7 +41,66 @@ func paint(code, s string) string {
 func bold(s string) string  { return paint("1", s) }
 func dim(s string) string   { return paint("2", s) }
 func green(s string) string { return paint("32", s) }
-func cyan(s string) string  { return paint("36", s) }
+
+// brand is the product's theme colour, #3C78B4 — the square of the web UI logo.
+// Anything that is "niq" rather than a state uses it.
+func brand(s string) string {
+	if !ansi {
+		return s
+	}
+	if truecolor {
+		return "\x1b[38;2;60;120;180m" + s + "\x1b[0m"
+	}
+	return "\x1b[38;5;67m" + s + "\x1b[0m"
+}
+
+// logoBadge is the niq mark: the blue square with the wordmark knocked out,
+// three lines tall, matching the logo the web UI ships. Empty when colour is
+// off — a banner made of spaces helps nobody.
+func logoBadge() [3]string {
+	if !ansi {
+		return [3]string{}
+	}
+	bg, fg := "\x1b[48;2;60;120;180m", "\x1b[38;2;238;238;238m"
+	if !truecolor {
+		bg, fg = "\x1b[48;5;67m", "\x1b[38;5;255m"
+	}
+	blank := bg + strings.Repeat(" ", 9) + "\x1b[0m"
+	mark := bg + fg + "   niq   " + "\x1b[0m"
+	return [3]string{blank, mark, blank}
+}
+
+// banner is the identity block printed beside the mark: version, an optional
+// one-liner, and the state. The mark already carries the product name, so the
+// text does not repeat it.
+type banner struct {
+	version string
+	tagline string
+	state   string
+}
+
+// printBanner prints the mark beside those three rows. Without colour there is
+// no mark to carry the name, so the first row leads with it instead.
+func printBanner(b banner) {
+	rows := [3]string{b.version, b.tagline, b.state}
+	badge := logoBadge()
+	for i, line := range rows {
+		if badge[i] == "" {
+			if i == 0 {
+				line = bold("niq") + "  " + line
+			}
+			if line != "" {
+				fmt.Printf("  %s\n", line)
+			}
+			continue
+		}
+		if line == "" {
+			fmt.Printf("  %s\n", badge[i])
+			continue
+		}
+		fmt.Printf("  %s  %s\n", badge[i], line)
+	}
+}
 
 // stateDot marks a running/stopped instance. It is the same glyph in the status
 // report and in the picker, so "am I looking at the same thing?" never costs a
@@ -97,5 +162,5 @@ func portCell(n int) string {
 // versionTag is the one place the CLI prints its identity: `niq status`, the
 // start banner, the picker and --help all lead with it.
 func versionTag() string {
-	return bold("niq") + " " + cyan(version)
+	return bold("niq") + " " + brand(version)
 }

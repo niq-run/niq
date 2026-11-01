@@ -88,7 +88,7 @@ func (m *menu) draw(out io.Writer) {
 	for i, opt := range m.options {
 		marker := "   "
 		if i == m.cursor {
-			marker = cyan(" > ")
+			marker = brand(" > ")
 		}
 		fmt.Fprintf(out, "\x1b[2K%s%s\r\n", marker, opt)
 	}
@@ -273,7 +273,7 @@ func stopProjectInstance(p project.Project) error {
 func startProjectInstance(p project.Project) error {
 	if projectRunning(p) {
 		fmt.Printf("%s is %s %s\n", bold(p.ID), green("already running"),
-			cyan(fmt.Sprintf("http://localhost:%d", p.Ports.WebUI)))
+			brand(fmt.Sprintf("http://localhost:%d", p.Ports.WebUI)))
 		return nil
 	}
 	return startProjectDetached(p)
@@ -310,7 +310,7 @@ func startProjectDetached(p project.Project) error {
 		if cur, err := project.LoadProject(p.ID); err == nil && cur.Ports.WebUI != 0 &&
 			isServing(fmt.Sprintf("127.0.0.1:%d", cur.Ports.WebUI)) {
 			fmt.Printf("%s %s %s\n", bold(p.ID), green("started"),
-				cyan(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI)))
+				brand(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI)))
 			return nil
 		}
 		if time.Now().After(deadline) {
