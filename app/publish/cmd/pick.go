@@ -44,16 +44,16 @@ type menu struct {
 	options []string
 	cursor  int
 	// status is the one line under the options. It is replaced in place, never
-	// appended, so a picker that stays up cannot scroll its own output away.
-	status string
+	// appended, so a picker that stays up cannot scroll its own output away;
+	// statusLine reserves it (the list keeps it, a one-shot menu does not).
+	status     string
+	statusLine bool
 	// keep leaves the block on screen when a choice is made: the project list
 	// stays up while the action it opens is chosen.
 	keep bool
-	// bare options already show which one is current (the project list brackets
-	// its selected row), so no cursor glyph is drawn beside them.
-	bare bool
-	// refresh rebuilds bare options when the cursor moves: the selection is part
-	// of the row text, so moving means repainting the rows, not just the marker.
+	// refresh rebuilds the options when the cursor moves: the selection is part
+	// of the row text (brackets plus the theme colour), so moving means
+	// repainting the rows, not just a marker beside them.
 	refresh func(cursor int) []string
 	drawn   bool // the block is on screen; only then is the cursor-up meaningful
 }
@@ -113,19 +113,13 @@ func (m *menu) draw(out io.Writer) {
 	for _, line := range strings.Split(m.title, "\n") {
 		fmt.Fprintf(out, "\x1b[2K%s\r\n", line)
 	}
-	for i, opt := range m.options {
-		marker := ""
-		switch {
-		case m.bare:
-		case i == m.cursor:
-			marker = brandBold(" > ")
-		default:
-			marker = "   "
-		}
-		fmt.Fprintf(out, "\x1b[2K%s%s\r\n", marker, opt)
+	for _, opt := range m.options {
+		fmt.Fprintf(out, "\x1b[2K%s\r\n", opt)
 	}
-	fmt.Fprintf(out, "\x1b[2K\r\n")             // blank line before the status
-	fmt.Fprintf(out, "\x1b[2K%s\r\n", m.status) // status starts at the left edge
+	if m.statusLine {
+		fmt.Fprintf(out, "\x1b[2K\r\n")             // blank line before the status
+		fmt.Fprintf(out, "\x1b[2K%s\r\n", m.status) // status starts at the left edge
+	}
 }
 
 // erase removes the block, leaving the cursor where the title started, so the
@@ -138,7 +132,11 @@ func (m *menu) erase(out io.Writer) {
 // several lines), the options, and the status line under them. draw and the
 // cursor-up in erase share it, so a redraw lands exactly on the first line.
 func (m *menu) height() int {
-	return len(m.options) + 1 + strings.Count(m.title, "\n") + 1 + 1 // + blank + status
+	h := len(m.options) + 1 + strings.Count(m.title, "\n")
+	if m.statusLine {
+		h += 2 // blank + status
+	}
+	return h
 }
 
 // readKey maps one keypress (or one arrow-key escape sequence) to a key.
@@ -196,7 +194,7 @@ func runProjectPicker() error {
 	// dropped — the status line is the report.
 	log.SetOutput(io.Discard)
 
-	list := &menu{title: pickerTitle(), keep: true, bare: true}
+	list := &menu{title: pickerTitle(), keep: true, statusLine: true}
 	for {
 		projects, err := project.ListProjects()
 		if err != nil {
@@ -267,11 +265,27 @@ func pickAction(p project.Project) (string, error) {
 	// No identity line here: this menu replaces the list for a moment, and the
 	// project it is about is the whole heading.
 	title := fmt.Sprintf("%s %s", brandBold("["+p.ID+"]"), stateWord(running))
-	chosen, err := (&menu{title: title, options: options}).run()
+	m := &menu{title: title}
+	m.options = actionRows(options, m.cursor)
+	m.refresh = func(c int) []string { return actionRows(options, c) }
+	chosen, err := m.run()
 	if err != nil || chosen < 0 {
 		return "", err
 	}
 	return actions[chosen], nil
+}
+
+// actionRows renders the actions the way the project list renders projects:
+// every item bracketed, the one under the cursor in the theme colour.
+func actionRows(options []string, cursor int) []string {
+	rows := make([]string, len(options))
+	for i, opt := range options {
+		rows[i] = bold("[" + opt + "]")
+		if i == cursor {
+			rows[i] = brandBold("[" + opt + "]")
+		}
+	}
+	return rows
 }
 
 // runAction performs one action and returns the line the picker shows for it.
