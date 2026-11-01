@@ -79,10 +79,10 @@ func logoChip() string {
 	if !truecolor {
 		bg, fg, dots = "\x1b[48;5;67m", "\x1b[1;38;5;255m", "\x1b[38;5;153m"
 	}
-	// Braille "dots" either side of the wordmark: a dot field on the blue, with
-	// the name in solid light type between them. Nothing resets until the end,
-	// so the background covers the whole box.
-	return bg + dots + " ⣾ " + fg + "niq" + dots + " ⣾ " + "\x1b[0m"
+	// Two full braille cells each side, flush with the box edges: a dot field on
+	// the blue with the name in solid light type between them. Nothing resets
+	// until the end, so the background covers the whole box.
+	return bg + dots + "⣿⣿ " + fg + "niq" + dots + " ⣿⣿" + "\x1b[0m"
 }
 
 // versionNumber is the build version without git describe's leading "v", so the
