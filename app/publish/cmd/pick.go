@@ -77,11 +77,14 @@ func (m *menu) run() (int, error) {
 }
 
 // draw rewrites the menu block in place. Raw mode means every newline has to
-// be an explicit "\r\n"; ERASE_LINE (\x1b[2K) wipes the previous, longer option
-// text before the new one is written.
+// be an explicit "\r\n" — including the ones inside a multi-line title, which
+// is why the title is split rather than printed as-is; ERASE_LINE (\x1b[2K)
+// wipes the previous, longer text before the new one is written.
 func (m *menu) draw(out io.Writer) {
 	fmt.Fprintf(out, "\x1b[%dA\r", m.height()) // back to the title line
-	fmt.Fprintf(out, "\x1b[2K%s\r\n", m.title)
+	for _, line := range strings.Split(m.title, "\n") {
+		fmt.Fprintf(out, "\x1b[2K%s\r\n", line)
+	}
 	for i, opt := range m.options {
 		marker := "   "
 		if i == m.cursor {
@@ -97,7 +100,10 @@ func (m *menu) erase(out io.Writer) {
 	fmt.Fprintf(out, "\x1b[%dA\r\x1b[J", m.height())
 }
 
-func (m *menu) height() int { return len(m.options) + 1 }
+// height is how many terminal lines the block occupies. The title may be more
+// than one line (version + hint), so both draw and the cursor-up in erase count
+// title lines — otherwise every redraw leaves the top lines behind.
+func (m *menu) height() int { return len(m.options) + 1 + strings.Count(m.title, "\n") }
 
 // readKey maps one keypress (or one arrow-key escape sequence) to a key.
 func readKey(in *bufio.Reader) key {
