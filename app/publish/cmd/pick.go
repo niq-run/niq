@@ -105,7 +105,8 @@ func (m *menu) draw(out io.Writer) {
 		}
 		fmt.Fprintf(out, "\x1b[2K%s%s\r\n", marker, opt)
 	}
-	fmt.Fprintf(out, "\x1b[2K%s\r\n", m.status)
+	fmt.Fprintf(out, "\x1b[2K\r\n")             // blank line before the status
+	fmt.Fprintf(out, "\x1b[2K%s\r\n", m.status) // status starts at the left edge
 }
 
 // erase removes the block, leaving the cursor where the title started, so the
@@ -118,7 +119,7 @@ func (m *menu) erase(out io.Writer) {
 // several lines), the options, and the status line under them. draw and the
 // cursor-up in erase share it, so a redraw lands exactly on the first line.
 func (m *menu) height() int {
-	return len(m.options) + 1 + strings.Count(m.title, "\n") + 1
+	return len(m.options) + 1 + strings.Count(m.title, "\n") + 1 + 1 // + blank + status
 }
 
 // readKey maps one keypress (or one arrow-key escape sequence) to a key.
@@ -218,7 +219,7 @@ func runProjectPicker() error {
 			continue
 		}
 		if line, err := runAction(p, action); err != nil {
-			list.status = "  " + red(err.Error())
+			list.status = red(err.Error())
 		} else {
 			list.status = line
 		}
@@ -307,7 +308,7 @@ func printProjectTable(projects []project.Project, trailing func(project.Project
 // hand, too.
 func stopProjectInstance(p project.Project) (string, error) {
 	if !projectRunning(p) {
-		return fmt.Sprintf("  %s is %s", bold(p.ID), dim("not running")), nil
+		return fmt.Sprintf("%s is %s", bold(p.ID), dim("not running")), nil
 	}
 	if project.InterruptPortHolders(p.Ports.WebUI) == 0 {
 		return "", fmt.Errorf("%s: nothing is listening on port %d", p.ID, p.Ports.WebUI)
@@ -315,7 +316,7 @@ func stopProjectInstance(p project.Project) (string, error) {
 	if err := waitPortClosed(p.Ports.WebUI, 15*time.Second); err != nil {
 		return "", fmt.Errorf("%s: %w", p.ID, err)
 	}
-	return fmt.Sprintf("  %s %s", bold(p.ID), green("stopped")), nil
+	return fmt.Sprintf("%s %s", bold(p.ID), green("stopped")), nil
 }
 
 // startProjectInstance brings a stopped project up. It does not go through the
@@ -324,7 +325,7 @@ func stopProjectInstance(p project.Project) (string, error) {
 // up on the next probe.
 func startProjectInstance(p project.Project) (string, error) {
 	if projectRunning(p) {
-		return fmt.Sprintf("  %s is %s %s", bold(p.ID), green("already running"),
+		return fmt.Sprintf("%s is %s %s", bold(p.ID), green("already running"),
 			brand(fmt.Sprintf("http://localhost:%d", p.Ports.WebUI))), nil
 	}
 	return startProjectDetached(p)
@@ -360,7 +361,7 @@ func startProjectDetached(p project.Project) (string, error) {
 	for {
 		if cur, err := project.LoadProject(p.ID); err == nil && cur.Ports.WebUI != 0 &&
 			isServing(fmt.Sprintf("127.0.0.1:%d", cur.Ports.WebUI)) {
-			return fmt.Sprintf("  %s %s %s", bold(p.ID), green("started"),
+			return fmt.Sprintf("%s %s %s", bold(p.ID), green("started"),
 				brand(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI))), nil
 		}
 		if time.Now().After(deadline) {
