@@ -682,7 +682,12 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       onMouseEnter={() => setSelectorHandleHover(true)}
       onMouseLeave={() => setSelectorHandleHover(false)}
       style={{
-        position: 'relative', margin: '16px ' + hrX + 'px', padding: '5px 0',
+        // The grip is 15px tall (5px padding + 5px pill) with the line at its
+        // centre, i.e. 7.5px in from each edge. An 8px margin therefore puts
+        // the line 15.5px from the list above and from the section below —
+        // the same spacing a plain 16px rule gives, so a collapsed title is
+        // centred here exactly as it is between two plain dividers.
+        position: 'relative', margin: '8px ' + hrX + 'px', padding: '5px 0',
         cursor: 'ns-resize', userSelect: 'none',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
