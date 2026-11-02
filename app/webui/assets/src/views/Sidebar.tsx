@@ -313,16 +313,17 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const PROJECT_RESOURCE_MODES: ViewMode[] = ['workers', 'mcp', 'programs']
 
   // One navigable view row. Shared by both groups so they cannot drift apart.
-  // The last row drops its bottom padding: the section's gap to the next
-  // divider is the divider's own margin, so every module ends the same
-  // distance below its last row as it starts below the divider above.
+  // The last row keeps its full padding (so its hover band is the same height
+  // as every other row) and cancels it with a negative bottom margin: the
+  // section's gap to the next divider is then the divider's own margin, the
+  // same distance the module starts below the divider above it.
   const navRow = (v: ViewMode, last = false) => (
     <div
       key={v}
       onClick={() => { setView(v); onNavigate() }}
       onMouseEnter={() => setHoverId('view:' + v)}
       onMouseLeave={() => setHoverId(null)}
-      style={{ ...hoverStyle('view:' + v), ...(last ? { paddingBottom: 0 } : null), cursor: 'pointer', color: view === v ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
+      style={{ ...hoverStyle('view:' + v), ...(last ? { marginBottom: -6 } : null), cursor: 'pointer', color: view === v ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
     >
       <span style={{ flex: 1 }}>{VIEW_LABELS[v]}{view === v ? ' \u25C9' : ''}</span>
       {v === 'approvals' && pendingApprovals > 0 && (
@@ -726,10 +727,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
 
   const workerRowStyle = (id: string, last = false): CSSProperties => ({
     background: hoverId === id ? colors.bgLight : 'transparent',
-    // The last row drops its bottom padding and gap for the same reason as
-    // navRow: the module's closing gap belongs to the divider below it.
-    padding: last ? `${workerRowPadY}px ${contentPadX}px 0` : `${workerRowPadY}px ${contentPadX}px`,
-    marginBottom: last ? 0 : workerRowGapY,
+    // The last row keeps its full padding (hover band height) and cancels it
+    // with a negative margin, for the same reason as navRow.
+    padding: `${workerRowPadY}px ${contentPadX}px`,
+    marginBottom: last ? -workerRowPadY : workerRowGapY,
     transition: 'background 0.12s',
     cursor: 'pointer',
     display: 'flex',
@@ -1087,7 +1088,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         onClick={() => { onSelectPanel('providers'); onNavigate() }}
         onMouseEnter={() => setHoverId('providers')}
         onMouseLeave={() => setHoverId(null)}
-        style={{ ...hoverStyle('providers'), paddingBottom: 0, cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
+        style={{ ...hoverStyle('providers'), marginBottom: -6, cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
       >
         {t('sidebar.providers')}{panel === 'providers' ? ' \u25C9' : ''}
       </div>
