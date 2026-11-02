@@ -16,21 +16,23 @@ niq grows not by adding new abstractions, but by adding more participants that c
 
 ## Install
 
-Three ways in. Every one of them ends the same way: run `niq`, and the control
-plane is up at <http://localhost:9527>.
+Three ways in; each one puts the `niq` command on your PATH. Nothing starts
+until you run it — see [Quick start](#quick-start). None of them need a JS
+runtime: the program worker runs script programs (PTC) inside an embedded QuickJS
+engine (`modernc.org/quickjs`, pure Go), so there is no `node` process to spawn,
+and scripts see only the SDK the worker injects — no `process`, `require`,
+`fetch`, or dynamic `import()`.
 
 **npm** (recommended — `niq update` keeps this install current):
 
 ```sh
 npm install -g @niq.run/niq
-niq
 ```
 
-**Install script** (no npm; puts the binary in `~/.niq/bin`):
+**Install script** (no npm; the binary goes to `~/.niq/bin`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/install.sh | sh
-niq
 ```
 
 **From source** (Go 1.26+ — the embedded JS engine requires it). `make install`
@@ -40,26 +42,29 @@ directory), so `niq` works from any shell once that directory is on your PATH:
 ```sh
 git clone https://github.com/niq-run/niq
 cd niq
-make install     # build, then ln -s ~/.local/bin/niq → ./bin/niq
-niq
+make install
 ```
 
 Run `make build` instead if you would rather keep the binary at `./bin/niq` and
 call it from the checkout.
 
+Check it worked — this prints the version and exits:
+
+```sh
+niq --version
+```
+
 **Upgrading.** `niq update` installs the npm package, so it is the way to update
 an npm install. A script install is updated by re-running the `curl` line, and a
-source install by `git pull && make install` — both replace the binary in place,
-and `niq restart -p` then puts the running control plane and projects on it.
-
-**Runtime: none to install.** The program worker runs script programs (PTC)
-inside an embedded QuickJS engine (`modernc.org/quickjs`, pure Go), so there is no
-`node` process to spawn and no JS runtime to install. Scripts see only the SDK the
-worker injects: no `process`, `require`, `fetch`, or dynamic `import()`.
+source install by `git pull && make install` — both replace the binary in place.
+The running control plane and projects keep the binary they started with, so
+finish with `niq restart -p`.
 
 ## Quick start
 
-niq has two layers: a **control plane**, and **projects** — each project is an isolated agent instance with its own event bus, worker set and WebUI on its own ports.
+With `niq` on your PATH, one command starts everything. niq has two layers: a
+**control plane**, and **projects** — each project is an isolated agent instance
+with its own event bus, worker set and WebUI on its own ports.
 
 ```sh
 # start the control plane (default :9527) in the background
