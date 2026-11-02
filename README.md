@@ -16,24 +16,41 @@ niq grows not by adding new abstractions, but by adding more participants that c
 
 ## Install
 
-**npm** (recommended):
+Three ways in. Every one of them ends the same way: run `niq`, and the control
+plane is up at <http://localhost:9527>.
+
+**npm** (recommended — `niq update` keeps this install current):
 
 ```sh
 npm install -g @niq.run/niq
+niq
 ```
 
-**Install script** (installs to `~/.niq/bin`):
+**Install script** (no npm; puts the binary in `~/.niq/bin`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/install.sh | sh
+niq
 ```
 
-**From source** (Go 1.26+ — the embedded JS engine requires it):
+**From source** (Go 1.26+ — the embedded JS engine requires it). `make install`
+builds `./bin/niq` and symlinks it into `~/.local/bin` (`PREFIX=...` for another
+directory), so `niq` works from any shell once that directory is on your PATH:
 
 ```sh
 git clone https://github.com/niq-run/niq
-cd niq && make build   # → ./bin/niq
+cd niq
+make install     # build, then ln -s ~/.local/bin/niq → ./bin/niq
+niq
 ```
+
+Run `make build` instead if you would rather keep the binary at `./bin/niq` and
+call it from the checkout.
+
+**Upgrading.** `niq update` installs the npm package, so it is the way to update
+an npm install. A script install is updated by re-running the `curl` line, and a
+source install by `git pull && make install` — both replace the binary in place,
+and `niq restart -p` then puts the running control plane and projects on it.
 
 **Runtime: none to install.** The program worker runs script programs (PTC)
 inside an embedded QuickJS engine (`modernc.org/quickjs`, pure Go), so there is no
