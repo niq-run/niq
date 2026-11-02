@@ -35,9 +35,10 @@ npm install -g @niq.run/niq
 curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/install.sh | sh
 ```
 
-**From source** (Go 1.26+ — the embedded JS engine requires it). `make install`
-builds `./bin/niq` and symlinks it into `~/.local/bin` (`PREFIX=...` for another
-directory), so `niq` works from any shell once that directory is on your PATH:
+**From source** (Go 1.26+ — the embedded JS engine requires it — and Node 20+
+for the WebUI bundle). `make install` rebuilds the WebUI, builds `./bin/niq` and
+symlinks it into `~/.local/bin` (`PREFIX=...` for another directory), so `niq`
+works from any shell once that directory is on your PATH:
 
 ```sh
 git clone https://github.com/niq-run/niq
@@ -78,7 +79,7 @@ session) no longer stops it. Running `niq` again reports on the service instead
 up?".
 
 ```
- - niq -  version: 0.14.0
+ - niq -  version: 0.14.0 · build: 2026-11-01T23:55:12Z
 
 [control] running  pid 4711 · since 2026-11-01 23:57
 webui    http://localhost:9527
@@ -213,11 +214,15 @@ go build ./... && go vet ./...
 go test ./core/impl/eventbus/ -count=1
 ```
 
-The WebUI bundle is committed (it is `go:embed`-ed), so rebuild and commit it
-after changing anything under `app/webui/assets/src`:
+The WebUI bundle is committed (it is `go:embed`-ed). `make build` and
+`make install` rebuild it from `app/webui/assets/src` before compiling the Go
+binary, so the binary never ships a stale UI. The commit still matters for
+`go build ./...`, `go test ./...` and the release workflow (goreleaser and CI
+do not run Node), so commit the rebuilt `app/webui/assets/dist` with the change:
 
 ```sh
-cd app/webui/assets && npm run build
+make build          # webui bundle + ./bin/niq
+make install        # the same, plus the ~/.local/bin symlink
 ```
 
 ### Frontend development

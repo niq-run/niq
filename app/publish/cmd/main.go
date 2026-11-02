@@ -33,6 +33,13 @@ import (
 //	-X main.version=v1.2.3
 var version = "dev"
 
+// buildTime is the build timestamp, injected the same way (RFC3339, UTC):
+//
+//	-X main.buildTime=2026-11-02T08:41:12Z
+//
+// Empty for a plain `go build`, in which case the version line omits it.
+var buildTime = ""
+
 func main() {
 	// Handle --version / -v / version before anything else.
 	if len(os.Args) > 1 {
