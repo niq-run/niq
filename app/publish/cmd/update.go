@@ -44,9 +44,6 @@ const (
 type updateCache struct {
 	Checked string `json:"checked"` // RFC3339
 	Latest  string `json:"latest"`
-	// Told is the version the hint has already mentioned, so the same release
-	// is announced once rather than on every `niq` for a day.
-	Told string `json:"told,omitempty"`
 }
 
 func updateCachePath() string { return filepath.Join(niqhome.Root(), "update-check.json") }
@@ -129,11 +126,6 @@ func readUpdateCache() (updateCache, bool) {
 
 func writeUpdateCache(latest string) {
 	c := updateCache{Checked: time.Now().Format(time.RFC3339), Latest: latest}
-	// Keep the "already announced" mark while the same version is the newest;
-	// a new release clears it, so it gets its own one-time mention.
-	if old, ok := readUpdateCache(); ok && old.Latest == latest {
-		c.Told = old.Told
-	}
 	b, err := json.Marshal(c)
 	if err != nil {
 		return
@@ -181,26 +173,11 @@ func checkForUpdate() {
 	if err != nil || !newerRelease(latest, version) {
 		return
 	}
-	if c, ok := readUpdateCache(); ok && c.Told == latest {
-		return // already mentioned this one
-	}
+	// Every start mentions it: the check is what is rationed (once a day), not
+	// the reminder — an update that is still pending is worth seeing until it
+	// is taken.
 	fmt.Printf("\n%s%s\n",
 		brand("niq "+latest), dim(" is available — run ")+bold("niq update"))
-	markTold(latest)
-}
-
-// markTold records that the hint for latest has been shown.
-func markTold(latest string) {
-	c, ok := readUpdateCache()
-	if !ok {
-		return
-	}
-	c.Told = latest
-	b, err := json.Marshal(c)
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(updateCachePath(), append(b, '\n'), 0644)
 }
 
 // runUpdate is `niq update`: check, install with npm, and say what the running

@@ -114,8 +114,9 @@ just the ids.
 `niq update` asks npm for the published version, installs it with
 `npm install -g @niq.run/niq@latest`, and points at `niq restart -p` — the
 control plane and the projects are separate processes still running the old
-binary. A bare `niq` checks once a day and mentions a newer release once per
-version; `NIQ_NO_UPDATE_CHECK=1` turns the check off.
+binary. A bare `niq` asks the registry at most once a day and mentions a newer
+release every time it starts (from the cached answer) until you install it;
+`NIQ_NO_UPDATE_CHECK=1` turns the check off.
 
 ```sh
 # bash
