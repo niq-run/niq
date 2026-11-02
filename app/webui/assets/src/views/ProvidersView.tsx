@@ -34,10 +34,17 @@ export default function ProvidersView() {
     })
   }
 
+  // A provider.json that cannot be read or parsed fails the GET. Rather than a
+  // dead-end panel, fall back to a blank config the user can rebuild — with the
+  // warning on screen, because saving replaces the unreadable file.
+  const [loadFailed, setLoadFailed] = useState(false)
   useEffect(() => {
     fetchProviders()
       .then((c) => openConfig(c))
-      .catch(() => setSaveError(t('providers.error.load')))
+      .catch(() => {
+        setLoadFailed(true)
+        openConfig({ providers: [] })
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -200,6 +207,11 @@ export default function ProvidersView() {
       </div>
 
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '12px 24px 24px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {loadFailed && (
+          <div style={{ border: '1px solid ' + colors.toolFailed, borderRadius: 6, padding: '10px 14px', color: colors.toolFailed, fontSize: fontSizes.sm }}>
+            {t('providers.loadFailed')}
+          </div>
+        )}
         {editorTab === 'visual' && cfg && (
           <>
             {/* Active provider: names the default the workers start on. */}

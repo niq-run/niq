@@ -82,6 +82,29 @@ func TestProviderConfigPathOverride(t *testing.T) {
 	}
 }
 
+// TestExampleTemplate pins the built-in default template: exactly one deepseek
+// provider with an empty api_key (the user fills one in) and its model list
+// carrying the per-model context window.
+func TestExampleTemplate(t *testing.T) {
+	cfg := Example()
+	if cfg.Active != "deepseek" || len(cfg.Providers) != 1 {
+		t.Fatalf("example = %+v, want one active deepseek provider", cfg)
+	}
+	p := cfg.Providers[0]
+	if p.Name != "deepseek" || p.Type != "deepseek" {
+		t.Fatalf("provider = %q/%q, want deepseek/deepseek", p.Name, p.Type)
+	}
+	if p.APIKey != "" {
+		t.Fatalf("example must not ship an api_key, got %q", p.APIKey)
+	}
+	if p.BaseURL != "https://api.deepseek.com/v1" {
+		t.Fatalf("base_url = %q", p.BaseURL)
+	}
+	if len(p.Models) != 1 || p.Models[0].Name != "deepseek-flash" || p.Models[0].ContextWindow != 1024000 {
+		t.Fatalf("models = %+v, want deepseek-flash with a 1024000 context window", p.Models)
+	}
+}
+
 // TestEnsureExampleAndConfigured verifies the example skeleton is seeded only
 // when missing (never overwriting a user config) and that Configured stays
 // false for the empty example but true once a provider has an api_key.

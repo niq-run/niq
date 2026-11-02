@@ -138,6 +138,13 @@ export async function fetchProviders(): Promise<any> {
   return res.json()
 }
 
+// providersUsable mirrors provider.Configured on the backend: at least one
+// provider carries a non-empty api_key. An unparsable provider.json fails the
+// GET above, which callers treat as "not usable" too.
+export function providersUsable(cfg: any): boolean {
+  return (cfg?.providers || []).some((p: any) => (p.api_key || '') !== '')
+}
+
 // updateProviders replaces the provider config with an edited body.
 export async function updateProviders(cfg: any): Promise<void> {
   const res = await fetch(CONTROL + '/api/providers', {

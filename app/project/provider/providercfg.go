@@ -203,8 +203,11 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
-// exampleJSON is the skeleton provider config written by EnsureExample. The
-// api_key is intentionally empty: the user fills it in before the project starts.
+// exampleJSON is the built-in skeleton provider config: the default template a
+// user starts from, both as the file EnsureExample seeds and as the config the
+// control plane's providers panel shows when no provider.json exists yet. The
+// api_key is intentionally empty: the user fills it in before the project
+// starts.
 const exampleJSON = `{
   "active": "deepseek",
   "providers": [
@@ -214,11 +217,28 @@ const exampleJSON = `{
       "api_key": "",
       "base_url": "https://api.deepseek.com/v1",
       "model": "deepseek-v4-flash",
-      "models": ["deepseek-v4-pro", "deepseek-v4-flash"]
+      "models": [
+        {
+          "name": "deepseek-flash",
+          "context_window": 1024000
+        }
+      ]
     }
   ]
 }
 `
+
+// Example returns the built-in skeleton config (see exampleJSON). It is the
+// default template offered to a user with no provider.json yet. The caller owns
+// the returned value and may edit it freely.
+func Example() *Config {
+	var cfg Config
+	if err := json.Unmarshal([]byte(exampleJSON), &cfg); err != nil {
+		// exampleJSON is a compile-time constant; a parse failure is a bug.
+		panic("provider: bad example config: " + err.Error())
+	}
+	return &cfg
+}
 
 // EnsureExample writes the example provider config to Path() when the file is
 // missing. It never overwrites an existing file: once a config exists it is

@@ -17,6 +17,7 @@ import (
 
 	"github.com/niq-run/niq/app/niqhome"
 	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/project/provider"
 	"github.com/niq-run/niq/app/webui"
 )
 
@@ -472,10 +473,18 @@ func TestControlProviders(t *testing.T) {
 		return resp.StatusCode, string(b)
 	}
 
-	// GET on a missing file returns an empty config, not an error.
+	// GET on a missing file answers with the built-in deepseek template rather
+	// than an empty list, so the panel opens on something editable. Nothing is
+	// written yet: the file only appears on save.
 	code, body := do("GET", "/api/providers", "")
 	if code != 200 {
 		t.Fatalf("get status=%d: %s", code, body)
+	}
+	if !strings.Contains(body, `"name":"deepseek"`) || strings.Contains(body, `"api_key":"sk`) {
+		t.Fatalf("missing-file body should be the empty-key deepseek template: %s", body)
+	}
+	if _, err := os.Stat(provider.Path()); !os.IsNotExist(err) {
+		t.Fatalf("GET must not write provider.json (stat err = %v)", err)
 	}
 
 	// PUT a config, then read it back.
