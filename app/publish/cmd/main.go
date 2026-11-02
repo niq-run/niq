@@ -8,6 +8,7 @@
 //	niq status              — report whether it is running and where
 //	niq stop [-p]           — stop the background control plane (-p: the projects too)
 //	niq restart [-p]        — stop and start it again (-p: the projects too)
+//	niq update              — install the latest release with npm
 //	niq project             — pick a project, then stop or restart it
 //	niq project list        — list projects, their ports and run state
 //	niq project create <id> — create a project from a template
@@ -57,6 +58,8 @@ func main() {
 		err = runRestart(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "status":
 		err = statusControl()
+	case len(os.Args) > 1 && os.Args[1] == "update":
+		err = runUpdate(os.Args[2:])
 	case len(os.Args) > 1 && (os.Args[1] == "completion" || os.Args[1] == "complete"):
 		err = runCompletion(os.Args[2:])
 	case len(os.Args) > 1:
@@ -76,7 +79,9 @@ func main() {
 // no flags means "the default address", never "a second instance".
 func runDefault() error {
 	if st, ok := readControlState(); ok && isRunning(st) {
-		return statusControl()
+		err := statusControl()
+		checkForUpdate()
+		return err
 	}
 	st, err := startBackground(defaultAddr, "")
 	if err != nil {
@@ -85,6 +90,7 @@ func runDefault() error {
 	if st != nil {
 		printControlStarted(st)
 	}
+	checkForUpdate()
 	return nil
 }
 
@@ -262,6 +268,7 @@ func printUsage() {
 		{"niq status", "the control plane and every project instance"},
 		{"niq stop [-p]", "stop the control plane; -p also stops the running projects"},
 		{"niq restart [-p]", "restart the control plane; -p also restarts the running projects"},
+		{"niq update", "install the latest release with npm"},
 		{"niq project", "pick a project, then start, stop or restart it"},
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
 		{"niq project create <id> [--template <name>]", "create a project from a template"},

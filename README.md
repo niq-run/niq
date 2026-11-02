@@ -107,8 +107,15 @@ just the ids.
 | `niq stop [-p]` | stop the control plane (`-p` also stops the running projects) |
 | `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
 | `niq project` | pick a project: start, stop or restart it |
+| `niq update` | install the latest release with npm |
 | `niq project create` / `niq project run` | create a project / run one in this terminal |
 | `niq completion <shell>` | completion for bash, zsh or fish |
+
+`niq update` asks npm for the published version, installs it with
+`npm install -g @niq.run/niq@latest`, and points at `niq restart -p` — the
+control plane and the projects are separate processes still running the old
+binary. A bare `niq` checks once a day and mentions a newer release once per
+version; `NIQ_NO_UPDATE_CHECK=1` turns the check off.
 
 ```sh
 # bash
