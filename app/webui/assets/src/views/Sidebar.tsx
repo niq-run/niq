@@ -1025,12 +1025,17 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             <>
               {selectorDivider}
               {sectionHeader('viewSettings', t('sidebar.viewSettings'), 0)}
-              {sectionOpen('viewSettings') && (<>
-                <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
-                <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
-                <ToggleRow label={t('view.toggle.collapseEvents')} on={viewSettings.collapseEvents} onToggle={() => onToggleViewSetting('collapseEvents')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
-                <ToggleRow label={t('view.toggle.responseOnly')} on={viewSettings.responseOnly} onToggle={() => onToggleViewSetting('responseOnly')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
-              </>)}
+              {sectionOpen('viewSettings') && (
+                // The toggles are shorter than the nav rows and the search box
+                // that open the other sections, so they need a few extra pixels
+                // to land at the same distance below their title.
+                <div style={{ marginTop: 4 }}>
+                  <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+                  <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+                  <ToggleRow label={t('view.toggle.collapseEvents')} on={viewSettings.collapseEvents} onToggle={() => onToggleViewSetting('collapseEvents')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+                  <ToggleRow label={t('view.toggle.responseOnly')} on={viewSettings.responseOnly} onToggle={() => onToggleViewSetting('responseOnly')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+                </div>
+              )}
             </>
           )}
         </>
