@@ -39,6 +39,8 @@ export const zh: Record<StringKey, string> = {
   'sidebar.programs': '程序',
   'sidebar.providers': '模型供应商',
   'providers.title': '模型供应商',
+  'providers.card.collapse': '收起',
+  'providers.card.expand': '展开',
   'providers.tab.visual': '可视化编辑',
   'providers.tab.json': 'JSON 编辑',
   'providers.saved': '已保存',

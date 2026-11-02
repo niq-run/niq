@@ -38,6 +38,8 @@ export const en = {
   'sidebar.programs': 'Programs',
   'sidebar.providers': 'Providers',
   'providers.title': 'Model providers',
+  'providers.card.collapse': 'collapse',
+  'providers.card.expand': 'expand',
   'providers.tab.visual': 'Visual editing',
   'providers.tab.json': 'JSON editing',
   'providers.saved': 'Saved',

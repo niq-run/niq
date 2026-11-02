@@ -222,34 +222,26 @@ export default function ProvidersView() {
               <div key={i + ':' + (p.name || '')} style={{ border: '1px solid ' + colors.border, borderRadius: 6, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8, background: colors.detailBg }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span
-                    role="button"
-                    aria-expanded={!collapsedCards.has(i)}
-                    onClick={() => toggleCard(i)}
-                    className="btn-hover"
-                    style={{ cursor: 'pointer', userSelect: 'none', color: colors.textDimmed, fontSize: fontSizes.xs, width: 16, textAlign: 'center', flexShrink: 0 }}
-                  >
-                    {collapsedCards.has(i) ? '▸' : '▾'}
-                  </span>
-                  <span
                     onClick={() => applyConfig({ ...cfg, active: p.name })}
                     title={t('providers.field.active')}
                     style={{ cursor: 'pointer', color: cfg.active === p.name ? colors.accent : colors.textDimmed, fontSize: fontSizes.md }}
                   >
                     {cfg.active === p.name ? '◉' : '○'}
                   </span>
-                  <span
-                    onClick={() => toggleCard(i)}
-                    title={p.name || t('providers.unnamed')}
-                    style={{ cursor: 'pointer', userSelect: 'none', color: colors.accent, fontSize: fontSizes.md, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  >
-                    {p.name || t('providers.unnamed')}
-                  </span>
+                  <span style={{ color: colors.accent, fontSize: fontSizes.md, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name || t('providers.unnamed')}</span>
                   <span style={{ flex: 1 }} />
                   <button
                     onClick={() => removeProvider(i)}
                     style={{ cursor: 'pointer', background: 'transparent', color: colors.toolFailed, border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 10px', fontSize: fontSizes.sm }}
                   >
                     {t('templates.delete')}
+                  </button>
+                  <button
+                    onClick={() => toggleCard(i)}
+                    aria-expanded={!collapsedCards.has(i)}
+                    style={{ cursor: 'pointer', background: 'transparent', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 10px', fontSize: fontSizes.sm }}
+                  >
+                    {collapsedCards.has(i) ? t('providers.card.expand') : t('providers.card.collapse')}
                   </button>
                 </div>
                 {!collapsedCards.has(i) && (<>
