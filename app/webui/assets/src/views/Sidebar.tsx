@@ -872,7 +872,8 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       {mode === 'project' && (<>
       {sectionHeader('projectViews', t('sidebar.projectViews'))}
       {sectionOpen('projectViews') && PROJECT_VIEW_MODES.map(navRow)}
-      {sectionHeader('projectResources', t('sidebar.projectResources'))}
+      <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
+      {sectionHeader('projectResources', t('sidebar.projectResources'), 0)}
       {sectionOpen('projectResources') && PROJECT_RESOURCE_MODES.map(navRow)}
 
       {/* Worker selector list — hidden in the workers view (the main area IS
@@ -1348,11 +1349,9 @@ function CheckBox({ active, accent, border, size = 13, style }: { active: boolea
 
 // A collapsible section title. Collapsed sections get a trailing expand icon
 // at the end of the row; open ones carry no icon, so the title reads exactly
-// like the plain heading it was before. A collapsed section is only its
-// header, so the header carries the whole gap itself: 16px above and none
-// below, because the 16px margin of the divider that follows plays the other
-// half. That leaves the lone title centred in its strip instead of hanging
-// from the top with the divider's margin stacked underneath it.
+// like the plain heading it was before. Every section is followed by a
+// divider, so a collapsed header drops its own margins and lets the 16px
+// divider margins above and below centre the lone title in its strip.
 function SectionHeader({ label, collapsed, onToggle, colors, size, marginTop, marginBottom = 8 }: { label: string; collapsed: boolean; onToggle: () => void; colors: Palette; size: number; marginTop: number; marginBottom?: number }) {
   const { t } = useI18n()
   const [hover, setHover] = useState(false)
@@ -1366,7 +1365,7 @@ function SectionHeader({ label, collapsed, onToggle, colors, size, marginTop, ma
       onMouseLeave={() => setHover(false)}
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
-        marginTop: collapsed ? 16 : marginTop,
+        marginTop: collapsed ? 0 : marginTop,
         marginBottom: collapsed ? 0 : marginBottom,
         color: colors.text, fontSize: size,
         cursor: 'pointer', userSelect: 'none',
