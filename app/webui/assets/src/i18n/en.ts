@@ -6,7 +6,7 @@ export const en = {
   'nav.approvals': 'Approvals',
   'nav.events': 'Events',
   'nav.workers': 'Workers',
-  'nav.mcp': 'MCP',
+  'nav.mcp': 'MCP Workers',
   'sidebar.projectViews': 'Project views',
   'sidebar.projectResources': 'Project resources',
   'sidebar.section.collapse': 'click to collapse',

@@ -563,10 +563,13 @@ export async function loadEventsBefore(anchorId: string, limit = 50, opts: Event
 
 // fetchEventsByRequest returns all persisted events carrying the given
 // request_id — the invocation plus its request.* answer. It is a one-shot
-// historical query, decoupled from the live event stream.
+// historical query, decoupled from the live event stream. A missing list (an
+// older server encoding no matches as `null`) is normalised to [], so callers
+// can .find/.map without guarding.
 export async function fetchEventsByRequest(requestId: string): Promise<EventPayload[]> {
   const res = await fetch(p(`/api/events/by-request/${encodeURIComponent(requestId)}`))
-  return res.json()
+  const body: unknown = await res.json()
+  return Array.isArray(body) ? (body as EventPayload[]) : []
 }
 
 // AskResult is one answered worker event: the reply's value when the worker

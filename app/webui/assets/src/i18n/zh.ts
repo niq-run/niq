@@ -7,7 +7,7 @@ export const zh: Record<StringKey, string> = {
   'nav.events': '事件',
   'nav.approvals': '审批',
   'nav.workers': '工作单元',
-  'nav.mcp': 'MCP',
+  'nav.mcp': 'MCP 工作单元',
   'sidebar.projectViews': '项目视图',
   'sidebar.projectResources': '项目资源',
   'sidebar.section.collapse': '点击折叠',
