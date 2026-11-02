@@ -241,18 +241,6 @@ export default function App() {
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>(() => viewFromLocation() ?? 'talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
-  // ?start=<id>: a stopped project's /p/<id>/ redirects here so the projects
-  // list can ask "start it?" with the SPA's own dialog. Stripped from the URL
-  // once read, so a reload does not ask again.
-  const [startTarget, setStartTarget] = useState<string | null>(
-    () => new URLSearchParams(window.location.search).get('start'),
-  )
-  useEffect(() => {
-    if (!window.location.search.includes('start=')) return
-    const url = new URL(window.location.href)
-    url.searchParams.delete('start')
-    window.history.replaceState({}, '', url.pathname + url.search + url.hash)
-  }, [])
   const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(() => {
     // ?panel=<tab> keeps the open management tab in the address bar, so a reload
     // (or a link) lands on the tab you were looking at instead of back in the
@@ -437,8 +425,6 @@ export default function App() {
   const [startProjErr, setStartProjErr] = useState('')
   usePolling<ProjectInfo[]>(CONTROL + '/api/projects', 5000, (list) => {
     if (mode !== 'project' || !projectName) return
-    // A management panel shows control-plane data; the project's event stream is
-    // not on screen, so it is not opened (and cannot drop behind one).
     if (panel) return
     const p = list.find((x: ProjectInfo) => x.id === projectName)
     setProjRunning(p ? !!p.running : false)
@@ -496,7 +482,13 @@ export default function App() {
     // Ask /api/context which mode this page is in: the control plane's own page
     // answers "control", a project page (served under /p/<id>/) answers
     // "project" with its id.
-    fetchContext().then(setContext).catch(() => {})
+    fetchContext().then(setContext).catch(() => {
+      // The project's own API is unreachable because the instance is stopped,
+      // but the control plane still serves the shell at /p/<id>/ so the page
+      // can offer a start. Keep project mode and take the id from the path.
+      const m = window.location.pathname.match(/^\/p\/([^/]+)/)
+      if (m) setContext({ mode: 'project', project: decodeURIComponent(m[1]) })
+    })
   }, [])
 
   // Provider onboarding: a project cannot start without a usable provider and a
@@ -555,26 +547,19 @@ export default function App() {
   	const responseOnly = viewSettings.responseOnly
   const streamingMode = viewSettings.streamingMode
 
-  // The talk view's conversation scope: the reason workers it's currently
-  // watching (worker_id OR target OR recipient — the same envelope semantics
-  // as TalkView's relevantEvents and the backend's workerMatchesAny). With no
-  // explicit selection it resolves to every talk-partner worker; passing this
-  // to BOTH the stream and the events/before API means the server scopes the
-  // tail and pages over the conversation, instead of the client discarding
-  // out-of-conversation noise.
-  // partnerIds is a stable string (regex-free id sort) so talkScope's array
-  // ref only changes when the partner set actually changes — the worker poll
-  // rebuilds the array every tick, and we must not reconnect on identical sets.
-  const partnerIds = useMemo(() =>
-    workers.filter(w => isTalkPartnerType(w.type)).map(w => w.id).sort().join(','),
-  [workers])
-  const talkScope = useMemo(() => {
-    if (talkWorkers.size > 0) return [...talkWorkers]
-    return partnerIds ? partnerIds.split(',') : []
-  }, [talkWorkers, partnerIds])
+  // The talk view's conversation scope: the workers the user picked in the
+  // sidebar (worker_id OR target OR recipient — the same envelope semantics as
+  // TalkView's relevantEvents and the backend's workerMatchesAny). An empty
+  // selection is NOT "every talk partner": expanding it to the whole roster
+  // made the server build one `worker IN (…)` branch per worker, which overran
+  // SQLite's bind-variable limit once a project had enough workers and broke
+  // the stream. No selection now means no worker filter at all — TalkView's
+  // relevantEvents still drops out-of-conversation rows locally.
+  const talkScope = useMemo(() => [...talkWorkers].sort(), [talkWorkers])
 
-  // The talk stream scopes server-side over talkScope, so the key must follow
-  // it (an empty selection becomes the all-partners scope once workers load).
+  // The talk stream scopes server-side over talkScope when a worker is picked;
+  // with none picked it leaves the worker filter off entirely (see talkScope)
+  // and the client-side scope in TalkView does the narrowing.
   // streamingMode is part of the key because it decides whether delta partials
   // are needed on the live stream — toggling it re-scopes the stream's blacklist.
   const talkScopeKey = talkScope.join(',')
@@ -604,6 +589,10 @@ export default function App() {
     // answers, so guarding on the mode alone opened a stream on the control
     // page, whose 404 then lit the "stream dropped" banner there for good.
     if (mode !== 'project' || !projectName) return
+    // A stopped project has no bus to subscribe to: the stopped banner owns
+    // that state, and connecting to a dead port would only race the reconnect
+    // loop behind it.
+    if (projRunning === false) return
     // A management panel shows control-plane data; the project's event stream is
     // not on screen, so it is not opened (and cannot drop behind one).
     if (panel) return
@@ -619,9 +608,9 @@ export default function App() {
       for (const role of filterRoles) params.append('role', role)
       if (traceFilter) params.set('trace', traceFilter)
     } else if (view === 'talk') {
-      // Always send the resolved conversation scope (selection, or all
-      // partners when nothing is picked) so the server drops out-of-scope
-      // events up front — never an unfiltered stream.
+      // Scope to the picked conversation workers only. An empty selection sends
+      // no worker param at all (an unfiltered stream, narrowed client-side by
+      // TalkView) rather than every talk partner — see talkScope.
       for (const id of talkScope) params.append('worker', id)
       if (responseOnly) for (const t of RESPONSE_ONLY_TYPES) params.append('type', t)
       for (const t of talkExclude) params.append('exclude', t)
@@ -844,7 +833,7 @@ export default function App() {
     // project name arrives (it is undefined until /api/context answers, and the
     // stream must not open before then). `view` itself is intentionally not a
     // dep; it is already encoded by streamKey.
-  }, [streamKey, mode, projectName, panel, projectBase])
+  }, [streamKey, mode, projectName, panel, projectBase, projRunning])
 
   // ── Polling (only meaningful when a project is attached). The URL carries the
   // project base so a project page reached through /p/<id>/ hits that project's
@@ -1506,7 +1495,7 @@ export default function App() {
             </span>
           </div>
         )}
-        {mode === 'project' && !panel && streamDropped && (
+        {mode === 'project' && !panel && streamDropped && projRunning !== false && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight, flexShrink: 0 }}>
             <span style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>●</span>
             <span style={{ flex: 1, color: colors.text, fontSize: fontSizes.sm }}>
@@ -1537,7 +1526,7 @@ export default function App() {
           </div>
         )}
         {mode !== 'project' ? (
-          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => selectPanel('providers')} focusStart={startTarget} onFocusDone={() => setStartTarget(null)} />
+          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => selectPanel('providers')} />
         ) : panel === 'templates' ? (
           <TemplatesView isMobile={isMobile} />
         ) : panel === 'providers' ? (

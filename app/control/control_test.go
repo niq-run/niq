@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -453,6 +454,37 @@ func TestControlImportTemplate(t *testing.T) {
 		t.Fatalf("duplicate import status=%d, want 400", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+// TestWaitProjectStartReportsExit asserts a start whose child dies before
+// serving is reported as a failure naming the exit and pointing at the log —
+// the old wait returned an empty address and the UI answered 200 with port 0.
+func TestWaitProjectStartReportsExit(t *testing.T) {
+	setupProjectsRoot(t)
+	exited := make(chan error, 1)
+	exited <- errors.New("exit status 1")
+	_, err := waitProjectStart("ghost", exited)
+	if err == nil || !strings.Contains(err.Error(), "exited during startup") {
+		t.Fatalf("err = %v, want an exit report", err)
+	}
+	if !strings.Contains(err.Error(), project.LogPath("ghost")) {
+		t.Fatalf("err should point at the project log: %v", err)
+	}
+}
+
+// TestLogTail returns only the trailing lines, which is what the start failure
+// appends after the log path.
+func TestLogTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "log")
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\nfour\nfive\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := logTail(path, 2); got != "four\nfive" {
+		t.Fatalf("logTail = %q", got)
+	}
+	if got := logTail(filepath.Join(t.TempDir(), "missing"), 2); got != "" {
+		t.Fatalf("missing file should yield no tail, got %q", got)
+	}
 }
 
 // TestControlProviders verifies the provider config endpoints: GET returns the

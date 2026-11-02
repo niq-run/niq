@@ -202,10 +202,12 @@ export async function fetchDirs(path?: string): Promise<DirEntry[]> {
 }
 
 // startProject asks the control plane to launch a project; returns the redirect
-// URL of the project's own WebUI.
+// URL of the project's own WebUI. A failed start carries the reason the control
+// plane saw (a process that exited during startup, its log tail), which the call
+// sites show verbatim.
 export async function startProject(id: string): Promise<ProjectStartResult> {
   const res = await fetch(CONTROL + `/api/projects/${encodeURIComponent(id)}/start`, { method: 'POST' })
-  if (!res.ok) throw new Error('start failed: ' + res.status)
+  if (!res.ok) throw new Error(await errText(res, 'start failed'))
   return res.json()
 }
 
@@ -238,7 +240,7 @@ export async function stopProject(id: string): Promise<void> {
 // is actually serving, so the caller can treat it as a ready project.
 export async function restartProject(id: string): Promise<ProjectStartResult> {
   const res = await fetch(CONTROL + `/api/projects/${encodeURIComponent(id)}/restart`, { method: 'POST' })
-  if (!res.ok) throw new Error('restart failed: ' + res.status)
+  if (!res.ok) throw new Error(await errText(res, 'restart failed'))
   return res.json()
 }
 
