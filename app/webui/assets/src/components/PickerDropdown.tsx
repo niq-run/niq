@@ -30,9 +30,10 @@ interface PickerDropdownProps {
   searchValue?: string
   onSearchValueChange?: (v: string) => void
   searchPlaceholder?: string
-  // Optional "open the full dialog" affordance in the header: the dropdown is
-  // a compact list, and a worker set that has outgrown it needs the room of a
-  // centered dialog (WorkerPickerModal).
+  // Optional "open the full dialog" affordance: the dropdown is a compact
+  // list, and a worker set that has outgrown it needs the room of a centered
+  // dialog (WorkerPickerModal). It sits beside the search box when there is
+  // one, so the pinned row reads like the sidebar's worker selector.
   onExpand?: () => void
   expandLabel?: string
 }
@@ -107,6 +108,16 @@ export default function PickerDropdown({
   const panelWidth = isMobile
     ? Math.min(width, (typeof window !== 'undefined' ? window.innerWidth : width) - 32)
     : width
+  // The expand button: a labelled button rather than an icon (a glyph there
+  // went unnoticed), sized to fill the search row's height.
+  const expandStyle: React.CSSProperties = {
+    cursor: 'pointer', userSelect: 'none', flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    color: colors.textDim, border: '1px solid ' + colors.border,
+    borderRadius: 4, padding: '0 10px', whiteSpace: 'nowrap',
+    fontSize: isMobile ? fontSizes.base : fontSizes.sm,
+  }
+
   const panelStyle: React.CSSProperties = isMobile ? {
     position: 'fixed',
     top: '50%',
@@ -119,7 +130,11 @@ export default function PickerDropdown({
     borderRadius: 6,
     maxHeight: '70vh',
     minHeight: 60,
-    overflowY: 'auto',
+    // The header/search stay put and only the rows scroll (see the inner
+    // scroller below), so the panel itself never scrolls.
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
     boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
     zIndex: 91,
   } : {
@@ -132,7 +147,9 @@ export default function PickerDropdown({
     // once; a floor on the empty/very-short state keeps it from looking cramped.
     maxHeight: 320,
     minHeight: 108,
-    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
     boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
   }
 
@@ -161,45 +178,49 @@ export default function PickerDropdown({
           fontSize: isMobile ? fontSizes.base : fontSizes.sm,
           color: colors.textDimmed,
           display: 'flex', alignItems: 'center', gap: 8,
+          flexShrink: 0,
         }}
       >
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{header}</span>
-        {onExpand && (
-          /* A labelled button rather than an icon: the compact dropdown is the
-             only place this entry point exists, and a glyph there went
-             unnoticed. Sized like the input's other inline buttons. */
+        {/* Without a search row to share, the expand affordance stays up here. */}
+        {!searchable && onExpand && (
           <span
             role="button"
             className="btn-hover"
             onClick={onExpand}
-            style={{
-              cursor: 'pointer', userSelect: 'none', flexShrink: 0,
-              color: colors.textDim, border: '1px solid ' + colors.border,
-              borderRadius: 2, padding: '0 8px', lineHeight: '20px',
-              fontSize: isMobile ? fontSizes.base : fontSizes.sm, whiteSpace: 'nowrap',
-            }}
+            style={expandStyle}
           >
             {expandLabel}
           </span>
         )}
       </div>
       {searchable && (
-        <div style={{ padding: isMobile ? '6px 12px 8px 12px' : '4px 10px 6px 10px' }}>
-          <input
-            ref={searchRef}
-            value={searchValue}
-            onChange={(e) => onSearchValueChange!(e.target.value)}
-            placeholder={searchPlaceholder ?? ''}
-            spellCheck={false}
-            style={{
-              width: '100%', boxSizing: 'border-box',
-              background: colors.bgLight, border: '1px solid ' + colors.border,
-              borderRadius: 4, padding: isMobile ? '9px 10px' : '5px 8px', outline: 'none',
-              color: colors.text, fontSize: isMobile ? fontSizes.base : fontSizes.sm,
-            }}
-          />
+        /* Search and expand share one pinned row, the way the sidebar's worker
+           selector pairs them: neither scrolls away with the option list. */
+        <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexShrink: 0, padding: isMobile ? '6px 12px 8px 12px' : '4px 10px 6px 10px' }}>
+          <div style={{ flex: '1 1 0', minWidth: 0 }}>
+            <input
+              ref={searchRef}
+              value={searchValue}
+              onChange={(e) => onSearchValueChange!(e.target.value)}
+              placeholder={searchPlaceholder ?? ''}
+              spellCheck={false}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: colors.bgLight, border: '1px solid ' + colors.border,
+                borderRadius: 4, padding: isMobile ? '9px 10px' : '5px 8px', outline: 'none',
+                color: colors.text, fontSize: isMobile ? fontSizes.base : fontSizes.sm,
+              }}
+            />
+          </div>
+          {onExpand && (
+            <span role="button" className="btn-hover" onClick={onExpand} style={expandStyle}>
+              {expandLabel}
+            </span>
+          )}
         </div>
       )}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       {options.map((opt, i) => {
         const selected = selectedIds ? selectedIds.includes(opt.id) : (selectedId !== undefined && selectedId === opt.id)
         const active = activeIndex === i
@@ -279,6 +300,7 @@ export default function PickerDropdown({
           </div>
         )
       })}
+      </div>
     </div>
     </>
   )
