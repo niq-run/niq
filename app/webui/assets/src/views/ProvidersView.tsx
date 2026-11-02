@@ -21,6 +21,18 @@ export default function ProvidersView() {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [editorTab, setEditorTab] = useState<'visual' | 'json'>('visual')
+  // Collapsed provider cards, by index. A long provider list is unwieldy when
+  // every card shows its full field set, so each card folds down to its header
+  // row. Indices shift when a card above is removed, so removal renumbers.
+  const [collapsedCards, setCollapsedCards] = useState<Set<number>>(new Set())
+  const toggleCard = (i: number) => {
+    setCollapsedCards((prev) => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
+  }
 
   useEffect(() => {
     fetchProviders()
@@ -70,6 +82,9 @@ export default function ProvidersView() {
     const next = { ...cfg, providers }
     // Dropping the active provider must not leave a stale reference.
     if (next.active && !providers.some((p: any) => p.name === next.active)) next.active = ''
+    // Collapsed state is index-keyed: drop the removed card and slide the rest
+    // up, or a neighbour would inherit its collapsed state.
+    setCollapsedCards((prev) => new Set([...prev].filter((j) => j !== i).map((j) => (j > i ? j - 1 : j))))
     applyConfig(next)
   }
 
@@ -207,13 +222,28 @@ export default function ProvidersView() {
               <div key={i + ':' + (p.name || '')} style={{ border: '1px solid ' + colors.border, borderRadius: 6, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8, background: colors.detailBg }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span
+                    role="button"
+                    aria-expanded={!collapsedCards.has(i)}
+                    onClick={() => toggleCard(i)}
+                    className="btn-hover"
+                    style={{ cursor: 'pointer', userSelect: 'none', color: colors.textDimmed, fontSize: fontSizes.xs, width: 16, textAlign: 'center', flexShrink: 0 }}
+                  >
+                    {collapsedCards.has(i) ? '▸' : '▾'}
+                  </span>
+                  <span
                     onClick={() => applyConfig({ ...cfg, active: p.name })}
                     title={t('providers.field.active')}
                     style={{ cursor: 'pointer', color: cfg.active === p.name ? colors.accent : colors.textDimmed, fontSize: fontSizes.md }}
                   >
                     {cfg.active === p.name ? '◉' : '○'}
                   </span>
-                  <span style={{ color: colors.accent, fontSize: fontSizes.md, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name || t('providers.unnamed')}</span>
+                  <span
+                    onClick={() => toggleCard(i)}
+                    title={p.name || t('providers.unnamed')}
+                    style={{ cursor: 'pointer', userSelect: 'none', color: colors.accent, fontSize: fontSizes.md, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {p.name || t('providers.unnamed')}
+                  </span>
                   <span style={{ flex: 1 }} />
                   <button
                     onClick={() => removeProvider(i)}
@@ -222,6 +252,7 @@ export default function ProvidersView() {
                     {t('templates.delete')}
                   </button>
                 </div>
+                {!collapsedCards.has(i) && (<>
                 <div style={{ display: 'flex', gap: 8 }}>
                   {field(t('providers.field.name'), (
                     <input value={p.name || ''} onChange={(e) => updateProvider(i, { name: e.target.value })} style={cardInput} />
@@ -331,6 +362,7 @@ export default function ProvidersView() {
                     style={{ ...cardInput, fontFamily: 'monospace', resize: 'vertical', minHeight: 48 }}
                   />
                 ))}
+                </>)}
               </div>
             ))}
             <div>
