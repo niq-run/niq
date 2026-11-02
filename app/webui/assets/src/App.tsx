@@ -555,26 +555,19 @@ export default function App() {
   	const responseOnly = viewSettings.responseOnly
   const streamingMode = viewSettings.streamingMode
 
-  // The talk view's conversation scope: the reason workers it's currently
-  // watching (worker_id OR target OR recipient — the same envelope semantics
-  // as TalkView's relevantEvents and the backend's workerMatchesAny). With no
-  // explicit selection it resolves to every talk-partner worker; passing this
-  // to BOTH the stream and the events/before API means the server scopes the
-  // tail and pages over the conversation, instead of the client discarding
-  // out-of-conversation noise.
-  // partnerIds is a stable string (regex-free id sort) so talkScope's array
-  // ref only changes when the partner set actually changes — the worker poll
-  // rebuilds the array every tick, and we must not reconnect on identical sets.
-  const partnerIds = useMemo(() =>
-    workers.filter(w => isTalkPartnerType(w.type)).map(w => w.id).sort().join(','),
-  [workers])
-  const talkScope = useMemo(() => {
-    if (talkWorkers.size > 0) return [...talkWorkers]
-    return partnerIds ? partnerIds.split(',') : []
-  }, [talkWorkers, partnerIds])
+  // The talk view's conversation scope: the workers the user picked in the
+  // sidebar (worker_id OR target OR recipient — the same envelope semantics as
+  // TalkView's relevantEvents and the backend's workerMatchesAny). An empty
+  // selection is NOT "every talk partner": expanding it to the whole roster
+  // made the server build one `worker IN (…)` branch per worker, which overran
+  // SQLite's bind-variable limit once a project had enough workers and broke
+  // the stream. No selection now means no worker filter at all — TalkView's
+  // relevantEvents still drops out-of-conversation rows locally.
+  const talkScope = useMemo(() => [...talkWorkers].sort(), [talkWorkers])
 
-  // The talk stream scopes server-side over talkScope, so the key must follow
-  // it (an empty selection becomes the all-partners scope once workers load).
+  // The talk stream scopes server-side over talkScope when a worker is picked;
+  // with none picked it leaves the worker filter off entirely (see talkScope)
+  // and the client-side scope in TalkView does the narrowing.
   // streamingMode is part of the key because it decides whether delta partials
   // are needed on the live stream — toggling it re-scopes the stream's blacklist.
   const talkScopeKey = talkScope.join(',')
@@ -619,9 +612,9 @@ export default function App() {
       for (const role of filterRoles) params.append('role', role)
       if (traceFilter) params.set('trace', traceFilter)
     } else if (view === 'talk') {
-      // Always send the resolved conversation scope (selection, or all
-      // partners when nothing is picked) so the server drops out-of-scope
-      // events up front — never an unfiltered stream.
+      // Scope to the picked conversation workers only. An empty selection sends
+      // no worker param at all (an unfiltered stream, narrowed client-side by
+      // TalkView) rather than every talk partner — see talkScope.
       for (const id of talkScope) params.append('worker', id)
       if (responseOnly) for (const t of RESPONSE_ONLY_TYPES) params.append('type', t)
       for (const t of talkExclude) params.append('exclude', t)
