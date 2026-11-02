@@ -221,12 +221,19 @@ func runProject(args []string) error {
 			return err
 		}
 		setupProjectLogging(id)
-		return project.RunProject(project.ProjectRunOptions{
+		err := project.RunProject(project.ProjectRunOptions{
 			ProjectID: id,
 			BusAddr:   *busAddr,
 			WebUIAddr: *webUIAddr,
 			WebUIAuth: *webUIAuth,
 		})
+		if err != nil {
+			// The failure reason otherwise only reaches stderr: the control
+			// plane reports "exit status 1" and points at this log, which used
+			// to end at the last successful line.
+			log.Printf("[project] startup failed: %v", err)
+		}
+		return err
 
 	case args[0] == "help" || args[0] == "-h" || args[0] == "--help":
 		printProjectUsage()

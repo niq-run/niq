@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/niq-run/niq/app/project"
@@ -248,22 +249,31 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 		stdhttp.Error(w, "control: start project: "+err.Error(), 500)
 		return
 	}
-	// Reap the child so its exit is observable: a project killed by an eventbus
+	// Reap the child and keep its exit result: a project killed by an eventbus
 	// panic exits with code 2 (Go's panic) and no shutdown seq, and discarding
-	// cmd.Wait() hid exactly that in the field. Nothing is remembered about the
-	// process — it is an instance like any other, identified by its ports.
+	// cmd.Wait() hid exactly that in the field. The channel is buffered so the
+	// reaper never blocks once startup has been answered.
+	exited := make(chan error, 1)
 	go func() {
-		if werr := cmd.Wait(); werr != nil {
+		werr := cmd.Wait()
+		if werr != nil {
 			log.Printf("[control] project %s exited abnormally: %v", id, werr)
 		} else {
 			log.Printf("[control] project %s exited cleanly", id)
 		}
+		exited <- werr
 	}()
 
 	// Wait until the new process is actually serving on its WebUI port, so the
 	// response (and the UI's loading state) reflects a ready project rather
-	// than one that merely assigned a port in project.json.
-	webUI := waitWebUIReady(id)
+	// than one that merely assigned a port in project.json. A child that dies
+	// during startup is answered as a failure with its log — the old path
+	// returned 200 with webui_port 0, which the UI could not report at all.
+	webUI, err := waitProjectStart(id, exited)
+	if err != nil {
+		stdhttp.Error(w, err.Error(), stdhttp.StatusBadGateway)
+		return
+	}
 	json.NewEncoder(w).Encode(map[string]any{
 		"project":    id,
 		"webui_port": project.PortOf(webUI),
@@ -271,23 +281,74 @@ func (c *Control) launchProject(w stdhttp.ResponseWriter, id string) {
 	})
 }
 
-// waitWebUIReady blocks until the project's WebUI port is actually accepting
-// TCP connections (not merely assigned in project.json), or the deadline lapses.
-// It reuses the persisted port, so it is safe to call right after a relaunch on
-// the same address — it succeeds only once the new process is listening.
-func waitWebUIReady(id string) string {
-	deadline := time.Now().Add(12 * time.Second)
-	for time.Now().Before(deadline) {
+// projectStartTimeout bounds how long a start waits for the new instance's WebUI
+// to accept connections. Matches the CLI picker's own wait.
+const projectStartTimeout = 20 * time.Second
+
+// waitProjectStart blocks until the project's WebUI port is actually accepting
+// TCP connections (not merely assigned in project.json), its process exits, or
+// the deadline lapses. The exited channel carries the child's Wait result; it
+// is buffered, so an exit long after a successful start is still reaped and
+// logged by the caller's goroutine.
+func waitProjectStart(id string, exited <-chan error) (string, error) {
+	deadline := time.Now().Add(projectStartTimeout)
+	for {
 		if p, err := project.LoadProject(id); err == nil && p.Ports.WebUI != 0 {
 			addr := "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI)
 			if conn, derr := net.DialTimeout("tcp", addr, 300*time.Millisecond); derr == nil {
 				conn.Close()
-				return addr
+				return addr, nil
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case werr := <-exited:
+			return "", fmt.Errorf("project %s exited during startup: %v%s", id, werr, logHint(id))
+		case <-time.After(100 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("project %s did not start within %s%s", id, projectStartTimeout, logHint(id))
+		}
 	}
-	return ""
+}
+
+// logHint points at the project's log and appends its tail, so the reason a
+// project refused to start (no usable provider, a port already in use) reaches
+// the UI instead of sitting in a file the user has to go find.
+func logHint(id string) string {
+	path := project.LogPath(id)
+	hint := "; see " + path
+	if tail := logTail(path, 4); tail != "" {
+		return hint + ":\n" + tail
+	}
+	return hint
+}
+
+// logTail returns the last n non-empty trailing lines of a file, or "" when it
+// cannot be read. Only the file's tail is loaded: project logs grow by the day.
+func logTail(path string, n int) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() == 0 {
+		return ""
+	}
+	const window = 4096
+	off := st.Size() - window
+	if off < 0 {
+		off = 0
+	}
+	buf := make([]byte, st.Size()-off)
+	if _, err := f.ReadAt(buf, off); err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(string(buf), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func resolvedBus(id string) int {
