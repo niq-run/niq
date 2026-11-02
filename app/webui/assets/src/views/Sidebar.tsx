@@ -1349,8 +1349,10 @@ function CheckBox({ active, accent, border, size = 13, style }: { active: boolea
 // A collapsible section title. Collapsed sections get a trailing expand icon
 // at the end of the row; open ones carry no icon, so the title reads exactly
 // like the plain heading it was before. A collapsed section is only its
-// header, so that header becomes a row of its own — equal padding and equal
-// margins put the label dead centre of the strip instead of hugging one edge.
+// header, so the header carries the whole gap itself: 16px above and none
+// below, because the 16px margin of the divider that follows plays the other
+// half. That leaves the lone title centred in its strip instead of hanging
+// from the top with the divider's margin stacked underneath it.
 function SectionHeader({ label, collapsed, onToggle, colors, size, marginTop, marginBottom = 8 }: { label: string; collapsed: boolean; onToggle: () => void; colors: Palette; size: number; marginTop: number; marginBottom?: number }) {
   const { t } = useI18n()
   const [hover, setHover] = useState(false)
@@ -1364,9 +1366,8 @@ function SectionHeader({ label, collapsed, onToggle, colors, size, marginTop, ma
       onMouseLeave={() => setHover(false)}
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
-        marginTop: collapsed ? 8 : marginTop,
-        marginBottom: collapsed ? 8 : marginBottom,
-        padding: collapsed ? '4px 0' : 0,
+        marginTop: collapsed ? 16 : marginTop,
+        marginBottom: collapsed ? 0 : marginBottom,
         color: colors.text, fontSize: size,
         cursor: 'pointer', userSelect: 'none',
       }}
