@@ -86,32 +86,26 @@ func logoChip() string {
 }
 
 // versionNumber is the build version without git describe's leading "v", so the
-// banner can read "version-0.13.0-…" instead of "version-v0.13.0-…".
+// banner can read "version: 0.13.0-…" instead of "version: v0.13.0-…".
 func versionNumber() string { return strings.TrimPrefix(version, "v") }
 
-// banner is the identity block printed beside the mark: version, an optional
-// one-liner, and the state. The mark already carries the product name, so the
-// text does not repeat it.
+// banner is the identity block printed under the mark: an optional one-liner
+// and the state. The mark already carries the product name, so the text does
+// not repeat it.
 type banner struct {
-	version string
 	tagline string
 	state   string
 }
 
-// printBanner prints the mark inline with the version, then the tagline and the
-// state on their own lines. Without colour there is no mark to carry the name,
-// so the first line leads with it instead.
+// printBanner prints the mark with the version, then the tagline and the state
+// on their own lines.
 func printBanner(b banner) {
-	if chip := logoChip(); chip != "" {
-		fmt.Printf("  %s %s\n", chip, b.version)
-	} else {
-		fmt.Printf("  %s  %s\n", "niq", b.version)
-	}
+	fmt.Println(versionTag())
 	if b.tagline != "" {
-		fmt.Printf("  %s\n", b.tagline)
+		fmt.Printf("%s\n", b.tagline)
 	}
 	if b.state != "" {
-		fmt.Printf("\n  %s\n", b.state)
+		fmt.Printf("\n%s\n", b.state)
 	}
 }
 
@@ -119,16 +113,6 @@ func printBanner(b banner) {
 // mark "this is a thing you can act on" in states, handlers and project rows.
 func bracketed(name string) string {
 	return brandBold("[") + bold(name) + brandBold("]")
-}
-
-// stateDot marks a running/stopped instance. It is the same glyph in the status
-// report and in the picker, so "am I looking at the same thing?" never costs a
-// thought.
-func stateDot(running bool) string {
-	if running {
-		return green("●")
-	}
-	return dim("○")
 }
 
 // stateWord renders the fixed-width state cell. Padding is applied before the
@@ -179,7 +163,13 @@ func portCell(n int) string {
 }
 
 // versionTag is the one place the CLI prints its identity: `niq status`, the
-// start banner, the picker and --help all lead with it.
+// start banner, --version, --help and the picker all lead with it. It is the
+// mark followed by the version, and without colour (no mark) the name stands in
+// for the mark.
 func versionTag() string {
-	return bold("niq") + "  " + dim("version-") + brand(versionNumber())
+	tag := dim("version: ") + brand(versionNumber())
+	if chip := logoChip(); chip != "" {
+		return chip + " " + tag
+	}
+	return bold("niq") + "  " + tag
 }

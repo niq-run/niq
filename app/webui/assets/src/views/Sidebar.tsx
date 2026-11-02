@@ -74,6 +74,17 @@ function loadSidebarWidth(): number {
   return Math.min(Math.max(v, MIN_SIDEBAR_WIDTH), Math.round((typeof window !== 'undefined' ? window.innerWidth : 1280) * 0.5))
 }
 
+// Worker-selector height: the divider under the list is its drag handle. Stored
+// as a cap (the list still shrinks to its content, as before) and reset by
+// double-clicking the handle.
+const SELECTOR_HEIGHT_KEY = 'niq-sidebar-selector-height'
+const MIN_SELECTOR_HEIGHT = 80
+
+function loadSelectorHeight(): number | null {
+  const v = parseInt(globalThis.localStorage?.getItem(SELECTOR_HEIGHT_KEY) ?? '', 10)
+  return Number.isNaN(v) ? null : Math.max(v, MIN_SELECTOR_HEIGHT)
+}
+
 export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWorker, workers, talkWorkers, onToggleWorker, onClearWorkers, viewSettings, onToggleViewSetting, mode, project, projRunning, projBusy, projStarting, projActionErr, onProjectStart, onProjectStop, onProjectRestart, panel, onSelectPanel, archived, isMobile, open, onNavigate, pendingApprovals = 0, notifyPermission = 'unsupported', notifyOn = false, onToggleNotify, onMention, onOpenDetail, onRefreshWorkers }: SidebarProps) {
   const { dark, toggle, colors, inverted, toggleInverted } = useTheme()
   const { lang, setLang, t } = useI18n()
@@ -565,6 +576,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // list never sprawls down the sidebar. Row height = its line height plus its
   // own vertical padding, plus the gap to the next row.
   const workerListMax = (optLineNum + workerRowPadY * 2 + workerRowGapY) * 10
+
   // Horizontal content inset; mobile gets more breathing room on both sides.
   // The section dividers use a matching negative horizontal margin so they
   // stay edge-to-edge.
@@ -575,6 +587,69 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const edgePadX = isMobile ? 24 : 16
   const contentPadX = isMobile ? 24 : 20
   const hrX = -contentPadX
+
+  // ── Worker-selector height ──
+  // The divider under the selector doubles as its resize handle: dragging it
+  // changes the list's height cap (the list keeps scrolling internally), the
+  // value persists across reloads, and a double-click restores the default.
+  const [selectorHeight, setSelectorHeight] = useState<number | null>(loadSelectorHeight)
+  const selectorH = selectorHeight ?? workerListMax
+  const [selectorResizing, setSelectorResizing] = useState(false)
+  const [selectorHandleHover, setSelectorHandleHover] = useState(false)
+  const startSelectorResize = (e: ReactMouseEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startH = selectorH
+    setSelectorResizing(true)
+    const onMove = (ev: MouseEvent) => {
+      const max = Math.round((typeof window !== 'undefined' ? window.innerHeight : 800) * 0.6)
+      const next = Math.min(Math.max(startH + (ev.clientY - startY), MIN_SELECTOR_HEIGHT), max)
+      setSelectorHeight(next)
+      globalThis.localStorage?.setItem(SELECTOR_HEIGHT_KEY, String(next))
+    }
+    const onUp = () => {
+      setSelectorResizing(false)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+    }
+    document.body.style.cursor = 'ns-resize'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+  const resetSelectorHeight = () => {
+    setSelectorHeight(null)
+    globalThis.localStorage?.removeItem(SELECTOR_HEIGHT_KEY)
+  }
+  // Hidden in the views that hide the selector, so no stray handle is left.
+  const selectorShown = view !== 'workers' && view !== 'programs' && view !== 'mcp'
+  // Visible grip on that divider, drawn exactly like the sidebar's width grip
+  // (a 5px rounded pill riding the divider line, dimmed until hovered) so the
+  // two handles read as the same affordance in different directions.
+  const selectorHandleActive = selectorResizing || selectorHandleHover
+  const selectorDivider = selectorShown ? (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      title={t('sidebar.selector.resize')}
+      onMouseDown={startSelectorResize}
+      onDoubleClick={resetSelectorHeight}
+      onMouseEnter={() => setSelectorHandleHover(true)}
+      onMouseLeave={() => setSelectorHandleHover(false)}
+      style={{
+        position: 'relative', margin: '10px ' + hrX + 'px 4px', padding: '5px 0',
+        cursor: 'ns-resize', userSelect: 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <span style={{ position: 'absolute', left: 0, right: 0, top: '50%', borderTop: '1px solid ' + colors.border }} />
+      <span style={{
+        position: 'relative', width: 30, height: 5, borderRadius: 3,
+        background: selectorHandleActive ? colors.textDim : colors.textDimmed,
+        transition: 'background 0.15s',
+      }} />
+    </div>
+  ) : null
   // Inter-row gap for the options list. Kept at 0 so the rows sit flush: with
   // the hover background bleeding full-width, neighbouring hovered rows read as
   // one continuous strip with no gap between their backgrounds. Vertical spacing
@@ -830,7 +905,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
               the rows themselves, see workerRowStyle) run edge-to-edge like
               the view rows above instead of stopping at the scroll container's
               padding. */}
-          <div style={{ flexShrink: 0, overflowY: 'auto', overflowX: 'hidden', maxHeight: workerListMax, margin: '0 -' + contentPadX + 'px' }}>
+          <div style={{ flexShrink: 0, overflowY: 'auto', overflowX: 'hidden', maxHeight: selectorH, margin: '0 -' + contentPadX + 'px' }}>
           {selectorList.map((w) => {
             const isActive = view === 'talk'
               ? talkWorkers.has(w.id)
@@ -900,7 +975,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           {/* View Settings — talk view only */}
           {view === 'talk' && (
             <>
-              <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
+              {selectorDivider}
               <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.viewSettings')}</strong>
               <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
               <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
@@ -917,9 +992,11 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           jump/start hop to other projects; in control mode this is the only
           usable section. In control mode no section precedes it, so the leading
           divider is skipped. */}
-      {mode === 'project' && (
+      {mode === 'project' && (view === 'talk' ? (
         <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
-      )}
+      ) : selectorDivider ?? (
+        <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
+      ))}
       <strong style={{ marginTop: mode === 'project' ? 0 : 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.resources')}</strong>
       <div
         onClick={() => { onSelectPanel('projects'); onNavigate() }}
@@ -985,24 +1062,31 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                 ...(projMenuOpen ? { background: colors.bgLight } : {}),
               }}
             >
-              {showProjectName ? (
-                <span style={{
-                  flexShrink: 0, display: 'inline-block', whiteSpace: 'nowrap',
-                  fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace",
-                  fontSize: fontSizes.lg, fontWeight: 'bold', lineHeight: 1,
-                  color: colors.accent,
-                }}>
-                  <LogoWordmark />
-                </span>
-              ) : (
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
-              )}
+              {/* One box for both states: the wordmark is larger type than the
+                  name, and a bigger inline-block grows the line box it sits in,
+                  so switching the logo used to change the height of the whole
+                  footer row. A fixed-height flex row keeps the trigger the same
+                  size whichever of the two is showing. */}
+              <span style={{ display: 'flex', alignItems: 'center', height: 20, minWidth: 0 }}>
+                {showProjectName ? (
+                  <span style={{
+                    flexShrink: 0, whiteSpace: 'nowrap',
+                    fontFamily: "'SomeType Mono', 'Fira Mono', 'PT Mono', monospace",
+                    fontSize: fontSizes.lg, fontWeight: 'bold', lineHeight: 1,
+                    color: colors.accent,
+                  }}>
+                    <LogoWordmark />
+                  </span>
+                ) : (
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project}</span>
+                )}
+              </span>
             </div>
             {/* Lifecycle menu, opening upward from the footer. Mirrors the
                 projects page rows: running → restart/stop, stopped → start,
-                with a spinner while an op is in flight and inline errors. When
-                the control-plane poll has not answered yet, restart/stop stay
-                available and the menu says the state is unknown. */}
+                with a spinner while an op is in flight and inline errors. Before
+                the control-plane poll has answered, restart/stop stay available
+                and the menu simply claims no state. */}
             {projMenuOpen && (
               <div
                 onClick={(e) => e.stopPropagation()}
@@ -1032,11 +1116,6 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
                     <span onClick={onProjectStop} className="btn-hover" style={{ cursor: 'pointer', fontSize: fontSizes.sm, color: colors.toolFailed, borderRadius: 2, padding: '3px 8px', userSelect: 'none' }}>
                       {t('projects.stop')}
                     </span>
-                    {projRunning === undefined && (
-                      <span style={{ color: colors.textDimmed, fontSize: fontSizes.xs, padding: '2px 8px' }}>
-                        {t('projects.statusUnknown')}
-                      </span>
-                    )}
                   </>
                 )}
                 {projActionErr && (

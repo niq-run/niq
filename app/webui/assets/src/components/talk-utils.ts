@@ -526,6 +526,15 @@ export function findReferencedInput(events: EventPayload[], responseEvt: EventPa
 
 // ── Time formatting ──
 
+// Full timestamp for the event detail panel. Rows show the time of day only
+// (density: the list is almost always today), but a single event you opened on
+// purpose needs its date — and the year, since a store outlives the calendar.
+export function formatDateTime(ts: number): string {
+  const d = new Date(ts * 1000)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${formatTime(ts)}`
+}
+
 export function formatTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString([], {
     hour: "2-digit",

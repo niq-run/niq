@@ -56,18 +56,23 @@ session) no longer stops it. Running `niq` again reports on the service instead
 up?".
 
 ```
-niq control is running in the background (pid 4711)
+ - niq -  version: 0.14.0
 
-  WebUI    http://localhost:9527
-  Log      ~/.niq/niq.log
-  Stop     niq stop
-  Restart  niq restart
+[control] running  pid 4711 · since 2026-11-01 23:57
+webui    http://localhost:9527
+log      ~/.niq/niq.log
+stop     niq stop
+restart  niq restart
+
+[projects]  niq project to start, stop or restart one
+● pin   running  webui 57609  bus 57608  http://localhost:9527/p/pin/
+○ notes stopped  webui 57621  bus 57620  http://localhost:9527/p/notes/
 ```
 
 `niq status` reports the process, address and log, plus each project's run
 state and URL (a refused port means that instance is not running); `niq stop`
 shuts it down — projects are their own processes, so they keep serving unless
-you add `--all`;
+you add `-p`;
 `niq restart` brings it back on the same address. Put the flags anywhere a
 start goes (`niq --addr :8080 --auth alice:s3cret`, `niq restart` reuses the
 recorded address). To keep it attached to the terminal — systemd, a container,
@@ -87,8 +92,8 @@ niq project run my-project
 ```
 
 `niq project` on its own (or `niq project list`) is an arrow-key picker over
-every project — state, ports and directory per row: `↑`/`↓` to move, `enter` to
-pick, then start (if stopped) or stop / restart (if running). An instance is
+every project — state, ports and directory per row: `↑`/`↓`, `⌃n`/`⌃p` or `j`/`k`
+to move, `enter` to pick, then start (if stopped) or stop / restart (if running). An instance is
 identified by its ports, so the CLI, the WebUI and a project started by hand in
 a terminal all act on the same thing — the control plane keeps no list of what
 it launched. Without a terminal the picker prints the same table; `--ids` prints
@@ -99,8 +104,8 @@ just the ids.
 | `niq` | start the control plane in the background, or report on it when it is already running |
 | `niq -f`, `niq --foreground` | run the control plane in this terminal |
 | `niq status` | the control plane and every project instance |
-| `niq stop [--all]` | stop the control plane (`--all` also stops the project instances) |
-| `niq restart` | restart it on the address it was started with |
+| `niq stop [-p]` | stop the control plane (`-p` also stops the running projects) |
+| `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
 | `niq project` | pick a project: start, stop or restart it |
 | `niq project create` / `niq project run` | create a project / run one in this terminal |
 | `niq completion <shell>` | completion for bash, zsh or fish |

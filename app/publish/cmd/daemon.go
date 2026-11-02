@@ -12,6 +12,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -123,13 +124,16 @@ func isRunning(st *controlState) bool {
 }
 
 // startBackground launches the control plane detached from this terminal.
-func startBackground(addr, auth string) error {
+// startBackground starts the detached control plane and returns once it is
+// serving. Printing is the caller's job: a start reports the whole service, a
+// restart reports only the plane (its project table would be about to change).
+func startBackground(addr, auth string) (*controlState, error) {
 	if st, ok := readControlState(); ok && isRunning(st) {
-		return reportAlreadyRunning(st, addr)
+		return nil, reportAlreadyRunning(st, addr)
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("resolve executable: %w", err)
+		return nil, fmt.Errorf("resolve executable: %w", err)
 	}
 	args := []string{"control", "--foreground", "--addr", addr}
 	if auth != "" {
@@ -140,7 +144,7 @@ func startBackground(addr, auth string) error {
 	// this terminal (or its pipeline) alive. Its logs go to niq.log.
 	cmd.SysProcAttr = detachedProcAttr()
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start background process: %w", err)
+		return nil, fmt.Errorf("start background process: %w", err)
 	}
 
 	exited := make(chan error, 1)
@@ -148,15 +152,14 @@ func startBackground(addr, auth string) error {
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		if st, ok := readControlState(); ok && st.PID == cmd.Process.Pid && isServing(st.Bound) {
-			printControlStarted(st)
-			return nil
+			return st, nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("control plane did not start within 20s; see %s:\n%s", controlLogPath(), logTail(10))
+			return nil, fmt.Errorf("control plane did not start within 20s; see %s:\n%s", controlLogPath(), logTail(10))
 		}
 		select {
 		case err := <-exited:
-			return fmt.Errorf("control plane exited during startup: %v; see %s:\n%s", err, controlLogPath(), logTail(10))
+			return nil, fmt.Errorf("control plane exited during startup: %v; see %s:\n%s", err, controlLogPath(), logTail(10))
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -278,7 +281,7 @@ func reportRunningProjects() {
 		return
 	}
 	fmt.Printf("\n%s %d project instance(s) still running (%s); %s stops them too.\n",
-		dim("note:"), len(ids), strings.Join(ids, ", "), bold("niq stop --all"))
+		dim("note:"), len(ids), strings.Join(ids, ", "), bold("niq stop -p"))
 }
 
 // stopProjects interrupts every running project instance. SIGINT is the same
@@ -286,6 +289,12 @@ func reportRunningProjects() {
 // reaches both instances this control plane launched and ones started by hand
 // in another terminal (they are found by their WebUI port).
 func stopProjects() error {
+	// The project package logs the signal it sends to a port holder; on a
+	// report like this it would land between the control line and the summary.
+	prev := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(prev)
+
 	projects, err := project.ListProjects()
 	if err != nil {
 		return err
@@ -328,12 +337,28 @@ func stopProjects() error {
 	return nil
 }
 
-func restartControl() error {
+// restartControl stops and starts the control plane again. With withProjects it
+// also restarts the instances that were running, which is what a binary upgrade
+// needs: every process serves the page it was built with, so leaving the old
+// ones up would leave the old UI up.
+//
+// The set is captured before the plane goes down. Instances are independent of
+// it, so nothing they do depends on the order — but capturing first makes clear
+// that "running now" is the whole criterion, whether the plane started them or
+// a terminal did.
+func restartControl(withProjects bool) error {
+	var running []string
+	if withProjects {
+		running = runningProjectIDs()
+	}
+
 	addr := defaultAddr
 	if st, ok := readControlState(); ok {
 		addr = st.Addr // keep the port the user originally chose
 		if isRunning(st) {
-			if err := stopControl(false); err != nil {
+			// Not stopControl: it reports the projects it left running, which
+			// this command is about to restart.
+			if err := stopControlPlane(); err != nil {
 				return err
 			}
 		} else {
@@ -342,7 +367,57 @@ func restartControl() error {
 	}
 	// Credentials survive in ~/.niq/common/auth.json, so a restart needs no
 	// --auth to keep remote access behind the same basic-auth pair.
-	return startBackground(addr, "")
+	st, err := startBackground(addr, "")
+	if err != nil {
+		return err
+	}
+	if st != nil {
+		// The plane's own report only: the project table would show states that
+		// the next step changes. A plain restart keeps the full banner.
+		if withProjects {
+			printControlRunning(st)
+		} else {
+			printControlStarted(st)
+		}
+	}
+	if !withProjects {
+		return nil
+	}
+
+	if len(running) == 0 {
+		fmt.Printf("\n%s\n", dim("no project instance was running"))
+		return nil
+	}
+	fmt.Printf("\n%s\n", bracketed("projects"))
+	restartProjectInstances(running)
+	return nil
+}
+
+// restartProjectInstances restarts each id on its recorded ports and prints one
+// line per project. A project that fails is reported and the rest continue: one
+// instance failing to come back should not strand the others half-upgraded.
+func restartProjectInstances(ids []string) {
+	// The project package logs the signal it sends to a port holder on the
+	// default logger; on a report like this those lines would land in the
+	// middle of the table, and the per-project line below already says what
+	// happened.
+	prev := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(prev)
+
+	for _, id := range ids {
+		p, err := project.LoadProject(id)
+		if err != nil {
+			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
+			continue
+		}
+		line, err := restartProjectInstance(*p)
+		if err != nil {
+			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
+			continue
+		}
+		fmt.Printf("%s\n", line)
+	}
 }
 
 func statusControl() error {
@@ -363,23 +438,21 @@ func statusControl() error {
 // you used to ask.
 func printControlRunning(st *controlState) {
 	printBanner(banner{
-		version: dim("version-") + brand(versionNumber()),
 		state: bracketed("control") + " " + stateWord(true) +
 			dim(fmt.Sprintf("  pid %d · since %s", st.PID, shortTime(st.Started))),
 	})
-	fmt.Printf("  %s %s\n", label("webui", 8), brand(project.LocalhostURL(st.Bound)))
-	fmt.Printf("  %s %s\n", label("log", 8), shortPath(controlLogPath()))
-	fmt.Printf("  %s %s\n", label("stop", 8), "niq stop")
-	fmt.Printf("  %s %s\n", label("restart", 8), "niq restart")
+	fmt.Printf("%s %s\n", label("webui", 8), brand(project.LocalhostURL(st.Bound)))
+	fmt.Printf("%s %s\n", label("log", 8), shortPath(controlLogPath()))
+	fmt.Printf("%s %s\n", label("stop", 8), "niq stop")
+	fmt.Printf("%s %s\n", label("restart", 8), "niq restart")
 }
 
 func printControlStopped() {
 	printBanner(banner{
-		version: dim("version-") + brand(versionNumber()),
-		state:   bracketed("control") + " " + stateWord(false),
+		state: bracketed("control") + " " + stateWord(false),
 	})
-	fmt.Printf("  %s %s  %s\n", label("start", 8), "niq", dim("background"))
-	fmt.Printf("  %s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))
+	fmt.Printf("%s %s  %s\n", label("start", 8), "niq", dim("background"))
+	fmt.Printf("%s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))
 }
 
 // printProjectStatus lists every project with the state of its instance, so
@@ -415,7 +488,9 @@ func printProjectStatus(controlURL string) {
 		return brand(target)
 	}
 	fmt.Println()
-	printProjectTable(projects, url)
+	// The list reports state; acting on it is the picker's job, so the heading
+	// says where that is.
+	printProjectTable(projects, url, bold("niq project")+dim(" to start, stop or restart one"))
 }
 
 func printControlStarted(st *controlState) {

@@ -6,8 +6,8 @@
 //	                          or show its status when it is already running
 //	niq control [-f]        — start it in the foreground instead
 //	niq status              — report whether it is running and where
-//	niq stop [--all]        — stop the background control plane (-all: + projects)
-//	niq restart             — stop and start it again
+//	niq stop [-p]           — stop the background control plane (-p: the projects too)
+//	niq restart [-p]        — stop and start it again (-p: the projects too)
 //	niq project             — pick a project, then stop or restart it
 //	niq project list        — list projects, their ports and run state
 //	niq project create <id> — create a project from a template
@@ -54,7 +54,7 @@ func main() {
 	case len(os.Args) > 1 && os.Args[1] == "stop":
 		err = runStop(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "restart":
-		err = restartControl()
+		err = runRestart(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "status":
 		err = statusControl()
 	case len(os.Args) > 1 && (os.Args[1] == "completion" || os.Args[1] == "complete"):
@@ -78,7 +78,14 @@ func runDefault() error {
 	if st, ok := readControlState(); ok && isRunning(st) {
 		return statusControl()
 	}
-	return startBackground(defaultAddr, "")
+	st, err := startBackground(defaultAddr, "")
+	if err != nil {
+		return err
+	}
+	if st != nil {
+		printControlStarted(st)
+	}
+	return nil
 }
 
 func runControl(args []string) error {
@@ -102,16 +109,39 @@ func runControl(args []string) error {
 	if *foreground {
 		return runControlForeground(*addr, *auth)
 	}
-	return startBackground(*addr, *auth)
+	st, err := startBackground(*addr, *auth)
+	if err != nil {
+		return err
+	}
+	if st != nil {
+		printControlStarted(st)
+	}
+	return nil
+}
+
+// runRestart restarts the control plane. -p / --projects also restarts the
+// instances that are running — after a binary upgrade each of them still serves
+// the page it was built with.
+func runRestart(args []string) error {
+	fs := flag.NewFlagSet("niq restart", flag.ContinueOnError)
+	var projects bool
+	fs.BoolVar(&projects, "projects", false, "Also restart every running project instance")
+	fs.BoolVar(&projects, "p", false, "Shorthand for --projects")
+	if err := fs.Parse(args); err != nil {
+		return helpOrErr(err)
+	}
+	return restartControl(projects)
 }
 
 func runStop(args []string) error {
 	fs := flag.NewFlagSet("niq stop", flag.ContinueOnError)
-	all := fs.Bool("all", false, "Also stop every running project instance")
+	var projects bool
+	fs.BoolVar(&projects, "projects", false, "Also stop every running project instance")
+	fs.BoolVar(&projects, "p", false, "Shorthand for --projects")
 	if err := fs.Parse(args); err != nil {
 		return helpOrErr(err)
 	}
-	return stopControl(*all)
+	return stopControl(projects)
 }
 
 // helpOrErr keeps --help from being reported as a failure: flag has already
@@ -223,15 +253,15 @@ func setupProjectLogging(id string) {
 }
 
 func printUsage() {
-	printBanner(banner{version: dim("version-") + brand(versionNumber()), tagline: dim("neural interface quantum")})
+	printBanner(banner{tagline: dim("neural interface quantum")})
 	fmt.Println()
-	fmt.Printf("  %s\n", bracketed("usage"))
+	fmt.Printf("%s\n", bracketed("usage"))
 	printUsageRows([][2]string{
 		{"niq", "start the control plane in the background, or report on it when it is already running"},
 		{"niq -f, --foreground", "run the control plane in this terminal"},
 		{"niq status", "the control plane and every project instance"},
-		{"niq stop [--all]", "stop the control plane (--all also stops the project instances)"},
-		{"niq restart", "restart the control plane on the address it was started with"},
+		{"niq stop [-p]", "stop the control plane; -p also stops the running projects"},
+		{"niq restart [-p]", "restart the control plane; -p also restarts the running projects"},
 		{"niq project", "pick a project, then start, stop or restart it"},
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
 		{"niq project create <id> [--template <name>]", "create a project from a template"},
@@ -240,13 +270,13 @@ func printUsage() {
 		{"niq --version", "print the version"},
 	})
 
-	fmt.Printf("\n  %s\n", bracketed("start flags"))
+	fmt.Printf("\n%s\n", bracketed("start flags"))
 	printUsageRows([][2]string{
 		{"--addr <host:port>", "listen address, default :9527"},
 		{"--auth <user:pass>", "basic auth for non-localhost access; saved to ~/.niq/common/auth.json"},
 	})
 
-	fmt.Printf("\n  %s\n", bracketed("shell completion"))
+	fmt.Printf("\n%s\n", bracketed("shell completion"))
 	printUsageRows([][2]string{
 		{"bash", "source <(niq completion bash)"},
 		{"zsh", "niq completion zsh > \"${fpath[1]}/_niq\""},
@@ -261,18 +291,18 @@ func printUsageRows(rows [][2]string) {
 	const col = 30
 	for _, r := range rows {
 		if len(r[0]) <= col {
-			fmt.Printf("  %s  %s\n", bold(fmt.Sprintf("%-*s", col, r[0])), dim(r[1]))
+			fmt.Printf("%s  %s\n", bold(fmt.Sprintf("%-*s", col, r[0])), dim(r[1]))
 			continue
 		}
-		fmt.Printf("  %s\n", bold(r[0]))
-		fmt.Printf("  %s  %s\n", strings.Repeat(" ", col), dim(r[1]))
+		fmt.Printf("%s\n", bold(r[0]))
+		fmt.Printf("%s  %s\n", strings.Repeat(" ", col), dim(r[1]))
 	}
 }
 
 func printProjectUsage() {
-	printBanner(banner{version: dim("version-") + brand(versionNumber()), tagline: dim("project instances")})
+	printBanner(banner{tagline: dim("project instances")})
 	fmt.Println()
-	fmt.Printf("  %s\n", bracketed("usage"))
+	fmt.Printf("%s\n", bracketed("usage"))
 	printUsageRows([][2]string{
 		{"niq project", "pick a project (↑/↓, enter), then start, stop or restart it"},
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},

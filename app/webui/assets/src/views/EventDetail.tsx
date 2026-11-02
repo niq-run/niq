@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { type EventPayload } from '../types'
-import { getTypeColor, formatTime, inputContent } from '../components/talk-utils'
+import { getTypeColor, formatDateTime, inputContent } from '../components/talk-utils'
 import { makeMdComponents } from '../components/MarkdownComponents'
 import PayloadGate from '../components/PayloadGate'
 import CollapsibleCode from '../components/CollapsibleCode'
@@ -27,7 +27,7 @@ interface EventDetailProps {
 export default function EventDetail({ evt, deliveries, onClose, canGoBack, onBack, onFindPair, onTraceClick }: EventDetailProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
-  const time = formatTime(evt.timestamp)
+  const time = formatDateTime(evt.timestamp)
   const typeColor = getTypeColor(evt.type, colors)
   const [wrap, setWrap] = useState(true)
   // Serialised once and handed to the size gate, which decides whether the
