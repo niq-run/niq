@@ -203,7 +203,6 @@ export const en = {
   'talk.input.expand.tooltip': 'expand the input box',
   'talk.input.collapse.tooltip': 'collapse the input box',
   'picker.mention': 'mention',
-  'picker.targets': 'recipients',
   'picker.header.mode': 'mode',
   'picker.group.untagged': 'other',
   'picker.group.selected': 'Selected',

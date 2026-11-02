@@ -12,6 +12,8 @@ export interface PickerOption {
 }
 
 interface PickerDropdownProps {
+  // The cap line above the rows. Empty string omits it entirely (the target
+  // picker has no title — the search box alone says what the list is).
   header: string
   options: PickerOption[]
   selectedId?: string
@@ -168,6 +170,7 @@ export default function PickerDropdown({
         // mobile backdrop is a separate sibling, so tapping it still closes.
         onClick={(e) => e.stopPropagation()}
       >
+      {header !== '' && (
       <div
         className="picker-header"
         style={{
@@ -194,10 +197,12 @@ export default function PickerDropdown({
           </span>
         )}
       </div>
+      )}
       {searchable && (
         /* Search and expand share one pinned row, the way the sidebar's worker
-           selector pairs them: neither scrolls away with the option list. */
-        <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexShrink: 0, padding: isMobile ? '6px 12px 8px 12px' : '4px 10px 6px 10px' }}>
+           selector pairs them: neither scrolls away with the option list. A
+           headerless picker keeps its top breathing room here instead. */
+        <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexShrink: 0, padding: header !== '' ? (isMobile ? '6px 12px 8px 12px' : '4px 10px 6px 10px') : (isMobile ? '12px 12px 10px 12px' : '10px 10px 6px 10px') }}>
           <div style={{ flex: '1 1 0', minWidth: 0 }}>
             <input
               ref={searchRef}

@@ -195,7 +195,6 @@ export const zh: Record<StringKey, string> = {
   'talk.input.expand.tooltip': '展开输入框',
   'talk.input.collapse.tooltip': '收起输入框',
   'picker.mention': '提及',
-  'picker.targets': '收件人',
   'picker.header.mode': '模式',
   'picker.group.untagged': '其他',
   'picker.group.selected': '已选中',
