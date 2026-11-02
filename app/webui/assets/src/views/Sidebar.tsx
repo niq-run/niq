@@ -670,8 +670,11 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     setSelectorHeight(null)
     globalThis.localStorage?.removeItem(SELECTOR_HEIGHT_KEY)
   }
-  // Hidden in the views that hide the selector, so no stray handle is left.
-  const selectorShown = view !== 'workers' && view !== 'programs' && view !== 'mcp'
+  // Hidden where the selector has no job: the management panels
+  // (projects/templates/providers), the approvals inbox, and the views whose
+  // main area is itself a worker list. Its separator is hidden too, so those
+  // surfaces don't leave a stray line.
+  const selectorShown = !panel && view !== 'workers' && view !== 'programs' && view !== 'mcp' && view !== 'approvals'
   // Visible grip on that divider, drawn exactly like the sidebar's width grip
   // (a 5px rounded pill riding the divider line, dimmed until hovered) so the
   // two handles read as the same affordance in different directions.
@@ -887,11 +890,9 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       {sectionHeader('projectResources', t('sidebar.projectResources'), 0)}
       {sectionOpen('projectResources') && PROJECT_RESOURCE_MODES.map((v, i, all) => navRow(v, i === all.length - 1))}
 
-      {/* Worker selector list — hidden in the workers view (the main area IS
-          the worker list there) and in the programs view (program browsing
-          needs no worker filter). Its separator is hidden too, so switching to
-          those views doesn't leave a stray line. */}
-      {view !== 'workers' && view !== 'programs' && view !== 'mcp' && (
+      {/* Worker selector list — see selectorShown for where it is left out.
+          Its separator goes with it, so those surfaces get no stray line. */}
+      {selectorShown && (
         <>
           <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
           {sectionHeader('workerSelector', t('sidebar.workerSelector'), 0)}
