@@ -682,7 +682,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       onMouseEnter={() => setSelectorHandleHover(true)}
       onMouseLeave={() => setSelectorHandleHover(false)}
       style={{
-        position: 'relative', margin: '10px ' + hrX + 'px 4px', padding: '5px 0',
+        position: 'relative', margin: '16px ' + hrX + 'px', padding: '5px 0',
         cursor: 'ns-resize', userSelect: 'none',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
@@ -1349,9 +1349,10 @@ function CheckBox({ active, accent, border, size = 13, style }: { active: boolea
 
 // A collapsible section title. Collapsed sections get a trailing expand icon
 // at the end of the row; open ones carry no icon, so the title reads exactly
-// like the plain heading it was before. Every section is followed by a
-// divider, so a collapsed header drops its own margins and lets the 16px
-// divider margins above and below centre the lone title in its strip.
+// like the plain heading it was before. A collapsed header keeps its top
+// margin (so the title does not jump when folded) and drops its bottom one:
+// the 16px divider that closes every section supplies the other half, which
+// leaves the lone title centred in its strip.
 function SectionHeader({ label, collapsed, onToggle, colors, size, marginTop, marginBottom = 8 }: { label: string; collapsed: boolean; onToggle: () => void; colors: Palette; size: number; marginTop: number; marginBottom?: number }) {
   const { t } = useI18n()
   const [hover, setHover] = useState(false)
@@ -1365,7 +1366,7 @@ function SectionHeader({ label, collapsed, onToggle, colors, size, marginTop, ma
       onMouseLeave={() => setHover(false)}
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
-        marginTop: collapsed ? 0 : marginTop,
+        marginTop,
         marginBottom: collapsed ? 0 : marginBottom,
         color: colors.text, fontSize: size,
         cursor: 'pointer', userSelect: 'none',
