@@ -41,7 +41,7 @@ _niq() {
 	COMPREPLY=()
 
 	if (( COMP_CWORD == 1 )); then
-		COMPREPLY=( $(compgen -W "start stop restart status project completion help version" -- "$cur") )
+		COMPREPLY=( $(compgen -W "start stop restart status update project completion help version" -- "$cur") )
 		return
 	fi
 
@@ -99,6 +99,7 @@ _niq() {
 		'stop:stop the control plane'
 		'restart:restart the control plane'
 		'status:show the control plane and its projects'
+		'update:install the latest release with npm'
 		'project:pick a project, or create/run one'
 		'completion:print a completion script'
 		'help:print usage'
@@ -159,6 +160,7 @@ complete -c niq -n '__fish_use_subcommand' -a start -d 'start the control plane 
 complete -c niq -n '__fish_use_subcommand' -a stop -d 'stop the control plane'
 complete -c niq -n '__fish_use_subcommand' -a restart -d 'restart the control plane'
 complete -c niq -n '__fish_use_subcommand' -a status -d 'show the control plane and its projects'
+complete -c niq -n '__fish_use_subcommand' -a update -d 'install the latest release with npm'
 complete -c niq -n '__fish_use_subcommand' -a project -d 'pick a project, or create/run one'
 complete -c niq -n '__fish_use_subcommand' -a completion -d 'print a completion script'
 complete -c niq -n '__fish_use_subcommand' -a help -d 'print usage'

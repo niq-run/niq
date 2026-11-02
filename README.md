@@ -16,33 +16,56 @@ niq grows not by adding new abstractions, but by adding more participants that c
 
 ## Install
 
-**npm** (recommended):
+Three ways in; each one puts the `niq` command on your PATH. Nothing starts
+until you run it — see [Quick start](#quick-start). None of them need a JS
+runtime: the program worker runs script programs (PTC) inside an embedded QuickJS
+engine (`modernc.org/quickjs`, pure Go), so there is no `node` process to spawn,
+and scripts see only the SDK the worker injects — no `process`, `require`,
+`fetch`, or dynamic `import()`.
+
+**npm** (recommended — `niq update` keeps this install current):
 
 ```sh
 npm install -g @niq.run/niq
 ```
 
-**Install script** (installs to `~/.niq/bin`):
+**Install script** (no npm; the binary goes to `~/.niq/bin`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/install.sh | sh
 ```
 
-**From source** (Go 1.26+ — the embedded JS engine requires it):
+**From source** (Go 1.26+ — the embedded JS engine requires it — and Node 20+
+for the WebUI bundle). `make install` rebuilds the WebUI, builds `./bin/niq` and
+symlinks it into `~/.local/bin` (`PREFIX=...` for another directory), so `niq`
+works from any shell once that directory is on your PATH:
 
 ```sh
 git clone https://github.com/niq-run/niq
-cd niq && make build   # → ./bin/niq
+cd niq
+make install
 ```
 
-**Runtime: none to install.** The program worker runs script programs (PTC)
-inside an embedded QuickJS engine (`modernc.org/quickjs`, pure Go), so there is no
-`node` process to spawn and no JS runtime to install. Scripts see only the SDK the
-worker injects: no `process`, `require`, `fetch`, or dynamic `import()`.
+Run `make build` instead if you would rather keep the binary at `./bin/niq` and
+call it from the checkout.
+
+Check it worked — this prints the version and exits:
+
+```sh
+niq --version
+```
+
+**Upgrading.** `niq update` installs the npm package, so it is the way to update
+an npm install. A script install is updated by re-running the `curl` line, and a
+source install by `git pull && make install` — both replace the binary in place.
+The running control plane and projects keep the binary they started with, so
+finish with `niq restart -p`.
 
 ## Quick start
 
-niq has two layers: a **control plane**, and **projects** — each project is an isolated agent instance with its own event bus, worker set and WebUI on its own ports.
+With `niq` on your PATH, one command starts everything. niq has two layers: a
+**control plane**, and **projects** — each project is an isolated agent instance
+with its own event bus, worker set and WebUI on its own ports.
 
 ```sh
 # start the control plane (default :9527) in the background
@@ -56,7 +79,7 @@ session) no longer stops it. Running `niq` again reports on the service instead
 up?".
 
 ```
- - niq -  version: 0.14.0
+ - niq -  version: 0.14.0 · build: 2026-11-01T23:55:12Z
 
 [control] running  pid 4711 · since 2026-11-01 23:57
 webui    http://localhost:9527
@@ -107,8 +130,16 @@ just the ids.
 | `niq stop [-p]` | stop the control plane (`-p` also stops the running projects) |
 | `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
 | `niq project` | pick a project: start, stop or restart it |
+| `niq update` | install the latest release with npm |
 | `niq project create` / `niq project run` | create a project / run one in this terminal |
 | `niq completion <shell>` | completion for bash, zsh or fish |
+
+`niq update` asks npm for the published version, installs it with
+`npm install -g @niq.run/niq@latest`, and points at `niq restart -p` — the
+control plane and the projects are separate processes still running the old
+binary. A bare `niq` asks the registry at most once a day and mentions a newer
+release every time it starts (from the cached answer) until you install it;
+`NIQ_NO_UPDATE_CHECK=1` turns the check off.
 
 ```sh
 # bash
@@ -183,11 +214,15 @@ go build ./... && go vet ./...
 go test ./core/impl/eventbus/ -count=1
 ```
 
-The WebUI bundle is committed (it is `go:embed`-ed), so rebuild and commit it
-after changing anything under `app/webui/assets/src`:
+The WebUI bundle is committed (it is `go:embed`-ed). `make build` and
+`make install` rebuild it from `app/webui/assets/src` before compiling the Go
+binary, so the binary never ships a stale UI. The commit still matters for
+`go build ./...`, `go test ./...` and the release workflow (goreleaser and CI
+do not run Node), so commit the rebuilt `app/webui/assets/dist` with the change:
 
 ```sh
-cd app/webui/assets && npm run build
+make build          # webui bundle + ./bin/niq
+make install        # the same, plus the ~/.local/bin symlink
 ```
 
 ### Frontend development

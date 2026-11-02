@@ -8,14 +8,24 @@ import (
 	"encoding/json"
 	"io"
 	stdhttp "net/http"
+	"os"
 
 	"github.com/niq-run/niq/app/project/provider"
 )
 
 // handleGetProviders returns the provider config verbatim (including api_key
 // values — it is the user's own file on their own machine, and ${VAR}
-// references only make sense if the raw text is preserved).
+// references only make sense if the raw text is preserved). When no config
+// exists yet, it answers with the built-in skeleton (see provider.Example)
+// instead of an empty list, so the providers panel opens on an editable
+// deepseek template rather than a blank page. Nothing is written: the file
+// appears only when the user saves.
 func (c *Control) handleGetProviders(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	if _, err := os.Stat(provider.Path()); os.IsNotExist(err) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(provider.Example())
+		return
+	}
 	cfg, err := provider.Load()
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 500)

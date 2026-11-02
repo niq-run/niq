@@ -764,7 +764,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
         {pickerOpen && (
           <div style={{ position: 'absolute', left: 0, bottom: '100%', marginBottom: 4, zIndex: 100 }}>
             <PickerDropdown
-              header={pickerFor === 'target' ? t('picker.targets') : t('picker.mention')}
+              header={pickerFor === 'target' ? '' : t('picker.mention')}
               options={pickList}
               selectedIds={checkedTargets}
               activeIndex={activeOptionIndex}
@@ -1057,6 +1057,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           onMention={(id) => { setTargetModalOpen(false); insertMention(id) }}
           onClose={() => setTargetModalOpen(false)}
           isMobile={isMobile}
+          selectionStrip
         />
       )}
     </div>

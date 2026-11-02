@@ -21,11 +21,30 @@ export default function ProvidersView() {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [editorTab, setEditorTab] = useState<'visual' | 'json'>('visual')
+  // Collapsed provider cards, by index. A long provider list is unwieldy when
+  // every card shows its full field set, so each card folds down to its header
+  // row. Indices shift when a card above is removed, so removal renumbers.
+  const [collapsedCards, setCollapsedCards] = useState<Set<number>>(new Set())
+  const toggleCard = (i: number) => {
+    setCollapsedCards((prev) => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
+  }
 
+  // A provider.json that cannot be read or parsed fails the GET. Rather than a
+  // dead-end panel, fall back to a blank config the user can rebuild — with the
+  // warning on screen, because saving replaces the unreadable file.
+  const [loadFailed, setLoadFailed] = useState(false)
   useEffect(() => {
     fetchProviders()
       .then((c) => openConfig(c))
-      .catch(() => setSaveError(t('providers.error.load')))
+      .catch(() => {
+        setLoadFailed(true)
+        openConfig({ providers: [] })
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -70,6 +89,9 @@ export default function ProvidersView() {
     const next = { ...cfg, providers }
     // Dropping the active provider must not leave a stale reference.
     if (next.active && !providers.some((p: any) => p.name === next.active)) next.active = ''
+    // Collapsed state is index-keyed: drop the removed card and slide the rest
+    // up, or a neighbour would inherit its collapsed state.
+    setCollapsedCards((prev) => new Set([...prev].filter((j) => j !== i).map((j) => (j > i ? j - 1 : j))))
     applyConfig(next)
   }
 
@@ -185,6 +207,11 @@ export default function ProvidersView() {
       </div>
 
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '12px 24px 24px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {loadFailed && (
+          <div style={{ border: '1px solid ' + colors.toolFailed, borderRadius: 6, padding: '10px 14px', color: colors.toolFailed, fontSize: fontSizes.sm }}>
+            {t('providers.loadFailed')}
+          </div>
+        )}
         {editorTab === 'visual' && cfg && (
           <>
             {/* Active provider: names the default the workers start on. */}
@@ -221,7 +248,15 @@ export default function ProvidersView() {
                   >
                     {t('templates.delete')}
                   </button>
+                  <button
+                    onClick={() => toggleCard(i)}
+                    aria-expanded={!collapsedCards.has(i)}
+                    style={{ cursor: 'pointer', background: 'transparent', color: colors.textDim, border: '1px solid ' + colors.border, borderRadius: 2, padding: '3px 10px', fontSize: fontSizes.sm }}
+                  >
+                    {collapsedCards.has(i) ? t('providers.card.expand') : t('providers.card.collapse')}
+                  </button>
                 </div>
+                {!collapsedCards.has(i) && (<>
                 <div style={{ display: 'flex', gap: 8 }}>
                   {field(t('providers.field.name'), (
                     <input value={p.name || ''} onChange={(e) => updateProvider(i, { name: e.target.value })} style={cardInput} />
@@ -331,6 +366,7 @@ export default function ProvidersView() {
                     style={{ ...cardInput, fontFamily: 'monospace', resize: 'vertical', minHeight: 48 }}
                   />
                 ))}
+                </>)}
               </div>
             ))}
             <div>

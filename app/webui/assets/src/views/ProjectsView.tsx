@@ -3,7 +3,7 @@ import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { usePolling } from '../hooks/usePolling'
 import ViewHeader from '../components/ViewHeader'
-import { CONTROL, fetchProjects, fetchTemplates, createProject, linkProject, fetchDirs, startProject, stopProject, restartProject, fetchProviders } from '../services/api'
+import { CONTROL, fetchProjects, fetchTemplates, createProject, linkProject, fetchDirs, startProject, stopProject, restartProject, fetchProviders, providersUsable } from '../services/api'
 import type { DirEntry } from '../services/api'
 import type { ProjectInfo } from '../types'
 
@@ -74,8 +74,7 @@ export default function ProjectsView({ onGoToProviders, focusStart, onFocusDone 
       // providers panel; 'create anyway' bypasses the check once.
       if (!provNotice && !bypassProvCheck.current) {
         const cfg = await fetchProviders()
-        const usable = (cfg.providers || []).some((p: any) => (p.api_key || '') !== '')
-        if (!usable) {
+        if (!providersUsable(cfg)) {
           setProvNotice(true)
           setCreating(false)
           return

@@ -2021,6 +2021,11 @@ func (s *Server) handleListByRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// The log returns nil when nothing matched; encode an empty array so the
+	// client always parses a list (a JSON null breaks the callers' .find).
+	if events == nil {
+		events = []event.Event{}
+	}
 	json.NewEncoder(w).Encode(events)
 }
 

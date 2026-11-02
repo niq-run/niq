@@ -138,6 +138,13 @@ export async function fetchProviders(): Promise<any> {
   return res.json()
 }
 
+// providersUsable mirrors provider.Configured on the backend: at least one
+// provider carries a non-empty api_key. An unparsable provider.json fails the
+// GET above, which callers treat as "not usable" too.
+export function providersUsable(cfg: any): boolean {
+  return (cfg?.providers || []).some((p: any) => (p.api_key || '') !== '')
+}
+
 // updateProviders replaces the provider config with an edited body.
 export async function updateProviders(cfg: any): Promise<void> {
   const res = await fetch(CONTROL + '/api/providers', {
@@ -563,10 +570,13 @@ export async function loadEventsBefore(anchorId: string, limit = 50, opts: Event
 
 // fetchEventsByRequest returns all persisted events carrying the given
 // request_id — the invocation plus its request.* answer. It is a one-shot
-// historical query, decoupled from the live event stream.
+// historical query, decoupled from the live event stream. A missing list (an
+// older server encoding no matches as `null`) is normalised to [], so callers
+// can .find/.map without guarding.
 export async function fetchEventsByRequest(requestId: string): Promise<EventPayload[]> {
   const res = await fetch(p(`/api/events/by-request/${encodeURIComponent(requestId)}`))
-  return res.json()
+  const body: unknown = await res.json()
+  return Array.isArray(body) ? (body as EventPayload[]) : []
 }
 
 // AskResult is one answered worker event: the reply's value when the worker

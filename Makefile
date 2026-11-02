@@ -1,10 +1,18 @@
 PREFIX ?= $(HOME)/.local/bin
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo 0.0.0-dev)
+BUILDTIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+WEBUI := app/webui/assets
 
-.PHONY: install build snapshot npm-publish
+.PHONY: install build webui snapshot npm-publish
 
-build:
-	go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev)" -o ./bin/niq ./app/publish/cmd/
+# The SPA is go:embed'd from $(WEBUI)/dist, so it has to be rebuilt before the
+# Go binary or the build ships whatever UI was last committed. node_modules is
+# only installed when absent, so a repeat build is just tsc + vite.
+webui:
+	cd $(WEBUI) && { [ -d node_modules ] || npm ci; } && npm run build
+
+build: webui
+	go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
 
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:

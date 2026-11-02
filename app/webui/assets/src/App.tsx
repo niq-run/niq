@@ -21,7 +21,7 @@ import { usePolling } from './hooks/usePolling'
 import { useApprovalNotifications } from './hooks/useApprovalNotifications'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
-import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent } from './services/api'
+import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent, fetchProviders, providersUsable } from './services/api'
 import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type InputContent, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerDetailTab, type WorkerInfo } from './types'
 
 // How many history events the WebUI pages back per /api/events/before call
@@ -498,6 +498,25 @@ export default function App() {
     // "project" with its id.
     fetchContext().then(setContext).catch(() => {})
   }, [])
+
+  // Provider onboarding: a project cannot start without a usable provider and a
+  // fresh install has none, so the control plane says so up front and offers the
+  // jump to the providers panel instead of letting the user hit the error on
+  // create/start. null = not checked yet (no banner, so a healthy install never
+  // flashes one). Checked on landing and whenever the panels close — saving in
+  // the providers panel is exactly how this flips to usable — but not while it
+  // is open, where the user is already editing the very thing.
+  const [providerReady, setProviderReady] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (mode !== 'control' || panel === 'providers') return
+    let alive = true
+    fetchProviders()
+      .then((cfg) => { if (alive) setProviderReady(providersUsable(cfg)) })
+      // A provider.json that cannot be read or parsed fails the GET: that is
+      // precisely the "config is invalid" case this banner exists for.
+      .catch(() => { if (alive) setProviderReady(false) })
+    return () => { alive = false }
+  }, [mode, panel])
 
   // Archived workers: hidden from the worker selector by default; toggled from
   // the workers view. State lives in the project's stream definitions.
@@ -1499,6 +1518,21 @@ export default function App() {
               style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', border: '1px solid ' + colors.accent, borderRadius: 2, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
             >
               {t('stream.reload')}
+            </span>
+          </div>
+        )}
+        {mode !== 'project' && panel !== 'providers' && providerReady === false && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px', borderBottom: '1px solid ' + colors.border, background: colors.bgLight, flexShrink: 0 }}>
+            <span style={{ color: colors.accent, fontSize: fontSizes.sm }}>●</span>
+            <span style={{ flex: 1, color: colors.text, fontSize: fontSizes.sm }}>
+              {t('providers.setupBanner')}
+            </span>
+            <span
+              onClick={() => selectPanel('providers')}
+              className="btn-hover"
+              style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', border: '1px solid ' + colors.accent, borderRadius: 2, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+            >
+              {t('providers.setupAction')}
             </span>
           </div>
         )}

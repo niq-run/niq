@@ -164,10 +164,13 @@ func portCell(n int) string {
 
 // versionTag is the one place the CLI prints its identity: `niq status`, the
 // start banner, --version, --help and the picker all lead with it. It is the
-// mark followed by the version, and without colour (no mark) the name stands in
-// for the mark.
+// mark followed by the version (and the build time when the build injected
+// one), and without colour (no mark) the name stands in for the mark.
 func versionTag() string {
 	tag := dim("version: ") + brand(versionNumber())
+	if buildTime != "" {
+		tag += dim(" · build: ") + bold(buildTime)
+	}
 	if chip := logoChip(); chip != "" {
 		return chip + " " + tag
 	}
