@@ -1,137 +1,140 @@
-# niq v0.14.0
+# niq v0.14.1
 
-A command-line release. `niq` is now a service you start once and ask after,
-`niq project` is a list you act on instead of a command you retype, and the
-control plane stopped treating the projects it had launched as different from
-the ones it had not. The browser side follows the same idea: an address keeps
-working whether or not the project behind it is running, and the tab you are
-looking at is the address you are at.
+A polish release on top of v0.14.0: the CLI settles into one visual language,
+`-p` means "and the running projects" on every command that touches them, and
+the WebUI gains a resizable worker selector plus a few fixes that had been
+nagging.
 
 ## Highlights
 
-- **`niq` runs in the background.** Start it, read the address, get your prompt
-  back; closing the terminal no longer stops the control plane. `niq status`,
-  `niq stop [--all]` and `niq restart` manage it, and `niq -f` still runs it
-  here.
-- **`niq project` is a picker.** State, ports and directory per project; enter
-  starts, stops or restarts the one you chose, and the list stays up for the
-  next one.
-- **An instance is the port it holds.** A project started by hand, by the WebUI,
-  or by a control plane that has since restarted are all stopped and restarted
-  the same way. Restart used to do nothing at all for the ones the plane had not
-  spawned itself.
-- **A stopped project's address is useful.** `/p/<id>/` lands on the projects
-  list with a start prompt instead of a 502, and the tab you are on is in the
-  URL, so Back and reload behave.
-- **Completion for bash, zsh and fish**, with the project ids completed live.
+- **`niq restart -p` and `niq stop -p`.** One flag, on both commands, for "the
+  running project instances as well as the control plane" — which is what a
+  binary upgrade needs, since every process serves the page it was built with.
+  `-p` replaces `stop --all`.
+- **One shape for the CLI.** `niq status`, `--help` and `niq project` now open
+  with the same identity line (the mark and `version: 0.14.1`), start at column
+  0, and write projects the same way everywhere: `[pin]`, with the theme colour
+  marking what is current.
+- **The picker's menus no longer change shape.** Start / Stop / Restart are
+  always listed; the ones an instance cannot perform are dimmed and the cursor
+  steps over them.
+- **The worker selector is resizable** — drag the divider under it, the height
+  is remembered, double-click restores the default.
 
-## 1. `niq` is a service
+## 1. `-p` on restart and stop
 
-A bare `niq` re-executes itself detached — its own session on unix, a detached
-console process on windows — waits until the listen socket is bound, prints the
-WebUI address, the log path and the two commands that matter, and returns to
-the prompt. Repeating it is how you ask after the service: when it is already
-running, `niq` prints exactly what `niq status` prints.
+```
+$ niq restart -p
+niq control stopped pid 66077
+   - niq -  version: 0.14.1
 
-The running process is recorded in `<niq root>/control.json` (`pid`, requested
-and bound address, start time), written through a temp file and a rename the
-moment the socket is bound. `status`, `stop` and `restart` read that record, and
-a record whose process is gone is cleared instead of being reported as running.
+[control] running  pid 66294 · since 2026-11-01 23:52
+webui    http://localhost:9527
+log      ~/.niq/niq.log
+stop     niq stop
+restart  niq restart
 
-- `niq stop` stops the control plane. Projects are their own processes, so they
-  keep serving; the command says which ones it left behind, and `niq stop --all`
-  interrupts them too (SIGINT — they snapshot on the way out).
-- `niq restart` brings the plane back on the address it was started with. The
-  basic-auth pair still comes from `~/.niq/common/auth.json`, so `--auth` is not
-  needed a second time.
-- `niq -f` (`niq control --foreground`) is the old attached behaviour: for
-  systemd, a container, or watching it work.
+[projects]
+demo1 restarted http://localhost:53916
+demo2 restarted http://localhost:54069
+```
 
-`niq control --addr …` also stopped ignoring its flags — `flag.Parse` used to
-stop at the subcommand word — and an unknown word is now an error instead of a
-silent start.
+The set is captured before the control plane goes down: whatever answered on its
+WebUI port, whether the plane started it, the WebUI did, or a terminal did. Each
+instance is stopped through that port (SIGINT — it snapshots on the way out),
+the port is waited on, and a new one is started on the same address. A project
+that fails is reported in red and the rest continue.
 
-## 2. `niq project`
+A plain `niq restart` still leaves the instances alone, and a plain `niq stop`
+still names the ones it left behind — pointing at `niq stop -p`, its new
+spelling.
 
-`niq project` lists every project on one screen — state, webui/bus ports and
-directory — and moves with the arrow keys, `j`/`k` or `⌃n`/`⌃p`. Enter offers
-the actions that fit that instance: start when it is stopped, stop or restart
-when it runs. `niq project list` is the same command.
+## 2. One shape for the CLI
 
-The list stays up after an action. States reload, the cursor stays on the
-project just acted on, and the result goes on a status line under the list,
-replaced each time rather than appended, so the screen never scrolls away from
-what you are looking at. `q`, `Esc` and `⌃C` leave; a failed action prints in
-red and returns you to the list.
+```
+ - niq -  version: 0.14.1
 
-Stop and start work through the instance's own state — the port for stopping,
-the persisted ports for starting — so they behave the same whether or not a
-control plane is running. Without a terminal `niq project` prints the same
-table; `--ids` prints just the ids, which is what completion calls.
+[control] running  pid 68892 · since 2026-11-01 23:57
+webui    http://localhost:9527
+log      ~/.niq/niq.log
+stop     niq stop
+restart  niq restart
 
-## 3. The control plane stops owning processes
+[projects]  niq project to start, stop or restart one
+[niqA]  stopped  webui 58473  bus 58471  http://localhost:9527/p/niqA/
+[pin]   running  webui 57609  bus 57608  http://localhost:9527/p/pin/
+```
 
-The control plane kept a map of the `niq project run` processes it had spawned
-and used it as the authority for "is it running", "stop it" and "restart it".
-Anything else — a project started in a terminal, or one that outlived a restart
-of the plane — took a different path, and the two disagreed: restart did nothing
-at all for the second kind.
+The two-column left margin is gone, so the mark, the headings, the labels, the
+project rows and the usage tables all start at the same edge. The version reads
+`version: 0.14.1` — a label and a value rather than one run-on token. Project
+names are bracketed everywhere, and `[projects]` says where the list can be
+acted on.
 
-An instance is now identified by the ports in its `project.json` and by nothing
-else. Running means the persisted WebUI port answers; stop interrupts whoever
-listens on it; restart does that, waits for the address to free, and relaunches
-on it. The plane still reaps the children it spawns, but only to log a crash —
-the map, the mutex and the second code path per action are gone.
+## 3. The project picker
 
-## 4. The WebUI: addresses that keep working
+```
+ - niq -  version: 0.14.1
 
-- Opening a stopped project's `/p/<id>/` redirects to the projects list with a
-  start prompt. Cancelling leaves you on the list, which is the point: a dead
-  link should land somewhere you can act. Starting from the prompt continues
-  into the project.
-- Management tabs (`projects`, `templates`, `providers`) and the project's own
-  views (`talk`, `events`, `approvals`, `workers`, `mcp`, `programs`) live in
-  the URL (`?panel=…`, `?view=…`). Back and Forward walk what you visited, a
-  reload lands on the same tab, and those pages do not subscribe to the
-  project's event stream — so neither "stream dropped" nor "project not
-  running" appears on a page that is not showing the project.
-- The control page no longer reports a dropped stream at all: context starts
-  optimistically as `project`, so a stream used to be opened once against the
-  control plane's 404 before `/api/context` answered.
-- Static assets are served relative to the page that embedded them. A project
-  page loads its own bundle through `/p/<id>/assets/…`; the absolute `/assets/…`
-  it used to request meant an older page asked the new control plane for a file
-  it no longer shipped, and the browser refused it as `text/plain`.
+↑/↓, ⌃n/⌃p or j/k move · enter select · q quit
+● [pin]   running  webui 57609  bus 57608  ~/.niq/projects/pin
+○ [sep5]  stopped  webui 52218  bus 52217  ~/.niq/projects/sep5
+```
 
-## 5. One look, and completion
+- The header is the identity line every other screen prints, a blank line, then
+  the keys — `j`/`k` and `⌃n`/`⌃p` work and are now advertised.
+- Rows start at column 0. The `>` cursor is gone: the leading dot is the cursor
+  — filled in the theme colour on the selected row, a dim ring on the others —
+  and the selected name is bracketed in the same colour.
+- A plain listing (`niq project | cat`, and `niq status`) has no cursor, so it
+  draws no dot; the state is the word after the name.
 
-The report has one look now: theme colour `#3C78B4` for the mark, the version
-and URLs; a one-line chip with the wordmark between rules; `version-…` rather
-than git describe's `v…`; bracketed headings over a single left margin. Colour
-is emitted only when stdout is a terminal — `NO_COLOR` and pipes get plain text.
+Choosing a project opens the action menu in the same language:
 
-`niq completion bash|zsh|fish` prints a script covering subcommands, flags and
-the project ids, read live from `niq project list --ids`.
+```
+[pat] running
 
-## 6. Smaller changes
+● [Start]
+○ [Stop]
+○ [Restart]
+```
 
-- The `event_recipients` backfill is gone from `migrate()`. The table is written
-  by `Append`; scanning every legacy row on each open is not worth keeping, and
-  no compatibility path is left for schemas already migrated.
-- Permissions moved into a dialog, and the forms share one set of styles.
-- The talk scroller settles its follow rules, and workers can be addressed by
-  display name in the talk input.
+All three are always listed, in that order. On a stopped project Stop and
+Restart are dimmed, the cursor skips them, and the menu says "press enter to
+start the project". Start on a running project reports "already running" rather
+than doing something surprising.
 
-## Upgrade notes
+## 4. WebUI
 
-- **`niq` backgrounds by default.** Scripts, containers and CI that expect the
-  process in the foreground need `niq -f`.
-- **`niq restart` after upgrading.** A control plane started by an older binary
-  has no record in `control.json`: `niq status` reports it as not running while
-  it still holds the port, and a new `niq` fails with "address already in use".
-  Stopping the old process once is enough.
-- **Restart running projects to get the new WebUI.** Each process serves the
-  page and assets it was built with, so an older project keeps rendering the
-  older UI — it no longer breaks, which it did while asset URLs were absolute.
-- **`niq stop` leaves projects running.** That was already true; it is now said
-  out loud, and `niq stop --all` is the whole-machine stop.
+- **The worker selector is resizable.** The divider under it is the drag handle,
+  drawn like the sidebar's width grip (a 5px pill riding the line, dimmed until
+  hovered). The height is a cap — the list still shrinks to its content and
+  scrolls inside it — persists in `localStorage`, and a double-click restores
+  the ten-row default.
+- **The sidebar footer no longer jumps** when the logo replaces the project
+  name: both states sit in a fixed-height row.
+- **"status unavailable — restart/stop still work" is gone.** It appeared for
+  the few hundred milliseconds before the first control-plane poll answered and
+  read as a fault; the menu already offers what it can do.
+- **The event detail shows the date** — `2026-11-01 17:39:53 · 1762011593`
+  instead of a bare time of day. List rows keep `HH:MM:SS`.
+
+## Upgrade
+
+Rebuild or install the new binary, then:
+
+```
+niq restart -p
+```
+
+One command now brings the control plane *and* every running project onto it.
+Without the flag the projects keep serving the page they were built with, which
+is correct but leaves the old UI up.
+
+## Verification
+
+`go build ./...`, `go vet ./app/...` and `go test ./app/...` pass, with new tests
+covering the menu's redraw height, the cursor skipping disabled actions, and the
+project-state record. Exercised on macOS: `restart -p` and `stop -p` with and
+without running instances, the picker's three menus, the selector's drag /
+double-click / reload, and the WebUI's URL and banner behaviour.
