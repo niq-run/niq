@@ -349,7 +349,7 @@ export const en = {
   'mcp.server.headers.hint': 'One KEY=VALUE per line; values may reference ${ENV_VAR}, resolved from the project env.',
   'mcp.server.headers.keepHint': 'Leave empty to keep the current headers. One KEY=VALUE per line; ${ENV_VAR} is resolved from the project env.',
   'mcp.server.headers.placeholder': 'Authorization=Bearer ${GITHUB_TOKEN}',
-  'mcp.server.tools': 'tools',
+  'mcp.server.tools': 'view tools',
   'mcp.server.tools.hide': 'hide tools',
   'mcp.tools.loading': 'loading tools…',
   'mcp.tools.none': 'This server reports no tools.',
