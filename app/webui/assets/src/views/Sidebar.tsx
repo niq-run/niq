@@ -1346,9 +1346,9 @@ function CheckBox({ active, accent, border, size = 13, style }: { active: boolea
   )
 }
 
-// A collapsible section title: a disclosure chevron plus the label. Clicking
-// the whole row folds the section's body away; the chevron points down while
-// open and right while collapsed, so the state reads at a glance.
+// A collapsible section title. Collapsed sections get a trailing expand icon
+// at the end of the row; open ones carry no icon, so the title reads exactly
+// like the plain heading it was before.
 function SectionHeader({ label, collapsed, onToggle, colors, size, marginTop, marginBottom = 8 }: { label: string; collapsed: boolean; onToggle: () => void; colors: Palette; size: number; marginTop: number; marginBottom?: number }) {
   const { t } = useI18n()
   const [hover, setHover] = useState(false)
@@ -1361,27 +1361,25 @@ function SectionHeader({ label, collapsed, onToggle, colors, size, marginTop, ma
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 6,
+        display: 'flex', alignItems: 'center', gap: 8,
         marginTop, marginBottom,
         color: colors.text, fontSize: size,
         cursor: 'pointer', userSelect: 'none',
       }}
     >
-      <svg
-        width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"
-        style={{
-          flexShrink: 0,
-          transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
-          transition: 'transform 0.15s ease',
-        }}
-      >
-        <path
-          d="M2 3.4 5 6.6 8 3.4" fill="none"
-          stroke={hover ? colors.accent : colors.textDim}
-          strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
-        />
-      </svg>
-      <span>{label}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
+      {collapsed && (
+        <svg
+          width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"
+          style={{ flexShrink: 0 }}
+        >
+          <path
+            d="M3.4 2 6.6 5 3.4 8" fill="none"
+            stroke={hover ? colors.accent : colors.textDim}
+            strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
+          />
+        </svg>
+      )}
     </strong>
   )
 }
