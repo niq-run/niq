@@ -199,6 +199,7 @@ export const zh: Record<StringKey, string> = {
   'picker.header.mode': '模式',
   'picker.group.untagged': '其他',
   'picker.group.selected': '已选中',
+  'picker.selected.remove': '点击移除',
   'pinned.header': '置顶',
   'pinned.pin': '置顶',
   'pinned.unpin': '取消置顶',

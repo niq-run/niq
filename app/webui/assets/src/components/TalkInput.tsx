@@ -1057,6 +1057,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
           onMention={(id) => { setTargetModalOpen(false); insertMention(id) }}
           onClose={() => setTargetModalOpen(false)}
           isMobile={isMobile}
+          selectionStrip
         />
       )}
     </div>

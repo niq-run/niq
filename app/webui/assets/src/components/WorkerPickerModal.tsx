@@ -23,6 +23,12 @@ interface WorkerPickerModalProps {
   // Optional right-click view entries (details / readme), matching the sidebar
   // row menu and the talk badge menu.
   onOpenDetail?: (id: string, tab?: WorkerDetailTab) => void
+  // When set, the selection is shown as a chip strip under the filters instead
+  // of a "selected" group at the top of the list: picked workers stay in their
+  // own groups, and a chip click removes one. The talk input's recipient
+  // picker uses this (its collapsed chip already reads the set that way), the
+  // sidebar's picker keeps the grouped list.
+  selectionStrip?: boolean
 }
 
 // A row in the modal's grouped list.
@@ -31,8 +37,9 @@ interface Row { kind: 'group' | 'worker'; key: string; group: string; w?: Worker
 // WorkerPickerModal is the expanded worker selector: a centered dialog with a
 // search box, tag-grouped rows and per-row toggle. It is where you pick when
 // the sidebar's inline checklist gets crowded — and the talk input's recipient
-// chip reuses it for the same job, so the two pickers behave alike.
-export default function WorkerPickerModal({ title, workers, selected, onToggle, onClose, isMobile, onMention, onOpenDetail }: WorkerPickerModalProps) {
+// chip reuses it for the same job, so the two pickers behave alike, except that
+// the recipient picker mirrors its chips in a strip (see selectionStrip).
+export default function WorkerPickerModal({ title, workers, selected, onToggle, onClose, isMobile, onMention, onOpenDetail, selectionStrip = false }: WorkerPickerModalProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const [query, setQuery] = useState('')
@@ -102,17 +109,20 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
         (w.tags || []).some(tag => tag.toLowerCase().includes(q)))
     : onlineMatched
 
-  // Build the grouped list: the currently selected workers in their own
-  // top group, then pinned, then per-tag groups of the active (non-slept)
-  // workers, then the slept workers in a final group (so hiding a worker is
-  // reversible by right-clicking it there to wake it). A selected worker is
-  // shown once, in the Selected group, and excluded from the others so the
-  // selection is visible at a glance without duplicating rows.
+  // Build the grouped list: pinned, then per-tag groups of the active
+  // (non-slept) workers, then the slept workers in a final group (so hiding a
+  // worker is reversible by right-clicking it there to wake it). With the chip
+  // strip on, selected workers stay where they belong — the strip above the
+  // list already tells the selection at a glance. Without it, a selected
+  // worker moves to its own top group and is excluded from the others so the
+  // same worker is never listed twice.
   const rows = useMemo((): Row[] => {
     const out: Row[] = []
     const isPinned = (w: WorkerInfo) => pinnedIds.includes(w.id)
     const isSlept = (w: WorkerInfo) => sleptIds.includes(w.id)
     const isSelected = (w: WorkerInfo) => selected.has(w.id)
+    // A row is suppressed only when the selection lives in its own group.
+    const free = (w: WorkerInfo) => selectionStrip || !isSelected(w)
     let lastGroup: string | null = null
     const emit = (g: string) => {
       if (g !== lastGroup) {
@@ -138,7 +148,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
     // Selected group: always first, driven by the worker order of `filtered`
     // (which preserves the selectable set's order). Empty when nothing is
     // picked, in which case it's simply skipped.
-    const selectedList = filtered.filter(isSelected)
+    const selectedList = selectionStrip ? [] : filtered.filter(isSelected)
     if (selectedList.length) {
       out.push({ kind: 'group', key: '__grp_selected', group: t('picker.group.selected') })
       lastGroup = t('picker.group.selected')
@@ -147,7 +157,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
       }
     }
     if (pinnedIds.length) {
-      const pinned = filtered.filter(w => isPinned(w) && !isSelected(w)).slice()
+      const pinned = filtered.filter(w => isPinned(w) && free(w)).slice()
         .sort((a, b) => pinnedIds.indexOf(a.id) - pinnedIds.indexOf(b.id))
       if (pinned.length) {
         out.push({ kind: 'group', key: '__grp_pinned', group: t('pinned.header') })
@@ -157,8 +167,8 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
         }
       }
     }
-    addTagged(filtered.filter(w => !isPinned(w) && !isSlept(w) && !isSelected(w)))
-    const slept = filtered.filter(w => isSlept(w) && !isSelected(w)).slice()
+    addTagged(filtered.filter(w => !isPinned(w) && !isSlept(w) && free(w)))
+    const slept = filtered.filter(w => isSlept(w) && free(w)).slice()
       .sort((a, b) => sleptIds.indexOf(a.id) - sleptIds.indexOf(b.id))
     if (slept.length) {
       emit(t('pinned.sleep.header'))
@@ -167,9 +177,19 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
       }
     }
     return out
-  }, [filtered, t, pinnedIds, sleptIds, selected, prefTick])
+  }, [filtered, t, pinnedIds, sleptIds, selected, prefTick, selectionStrip])
 
   const checkedCount = workers.filter(w => selected.has(w.id)).length
+
+  // Chip strip entries: every selected id in the caller's order, named with its
+  // display name and falling back to the raw id for a worker this picker does
+  // not list (a typed @mention can name one that isn't pickable here).
+  const stripEntries = selectionStrip
+    ? [...selected].map(id => {
+        const w = workers.find(x => x.id === id)
+        return { id, label: w ? (w.label || w.id) : id }
+      })
+    : []
 
   // Same box as the tag-filter trigger on the row below: the dialog's own
   // background plus a border. Left unset, a native input would paint the UA's
@@ -272,6 +292,29 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
               )
             })}
           </div>
+          {/* Selection strip: the picked workers as tokens, the same shape the
+              talk input's collapsed chip uses. Clicking a token un-picks it;
+              the rows below keep their own checkboxes for the same toggle. */}
+          {stripEntries.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+              {stripEntries.map(({ id, label }) => (
+                <span
+                  key={id}
+                  onClick={() => onToggle(id)}
+                  className="btn-hover"
+                  title={t('picker.selected.remove')}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 2,
+                    background: colors.bgChip, borderRadius: 2, padding: '2px 8px',
+                    color: colors.text, fontSize: fontSizes.sm, lineHeight: '18px',
+                    cursor: 'pointer', userSelect: 'none',
+                  }}
+                >
+                  <span style={{ color: colors.textDimmed }}>@</span>{label}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Body: grouped scrollable list */}

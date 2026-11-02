@@ -207,6 +207,7 @@ export const en = {
   'picker.header.mode': 'mode',
   'picker.group.untagged': 'other',
   'picker.group.selected': 'Selected',
+  'picker.selected.remove': 'click to remove',
   'pinned.header': 'pinned',
   'pinned.pin': 'pin to top',
   'pinned.unpin': 'unpin',
