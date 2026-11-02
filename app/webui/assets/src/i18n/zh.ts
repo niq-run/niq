@@ -10,6 +10,8 @@ export const zh: Record<StringKey, string> = {
   'nav.mcp': 'MCP',
   'sidebar.projectViews': '项目视图',
   'sidebar.projectResources': '项目资源',
+  'sidebar.section.collapse': '点击折叠',
+  'sidebar.section.expand': '点击展开',
   'sidebar.selector.resize': '拖动调整高度 · 双击还原',
   'sidebar.workerSelector': '工作单元选择',
   'sidebar.rename': '备注名',

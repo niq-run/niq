@@ -80,6 +80,20 @@ function loadSidebarWidth(): number {
 const SELECTOR_HEIGHT_KEY = 'niq-sidebar-selector-height'
 const MIN_SELECTOR_HEIGHT = 80
 
+// Collapsed section ids, persisted so the sidebar keeps its shape across
+// reloads. A section is open unless its id is listed here.
+const COLLAPSED_SECTIONS_KEY = 'niq-sidebar-collapsed-sections'
+
+function loadCollapsedSections(): Set<string> {
+  try {
+    const raw = globalThis.localStorage?.getItem(COLLAPSED_SECTIONS_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    return new Set(Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
 function loadSelectorHeight(): number | null {
   const v = parseInt(globalThis.localStorage?.getItem(SELECTOR_HEIGHT_KEY) ?? '', 10)
   return Number.isNaN(v) ? null : Math.max(v, MIN_SELECTOR_HEIGHT)
@@ -237,6 +251,37 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   // filter here (picking a worker by name is the common case); the expanded
   // picker still offers the tag filter for the crowded case.
   const [workerQuery, setWorkerQuery] = useState('')
+  // Collapsible sections: clicking a section title hides its body so a long
+  // sidebar can be folded down to the parts in use. The set persists across
+  // reloads (see loadCollapsedSections).
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(loadCollapsedSections)
+  const sectionOpen = (id: string) => !collapsedSections.has(id)
+  const toggleSection = (id: string) => {
+    setCollapsedSections(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      try {
+        globalThis.localStorage?.setItem(COLLAPSED_SECTIONS_KEY, JSON.stringify([...next]))
+      } catch {
+        // ignore persistence failure (e.g. private mode)
+      }
+      return next
+    })
+  }
+  // One section title, shared by every collapsible block so the affordance
+  // cannot drift between sections. marginTop keeps the previous spacing (the
+  // header after a divider sits flush, so it passes 0).
+  const sectionHeader = (id: string, label: string, marginTop = 16) => (
+    <SectionHeader
+      label={label}
+      collapsed={!sectionOpen(id)}
+      onToggle={() => toggleSection(id)}
+      colors={colors}
+      size={fontSizes.xl}
+      marginTop={marginTop}
+    />
+  )
   const hoverStyle = (id: string): CSSProperties => ({
     background: hoverId === id ? colors.bgLight : 'transparent',
     // Full-width row highlight that bleeds to the sidebar edges. The options
@@ -825,10 +870,10 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           resources. Absent in control mode (no project is attached, so talk /
           events / workers are unavailable). */}
       {mode === 'project' && (<>
-      <strong style={{ marginTop: 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.projectViews')}</strong>
-      {PROJECT_VIEW_MODES.map(navRow)}
-      <strong style={{ marginTop: 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.projectResources')}</strong>
-      {PROJECT_RESOURCE_MODES.map(navRow)}
+      {sectionHeader('projectViews', t('sidebar.projectViews'))}
+      {sectionOpen('projectViews') && PROJECT_VIEW_MODES.map(navRow)}
+      {sectionHeader('projectResources', t('sidebar.projectResources'))}
+      {sectionOpen('projectResources') && PROJECT_RESOURCE_MODES.map(navRow)}
 
       {/* Worker selector list — hidden in the workers view (the main area IS
           the worker list there) and in the programs view (program browsing
@@ -837,7 +882,8 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       {view !== 'workers' && view !== 'programs' && view !== 'mcp' && (
         <>
           <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
-          <strong style={{ display: 'block', color: colors.text, fontSize: fontSizes.xl, marginBottom: 8 }}>{t('sidebar.workerSelector')}</strong>
+          {sectionHeader('workerSelector', t('sidebar.workerSelector'), 0)}
+          {sectionOpen('workerSelector') && (<>
         	  {/* Control row: the search box and the action buttons share the width evenly
               by count — two widgets (search + expand) each get 1/2, three
               (search + expand + "view all"/clear-filter when something is
@@ -971,16 +1017,19 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
             </div>
           )}
           </div>
+          </>)}
 
           {/* View Settings — talk view only */}
           {view === 'talk' && (
             <>
               {selectorDivider}
-              <strong style={{ marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.viewSettings')}</strong>
-              <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
-              <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
-              <ToggleRow label={t('view.toggle.collapseEvents')} on={viewSettings.collapseEvents} onToggle={() => onToggleViewSetting('collapseEvents')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
-              <ToggleRow label={t('view.toggle.responseOnly')} on={viewSettings.responseOnly} onToggle={() => onToggleViewSetting('responseOnly')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+              {sectionHeader('viewSettings', t('sidebar.viewSettings'), 0)}
+              {sectionOpen('viewSettings') && (<>
+                <ToggleRow label={t('view.toggle.streamingMode')} on={viewSettings.streamingMode} onToggle={() => onToggleViewSetting('streamingMode')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+                <ToggleRow label={t('view.toggle.expandThinking')} on={viewSettings.thinkingExpanded} onToggle={() => onToggleViewSetting('thinkingExpanded')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+                <ToggleRow label={t('view.toggle.collapseEvents')} on={viewSettings.collapseEvents} onToggle={() => onToggleViewSetting('collapseEvents')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+                <ToggleRow label={t('view.toggle.responseOnly')} on={viewSettings.responseOnly} onToggle={() => onToggleViewSetting('responseOnly')} colors={colors} dark={dark} mobile={isMobile} size={optSize} />
+              </>)}
             </>
           )}
         </>
@@ -997,7 +1046,8 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       ) : selectorDivider ?? (
         <hr style={{ border: 'none', borderTop: '1px solid ' + colors.border, margin: '16px ' + hrX + 'px' }} />
       ))}
-      <strong style={{ marginTop: mode === 'project' ? 0 : 16, marginBottom: 8, color: colors.text, fontSize: fontSizes.xl }}>{t('sidebar.resources')}</strong>
+      {sectionHeader('resources', t('sidebar.resources'), mode === 'project' ? 0 : 16)}
+      {sectionOpen('resources') && (<>
       <div
         onClick={() => { onSelectPanel('projects'); onNavigate() }}
         onMouseEnter={() => setHoverId('projects')}
@@ -1022,6 +1072,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       >
         {t('sidebar.providers')}{panel === 'providers' ? ' \u25C9' : ''}
       </div>
+      </>)}
 
       </div>
 
@@ -1292,6 +1343,46 @@ function CheckBox({ active, accent, border, size = 13, style }: { active: boolea
         />
       )}
     </span>
+  )
+}
+
+// A collapsible section title: a disclosure chevron plus the label. Clicking
+// the whole row folds the section's body away; the chevron points down while
+// open and right while collapsed, so the state reads at a glance.
+function SectionHeader({ label, collapsed, onToggle, colors, size, marginTop, marginBottom = 8 }: { label: string; collapsed: boolean; onToggle: () => void; colors: Palette; size: number; marginTop: number; marginBottom?: number }) {
+  const { t } = useI18n()
+  const [hover, setHover] = useState(false)
+  return (
+    <strong
+      role="button"
+      aria-expanded={!collapsed}
+      title={collapsed ? t('sidebar.section.expand') : t('sidebar.section.collapse')}
+      onClick={onToggle}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        marginTop, marginBottom,
+        color: colors.text, fontSize: size,
+        cursor: 'pointer', userSelect: 'none',
+      }}
+    >
+      <svg
+        width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"
+        style={{
+          flexShrink: 0,
+          transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+          transition: 'transform 0.15s ease',
+        }}
+      >
+        <path
+          d="M2 3.4 5 6.6 8 3.4" fill="none"
+          stroke={hover ? colors.accent : colors.textDim}
+          strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"
+        />
+      </svg>
+      <span>{label}</span>
+    </strong>
   )
 }
 
