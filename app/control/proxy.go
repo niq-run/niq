@@ -7,10 +7,10 @@ package control
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log"
 	stdhttp "net/http"
 	"net/http/httputil"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -35,7 +35,7 @@ type proxyTargetKey struct{}
 // own WebUI. The upstream is taken from the request (see handleProjectProxy)
 // instead of being baked in, so a project that restarted on another port is
 // picked up immediately and a stopped one never hits a stale address.
-func newProjectProxy() *httputil.ReverseProxy {
+func (c *Control) newProjectProxy() *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		// The project's /api/stream is SSE: flush every write so events reach
 		// the browser as they happen instead of sitting in a copy buffer.
@@ -50,14 +50,16 @@ func newProjectProxy() *httputil.ReverseProxy {
 		},
 		ErrorHandler: func(w stdhttp.ResponseWriter, r *stdhttp.Request, err error) {
 			t, _ := r.Context().Value(proxyTargetKey{}).(proxyTarget)
-			log.Printf("[control] proxy %s p=%s %s: %v", t.addr, t.id, r.URL.RequestURI(), err)
-			// A navigation goes to the projects list with a start prompt (the SPA
-			// owns that UI); the SPA's own fetch/stream calls keep the plain 502
-			// they know how to report.
-			if wantsHTML(r) {
-				redirectToStartPrompt(w, r, t.id)
+			// Navigation and the bundle's own static files come from the
+			// control plane's embedded SPA when the project is down, so the
+			// page still renders the product UI — with its "project stopped"
+			// banner and start button — instead of a dead end. The SPA's API
+			// calls are not SPA files and keep the plain 502 they know how to
+			// report.
+			if c.serveSPA(w, r, t.prefix) {
 				return
 			}
+			log.Printf("[control] proxy %s p=%s %s: %v", t.addr, t.id, r.URL.RequestURI(), err)
 			stdhttp.Error(w, fmt.Sprintf("project WebUI at %s is unreachable: %v", t.addr, err), stdhttp.StatusBadGateway)
 		},
 	}
@@ -69,13 +71,26 @@ func wantsHTML(r *stdhttp.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
-// redirectToStartPrompt sends a browser that opened a stopped project's address
-// to the control plane's project list, where the SPA asks whether to start it.
-// The list stays visible behind the prompt, so dismissing it still lands the
-// user somewhere useful — and the prompt is drawn by the same UI as everything
-// else instead of being a second, server-rendered page.
-func redirectToStartPrompt(w stdhttp.ResponseWriter, r *stdhttp.Request, id string) {
-	stdhttp.Redirect(w, r, "/?start="+url.QueryEscape(id), stdhttp.StatusFound)
+// serveSPA answers a request from the control plane's embedded SPA bundle,
+// stitched under the project's /p/<id>/ prefix. It lets a stopped project's
+// address still serve its page: the shell and every static file load from here
+// while the project's API calls keep failing, so the UI can say the project is
+// stopped and offer to start it. Returns false when the path is not a bundle
+// file (any API call), leaving the caller to answer with its own error.
+func (c *Control) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix string) bool {
+	if c.assets == nil {
+		return false
+	}
+	rel := strings.TrimPrefix(r.URL.Path, prefix)
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" {
+		rel = "index.html"
+	}
+	if _, err := fs.Stat(c.assets, rel); err != nil {
+		return false
+	}
+	stdhttp.ServeFileFS(w, r, c.assets, rel)
+	return true
 }
 
 // handleProjectProxy serves /p/{id}/* from the project's own WebUI. The target
@@ -89,10 +104,9 @@ func (c *Control) handleProjectProxy(w stdhttp.ResponseWriter, r *stdhttp.Reques
 		return
 	}
 	if p.Ports.WebUI == 0 {
-		// Never started, so there is no address to proxy to — same prompt, which
-		// is exactly the "click the link, start the project" flow.
-		if wantsHTML(r) {
-			redirectToStartPrompt(w, r, id)
+		// Never started, so there is no address to proxy to. Same shell as a
+		// stopped project: the page says so and offers the start button.
+		if wantsHTML(r) && c.serveSPA(w, r, projectPrefix+id) {
 			return
 		}
 		stdhttp.Error(w, "project "+id+" is not running: no WebUI port assigned yet", stdhttp.StatusBadGateway)

@@ -63,6 +63,57 @@ func TestProjectProxyNotRunning(t *testing.T) {
 	}
 }
 
+// TestProjectProxyServesStoppedShell asserts a browser navigation to a stopped
+// project still gets the SPA — so the page renders the product UI with its
+// stopped banner and start button — while the SPA's API calls keep the plain
+// 502 they know how to report.
+func TestProjectProxyServesStoppedShell(t *testing.T) {
+	setupProjectsRoot(t)
+	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
+		t.Fatal(err)
+	}
+	// A WebUI port nobody listens on: the project exists and was started before,
+	// it is simply down now.
+	setProjectWebUIPort(t, "alpha", "1")
+	base := newControl(t)
+
+	req, _ := http.NewRequest("GET", base+"/p/alpha/", nil)
+	req.Header.Set("Accept", "text/html")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d (%s), want the SPA shell", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `id="root"`) {
+		t.Fatalf("expected the SPA shell, got: %s", body)
+	}
+
+	// Its bundle files resolve under the project prefix as well.
+	var src string
+	for _, tok := range strings.FieldsFunc(string(body), func(r rune) bool { return r == '"' || r == '\'' }) {
+		if strings.HasPrefix(tok, "./assets/") && strings.HasSuffix(tok, ".js") {
+			src = strings.TrimPrefix(tok, ".")
+			break
+		}
+	}
+	if src == "" {
+		t.Fatalf("no bundle path in the shell: %s", body)
+	}
+	code, js := doGet(t, base+"/p/alpha"+src)
+	if code != http.StatusOK || !strings.Contains(js, "niq") {
+		t.Fatalf("asset %s: status=%d len=%d", src, code, len(js))
+	}
+
+	// API calls are not bundle files: they keep the 502 contract.
+	if code, _ := doGet(t, base+"/p/alpha/api/workers"); code != http.StatusBadGateway {
+		t.Fatalf("api status=%d, want 502", code)
+	}
+}
+
 // TestProjectProxyForwards asserts /p/<id>/... reaches the project's own WebUI
 // with the mount prefix stripped, the query string intact, and the original
 // client address preserved for the upstream.

@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	stdhttp "net/http"
@@ -80,6 +81,11 @@ type Control struct {
 	// proxy serves /p/<id>/* from each project's own loopback WebUI.
 	proxy *httputil.ReverseProxy
 
+	// assets is the SPA bundle, also served as the shell for a project whose
+	// WebUI is down (see handleProjectProxy), so a stopped project's page still
+	// renders the product UI with its start banner.
+	assets fs.FS
+
 	authUser string // basic-auth user for non-loopback access ("" = disabled)
 	authPass string
 }
@@ -89,10 +95,9 @@ func NewControl(addr string) *Control {
 	if addr == "" {
 		addr = ":9527"
 	}
-	return &Control{
-		addr:  addr,
-		proxy: newProjectProxy(),
-	}
+	c := &Control{addr: addr}
+	c.proxy = c.newProjectProxy()
+	return c
 }
 
 // SetBasicAuth enables HTTP basic auth for requests from non-loopback peers
@@ -155,6 +160,7 @@ func (c *Control) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("control: assets: %w", err)
 	}
+	c.assets = assets
 	// Registered without a method so it cannot conflict with the all-methods
 	// /p/{id}/ proxy below ("GET /" vs "/p/{id}/" is ambiguous: the former has a
 	// narrower method but a wider path).
