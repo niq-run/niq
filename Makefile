@@ -63,7 +63,7 @@ APP := dist/niq.app
 build-miq:
 	@echo "app: building $(APP) (swiftc)…"
 	rm -rf "$(APP)"
-	mkdir -p "$(APP)/Contents/MacOS"
+	mkdir -p "$(APP)/Contents/MacOS" bin
 	swiftc -O -swift-version 5 -framework AppKit app/menubar/main.swift \
 		-o "$(APP)/Contents/MacOS/niq-menubar"
 	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
@@ -81,7 +81,7 @@ MENUBAR_ZIP := dist/niq_menubar_darwin_universal.zip
 build-miq-universal:
 	@echo "app: building $(APP) (universal)…"
 	rm -rf "$(APP)" build/niq-menubar-* build/miq-*
-	mkdir -p "$(APP)/Contents/MacOS" build
+	mkdir -p "$(APP)/Contents/MacOS" build bin
 	swiftc -O -swift-version 5 -target arm64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
 		app/menubar/main.swift -o build/niq-menubar-arm64
 	swiftc -O -swift-version 5 -target x86_64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
