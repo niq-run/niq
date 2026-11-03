@@ -47,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.toolTip = "niq"
         statusItem.menu = menu
         menu.delegate = self
+        // Without this, AppKit enables every item whose target implements the
+        // action and ignores isEnabled — which is why Start on a running project
+        // and Stop on a stopped one looked available.
+        menu.autoenablesItems = false
 
         rebuild()
     }
@@ -276,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for project in snapshot.projects {
             let entry = NSMenuItem(title: "\(project.id) · \(project.running ? "running" : "stopped")", action: nil, keyEquivalent: "")
             let actions = NSMenu()
+            actions.autoenablesItems = false
 
             // Only a running instance serves a page: a stopped one's URL is the
             // proxy's start prompt, and Start is already in this menu.
