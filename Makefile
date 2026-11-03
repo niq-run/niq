@@ -85,6 +85,8 @@ miq:
 	swiftc -O -swift-version 5 -framework AppKit app/menubar/main.swift \
 		-o "$(APP)/Contents/MacOS/niq-menubar"
 	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	mkdir -p "$(APP)/Contents/Resources"
+	cp app/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@echo "app: building ./bin/miq (launcher)…"
 	@# miq-universal leaves a lipo'd fat binary here, and go refuses to
@@ -110,6 +112,8 @@ miq-universal:
 		app/menubar/main.swift -o build/niq-menubar-x86_64
 	lipo -create -output "$(APP)/Contents/MacOS/niq-menubar" build/niq-menubar-arm64 build/niq-menubar-x86_64
 	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	mkdir -p "$(APP)/Contents/Resources"
+	cp app/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@echo "app: building ./bin/miq (universal launcher)…"
 	GOOS=darwin GOARCH=arm64 go build -o build/miq-arm64 ./app/menubar/miq
