@@ -78,7 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The squares are the ones in pin.svg, at their own scale: 1000 of 3500,
     /// at (1250, 500) on top, (500, 2000) and (2000, 2000) below.
     private static func mark() -> NSImage {
-        let side: CGFloat = 18
+        // 16pt: a touch under the 18pt a status item allows, which reads as the
+        // same weight as the system icons beside it.
+        let side: CGFloat = 16
         let unit = side / 3500
         let cell = 1000 * unit
         let image = NSImage(size: NSSize(width: side, height: side))
