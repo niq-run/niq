@@ -7,8 +7,9 @@
 # CLI, so this is an entry point, not a second implementation.
 #
 # A bundle next to this script wins: that is the one the same build produced
-# (bin/miq → ../dist/niq.app, or the zip's ./niq.app), so `make build miq && miq`
-# cannot open a stale copy from /Applications.
+# (bin/miq → ../dist/niq.app in the repo, ../niq.app in the npm package, or the
+# zip's ./niq.app), so `make build miq && miq` cannot open a stale copy from
+# /Applications.
 set -eu
 
 # Follow symlinks: `make install` links ~/.local/bin/miq to <repo>/bin/miq.
@@ -23,9 +24,10 @@ done
 dir=$(cd "$(dirname "$self")" && pwd)
 
 app=
-for candidate in "${NIQ_APP:-}" "$dir/niq.app" "$dir/../dist/niq.app" \
-                 "$dir/../../dist/niq.app" "$HOME/Applications/niq.app" \
-                 /Applications/niq.app "$PWD/dist/niq.app"; do
+for candidate in "${NIQ_APP:-}" "$dir/niq.app" "$dir/../niq.app" \
+                 "$dir/../dist/niq.app" "$dir/../../dist/niq.app" \
+                 "$HOME/Applications/niq.app" /Applications/niq.app \
+                 "$PWD/dist/niq.app"; do
 	[ -n "$candidate" ] || continue
 	if [ -f "$candidate/Contents/Info.plist" ]; then
 		app=$(cd "$candidate" && pwd)

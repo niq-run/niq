@@ -5,7 +5,8 @@
 #
 # Layout produced:
 #   <dist>/npm/@niq.run/niq-<os>-<arch>/   platform subpackages (binary only)
-#   <dist>/npm/niq/                     main package (copied from npm/)
+#   <dist>/npm/niq/                     main package (copied from npm/, plus the
+#                                       miq launcher and niq.app when built)
 #
 # goreleaser archives are named niq_<os>_<arch>.tar.gz where
 # os/arch are Go names; they are mapped to npm os/arch names.
@@ -44,6 +45,9 @@ mkdir -p "${OUT}"
 for archive in "${DIST}"/niq_*_*.tar.gz "${DIST}"/niq_*_*.zip; do
   [ -e "$archive" ] || continue
   base="$(basename "$archive")"
+  # niq_menubar_darwin_universal.zip is the app, not a CLI archive; it is
+  # packaged separately below.
+  case "$base" in niq_menubar_*) continue ;; esac
   # niq_darwin_arm64.tar.gz -> goos=darwin goarch=arm64
   goos="$(echo "$base" | cut -d_ -f2)"
   goarch="$(echo "$base" | cut -d_ -f3)"
@@ -81,6 +85,24 @@ mkdir -p "${OUT}/niq"
 mkdir -p "${OUT}/niq/bin"
 cp "${NPM_DIR}/bin/"* "${OUT}/niq/bin/"
 cp "${NPM_DIR}/README.md" "${OUT}/niq/README.md"
+
+# The launcher that opens the menu bar app. It is a shell script, platform
+# independent: elsewhere it simply finds no bundle and says so.
+cp "${ROOT}/app/menubar/miq" "${OUT}/niq/bin/miq"
+chmod +x "${OUT}/niq/bin/miq"
+
+# 3. niq.app, when the macOS job produced it. It rides inside the package (so
+# `miq` finds it next to itself) and postinstall copies it to ~/Applications.
+MENUBAR_ZIP="${DIST}/niq_menubar_darwin_universal.zip"
+if [ -f "${MENUBAR_ZIP}" ]; then
+  tmp="$(mktemp -d)"
+  unzip -q "${MENUBAR_ZIP}" "niq-menubar/niq.app/*" -d "${tmp}"
+  cp -R "${tmp}/niq-menubar/niq.app" "${OUT}/niq/niq.app"
+  rm -rf "${tmp}"
+  echo "packaged niq.app"
+else
+  echo "note: ${MENUBAR_ZIP} not found; the npm package will ship without niq.app"
+fi
 node - "${VERSION}" "${OUT}" "${ROOT}" <<'EOF'
 const [version, out, root] = process.argv.slice(2);
 const fs = require('fs');

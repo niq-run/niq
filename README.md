@@ -29,6 +29,11 @@ and scripts see only the SDK the worker injects — no `process`, `require`,
 npm install -g @niq.run/niq
 ```
 
+On macOS that installs three things: the `niq` command, `miq`, and `niq.app`
+(copied to `~/Applications`, so Spotlight and Finder see it). `miq` opens the
+menu bar app; it is the same menu whether you start it that way or by
+double-clicking the app.
+
 **Install script** (no npm; the binary goes to `~/.niq/bin`):
 
 ```sh
@@ -216,6 +221,9 @@ The same report, one click away.
 make build miq   # builds dist/niq.app and ./bin/miq
 miq              # puts niq in the menu bar; running it again focuses it
 ```
+
+A `npm install -g @niq.run/niq` on macOS gives you all three already: `niq`,
+`miq`, and `niq.app` in `~/Applications`. `make build miq` is for a checkout.
 
 The icon is the web UI's logo as a template image: a tile in the menu bar's own
 text colour with the 品 knocked out of it. macOS draws templates white on a dark
