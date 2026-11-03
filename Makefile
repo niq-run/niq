@@ -55,9 +55,9 @@ app:
 		-o "$(APP)/Contents/MacOS/niq-menubar"
 	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
-	@echo "app: building ./bin/niqm (launcher)…"
-	go build -o ./bin/niqm ./app/menubar/niqm
-	@echo "app: built — run: ./bin/niqm"
+	@echo "app: building ./bin/miq (launcher)…"
+	go build -o ./bin/miq ./app/menubar/miq
+	@echo "app: built — run: ./bin/miq"
 
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:
@@ -79,7 +79,7 @@ define install_steps
 	@echo "install: linking $(PREFIX)/niq → $(shell pwd)/bin/niq"
 	mkdir -p $(PREFIX)
 	ln -sf "$(shell pwd)/bin/niq" $(PREFIX)/niq
-	-@if [ -x "$(shell pwd)/bin/niqm" ]; then ln -sf "$(shell pwd)/bin/niqm" $(PREFIX)/niqm; echo "install: $(PREFIX)/niqm → $(shell pwd)/bin/niqm"; fi
+	-@if [ -x "$(shell pwd)/bin/miq" ]; then ln -sf "$(shell pwd)/bin/miq" $(PREFIX)/miq; echo "install: $(PREFIX)/miq → $(shell pwd)/bin/miq"; fi
 	-@if [ "$$NIQ_NO_COMPLETION" != "1" ]; then "$(PREFIX)/niq" completion install; fi
 	@echo "niq installed → $(PREFIX)/niq"
 	@echo "Make sure $(PREFIX) is in your PATH"

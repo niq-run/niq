@@ -50,10 +50,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuild()
     }
 
-    // The menu is rebuilt on open rather than polled: opening it is the moment
-    // the answer has to be true, and the command takes a few milliseconds.
+    // The menu is rebuilt on open rather than polled, and built synchronously:
+    // this runs just before the menu is drawn, so the first thing the user sees
+    // is current. The command takes tens of milliseconds, and the alternative —
+    // updating items while the menu is already on screen — moves them under the
+    // cursor.
     func menuWillOpen(_ menu: NSMenu) {
-        refresh()
+        refreshing = false
+        let result = run(["status", "--json"])
+        if result.status == 0, let data = result.out.data(using: .utf8),
+           let parsed = try? JSONDecoder().decode(Snapshot.self, from: data) {
+            snapshot = parsed
+            rebuild()
+        } else {
+            rebuild(error: result.err.isEmpty ? "niq status failed" : result.err)
+        }
     }
 
     // MARK: Status item art
@@ -207,9 +218,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refreshClicked), keyEquivalent: "r")
-        refreshItem.target = self
-        menu.addItem(refreshItem)
+        // No Refresh item: opening the menu already refreshes it (menuWillOpen).
+        if let github = URL(string: "https://github.com/niq-run/niq") {
+            menu.addItem(item("Open GitHub", #selector(openURL(_:)), represented: github))
+        }
 
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitClicked), keyEquivalent: "q")
         quitItem.target = self
@@ -218,63 +230,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func addControlItems(_ snapshot: Snapshot) {
         let control = snapshot.control
-        let state = control.running ? "control running · pid \(control.pid ?? 0)" : "control stopped"
+        let state = control.running ? "Control Running · pid \(control.pid ?? 0)" : "Control Stopped"
         let stateItem = NSMenuItem(title: state, action: nil, keyEquivalent: "")
         stateItem.isEnabled = false
         menu.addItem(stateItem)
 
         if control.running, let urlString = control.url, let url = URL(string: urlString) {
-            menu.addItem(item("WebUI   \(urlString)", #selector(openURL(_:)), represented: url))
+            menu.addItem(item("Open WebUI", #selector(openURL(_:)), represented: url))
+            menu.addItem(item("Stop", #selector(runCommand(_:)), represented: ["stop"]))
         } else {
-            let item = NSMenuItem(title: "WebUI   —", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        }
-
-        if let log = control.log {
-            menu.addItem(item("Log   \(short(log))", #selector(openFile(_:)), represented: URL(fileURLWithPath: log)))
-        }
-
-        if control.running {
-            menu.addItem(item("Restart niq", #selector(runCommand(_:)), represented: ["restart"]))
-            menu.addItem(item("Restart niq and projects", #selector(runCommand(_:)), represented: ["restart", "-p"]))
-            menu.addItem(item("Stop niq", #selector(runCommand(_:)), represented: ["stop"]))
-        } else {
-            menu.addItem(item("Start niq", #selector(runCommand(_:)), represented: ["start"]))
+            let openItem = item("Open WebUI", #selector(openURL(_:)), represented: nil, enabled: false)
+            menu.addItem(openItem)
+            menu.addItem(item("Start", #selector(runCommand(_:)), represented: ["start"]))
         }
     }
 
     private func addProjectItems(_ snapshot: Snapshot) {
-        let root = NSMenuItem(title: "Projects", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
         if snapshot.projects.isEmpty {
-            let empty = NSMenuItem(title: "(none)", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(title: "No Projects", action: nil, keyEquivalent: "")
             empty.isEnabled = false
-            submenu.addItem(empty)
+            menu.addItem(empty)
+            return
         }
+        // One entry per project at the top level: the list is the menu, and a
+        // "Projects" parent would only add a click.
         for project in snapshot.projects {
-            let entry = NSMenuItem(title: "[\(project.id)]  \(project.running ? "running" : "stopped")", action: nil, keyEquivalent: "")
+            let entry = NSMenuItem(title: "[\(project.id)]  \(project.running ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
             let actions = NSMenu()
 
             if let urlString = project.url, let url = URL(string: urlString) {
                 actions.addItem(item("Open WebUI", #selector(openURL(_:)), represented: url))
+            } else {
+                actions.addItem(item("Open WebUI", #selector(openURL(_:)), represented: nil, enabled: false))
             }
-            let ports = NSMenuItem(title: "webui \(project.webui)   bus \(project.bus)", action: nil, keyEquivalent: "")
-            ports.isEnabled = false
-            actions.addItem(ports)
-            actions.addItem(.separator())
-
-            // The same three entries the CLI's action menu always lists; the ones
-            // an instance cannot perform are disabled rather than absent.
             actions.addItem(item("Start", #selector(runCommand(_:)), represented: ["project", "start", project.id], enabled: !project.running))
             actions.addItem(item("Stop", #selector(runCommand(_:)), represented: ["project", "stop", project.id], enabled: project.running))
             actions.addItem(item("Restart", #selector(runCommand(_:)), represented: ["project", "restart", project.id], enabled: project.running))
 
             entry.submenu = actions
-            submenu.addItem(entry)
+            menu.addItem(entry)
         }
-        root.submenu = submenu
-        menu.addItem(root)
     }
 
     private func item(_ title: String, _ action: Selector, represented: Any? = nil, enabled: Bool = true) -> NSMenuItem {
@@ -285,16 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
-    private func short(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
-    }
-
     // MARK: Actions
-
-    @objc private func refreshClicked() {
-        refresh()
-    }
 
     @objc private func quitClicked() {
         NSApp.terminate(nil)
@@ -303,12 +289,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openURL(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         NSWorkspace.shared.open(url)
-    }
-
-    @objc private func openFile(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? URL else { return }
-        // Reveal, so the log opens in whatever the user edits text with.
-        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     @objc private func runCommand(_ sender: NSMenuItem) {

@@ -213,20 +213,23 @@ The `reason` worker talks to an LLM provider. Provider settings (endpoint, model
 The same report, one click away.
 
 ```sh
-make app      # builds dist/niq.app and ./bin/niqm
-niqm          # puts niq in the menu bar; running it again focuses it
+make app      # builds dist/niq.app and ./bin/miq
+miq           # puts niq in the menu bar; running it again focuses it
 ```
 
-The menu is the `niq status` report: the control plane's state, pid and address,
-the log, and one submenu per project with **Open WebUI / Start / Stop /
-Restart** — the same three actions the picker offers, disabled when the
-instance cannot perform them.
+The menu opens with the report — **Control Running** (with its pid) or **Control
+Stopped**, then **Open WebUI** and **Stop** (**Start** when it is down) — and
+continues with one entry per project, flat, each a submenu of **Open WebUI /
+Start / Stop / Restart**: the same three actions the picker offers, disabled
+when the instance cannot perform them. **Open GitHub** and **Quit** close it.
 
-It is a front end, not a second implementation: every refresh is
+It refreshes itself when the menu opens, so there is no Refresh item to
+remember. It is a front end, not a second implementation: the status comes from
 `niq status --json`, every action is a `niq` command (`niq project restart <id>`,
-`niq restart -p`, …), so the app cannot drift from the CLI. `niqm` finds the
+`niq restart -p`, …), so the app cannot drift from the CLI. `miq` finds the
 bundle through `NIQ_APP`, `~/Applications`, `/Applications`, or the checkout it
-was built in.
+was built in, and hands the app the `niq` next to it (`--niq <path>`), since a
+GUI launch does not inherit the shell's PATH.
 
 ## Project layout
 

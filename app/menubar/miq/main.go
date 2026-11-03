@@ -1,6 +1,6 @@
 //go:build darwin
 
-// niqm starts the macOS menu bar app.
+// miq starts the macOS menu bar app (`niq` with an m for menu bar).
 //
 // The app is a .app bundle (built by `make app`); this command only locates it
 // and hands it to LaunchServices, so running `niqm` twice focuses the instance
@@ -21,7 +21,7 @@ import (
 func main() {
 	app, err := findApp()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "niqm:", err)
+		fmt.Fprintln(os.Stderr, "miq:", err)
 		os.Exit(1)
 	}
 	args := []string{"-a", app}
@@ -32,7 +32,7 @@ func main() {
 		args = append(args, "--args", "--niq", niq)
 	}
 	if err := exec.Command("open", args...).Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "niqm: open %s: %v\n", app, err)
+		fmt.Fprintf(os.Stderr, "miq: open %s: %v\n", app, err)
 		os.Exit(1)
 	}
 }
@@ -48,13 +48,13 @@ func sibling(name string) (string, error) {
 	}
 	path := filepath.Join(filepath.Dir(exe), name)
 	if info, err := os.Stat(path); err != nil || info.IsDir() {
-		return "", fmt.Errorf("%s not found next to niqm", name)
+		return "", fmt.Errorf("%s not found next to miq", name)
 	}
 	return path, nil
 }
 
 // findApp looks where the bundle can reasonably be: NIQ_APP, ~/Applications,
-// /Applications, and the checkout this binary was built in (bin/niqm →
+// /Applications, and the checkout this binary was built in (bin/miq →
 // ../../dist/niq.app).
 func findApp() (string, error) {
 	var candidates []string
