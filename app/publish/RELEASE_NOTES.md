@@ -1,143 +1,129 @@
-# niq v0.14.2
+# niq v0.15.0
 
-A first-run and reliability patch on top of v0.14.1. A fresh install now leads
-you into a model provider instead of dying at startup, a project that refuses to
-start says why, its page stays usable while it is stopped, and `make install`
-builds the UI it embeds.
+A release about reach: the CLI got a short name and a machine-readable status,
+and niq now has a macOS menu bar app that shows the same thing and does the same
+things — built out of the CLI rather than beside it.
 
 ## Highlights
 
-- **First run has somewhere to go.** When no provider is configured, the
-  control plane seeds a deepseek template, says so in a banner, and opens the
-  providers panel on that editable card — with a warning and a way out if
-  `provider.json` cannot be parsed.
-- **A failed start reports the reason.** The start call answers with the child's
-  exit, the project log path and the log's last lines; the reason is written to
-  that log instead of only stderr; the WebUI prints the server's message.
-- **A stopped project keeps its page.** Its address loads the product UI again —
-  talk, events, workers — with the header's "project stopped — Start" banner,
-  instead of redirecting to the projects list.
-- **An empty talk selection means no worker filter.** It used to expand to every
-  talk partner, one `worker IN (…)` branch with three bound variables each,
-  which SQLite refused on projects with a large roster.
-- **`make build` / `make install` build the WebUI first**, so the binary never
-  embeds a stale UI. The step prints what it is doing, repairs an interrupted
-  dependency install, respects the machine's npm registry, and the version line
-  now carries the build time.
+- **`miq`, a menu bar app.** One click: open the control plane's WebUI, stop it,
+  and one entry per project with open / start / stop / restart. macOS only, and
+  it ships with the release as a universal build.
+- **`niq p`** is `niq project`, and **`niq status --json`** is the report as data.
+- **`niq project start|stop|restart <id>`** — the picker's three actions without
+  the picker.
+- **Completion with no dotfile edit.** `niq completion install` writes into a
+  directory your shell already scans, and the installers call it.
 
-## 1. First run: a provider to fill in
+## 1. `niq p`
 
-A project with an LLM worker cannot start without a provider, and a new machine
-has none — which used to end in `no LLM provider configured: edit … and re-run`
-with an empty providers panel.
+The picker is the command people run most, so it has a one-letter spelling:
+`niq p` is `niq project` word for word — `p list`, `p create <id>`, `p run <id>`,
+and the picker on its own. Both words dispatch from the same case in `main`, so
+they cannot drift.
 
-- The built-in template is one `deepseek` provider with an empty `api_key`, so
-  the only thing missing is the key. `EnsureExample` seeds it on disk, and
-  `GET /api/providers` answers with it when the file does not exist yet
-  (read-only: the file appears when you save).
-- The control plane shows a setup banner while no provider is usable — nothing
-  configured, every `api_key` empty, or `provider.json` unreadable — and jumps
-  to the providers panel from it. It re-checks whenever the panels close, so
-  saving a key clears it.
-- An unparsable `provider.json` no longer leaves a blank panel: it falls back to
-  an empty config with a warning that saving replaces the file.
-
-## 2. A failed start says why
-
-`launchProject` waited for the new instance's WebUI port and then answered 200
-with `webui_port: 0` when the process had already died, so the projects list,
-the sidebar menu and the banner had nothing to report.
-
-- The start now watches the child's exit alongside its port. An early exit
-  answers 502 with `project <id> exited during startup: <err>`, the log path and
-  the log's last four lines; a timeout reports the elapsed budget.
-- `niq project run` logs its fatal startup error (`[project] startup failed: …`)
-  before returning, so the log the message points at actually contains it.
-- The SPA throws the server's message for start and restart instead of
-  `start failed: 502`, and renders it with `pre-wrap` so the log tail keeps its
-  lines — on the projects list, in the stopped banner and in the sidebar menu.
-
-## 3. A stopped project keeps its page
-
-A stopped project's `/p/<id>/` redirected to the projects list, which made its
-own views unreachable — and with them the header banner that offers Start.
-
-- The control plane serves the embedded SPA for navigation and for the bundle's
-  static files under the project prefix while the project's API calls keep their
-  plain 502. The SPA takes the project id from the URL when `/api/context` is
-  unreachable, skips the event stream (and its "stream dropped" banner) while the
-  project is known stopped, and shows the stopped banner with Start.
-- The `?start=` handoff and the projects-list start dialog are gone with the
-  redirect they existed for.
-
-## 4. Talk scope
-
-With nothing selected in the sidebar, the talk view expanded its scope to every
-talk-partner worker and sent them all to the event APIs. Each worker becomes a
-`worker IN (…)` branch with three bound variables chained by `UNION`, so a large
-roster produced a query SQLite rejected and the stream failed.
-
-An empty selection now sends no `worker` param at all: the stream is unfiltered
-and `TalkView` narrows it client-side by worker type, which is what it already
-did before the server-side scoping was introduced. Picking workers keeps the
-server-side filter. Unfiltered mode shares the newest-N trim window with
-non-conversation events, so a busy project may page once more to fill the list.
-
-## 5. Building and version
-
-- `make build` (and `make install`, which depends on it) runs the webui target
-  first: `tsc -b && vite build`, then `go build`. The binary can no longer embed
-  whatever UI happened to be committed.
-- Dependencies are keyed on npm's completion marker
-  (`node_modules/.package-lock.json`), with `package-lock.json` as prerequisite:
-  an interrupted install or a changed dependency set reinstalls, a current tree
-  is reused. `--include=dev` keeps `tsc` and `vite` on machines that export
-  `NODE_ENV=production`.
-- Every stage announces itself, and `npm ci` logs each fetch so a slow mirror
-  shows which host it is waiting on (`make build NPM_LOGLEVEL=notice` quiets it).
-- `app/webui/assets/.npmrc` sets `replace-registry-host=always`: the lockfile
-  records npmmirror tarball URLs, and npm's default only rewrites npmjs hosts,
-  which pinned other machines to that mirror.
-- The identity line gained a build timestamp injected by the Makefile
-  (`-X main.buildTime`) and by goreleaser (`{{.Date}}`). A plain `go build`
-  omits it:
+## 2. `niq status --json`
 
 ```
- - niq -  version: 0.14.2 · build: 2026-11-02T11:22:47Z
+$ niq status --json
+{
+  "version": "0.15.0",
+  "control": {
+    "running": true,
+    "pid": 99561,
+    "addr": ":9527",
+    "url": "http://localhost:9527",
+    "log": "~/.niq/niq.log",
+    "started": "2026-11-03T13:22:28+08:00"
+  },
+  "projects": [
+    {
+      "id": "pin",
+      "running": true,
+      "webui": 57609,
+      "bus": 57608,
+      "url": "http://localhost:9527/p/pin/",
+      "log": "~/.niq/projects/pin/logs/niq-2026-11-03.log"
+    }
+  ]
+}
 ```
 
-## Also in this release
+A stopped control plane is not an error: the projects keep their ports and can be
+started from that answer. `url` is the proxy while the plane is up and the
+loopback address otherwise, so it is always the one that works.
 
-- **`niq update`**, plus a quiet note on start when a newer release is published;
-  the registry is asked at most once a day.
-- **Collapsible sidebar sections**, with the same spacing whether open or closed.
-- **Provider cards collapse**, one row each.
-- **The approvals and management panels lose their worker selector**, which did
-  not apply there.
-- **The recipient picker shows its selection as a chip strip** and keeps the
-  search row pinned.
-- **MCP is "MCP workers"** in the navigation, and the client is never handed a
-  null event list.
+## 3. One project at a time
+
+`niq project start|stop|restart <id>` are the picker's operations with an id
+instead of a cursor — the same functions, so the same behaviour: wait for the
+port to free before starting, snapshot on the way out, one line of report.
+
+## 4. The menu bar app
+
+```sh
+make build-miq   # dist/niq.app and ./bin/miq
+miq              # puts niq in the menu bar; running it again focuses it
+```
+
+The menu is the actions, nothing else: **Open WebUI** and **Stop** (**Start**
+when the plane is down), then one entry per project — `pin · running` — each a
+submenu of **Open WebUI / Start / Stop / Restart**, greyed out when the instance
+cannot perform them. **Open GitHub** and **Quit** close it. It rebuilds itself
+when the menu opens.
+
+It is a front end, not a second implementation: the status is `niq status
+--json`, every action is a `niq` command, and `miq` hands the app the `niq`
+binary next to it, because a LaunchServices start inherits none of the shell's
+PATH.
+
+The icon is the web UI's logo — the 品 of three squares — as a template image: a
+tile in the menu bar's text colour with the squares knocked out, so macOS draws
+it white on a dark bar and black on a light one.
+
+## 5. Completion
+
+`niq completion install` writes the script into a directory the shell already
+scans — a writable entry of zsh's `$fpath` (preferring one under your home, such
+as oh-my-zsh's `custom/completions`), `~/.config/fish/completions`, or
+bash-completion's user directory — and prints where it went.
+
+`make install`, `install.sh` and the npm package's `postinstall` all call it.
+Nothing edits `~/.zshrc`; `NIQ_NO_COMPLETION=1` skips it.
+
+## 6. Build
+
+The two things this repository builds have names:
+
+```sh
+make build                    # everything this machine can build
+make build-niq                # the CLI (rebuilds the SPA first)
+SKIP_WEBUI=1 make build-niq   # Go only, no SPA rebuild
+make build-miq                # the menu bar app
+make install                  # links what is already built — it does not build
+```
+
+`make install` stops with "run 'make build' first" rather than quietly starting
+a minutes-long npm/vite run.
 
 ## Upgrade
 
-Install the new binary — `git pull && make install` for a source install,
-`niq update` for an npm install — then bring the control plane and every project
-onto it:
-
 ```
-niq restart -p
+niq update          # npm install: installs 0.15.0
+niq restart -p      # put the control plane and the running projects on it
 ```
 
-Projects keep serving the page they were built with until they are restarted —
-`-p` is what upgrades them alongside the control plane.
+The menu bar app is a separate download —
+`niq_menubar_darwin_universal.zip` on the release page, holding `niq.app` and
+`miq`. It is ad-hoc signed but not notarized: the first launch needs
+right-click → Open.
 
 ## Verification
 
-`go build ./...`, `go vet ./app/...` and `go test ./app/...` pass, with new
-tests covering the stopped project's shell and static files versus its 502 API,
-`waitProjectStart` reporting an early exit with the log path, and the log tail.
-The SPA builds with `tsc -b && vite build`; the bundle is rebuilt and committed.
-`make build` and `make install` were exercised end to end, together with all
-three `npm ci` guard states (missing marker, stale marker, current marker) in a
-scratch tree.
+`go build ./...`, `go vet ./app/...` and `go test ./app/...` pass, with new tests
+for the picker's redraw height, the cursor skipping disabled actions, and the
+version comparison behind `niq update`. Exercised on macOS: completion installed
+into a fresh zsh (`zsh -ic 'echo ${_comps[niq]}'` → `_niq`), `niq p` variants,
+`status --json` with the plane up and down, per-project start/stop, the menu bar
+app driven through its menu, and `make dist-miq` (universal build, signature
+verified, zip inspected).
