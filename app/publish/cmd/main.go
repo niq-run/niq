@@ -299,6 +299,7 @@ func printUsage() {
 
 	fmt.Printf("\n%s\n", bracketed("shell completion"))
 	printUsageRows([][2]string{
+		{"niq completion install", "write it into your shell's own directory — nothing to add to a dotfile"},
 		{"bash", "source <(niq completion bash)"},
 		{"zsh", "niq completion zsh > \"${fpath[1]}/_niq\""},
 		{"fish", "niq completion fish | source"},

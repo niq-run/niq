@@ -132,7 +132,8 @@ just the ids.
 | `niq project` | pick a project: start, stop or restart it |
 | `niq update` | install the latest release with npm |
 | `niq project create` / `niq project run` | create a project / run one in this terminal |
-| `niq completion <shell>` | completion for bash, zsh or fish |
+| `niq completion install` | put completion where your shell already looks |
+| `niq completion <shell>` | print a script for bash, zsh or fish |
 
 `niq update` asks npm for the published version, installs it with
 `npm install -g @niq.run/niq@latest`, and points at `niq restart -p` — the
@@ -140,6 +141,16 @@ control plane and the projects are separate processes still running the old
 binary. A bare `niq` asks the registry at most once a day and mentions a newer
 release every time it starts (from the cached answer) until you install it;
 `NIQ_NO_UPDATE_CHECK=1` turns the check off.
+
+Completion needs no dotfile edit: `niq completion install` writes the script
+into a directory the shell already scans — a writable entry of zsh's `$fpath`,
+`~/.config/fish/completions`, or bash-completion's user directory — and prints
+where it went. `make install`, the install script and the npm package's
+`postinstall` all call it, so a normal install ends with tab completion working
+in the next shell. `NIQ_NO_COMPLETION=1` skips it.
+
+The scripts are printable too, for the cases where that directory is not
+available (a locked-down `/usr/share/zsh`, a shell started from a script):
 
 ```sh
 # bash

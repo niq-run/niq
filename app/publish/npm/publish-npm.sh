@@ -79,7 +79,7 @@ done
 # 2. Main package: copy npm/ and stamp version + matching optionalDeps.
 mkdir -p "${OUT}/niq"
 mkdir -p "${OUT}/niq/bin"
-cp "${NPM_DIR}/bin/niq.js" "${OUT}/niq/bin/"
+cp "${NPM_DIR}/bin/"* "${OUT}/niq/bin/"
 cp "${NPM_DIR}/README.md" "${OUT}/niq/README.md"
 node - "${VERSION}" "${OUT}" "${ROOT}" <<'EOF'
 const [version, out, root] = process.argv.slice(2);

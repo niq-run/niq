@@ -45,9 +45,14 @@ snapshot:
 npm-publish:
 	./app/publish/npm/publish-npm.sh "$(VERSION:v%=%)" ./dist $(DRY)
 
+# The completion install comes after the link and is best-effort: it writes into
+# a directory the shell already scans (zsh's fpath, fish's completions dir), so
+# there is no dotfile edit and nothing to undo — a failure is not an install
+# failure. NIQ_NO_COMPLETION=1 skips it.
 install: build
 	@echo "install: linking $(PREFIX)/niq → $(shell pwd)/bin/niq"
 	mkdir -p $(PREFIX)
 	ln -sf "$(shell pwd)/bin/niq" $(PREFIX)/niq
+	-@if [ "$$NIQ_NO_COMPLETION" != "1" ]; then "$(PREFIX)/niq" completion install; fi
 	@echo "niq installed → $(PREFIX)/niq"
 	@echo "Make sure $(PREFIX) is in your PATH"
