@@ -213,7 +213,7 @@ The `reason` worker talks to an LLM provider. Provider settings (endpoint, model
 The same report, one click away.
 
 ```sh
-make build:miq   # builds dist/niq.app and ./bin/miq
+make build-miq   # builds dist/niq.app and ./bin/miq
 miq              # puts niq in the menu bar; running it again focuses it
 ```
 
@@ -252,7 +252,7 @@ go build ./... && go vet ./...
 go test ./core/impl/eventbus/ -count=1
 ```
 
-The WebUI bundle is committed (it is `go:embed`-ed). `make build:niq` rebuilds
+The WebUI bundle is committed (it is `go:embed`-ed). `make build-niq` rebuilds
 it from `app/webui/assets/src` before compiling the Go binary, so the binary
 never ships a stale UI. The commit still matters for `go build ./...`,
 `go test ./...` and the release workflow (goreleaser and CI do not run Node), so
@@ -260,9 +260,9 @@ commit the rebuilt `app/webui/assets/dist` with the change:
 
 ```sh
 make build            # everything this machine can build
-make build:niq        # the CLI (rebuilds the SPA first)
-SKIP_WEBUI=1 make build:niq   # Go only, no SPA rebuild
-make build:miq        # the menu bar app
+make build-niq        # the CLI (rebuilds the SPA first)
+SKIP_WEBUI=1 make build-niq   # Go only, no SPA rebuild
+make build-miq        # the menu bar app
 make install          # links what is already built — it does not build
 ```
 

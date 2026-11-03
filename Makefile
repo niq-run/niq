@@ -7,16 +7,12 @@ WEBUI := app/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build app webui snapshot npm-publish
+.PHONY: install build build-niq build-miq app webui snapshot npm-publish
 
 # `make build` rebuilds the SPA first — it is go:embed-ed, so skipping that
 # would ship whatever UI was last built. For Go-only iteration:
 #
-#	SKIP_WEBUI=1 make build:niq
-#
-# The build targets carry a colon in their names (build:niq, build:miq), which
-# make cannot take in a prerequisite list — a colon there is the rule separator
-# — so `build` recurses into them instead of listing them.
+#	SKIP_WEBUI=1 make build-niq
 SKIP_WEBUI ?=
 
 ifeq ($(SKIP_WEBUI),1)
@@ -27,15 +23,12 @@ endif
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
-BUILD_GOALS := build:niq build:miq
+BUILD_GOALS := build-niq build-miq
 else
-BUILD_GOALS := build:niq
+BUILD_GOALS := build-niq
 endif
 
-MAKEFILE_SELF := $(firstword $(MAKEFILE_LIST))
-
-build:
-	@$(MAKE) --no-print-directory -f $(MAKEFILE_SELF) $(BUILD_GOALS)
+build: $(BUILD_GOALS)
 
 # Dependencies are keyed on npm's own completion marker, not on node_modules
 # existing: npm creates the directory before it finishes, so an interrupted
@@ -57,7 +50,7 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
 
 # The CLI, with the SPA rebuilt unless SKIP_WEBUI=1.
-build\:niq: $(WEBUI_PREREQ)
+build-niq: $(WEBUI_PREREQ)
 	@echo "go: building ./bin/niq…"
 	$(GO_BUILD)
 
@@ -67,7 +60,7 @@ build\:niq: $(WEBUI_PREREQ)
 # plus ./bin/miq, the launcher that opens it.
 APP := dist/niq.app
 
-build\:miq:
+build-miq:
 	@echo "app: building $(APP) (swiftc)…"
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS"
@@ -79,9 +72,8 @@ build\:miq:
 	go build -o ./bin/miq ./app/menubar/miq
 	@echo "app: built — run: ./bin/miq"
 
-# `make app` is the older spelling of build:miq.
-app:
-	@$(MAKE) --no-print-directory -f $(MAKEFILE_SELF) build:miq
+# `make app` is the older spelling of build-miq.
+app: build-miq
 
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:
