@@ -12,6 +12,7 @@ import type { EventPayload } from '../../types'
 import WorkerBadge from './WorkerBadge'
 import type { RowCtx } from './RowCtx'
 import { AT_BOTTOM_PX, TALK_SCROLL_CLASS } from './useChatScroll'
+import { captureElementAnchor, settleScrollAnchor, type ScrollAnchor } from './scrollAnchor'
 import {
   InputRow, AbortRow, TimeoutRow,
   CancelRow, InterruptedRow, ThinkingRow, ResponseRow, ApprovalRow, ToolRow,
@@ -175,26 +176,17 @@ export default function TalkRows({ relevantEvents, allEvents, responseOnly, talk
   // starts folded again.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
   // Folding/unfolding changes the timeline height by however tall the group is
-  // (a big tool list is thousands of pixels). Content above the viewport growing
-  // leaves scrollTop untouched, so the reader is thrown to an earlier part of
-  // the conversation. Remember the chip's screen position on click and restore
-  // it after the commit: the row the finger is on stays where it was.
-  const anchorTopRef = useRef<number | null>(null)
-  const anchorElRef = useRef<HTMLElement | null>(null)
-  // True when the reader was already at the bottom on click: the follow pin
-  // owns the scroll then, and anchoring the chip would fight it (the view would
-  // settle at the chip instead of the newest row).
-  const anchorFollowRef = useRef(false)
+  // (a big tool list is thousands of pixels), and the chip loses its badge above
+  // it when it opens. Keep the chip the finger is on where it was: one row
+  // anchor, settled once, with the same math the prepend uses (scrollAnchor.ts).
+  // When the reader is already following the bottom, the follow pin owns the
+  // scroll and no anchor is taken.
+  const anchorRef = useRef<{ scroller: HTMLElement; anchor: ScrollAnchor } | null>(null)
   useLayoutEffect(() => {
-    const top = anchorTopRef.current
-    const chip = anchorElRef.current
-    anchorTopRef.current = null
-    if (top === null || !chip) return
-    const scroller = chip.closest('.' + TALK_SCROLL_CLASS) as HTMLElement | null
-    if (!scroller) return
-    if (anchorFollowRef.current) return
-    const delta = chip.getBoundingClientRect().top - top
-    if (delta !== 0) scroller.scrollTop += delta
+    const pending = anchorRef.current
+    if (!pending) return
+    anchorRef.current = null
+    settleScrollAnchor(pending.scroller, pending.anchor)
   })
   // Track the last DISPLAYED avatar's worker id. Avatars render for reason
   // workers and the human; hidden workers (workspace, timer, ...) don't reset
@@ -338,10 +330,10 @@ export default function TalkRows({ relevantEvents, allEvents, responseOnly, talk
           badge={<RowBadge ctx={ctx} workerId={head.evt.worker_id} showBadge={head.showBadge} extraPad />}
           onToggle={(chip) => {
             const scroller = chip.closest('.' + TALK_SCROLL_CLASS) as HTMLElement | null
-            anchorFollowRef.current = !!scroller &&
+            const following = !!scroller &&
               scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= AT_BOTTOM_PX
-            anchorTopRef.current = chip.getBoundingClientRect().top
-            anchorElRef.current = chip
+            const anchor = scroller && !following ? captureElementAnchor(chip, scroller) : null
+            anchorRef.current = scroller && anchor ? { scroller, anchor } : null
             setOpenGroups((g) => ({ ...g, [key]: !g[key] }))
           }}
         >
