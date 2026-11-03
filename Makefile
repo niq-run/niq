@@ -7,7 +7,7 @@ WEBUI := app/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build build-niq build-miq build-miq-universal dist-miq app webui snapshot npm-publish
+.PHONY: install build niq miq build-niq build-miq build-miq-universal dist-miq app webui snapshot npm-publish
 
 # `make build` rebuilds the SPA first — it is go:embed-ed, so skipping that
 # would ship whatever UI was last built. For Go-only iteration:
@@ -28,7 +28,29 @@ else
 BUILD_GOALS := build-niq
 endif
 
-build: $(BUILD_GOALS)
+# `make build` on its own builds everything this machine can. Naming a piece
+# after it — `make build niq` — makes make treat that word as a second goal
+# rather than an argument to `build`, so `build` contributes no prerequisites
+# and the component target does the work:
+#
+#	make build niq     the CLI
+#	make build miq     the menu bar app
+#	make build webui   just the bundle
+#
+# `make niq` / `make miq` mean the same thing without the prefix.
+ifneq (,$(strip $(filter-out build,$(MAKECMDGOALS))))
+BUILD_PREREQ :=
+else
+BUILD_PREREQ := $(BUILD_GOALS)
+endif
+
+build: $(BUILD_PREREQ)
+	@# With a component named, this is empty and the recipe is what keeps make
+	@# from printing "Nothing to be done for 'build'".
+	@:
+
+niq: build-niq
+miq: build-miq
 
 # Dependencies are keyed on npm's own completion marker, not on node_modules
 # existing: npm creates the directory before it finishes, so an interrupted
