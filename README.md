@@ -217,9 +217,9 @@ make build-miq   # builds dist/niq.app and ./bin/miq
 miq              # puts niq in the menu bar; running it again focuses it
 ```
 
-The icon is the web UI's mark — three squares, the 品 shape from the sidebar
-logo — drawn as a template image, so it is black on a light menu bar and white
-on a dark one.
+The icon is the web UI's own logo — three squares, the 品 shape — and it uses
+the same two files the sidebar does: `pinw.svg` on a light menu bar, `pin.svg`
+on a dark one, switching when the system appearance changes.
 
 The menu is the actions, nothing else: **Open WebUI** and **Stop** (**Start**
 when the control plane is down), then one entry per project — `pin · running` —

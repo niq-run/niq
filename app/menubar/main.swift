@@ -47,6 +47,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.toolTip = "niq"
         statusItem.menu = menu
         menu.delegate = self
+
+        // The web UI ships two versions of the mark, one per theme; follow the
+        // system appearance the same way the sidebar does, and redraw when the
+        // user switches.
+        DistributedNotificationCenter.default.addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.statusItem.button?.image = Self.mark()
+        }
+
         rebuild()
     }
 
@@ -69,25 +80,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Status item art
 
-    /// The web UI's mark: three squares — one centred on top, two below — the
-    /// 品 shape from the sidebar logo (pin.svg), drawn without its background
-    /// tile so it works at menu bar size.
-    ///
-    /// A template image: macOS draws it black on a light menu bar and white on a
-    /// dark one, which is the light/dark support — no per-appearance artwork to
-    /// keep in sync.
+    /// The web UI's own logo, unmodified: `pinw.svg` on a light menu bar,
+    /// `pin.svg` on a dark one — the two files the sidebar switches between, with
+    /// their proportions and margins intact.
     private static func mark() -> NSImage {
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let name = dark ? "pin" : "pinw"
         let side: CGFloat = 18
-        let cell: CGFloat = 5
-        let gap: CGFloat = 1.5
+        guard let url = Bundle.main.url(forResource: name, withExtension: "svg"),
+              let logo = NSImage(contentsOf: url) else {
+            return fallbackMark(side: side)
+        }
+        let image = NSImage(size: NSSize(width: side, height: side))
+        image.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        logo.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
+        image.unlockFocus()
+        return image
+    }
+
+    /// Used only if the SVG cannot be read (a hand-assembled bundle): the same
+    /// three squares, in the template colour.
+    private static func fallbackMark(side: CGFloat) -> NSImage {
         let image = NSImage(size: NSSize(width: side, height: side))
         image.lockFocus()
         NSColor.black.setFill()
-        // AppKit's origin is bottom-left; the pattern is top-centre, bottom-left,
-        // bottom-right.
+        let cell = side * 0.4
+        let gap = side * 0.1
         for (column, row) in [(1, 2), (0, 0), (2, 0)] {
-            let origin = NSPoint(x: CGFloat(column) * (cell + gap), y: CGFloat(row) * (cell + gap))
-            NSBezierPath(rect: NSRect(origin: origin, size: NSSize(width: cell, height: cell))).fill()
+            let x = side * 0.05 + CGFloat(column) * (cell + gap)
+            let y = side * 0.05 + CGFloat(row) * (cell + gap)
+            NSBezierPath(rect: NSRect(x: x, y: y, width: cell, height: cell)).fill()
         }
         image.unlockFocus()
         image.isTemplate = true
