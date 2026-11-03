@@ -22,6 +22,7 @@ import { useApprovalNotifications } from './hooks/useApprovalNotifications'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
 import { captureScrollAnchor, settleScrollAnchor, type ScrollAnchor } from './views/talk/scrollAnchor'
+import { nearTopPx } from './views/talk/useChatScroll'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent, fetchProviders, providersUsable } from './services/api'
 import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type InputContent, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerDetailTab, type WorkerInfo } from './types'
 
@@ -1222,9 +1223,6 @@ export default function App() {
   // while the page is in flight, which a height snapshot does not.
   const pendingAnchorRef = useRef<ScrollAnchor | null>(null)
 
-  // LOAD_EARLY_PX: how far below the top the events list starts prefetching
-  // older events, so the page lands while there is still room to scroll.
-  const LOAD_EARLY_PX = 480
   const loadMore = useCallback(async () => {
     if (loadingMoreRef.current || noMoreRef.current) return
     if (events.length === 0) return
@@ -1330,7 +1328,7 @@ export default function App() {
     // oldest row. scrollTop is the remaining distance upward; the prepend's
     // anchor correction pushes it past LOAD_EARLY_PX so this can't loop, and a
     // non-overflowing (short/empty) timeline is left to the sentinel/backfill.
-    if (el.scrollTop < LOAD_EARLY_PX && el.scrollHeight > el.clientHeight + 1) {
+    if (el.scrollTop < nearTopPx(el) && el.scrollHeight > el.clientHeight + 1) {
       loadMoreRef.current?.()
     }
   }, [setActiveFollowing])
