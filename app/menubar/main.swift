@@ -201,11 +201,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func rebuild(error: String? = nil) {
         menu.removeAllItems()
 
-        let versionItem = NSMenuItem(title: snapshot.map { "niq \($0.version)" } ?? "niq", action: nil, keyEquivalent: "")
-        versionItem.isEnabled = false
-        menu.addItem(versionItem)
-        menu.addItem(.separator())
-
         if let error {
             let item = NSMenuItem(title: error.trimmingCharacters(in: .whitespacesAndNewlines), action: nil, keyEquivalent: "")
             item.isEnabled = false
@@ -230,11 +225,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func addControlItems(_ snapshot: Snapshot) {
         let control = snapshot.control
-        let state = control.running ? "Control Running · pid \(control.pid ?? 0)" : "Control Stopped"
-        let stateItem = NSMenuItem(title: state, action: nil, keyEquivalent: "")
-        stateItem.isEnabled = false
-        menu.addItem(stateItem)
-
         if control.running, let urlString = control.url, let url = URL(string: urlString) {
             menu.addItem(item("Open WebUI", #selector(openURL(_:)), represented: url))
             menu.addItem(item("Stop", #selector(runCommand(_:)), represented: ["stop"]))
@@ -255,10 +245,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // One entry per project at the top level: the list is the menu, and a
         // "Projects" parent would only add a click.
         for project in snapshot.projects {
-            let entry = NSMenuItem(title: "[\(project.id)]  \(project.running ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
+            let entry = NSMenuItem(title: "\(project.id) · \(project.running ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
             let actions = NSMenu()
 
-            if let urlString = project.url, let url = URL(string: urlString) {
+            // Only a running instance serves a page: a stopped one's URL is the
+            // proxy's start prompt, and Start is already in this menu.
+            if project.running, let urlString = project.url, let url = URL(string: urlString) {
                 actions.addItem(item("Open WebUI", #selector(openURL(_:)), represented: url))
             } else {
                 actions.addItem(item("Open WebUI", #selector(openURL(_:)), represented: nil, enabled: false))

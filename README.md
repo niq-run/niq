@@ -217,11 +217,10 @@ make app      # builds dist/niq.app and ./bin/miq
 miq           # puts niq in the menu bar; running it again focuses it
 ```
 
-The menu opens with the report — **Control Running** (with its pid) or **Control
-Stopped**, then **Open WebUI** and **Stop** (**Start** when it is down) — and
-continues with one entry per project, flat, each a submenu of **Open WebUI /
-Start / Stop / Restart**: the same three actions the picker offers, disabled
-when the instance cannot perform them. **Open GitHub** and **Quit** close it.
+The menu is the actions, nothing else: **Open WebUI** and **Stop** (**Start**
+when the control plane is down), then one entry per project — `pin · Running` —
+each a submenu of **Open WebUI / Start / Stop / Restart**, with the entries that
+instance cannot perform greyed out. **Open GitHub** and **Quit** close it.
 
 It refreshes itself when the menu opens, so there is no Refresh item to
 remember. It is a front end, not a second implementation: the status comes from
