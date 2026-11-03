@@ -7,7 +7,7 @@ WEBUI := app/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build webui snapshot npm-publish
+.PHONY: install install_skip_ui build build_skip_ui webui snapshot npm-publish
 
 # The SPA is go:embed'd from $(WEBUI)/dist, so it has to be rebuilt before the
 # Go binary or the build ships whatever UI was last committed.
@@ -29,9 +29,18 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 	@echo "webui: building the bundle (tsc -b && vite build)…"
 	cd $(WEBUI) && npm run build
 
+GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
+
 build: webui
 	@echo "go: building ./bin/niq…"
-	go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
+	$(GO_BUILD)
+
+# Go-only iteration: the same binary, without rebuilding the SPA first. The
+# embed input is still $(WEBUI)/dist, so the committed bundle is what ships —
+# this skips the rebuild, it does not change what gets embedded.
+build_skip_ui:
+	@echo "go: building ./bin/niq (SPA not rebuilt)…"
+	$(GO_BUILD)
 
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:
@@ -49,10 +58,17 @@ npm-publish:
 # a directory the shell already scans (zsh's fpath, fish's completions dir), so
 # there is no dotfile edit and nothing to undo — a failure is not an install
 # failure. NIQ_NO_COMPLETION=1 skips it.
-install: build
+define install_steps
 	@echo "install: linking $(PREFIX)/niq → $(shell pwd)/bin/niq"
 	mkdir -p $(PREFIX)
 	ln -sf "$(shell pwd)/bin/niq" $(PREFIX)/niq
 	-@if [ "$$NIQ_NO_COMPLETION" != "1" ]; then "$(PREFIX)/niq" completion install; fi
 	@echo "niq installed → $(PREFIX)/niq"
 	@echo "Make sure $(PREFIX) is in your PATH"
+endef
+
+install: build
+	$(install_steps)
+
+install_skip_ui: build_skip_ui
+	$(install_steps)
