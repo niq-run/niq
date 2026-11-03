@@ -81,20 +81,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 16pt: a touch under the 18pt a status item allows, which reads as the
         // same weight as the system icons beside it.
         let side: CGFloat = 16
-        let unit = side / 3500
-        let cell = 1000 * unit
-        let image = NSImage(size: NSSize(width: side, height: side))
-        image.lockFocus()
+        // Drawn at 2x. A 1x bitmap is stretched on a Retina display, and the
+        // softened edges make the squares look larger and the margins thinner
+        // than the web UI's logo, which is vector at every size.
+        let scale: CGFloat = 2
+        let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(side * scale), pixelsHigh: Int(side * scale),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        )!
+        rep.size = NSSize(width: side, height: side)
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         NSColor.black.setFill()
         NSBezierPath(rect: NSRect(x: 0, y: 0, width: side, height: side)).fill()
 
-        // The SVG measures y from the top; AppKit's origin is bottom-left.
+        // The squares are pin.svg's own: 1000 of 3500, at (1250, 500) on top and
+        // (500, 2000) / (2000, 2000) below. The SVG measures y from the top;
+        // AppKit's origin is bottom-left.
+        let unit = side / 3500
+        let cell = 1000 * unit
         NSGraphicsContext.current?.compositingOperation = .destinationOut
         for (x, y) in [(1250.0, 500.0), (500.0, 2000.0), (2000.0, 2000.0)] {
             let rect = NSRect(x: x * unit, y: side - (y + 1000) * unit, width: cell, height: cell)
             NSBezierPath(rect: rect).fill()
         }
-        image.unlockFocus()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let image = NSImage(size: NSSize(width: side, height: side))
+        image.addRepresentation(rep)
         image.isTemplate = true
         return image
     }
