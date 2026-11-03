@@ -7,50 +7,45 @@ WEBUI := app/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build niq miq build-niq build-miq build-miq-universal dist-miq app webui snapshot npm-publish
-
-# `make build` rebuilds the SPA first — it is go:embed-ed, so skipping that
-# would ship whatever UI was last built. For Go-only iteration:
-#
-#	SKIP_WEBUI=1 make build-niq
-SKIP_WEBUI ?=
-
-ifeq ($(SKIP_WEBUI),1)
-WEBUI_PREREQ :=
-else
-WEBUI_PREREQ := webui
-endif
+.PHONY: install build niq miq webui miq-universal dist-miq app snapshot npm-publish
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
-BUILD_GOALS := build-niq build-miq
+BUILD_PARTS := webui niq miq
 else
-BUILD_GOALS := build-niq
+BUILD_PARTS := webui niq
 endif
 
-# `make build` on its own builds everything this machine can. Naming a piece
-# after it — `make build niq` — makes make treat that word as a second goal
-# rather than an argument to `build`, so `build` contributes no prerequisites
-# and the component target does the work:
+# `make build` on its own is everything this machine can build. make has no
+# notion of a subcommand — a word after `build` is another goal, not an argument
+# — so `build` contributes prerequisites only when it stands alone, and each
+# part is a target of its own:
 #
-#	make build niq     the CLI
-#	make build miq     the menu bar app
-#	make build webui   just the bundle
+#	make build              webui, then the CLI, then the app
+#	make build webui        just the bundle
+#	make build niq          just the CLI, embedding the bundle as it is
+#	make build niq webui    the bundle, then the CLI
+#	make build miq          the menu bar app
 #
-# `make niq` / `make miq` mean the same thing without the prefix.
+# `make niq` / `make miq` / `make webui` mean the same without the prefix.
 ifneq (,$(strip $(filter-out build,$(MAKECMDGOALS))))
 BUILD_PREREQ :=
+WANT := $(filter-out build,$(MAKECMDGOALS))
 else
-BUILD_PREREQ := $(BUILD_GOALS)
+BUILD_PREREQ := $(BUILD_PARTS)
+WANT := $(BUILD_PARTS)
 endif
 
 build: $(BUILD_PREREQ)
-	@# With a component named, this is empty and the recipe is what keeps make
-	@# from printing "Nothing to be done for 'build'".
+	@# With a part named, this is empty and the recipe is what keeps make from
+	@# printing "Nothing to be done for 'build'".
 	@:
 
-niq: build-niq
-miq: build-miq
+# Naming both must not depend on the order typed: the bundle is go:embed-ed, so
+# the CLI has to be compiled after it.
+ifneq (,$(and $(filter webui,$(WANT)),$(filter niq,$(WANT))))
+niq: webui
+endif
 
 # Dependencies are keyed on npm's own completion marker, not on node_modules
 # existing: npm creates the directory before it finishes, so an interrupted
@@ -71,8 +66,9 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 
 GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
 
-# The CLI, with the SPA rebuilt unless SKIP_WEBUI=1.
-build-niq: $(WEBUI_PREREQ)
+# The CLI. It embeds whatever bundle is in app/webui/assets/dist, so this does
+# not rebuild the SPA — `make build webui` (or plain `make build`) is that step.
+niq:
 	@echo "go: building ./bin/niq…"
 	$(GO_BUILD)
 
@@ -82,7 +78,7 @@ build-niq: $(WEBUI_PREREQ)
 # plus ./bin/miq, the launcher that opens it.
 APP := dist/niq.app
 
-build-miq:
+miq:
 	@echo "app: building $(APP) (swiftc)…"
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS" bin
@@ -91,7 +87,7 @@ build-miq:
 	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@echo "app: building ./bin/miq (launcher)…"
-	@# build-miq-universal leaves a lipo'd fat binary here, and go refuses to
+	@# miq-universal leaves a lipo'd fat binary here, and go refuses to
 	@# overwrite an existing file it does not recognise as an object file (its
 	@# magic list has thin Mach-O but not the fat one), so clear it first.
 	rm -f ./bin/miq
@@ -104,7 +100,7 @@ build-miq:
 APP_MIN_MACOS := 13.0
 MENUBAR_ZIP := dist/niq_menubar_darwin_universal.zip
 
-build-miq-universal:
+miq-universal:
 	@echo "app: building $(APP) (universal)…"
 	rm -rf "$(APP)" build/niq-menubar-* build/miq-*
 	mkdir -p "$(APP)/Contents/MacOS" build bin
@@ -127,7 +123,7 @@ build-miq-universal:
 
 # Zip for the GitHub release: a folder with the app and the launcher, so it
 # unpacks into something you can run without reading instructions.
-dist-miq: build-miq-universal
+dist-miq: miq-universal
 	@echo "app: packaging $(MENUBAR_ZIP)…"
 	rm -rf dist/niq-menubar
 	mkdir -p dist/niq-menubar
@@ -138,8 +134,8 @@ dist-miq: build-miq-universal
 		--keepParent niq-menubar "$(notdir $(MENUBAR_ZIP))"
 	@echo "app: $(MENUBAR_ZIP)"
 
-# `make app` is the older spelling of build-miq.
-app: build-miq
+# `make app` is the older spelling of `make miq`.
+app: miq
 
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:

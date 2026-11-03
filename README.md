@@ -257,24 +257,25 @@ go build ./... && go vet ./...
 go test ./core/impl/eventbus/ -count=1
 ```
 
-The WebUI bundle is committed (it is `go:embed`-ed). `make build niq` rebuilds
-it from `app/webui/assets/src` before compiling the Go binary, so the binary
-never ships a stale UI. The commit still matters for `go build ./...`,
-`go test ./...` and the release workflow (goreleaser and CI do not run Node), so
-commit the rebuilt `app/webui/assets/dist` with the change:
+The WebUI bundle is committed (it is `go:embed`-ed), and `make build niq` takes
+it exactly as it is: rebuilding the SPA is its own step. A plain `make build`
+does both, in order — bundle, CLI, app. The commit still matters for
+`go build ./...`, `go test ./...` and the release workflow (goreleaser and CI do
+not run Node), so commit the rebuilt `app/webui/assets/dist` with the change:
 
 ```sh
-make build            # everything this machine can build
-make build niq        # the CLI (rebuilds the SPA first)
-make build miq        # the menu bar app
-make build webui      # just the bundle
-SKIP_WEBUI=1 make build niq   # Go only, no SPA rebuild
-make install          # links what is already built — it does not build
+make build              # everything this machine can build
+make build webui        # just the bundle
+make build niq          # just the CLI, embedding the bundle as it is
+make build niq webui    # the bundle, then the CLI
+make build miq          # the menu bar app
+make install            # links what is already built — it does not build
 ```
 
-The piece after `build` is a target, not an argument — make runs both — so
-`make niq` and `make miq` work on their own too. `make build` alone still means
-everything.
+The word after `build` is a target, not an argument — make runs both — so
+`make niq`, `make webui` and `make miq` work on their own too, and `make build`
+alone still means everything. Naming `niq` and `webui` together builds the
+bundle first whichever order you type them in.
 
 `make install` never builds: if `./bin/niq` is missing it says so and stops, so
 an install cannot quietly turn into a long npm/vite run.
