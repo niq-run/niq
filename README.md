@@ -129,7 +129,7 @@ just the ids.
 | `niq status` | the control plane and every project instance |
 | `niq stop [-p]` | stop the control plane (`-p` also stops the running projects) |
 | `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
-| `niq project` | pick a project: start, stop or restart it |
+| `niq project`, `niq p` | pick a project: start, stop or restart it |
 | `niq update` | install the latest release with npm |
 | `niq project create` / `niq project run` | create a project / run one in this terminal |
 | `niq completion install` | put completion where your shell already looks |

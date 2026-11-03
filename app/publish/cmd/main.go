@@ -9,7 +9,7 @@
 //	niq stop [-p]           — stop the background control plane (-p: the projects too)
 //	niq restart [-p]        — stop and start it again (-p: the projects too)
 //	niq update              — install the latest release with npm
-//	niq project             — pick a project, then stop or restart it
+//	niq project | niq p     — pick a project, then stop or restart it
 //	niq project list        — list projects, their ports and run state
 //	niq project create <id> — create a project from a template
 //	niq project run <id>    — run a project instance in this process
@@ -57,7 +57,7 @@ func main() {
 	// "control" word) is a control-plane start.
 	var err error
 	switch {
-	case len(os.Args) > 1 && os.Args[1] == "project":
+	case len(os.Args) > 1 && (os.Args[1] == "project" || os.Args[1] == "p"):
 		err = runProject(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "stop":
 		err = runStop(os.Args[2:])
@@ -283,7 +283,7 @@ func printUsage() {
 		{"niq stop [-p]", "stop the control plane; -p also stops the running projects"},
 		{"niq restart [-p]", "restart the control plane; -p also restarts the running projects"},
 		{"niq update", "install the latest release with npm"},
-		{"niq project", "pick a project, then start, stop or restart it"},
+		{"niq project, niq p", "pick a project, then start, stop or restart it"},
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
 		{"niq project create <id> [--template <name>]", "create a project from a template"},
 		{"niq project run <id> [--bus :0] [--webui :0]", "run an instance in this terminal"},
