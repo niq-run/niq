@@ -69,20 +69,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Status item art
 
-    /// The wordmark as a template image — the menu bar tints it for light and
-    /// dark, and no asset has to ship with the app.
+    /// The web UI's mark: three squares — one centred on top, two below — the
+    /// 品 shape from the sidebar logo (pin.svg), drawn without its background
+    /// tile so it works at menu bar size.
+    ///
+    /// A template image: macOS draws it black on a light menu bar and white on a
+    /// dark one, which is the light/dark support — no per-appearance artwork to
+    /// keep in sync.
     private static func mark() -> NSImage {
-        let size = NSSize(width: 26, height: 18)
-        let image = NSImage(size: size)
+        let side: CGFloat = 18
+        let cell: CGFloat = 5
+        let gap: CGFloat = 1.5
+        let image = NSImage(size: NSSize(width: side, height: side))
         image.lockFocus()
-        let text = "niq" as NSString
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .bold),
-            .foregroundColor: NSColor.black,
-        ]
-        let bounds = text.size(withAttributes: attrs)
-        text.draw(at: NSPoint(x: (size.width - bounds.width) / 2, y: (size.height - bounds.height) / 2),
-                  withAttributes: attrs)
+        NSColor.black.setFill()
+        // AppKit's origin is bottom-left; the pattern is top-centre, bottom-left,
+        // bottom-right.
+        for (column, row) in [(1, 2), (0, 0), (2, 0)] {
+            let origin = NSPoint(x: CGFloat(column) * (cell + gap), y: CGFloat(row) * (cell + gap))
+            NSBezierPath(rect: NSRect(origin: origin, size: NSSize(width: cell, height: cell))).fill()
+        }
         image.unlockFocus()
         image.isTemplate = true
         return image
@@ -245,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // One entry per project at the top level: the list is the menu, and a
         // "Projects" parent would only add a click.
         for project in snapshot.projects {
-            let entry = NSMenuItem(title: "\(project.id) · \(project.running ? "Running" : "Stopped")", action: nil, keyEquivalent: "")
+            let entry = NSMenuItem(title: "\(project.id) · \(project.running ? "running" : "stopped")", action: nil, keyEquivalent: "")
             let actions = NSMenu()
 
             // Only a running instance serves a page: a stopped one's URL is the

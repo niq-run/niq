@@ -7,11 +7,36 @@ WEBUI := app/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install install_skip_ui build build_skip_ui app webui snapshot npm-publish
+.PHONY: install build app webui snapshot npm-publish
 
-# The SPA is go:embed'd from $(WEBUI)/dist, so it has to be rebuilt before the
-# Go binary or the build ships whatever UI was last committed.
+# `make build` rebuilds the SPA first — it is go:embed-ed, so skipping that
+# would ship whatever UI was last built. For Go-only iteration:
 #
+#	SKIP_WEBUI=1 make build:niq
+#
+# The build targets carry a colon in their names (build:niq, build:miq), which
+# make cannot take in a prerequisite list — a colon there is the rule separator
+# — so `build` recurses into them instead of listing them.
+SKIP_WEBUI ?=
+
+ifeq ($(SKIP_WEBUI),1)
+WEBUI_PREREQ :=
+else
+WEBUI_PREREQ := webui
+endif
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+BUILD_GOALS := build:niq build:miq
+else
+BUILD_GOALS := build:niq
+endif
+
+MAKEFILE_SELF := $(firstword $(MAKEFILE_LIST))
+
+build:
+	@$(MAKE) --no-print-directory -f $(MAKEFILE_SELF) $(BUILD_GOALS)
+
 # Dependencies are keyed on npm's own completion marker, not on node_modules
 # existing: npm creates the directory before it finishes, so an interrupted
 # install used to leave a half-populated tree that a `-d` test trusted — the
@@ -31,23 +56,18 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 
 GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
 
-build: webui
+# The CLI, with the SPA rebuilt unless SKIP_WEBUI=1.
+build\:niq: $(WEBUI_PREREQ)
 	@echo "go: building ./bin/niq…"
-	$(GO_BUILD)
-
-# Go-only iteration: the same binary, without rebuilding the SPA first. The
-# embed input is still $(WEBUI)/dist, so the committed bundle is what ships —
-# this skips the rebuild, it does not change what gets embedded.
-build_skip_ui:
-	@echo "go: building ./bin/niq (SPA not rebuilt)…"
 	$(GO_BUILD)
 
 # The menu bar app is a thin front end: it runs `niq status --json` and the
 # per-project commands, so nothing here duplicates the CLI's logic. Built with
-# the system Swift compiler into a .app bundle (LSUIElement: no Dock icon).
+# the system Swift compiler into a .app bundle (LSUIElement: no Dock icon),
+# plus ./bin/miq, the launcher that opens it.
 APP := dist/niq.app
 
-app:
+build\:miq:
 	@echo "app: building $(APP) (swiftc)…"
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS"
@@ -58,6 +78,10 @@ app:
 	@echo "app: building ./bin/miq (launcher)…"
 	go build -o ./bin/miq ./app/menubar/miq
 	@echo "app: built — run: ./bin/miq"
+
+# `make app` is the older spelling of build:miq.
+app:
+	@$(MAKE) --no-print-directory -f $(MAKEFILE_SELF) build:miq
 
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:
@@ -85,8 +109,9 @@ define install_steps
 	@echo "Make sure $(PREFIX) is in your PATH"
 endef
 
-install: build
-	$(install_steps)
-
-install_skip_ui: build_skip_ui
+# install never builds: it links what is already there, and says what is missing
+# instead of starting a build that was not asked for.
+install:
+	@if [ ! -x "$(shell pwd)/bin/niq" ]; then \
+		echo "install: ./bin/niq is missing — run 'make build' first"; exit 1; fi
 	$(install_steps)

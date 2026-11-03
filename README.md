@@ -213,12 +213,16 @@ The `reason` worker talks to an LLM provider. Provider settings (endpoint, model
 The same report, one click away.
 
 ```sh
-make app      # builds dist/niq.app and ./bin/miq
-miq           # puts niq in the menu bar; running it again focuses it
+make build:miq   # builds dist/niq.app and ./bin/miq
+miq              # puts niq in the menu bar; running it again focuses it
 ```
 
+The icon is the web UI's mark — three squares, the 品 shape from the sidebar
+logo — drawn as a template image, so it is black on a light menu bar and white
+on a dark one.
+
 The menu is the actions, nothing else: **Open WebUI** and **Stop** (**Start**
-when the control plane is down), then one entry per project — `pin · Running` —
+when the control plane is down), then one entry per project — `pin · running` —
 each a submenu of **Open WebUI / Start / Stop / Restart**, with the entries that
 instance cannot perform greyed out. **Open GitHub** and **Quit** close it.
 
@@ -248,18 +252,22 @@ go build ./... && go vet ./...
 go test ./core/impl/eventbus/ -count=1
 ```
 
-The WebUI bundle is committed (it is `go:embed`-ed). `make build` and
-`make install` rebuild it from `app/webui/assets/src` before compiling the Go
-binary, so the binary never ships a stale UI. The commit still matters for
-`go build ./...`, `go test ./...` and the release workflow (goreleaser and CI
-do not run Node), so commit the rebuilt `app/webui/assets/dist` with the change:
+The WebUI bundle is committed (it is `go:embed`-ed). `make build:niq` rebuilds
+it from `app/webui/assets/src` before compiling the Go binary, so the binary
+never ships a stale UI. The commit still matters for `go build ./...`,
+`go test ./...` and the release workflow (goreleaser and CI do not run Node), so
+commit the rebuilt `app/webui/assets/dist` with the change:
 
 ```sh
-make build            # webui bundle + ./bin/niq
-make build_skip_ui    # Go only: the bundle is not rebuilt
-make install          # the same, plus the ~/.local/bin symlink
-make install_skip_ui  # install without the SPA rebuild
+make build            # everything this machine can build
+make build:niq        # the CLI (rebuilds the SPA first)
+SKIP_WEBUI=1 make build:niq   # Go only, no SPA rebuild
+make build:miq        # the menu bar app
+make install          # links what is already built — it does not build
 ```
+
+`make install` never builds: if `./bin/niq` is missing it says so and stops, so
+an install cannot quietly turn into a long npm/vite run.
 
 ### Frontend development
 
