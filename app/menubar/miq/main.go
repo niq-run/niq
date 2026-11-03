@@ -53,29 +53,33 @@ func sibling(name string) (string, error) {
 	return path, nil
 }
 
-// findApp looks where the bundle can reasonably be: NIQ_APP, ~/Applications,
-// /Applications, and the checkout this binary was built in (bin/miq →
-// ../../dist/niq.app).
+// findApp looks where the bundle can reasonably be. A bundle next to the
+// launcher comes first: that is the one this build produced (bin/miq →
+// ../dist/niq.app, or the zip's miq → ./niq.app), and preferring an installed
+// copy meant `make build miq && miq` kept opening whatever was in /Applications.
+// NIQ_APP still overrides everything.
 func findApp() (string, error) {
 	var candidates []string
 	if v := os.Getenv("NIQ_APP"); v != "" {
 		candidates = append(candidates, v)
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, "Applications", "niq.app"))
-	}
-	candidates = append(candidates, "/Applications/niq.app")
-
 	if exe, err := os.Executable(); err == nil {
 		if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
 			exe = resolved
 		}
 		dir := filepath.Dir(exe)
 		candidates = append(candidates,
-			filepath.Join(dir, "..", "dist", "niq.app"),
+			filepath.Join(dir, "niq.app"),               // release zip
+			filepath.Join(dir, "..", "dist", "niq.app"), // checkout: bin/miq
 			filepath.Join(dir, "..", "..", "dist", "niq.app"),
 		)
 	}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, "Applications", "niq.app"))
+	}
+	candidates = append(candidates, "/Applications/niq.app")
+
 	if wd, err := os.Getwd(); err == nil {
 		candidates = append(candidates, filepath.Join(wd, "dist", "niq.app"))
 	}
