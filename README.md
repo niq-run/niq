@@ -126,13 +126,15 @@ just the ids.
 | --- | --- |
 | `niq` | start the control plane in the background, or report on it when it is already running |
 | `niq -f`, `niq --foreground` | run the control plane in this terminal |
-| `niq status` | the control plane and every project instance |
+| `niq status [--json]` | the control plane and every project instance (`--json` for tools) |
 | `niq stop [-p]` | stop the control plane (`-p` also stops the running projects) |
 | `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
-| `niq project` | pick a project: start, stop or restart it |
+| `niq project`, `niq p` | pick a project: start, stop or restart it |
 | `niq update` | install the latest release with npm |
+| `niq project start\|stop\|restart <id>` | act on one instance, without the picker |
 | `niq project create` / `niq project run` | create a project / run one in this terminal |
-| `niq completion <shell>` | completion for bash, zsh or fish |
+| `niq completion install` | put completion where your shell already looks |
+| `niq completion <shell>` | print a script for bash, zsh or fish |
 
 `niq update` asks npm for the published version, installs it with
 `npm install -g @niq.run/niq@latest`, and points at `niq restart -p` — the
@@ -140,6 +142,16 @@ control plane and the projects are separate processes still running the old
 binary. A bare `niq` asks the registry at most once a day and mentions a newer
 release every time it starts (from the cached answer) until you install it;
 `NIQ_NO_UPDATE_CHECK=1` turns the check off.
+
+Completion needs no dotfile edit: `niq completion install` writes the script
+into a directory the shell already scans — a writable entry of zsh's `$fpath`,
+`~/.config/fish/completions`, or bash-completion's user directory — and prints
+where it went. `make install`, the install script and the npm package's
+`postinstall` all call it, so a normal install ends with tab completion working
+in the next shell. `NIQ_NO_COMPLETION=1` skips it.
+
+The scripts are printable too, for the cases where that directory is not
+available (a locked-down `/usr/share/zsh`, a shell started from a script):
 
 ```sh
 # bash
@@ -196,6 +208,37 @@ is restarted.
 
 The `reason` worker talks to an LLM provider. Provider settings (endpoint, model, API key) live in `~/.niq/common/providers/provider.json`; `api_key` and header values support environment-variable expansion — e.g. `"api_key": "${OPENAI_API_KEY}"` keeps secrets out of stored files.
 
+## Menu bar (macOS)
+
+The same report, one click away.
+
+```sh
+make build-miq   # builds dist/niq.app and ./bin/miq
+miq              # puts niq in the menu bar; running it again focuses it
+```
+
+The icon is the web UI's logo as a template image: a tile in the menu bar's own
+text colour with the 品 knocked out of it. macOS draws templates white on a dark
+menu bar and black on a light one, so the icon follows the appearance without
+any artwork to keep in sync.
+
+The menu is the actions, nothing else: **Open WebUI** and **Stop** (**Start**
+when the control plane is down), then one entry per project — `pin · running` —
+each a submenu of **Open WebUI / Start / Stop / Restart**, with the entries that
+instance cannot perform greyed out. **Open GitHub** and **Quit** close it.
+
+Releases ship a universal build as `niq_menubar_darwin_universal.zip`, holding
+`niq.app` and `miq`. It is ad-hoc signed, not notarized, so the first launch
+needs right-click → Open (or `xattr -d com.apple.quarantine niq.app`).
+
+It refreshes itself when the menu opens, so there is no Refresh item to
+remember. It is a front end, not a second implementation: the status comes from
+`niq status --json`, every action is a `niq` command (`niq project restart <id>`,
+`niq restart -p`, …), so the app cannot drift from the CLI. `miq` finds the
+bundle through `NIQ_APP`, `~/Applications`, `/Applications`, or the checkout it
+was built in, and hands the app the `niq` next to it (`--niq <path>`), since a
+GUI launch does not inherit the shell's PATH.
+
 ## Project layout
 
 ```
@@ -214,16 +257,22 @@ go build ./... && go vet ./...
 go test ./core/impl/eventbus/ -count=1
 ```
 
-The WebUI bundle is committed (it is `go:embed`-ed). `make build` and
-`make install` rebuild it from `app/webui/assets/src` before compiling the Go
-binary, so the binary never ships a stale UI. The commit still matters for
-`go build ./...`, `go test ./...` and the release workflow (goreleaser and CI
-do not run Node), so commit the rebuilt `app/webui/assets/dist` with the change:
+The WebUI bundle is committed (it is `go:embed`-ed). `make build-niq` rebuilds
+it from `app/webui/assets/src` before compiling the Go binary, so the binary
+never ships a stale UI. The commit still matters for `go build ./...`,
+`go test ./...` and the release workflow (goreleaser and CI do not run Node), so
+commit the rebuilt `app/webui/assets/dist` with the change:
 
 ```sh
-make build          # webui bundle + ./bin/niq
-make install        # the same, plus the ~/.local/bin symlink
+make build            # everything this machine can build
+make build-niq        # the CLI (rebuilds the SPA first)
+SKIP_WEBUI=1 make build-niq   # Go only, no SPA rebuild
+make build-miq        # the menu bar app
+make install          # links what is already built — it does not build
 ```
+
+`make install` never builds: if `./bin/niq` is missing it says so and stops, so
+an install cannot quietly turn into a long npm/vite run.
 
 ### Frontend development
 

@@ -62,3 +62,24 @@ jobs:
         run: ./app/publish/npm/publish-npm.sh "${GITHUB_REF_NAME#v}" ./dist
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # The menu bar app is Swift, so it cannot ride along in the goreleaser run on
+  # linux: a Mac builds it, universal, and attaches the zip to the release the
+  # job above created.
+  menubar:
+    needs: release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build the menu bar app (universal)
+        run: make dist-miq
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/niq_menubar_darwin_universal.zip --clobber

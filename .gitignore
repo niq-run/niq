@@ -22,3 +22,4 @@ sdk/ts/dist/
 
 # Frontend caches (app/webui)
 app/webui/assets/.vite/
+build/

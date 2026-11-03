@@ -7,11 +7,29 @@ WEBUI := app/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build webui snapshot npm-publish
+.PHONY: install build build-niq build-miq build-miq-universal dist-miq app webui snapshot npm-publish
 
-# The SPA is go:embed'd from $(WEBUI)/dist, so it has to be rebuilt before the
-# Go binary or the build ships whatever UI was last committed.
+# `make build` rebuilds the SPA first — it is go:embed-ed, so skipping that
+# would ship whatever UI was last built. For Go-only iteration:
 #
+#	SKIP_WEBUI=1 make build-niq
+SKIP_WEBUI ?=
+
+ifeq ($(SKIP_WEBUI),1)
+WEBUI_PREREQ :=
+else
+WEBUI_PREREQ := webui
+endif
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+BUILD_GOALS := build-niq build-miq
+else
+BUILD_GOALS := build-niq
+endif
+
+build: $(BUILD_GOALS)
+
 # Dependencies are keyed on npm's own completion marker, not on node_modules
 # existing: npm creates the directory before it finishes, so an interrupted
 # install used to leave a half-populated tree that a `-d` test trusted — the
@@ -29,9 +47,73 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 	@echo "webui: building the bundle (tsc -b && vite build)…"
 	cd $(WEBUI) && npm run build
 
-build: webui
+GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
+
+# The CLI, with the SPA rebuilt unless SKIP_WEBUI=1.
+build-niq: $(WEBUI_PREREQ)
 	@echo "go: building ./bin/niq…"
-	go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
+	$(GO_BUILD)
+
+# The menu bar app is a thin front end: it runs `niq status --json` and the
+# per-project commands, so nothing here duplicates the CLI's logic. Built with
+# the system Swift compiler into a .app bundle (LSUIElement: no Dock icon),
+# plus ./bin/miq, the launcher that opens it.
+APP := dist/niq.app
+
+build-miq:
+	@echo "app: building $(APP) (swiftc)…"
+	rm -rf "$(APP)"
+	mkdir -p "$(APP)/Contents/MacOS"
+	swiftc -O -swift-version 5 -framework AppKit app/menubar/main.swift \
+		-o "$(APP)/Contents/MacOS/niq-menubar"
+	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
+	@echo "app: building ./bin/miq (launcher)…"
+	go build -o ./bin/miq ./app/menubar/miq
+	@echo "app: built — run: ./bin/miq"
+
+# Universal build + zip for the release: the app is small, so compiling it twice
+# and lipo-ing costs a few seconds and saves shipping two downloads. The zip
+# holds niq.app and the miq launcher together, which is how they are used.
+APP_MIN_MACOS := 13.0
+MENUBAR_ZIP := dist/niq_menubar_darwin_universal.zip
+
+build-miq-universal:
+	@echo "app: building $(APP) (universal)…"
+	rm -rf "$(APP)" build/niq-menubar-* build/miq-*
+	mkdir -p "$(APP)/Contents/MacOS" build
+	swiftc -O -swift-version 5 -target arm64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
+		app/menubar/main.swift -o build/niq-menubar-arm64
+	swiftc -O -swift-version 5 -target x86_64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
+		app/menubar/main.swift -o build/niq-menubar-x86_64
+	lipo -create -output "$(APP)/Contents/MacOS/niq-menubar" build/niq-menubar-arm64 build/niq-menubar-x86_64
+	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
+	@echo "app: building ./bin/miq (universal launcher)…"
+	GOOS=darwin GOARCH=arm64 go build -o build/miq-arm64 ./app/menubar/miq
+	GOOS=darwin GOARCH=amd64 go build -o build/miq-amd64 ./app/menubar/miq
+	lipo -create -output ./bin/miq build/miq-arm64 build/miq-amd64
+	@# lipo invalidates the linker's ad-hoc signature, and an unsigned arm64
+	@# binary will not run at all — re-sign the bundle.
+	codesign --force --sign - --timestamp=none "$(APP)"
+	codesign --force --sign - --timestamp=none ./bin/miq
+	@echo "app: built (universal)"
+
+# Zip for the GitHub release: a folder with the app and the launcher, so it
+# unpacks into something you can run without reading instructions.
+dist-miq: build-miq-universal
+	@echo "app: packaging $(MENUBAR_ZIP)…"
+	rm -rf dist/niq-menubar
+	mkdir -p dist/niq-menubar
+	cp -R "$(APP)" dist/niq-menubar/
+	cp ./bin/miq dist/niq-menubar/
+	@# --norsrc/--noextattr: no AppleDouble ._ entries in the archive
+	cd dist && ditto -c -k --norsrc --noextattr --noqtn --noacl \
+		--keepParent niq-menubar "$(notdir $(MENUBAR_ZIP))"
+	@echo "app: $(MENUBAR_ZIP)"
+
+# `make app` is the older spelling of build-miq.
+app: build-miq
 
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:
@@ -45,9 +127,23 @@ snapshot:
 npm-publish:
 	./app/publish/npm/publish-npm.sh "$(VERSION:v%=%)" ./dist $(DRY)
 
-install: build
+# The completion install comes after the link and is best-effort: it writes into
+# a directory the shell already scans (zsh's fpath, fish's completions dir), so
+# there is no dotfile edit and nothing to undo — a failure is not an install
+# failure. NIQ_NO_COMPLETION=1 skips it.
+define install_steps
 	@echo "install: linking $(PREFIX)/niq → $(shell pwd)/bin/niq"
 	mkdir -p $(PREFIX)
 	ln -sf "$(shell pwd)/bin/niq" $(PREFIX)/niq
+	-@if [ -x "$(shell pwd)/bin/miq" ]; then ln -sf "$(shell pwd)/bin/miq" $(PREFIX)/miq; echo "install: $(PREFIX)/miq → $(shell pwd)/bin/miq"; fi
+	-@if [ "$$NIQ_NO_COMPLETION" != "1" ]; then "$(PREFIX)/niq" completion install; fi
 	@echo "niq installed → $(PREFIX)/niq"
 	@echo "Make sure $(PREFIX) is in your PATH"
+endef
+
+# install never builds: it links what is already there, and says what is missing
+# instead of starting a build that was not asked for.
+install:
+	@if [ ! -x "$(shell pwd)/bin/niq" ]; then \
+		echo "install: ./bin/niq is missing — run 'make build' first"; exit 1; fi
+	$(install_steps)

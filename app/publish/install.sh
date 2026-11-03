@@ -10,6 +10,7 @@
 #   NIQ_INSTALL_DIR      target directory (default: ~/.niq/bin)
 #   NIQ_VERSION          exact release tag to install (default: latest)
 #   NIQ_NO_MODIFY_PATH   set to 1 to skip PATH setup
+#   NIQ_NO_COMPLETION    set to 1 to skip shell completion
 
 set -eu
 
@@ -71,6 +72,13 @@ chmod +x "$INSTALL_DIR/niq"
 
 log "installed: $INSTALL_DIR/niq"
 "$INSTALL_DIR/niq" --version || true
+
+# --- shell completion: written where the shell already looks ---
+if [ "${NIQ_NO_COMPLETION:-}" = "1" ]; then
+  log "NIQ_NO_COMPLETION=1 — skipped shell completion"
+else
+  "$INSTALL_DIR/niq" completion install || log "completion not installed (run: niq completion install)"
+fi
 
 # --- PATH setup: make `niq` callable in new shells ---
 if [ "${NIQ_NO_MODIFY_PATH:-}" = "1" ]; then

@@ -12,9 +12,11 @@ import (
 
 func runCompletion(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: niq completion bash|zsh|fish")
+		return fmt.Errorf("usage: niq completion install|bash|zsh|fish")
 	}
 	switch args[0] {
+	case "install":
+		return runCompletionInstall(args[1:])
 	case "bash":
 		fmt.Print(bashCompletion)
 	case "zsh":
@@ -22,14 +24,15 @@ func runCompletion(args []string) error {
 	case "fish":
 		fmt.Print(fishCompletion)
 	case "help", "-h", "--help":
-		fmt.Println(bold("usage"))
+		fmt.Println(bracketed("usage"))
 		printUsageRows([][2]string{
+			{"niq completion install", "write it where your shell already looks (no dotfile edit)"},
 			{"niq completion bash", "source <(niq completion bash)"},
 			{"niq completion zsh", "niq completion zsh > \"${fpath[1]}/_niq\""},
 			{"niq completion fish", "niq completion fish | source"},
 		})
 	default:
-		return fmt.Errorf("unknown shell %q (want bash, zsh or fish)", args[0])
+		return fmt.Errorf("unknown target %q (want install, bash, zsh or fish)", args[0])
 	}
 	return nil
 }
@@ -41,7 +44,7 @@ _niq() {
 	COMPREPLY=()
 
 	if (( COMP_CWORD == 1 )); then
-		COMPREPLY=( $(compgen -W "start stop restart status update project completion help version" -- "$cur") )
+		COMPREPLY=( $(compgen -W "start stop restart status update project p completion help version" -- "$cur") )
 		return
 	fi
 
@@ -101,6 +104,7 @@ _niq() {
 		'status:show the control plane and its projects'
 		'update:install the latest release with npm'
 		'project:pick a project, or create/run one'
+		'p:same as niq project'
 		'completion:print a completion script'
 		'help:print usage'
 		'version:print the version'
@@ -162,6 +166,7 @@ complete -c niq -n '__fish_use_subcommand' -a restart -d 'restart the control pl
 complete -c niq -n '__fish_use_subcommand' -a status -d 'show the control plane and its projects'
 complete -c niq -n '__fish_use_subcommand' -a update -d 'install the latest release with npm'
 complete -c niq -n '__fish_use_subcommand' -a project -d 'pick a project, or create/run one'
+complete -c niq -n '__fish_use_subcommand' -a p -d 'same as niq project'
 complete -c niq -n '__fish_use_subcommand' -a completion -d 'print a completion script'
 complete -c niq -n '__fish_use_subcommand' -a help -d 'print usage'
 complete -c niq -n '__fish_use_subcommand' -a version -d 'print the version'

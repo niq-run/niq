@@ -9,7 +9,7 @@
 //	niq stop [-p]           — stop the background control plane (-p: the projects too)
 //	niq restart [-p]        — stop and start it again (-p: the projects too)
 //	niq update              — install the latest release with npm
-//	niq project             — pick a project, then stop or restart it
+//	niq project | niq p     — pick a project, then stop or restart it
 //	niq project list        — list projects, their ports and run state
 //	niq project create <id> — create a project from a template
 //	niq project run <id>    — run a project instance in this process
@@ -57,14 +57,14 @@ func main() {
 	// "control" word) is a control-plane start.
 	var err error
 	switch {
-	case len(os.Args) > 1 && os.Args[1] == "project":
+	case len(os.Args) > 1 && (os.Args[1] == "project" || os.Args[1] == "p"):
 		err = runProject(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "stop":
 		err = runStop(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "restart":
 		err = runRestart(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "status":
-		err = statusControl()
+		err = runStatus(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "update":
 		err = runUpdate(os.Args[2:])
 	case len(os.Args) > 1 && (os.Args[1] == "completion" || os.Args[1] == "complete"):
@@ -235,12 +235,39 @@ func runProject(args []string) error {
 		}
 		return err
 
+	case len(args) >= 2 && (args[0] == "start" || args[0] == "stop" || args[0] == "restart"):
+		// One instance, by id: the same three operations the picker offers,
+		// scriptable — and the menu bar app's whole vocabulary.
+		p, err := project.LoadProject(args[1])
+		if err != nil {
+			return err
+		}
+		// The project package logs the signal it sends to a port holder; here the
+		// one-line report below is the answer.
+		prev := log.Writer()
+		log.SetOutput(io.Discard)
+		defer log.SetOutput(prev)
+
+		var line string
+		switch args[0] {
+		case "start":
+			line, err = startProjectInstance(*p)
+		case "stop":
+			line, err = stopProjectInstance(*p)
+		default:
+			line, err = restartProjectInstance(*p)
+		}
+		if line != "" {
+			fmt.Println(line)
+		}
+		return err
+
 	case args[0] == "help" || args[0] == "-h" || args[0] == "--help":
 		printProjectUsage()
 		return nil
 
 	default:
-		return fmt.Errorf("usage: niq project [list | create <id> | run <id>] (see: niq project --help)")
+		return fmt.Errorf("usage: niq project [list | create <id> | run <id> | start|stop|restart <id>] (see: niq project --help)")
 	}
 }
 
@@ -283,8 +310,9 @@ func printUsage() {
 		{"niq stop [-p]", "stop the control plane; -p also stops the running projects"},
 		{"niq restart [-p]", "restart the control plane; -p also restarts the running projects"},
 		{"niq update", "install the latest release with npm"},
-		{"niq project", "pick a project, then start, stop or restart it"},
+		{"niq project, niq p", "pick a project, then start, stop or restart it"},
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
+		{"niq project start|stop|restart <id>", "act on one instance, without the picker"},
 		{"niq project create <id> [--template <name>]", "create a project from a template"},
 		{"niq project run <id> [--bus :0] [--webui :0]", "run an instance in this terminal"},
 		{"niq completion <shell>", "print a completion script: bash, zsh or fish"},
@@ -299,6 +327,7 @@ func printUsage() {
 
 	fmt.Printf("\n%s\n", bracketed("shell completion"))
 	printUsageRows([][2]string{
+		{"niq completion install", "write it into your shell's own directory — nothing to add to a dotfile"},
 		{"bash", "source <(niq completion bash)"},
 		{"zsh", "niq completion zsh > \"${fpath[1]}/_niq\""},
 		{"fish", "niq completion fish | source"},
@@ -327,6 +356,7 @@ func printProjectUsage() {
 	printUsageRows([][2]string{
 		{"niq project", "pick a project (↑/↓, enter), then start, stop or restart it"},
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
+		{"niq project start|stop|restart <id>", "act on one instance, without the picker"},
 		{"niq project create <id> [--template <name>]", "create a project from a template"},
 		{"niq project run <id> [--bus :0] [--webui :0] [--webui-auth user:pass]", "run an instance in this terminal (webui-auth locks non-localhost access)"},
 	})
