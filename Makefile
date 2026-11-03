@@ -7,7 +7,7 @@ WEBUI := app/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install install_skip_ui build build_skip_ui webui snapshot npm-publish
+.PHONY: install install_skip_ui build build_skip_ui app webui snapshot npm-publish
 
 # The SPA is go:embed'd from $(WEBUI)/dist, so it has to be rebuilt before the
 # Go binary or the build ships whatever UI was last committed.
@@ -42,6 +42,23 @@ build_skip_ui:
 	@echo "go: building ./bin/niq (SPA not rebuilt)…"
 	$(GO_BUILD)
 
+# The menu bar app is a thin front end: it runs `niq status --json` and the
+# per-project commands, so nothing here duplicates the CLI's logic. Built with
+# the system Swift compiler into a .app bundle (LSUIElement: no Dock icon).
+APP := dist/niq.app
+
+app:
+	@echo "app: building $(APP) (swiftc)…"
+	rm -rf "$(APP)"
+	mkdir -p "$(APP)/Contents/MacOS"
+	swiftc -O -swift-version 5 -framework AppKit app/menubar/main.swift \
+		-o "$(APP)/Contents/MacOS/niq-menubar"
+	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
+	@echo "app: building ./bin/niqm (launcher)…"
+	go build -o ./bin/niqm ./app/menubar/niqm
+	@echo "app: built — run: ./bin/niqm"
+
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:
 	goreleaser release --snapshot --clean --config app/publish/.goreleaser.yaml
@@ -62,6 +79,7 @@ define install_steps
 	@echo "install: linking $(PREFIX)/niq → $(shell pwd)/bin/niq"
 	mkdir -p $(PREFIX)
 	ln -sf "$(shell pwd)/bin/niq" $(PREFIX)/niq
+	-@if [ -x "$(shell pwd)/bin/niqm" ]; then ln -sf "$(shell pwd)/bin/niqm" $(PREFIX)/niqm; echo "install: $(PREFIX)/niqm → $(shell pwd)/bin/niqm"; fi
 	-@if [ "$$NIQ_NO_COMPLETION" != "1" ]; then "$(PREFIX)/niq" completion install; fi
 	@echo "niq installed → $(PREFIX)/niq"
 	@echo "Make sure $(PREFIX) is in your PATH"

@@ -126,11 +126,12 @@ just the ids.
 | --- | --- |
 | `niq` | start the control plane in the background, or report on it when it is already running |
 | `niq -f`, `niq --foreground` | run the control plane in this terminal |
-| `niq status` | the control plane and every project instance |
+| `niq status [--json]` | the control plane and every project instance (`--json` for tools) |
 | `niq stop [-p]` | stop the control plane (`-p` also stops the running projects) |
 | `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
 | `niq project`, `niq p` | pick a project: start, stop or restart it |
 | `niq update` | install the latest release with npm |
+| `niq project start\|stop\|restart <id>` | act on one instance, without the picker |
 | `niq project create` / `niq project run` | create a project / run one in this terminal |
 | `niq completion install` | put completion where your shell already looks |
 | `niq completion <shell>` | print a script for bash, zsh or fish |
@@ -207,6 +208,26 @@ is restarted.
 
 The `reason` worker talks to an LLM provider. Provider settings (endpoint, model, API key) live in `~/.niq/common/providers/provider.json`; `api_key` and header values support environment-variable expansion — e.g. `"api_key": "${OPENAI_API_KEY}"` keeps secrets out of stored files.
 
+## Menu bar (macOS)
+
+The same report, one click away.
+
+```sh
+make app      # builds dist/niq.app and ./bin/niqm
+niqm          # puts niq in the menu bar; running it again focuses it
+```
+
+The menu is the `niq status` report: the control plane's state, pid and address,
+the log, and one submenu per project with **Open WebUI / Start / Stop /
+Restart** — the same three actions the picker offers, disabled when the
+instance cannot perform them.
+
+It is a front end, not a second implementation: every refresh is
+`niq status --json`, every action is a `niq` command (`niq project restart <id>`,
+`niq restart -p`, …), so the app cannot drift from the CLI. `niqm` finds the
+bundle through `NIQ_APP`, `~/Applications`, `/Applications`, or the checkout it
+was built in.
+
 ## Project layout
 
 ```
@@ -232,8 +253,10 @@ binary, so the binary never ships a stale UI. The commit still matters for
 do not run Node), so commit the rebuilt `app/webui/assets/dist` with the change:
 
 ```sh
-make build          # webui bundle + ./bin/niq
-make install        # the same, plus the ~/.local/bin symlink
+make build            # webui bundle + ./bin/niq
+make build_skip_ui    # Go only: the bundle is not rebuilt
+make install          # the same, plus the ~/.local/bin symlink
+make install_skip_ui  # install without the SPA rebuild
 ```
 
 ### Frontend development
