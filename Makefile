@@ -69,6 +69,10 @@ build-miq:
 	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@echo "app: building ./bin/miq (launcher)…"
+	@# build-miq-universal leaves a lipo'd fat binary here, and go refuses to
+	@# overwrite an existing file it does not recognise as an object file (its
+	@# magic list has thin Mach-O but not the fat one), so clear it first.
+	rm -f ./bin/miq
 	go build -o ./bin/miq ./app/menubar/miq
 	@echo "app: built — run: ./bin/miq"
 
