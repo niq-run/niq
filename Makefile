@@ -9,6 +9,11 @@ NPM_LOGLEVEL ?= http
 
 .PHONY: install build webui snapshot npm-publish
 
+# Skip the SPA rebuild for Go-only edits: `make build SKIP_WEBUI=1`. The binary
+# always embeds whatever is in $(WEBUI)/dist, so this only skips the rebuild —
+# it does not touch the bundle, and the committed one is what gets embedded.
+SKIP_WEBUI ?=
+
 # The SPA is go:embed'd from $(WEBUI)/dist, so it has to be rebuilt before the
 # Go binary or the build ships whatever UI was last committed.
 #
@@ -25,9 +30,14 @@ $(WEBUI)/node_modules/.package-lock.json: $(WEBUI)/package-lock.json
 	@echo "webui: installing dependencies (npm ci)…"
 	cd $(WEBUI) && npm ci --no-audit --no-fund --include=dev --loglevel=$(NPM_LOGLEVEL)
 
+ifeq ($(SKIP_WEBUI),1)
+webui:
+	@echo "webui: skipped (SKIP_WEBUI=1) — embedding $(WEBUI)/dist as it is"
+else
 webui: $(WEBUI)/node_modules/.package-lock.json
 	@echo "webui: building the bundle (tsc -b && vite build)…"
 	cd $(WEBUI) && npm run build
+endif
 
 build: webui
 	@echo "go: building ./bin/niq…"
