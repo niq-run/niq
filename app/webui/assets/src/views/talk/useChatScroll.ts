@@ -10,6 +10,7 @@
 // answers both questions the old gesture bookkeeping tried to infer.
 import { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react'
 import type { EventPayload } from '../../types'
+import { captureScrollAnchor, settleScrollAnchor, type ScrollAnchor } from './scrollAnchor'
 
 // MAX_TALK_BACKFILL caps how many history pages the talk view will page back
 // through when its timeline is empty (recent events all filtered out). Bounds
@@ -82,6 +83,7 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   // newest row now", without an animation to read scroll events from.
   const jumpToBottom = useCallback(() => {
     setFollow(true)
+    prependAnchorRef.current = null
     const el = scrollRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
@@ -139,12 +141,13 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   const loadMoreRef = useRef(onLoadMore)
   loadMoreRef.current = onLoadMore
 
-  const prependAnchorRef = useRef<{ top: number; height: number } | null>(null)
+  // The row the reader is looking at, held across a history prepend (and across
+  // the live appends that race it). See scrollAnchor.ts for why the anchor is a
+  // row rather than a scrollHeight snapshot.
+  const prependAnchorRef = useRef<ScrollAnchor | null>(null)
   const captureTopAnchor = () => {
     if (atBottomRef.current) return
-    const el = scrollRef.current
-    if (!el) return
-    prependAnchorRef.current = { top: el.scrollTop, height: el.scrollHeight }
+    prependAnchorRef.current = captureScrollAnchor(scrollRef.current, '[data-evt-id]')
   }
 
   // Unified load-more controller: 'short' (timeline doesn't fill the container)
@@ -181,6 +184,11 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
+    // Absorb the reader's own movement into the anchor as it happens, so a
+    // page that lands mid-gesture (touch momentum especially) is still measured
+    // against the position they just came to.
+    const anchor = prependAnchorRef.current
+    if (anchor && !settleScrollAnchor(el, anchor)) prependAnchorRef.current = null
     const height = el.scrollHeight
     const shrank = height < lastHeightRef.current
     lastHeightRef.current = height
@@ -204,6 +212,7 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
 
   const scrollToBottom = useCallback(() => {
     setFollow(true)
+    prependAnchorRef.current = null
     programmaticUntilRef.current = Date.now() + 600
     const el = scrollRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
@@ -230,19 +239,14 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relevantEvents])
 
-  // If a history prepend is in flight, keep the same viewport region anchored:
-  // content grew by `grew` px above what the reader was looking at, so raise
-  // scrollTop by exactly that much. Unconditional (even when the reader is
-  // mid-gesture or at the true top) so a prepend never reads as a jump.
+  // Reconcile the prepend anchor after every commit rather than on a guessed
+  // one: a live append leaves the anchor row untouched (nothing to do), and the
+  // history page moves it exactly once, when it lands. Until then the anchor is
+  // kept; once it has done its job it is dropped.
   useLayoutEffect(() => {
     const a = prependAnchorRef.current
-    if (!a) return
-    prependAnchorRef.current = null
-    const el = scrollRef.current
-    if (!el) return
-    const grew = el.scrollHeight - a.height
-    if (grew > 0) el.scrollTop = a.top + grew
-  }, [relevantEvents])
+    if (a && !settleScrollAnchor(scrollRef.current, a)) prependAnchorRef.current = null
+  })
 
   return { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToEvent }
 }

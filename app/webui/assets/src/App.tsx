@@ -21,6 +21,7 @@ import { usePolling } from './hooks/usePolling'
 import { useApprovalNotifications } from './hooks/useApprovalNotifications'
 import { useIsMobile } from './hooks/useIsMobile'
 import { CONTROL } from './services/api'
+import { captureScrollAnchor, settleScrollAnchor, type ScrollAnchor } from './views/talk/scrollAnchor'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent, fetchProviders, providersUsable } from './services/api'
 import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type InputContent, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerDetailTab, type WorkerInfo } from './types'
 
@@ -1214,10 +1215,12 @@ export default function App() {
   // matches the current filter, so stop asking).
   const loadingMoreRef = useRef(false)
   const noMoreRef = useRef(false)
-  // Viewport anchor for the prepend: captured before setEvents, applied by the
-  // layout effect below so the visible frame doesn't jump and the sentinel
-  // moves out of view instead of staying pinned at the top.
-  const pendingAnchorRef = useRef<{ top: number; height: number } | null>(null)
+  // Viewport anchor for the prepend: the first visible row, captured before the
+  // fetch and reconciled by the layout effect below so the visible frame doesn't
+  // jump and the sentinel moves out of view instead of staying pinned at the
+  // top. A row anchor (scrollAnchor.ts) survives the live appends that land
+  // while the page is in flight, which a height snapshot does not.
+  const pendingAnchorRef = useRef<ScrollAnchor | null>(null)
 
   // LOAD_EARLY_PX: how far below the top the events list starts prefetching
   // older events, so the page lands while there is still room to scroll.
@@ -1227,8 +1230,7 @@ export default function App() {
     if (events.length === 0) return
     loadingMoreRef.current = true
     try {
-    	  const anchorEl = listRef.current
-      const anchor = anchorEl ? { top: anchorEl.scrollTop, height: anchorEl.scrollHeight } : null
+      const anchor = captureScrollAnchor(listRef.current, '[data-evt-id]')
       const isTalk = view === 'talk'
       const opts = isTalk
         ? { workers: talkScope, types: responseOnly ? [...RESPONSE_ONLY_TYPES] as string[] : [],
@@ -1266,11 +1268,8 @@ export default function App() {
   // stays visible — re-triggering the loader in a loop.
   useLayoutEffect(() => {
     const a = pendingAnchorRef.current
-    pendingAnchorRef.current = null
-    const el = listRef.current
-    if (!a || !el) return
-    const grew = el.scrollHeight - a.height
-    if (grew > 0) el.scrollTop = a.top + grew
+    if (!a) return
+    if (!settleScrollAnchor(listRef.current, a)) pendingAnchorRef.current = null
   }, [events])
 
   // A new filter scope may have older events again — clear the exhausted flag
@@ -1307,6 +1306,10 @@ export default function App() {
   const handleScroll = useCallback(() => {
     const el = listRef.current
     if (!el) return
+    // Same rationale as TalkView: keep the prepend anchor current while the
+    // reader scrolls, so content that lands mid-gesture is not mistaken for one.
+    const anchor = pendingAnchorRef.current
+    if (anchor && !settleScrollAnchor(el, anchor)) pendingAnchorRef.current = null
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
     const prev = prevEventsScrollRef.current
     // Sticky follow switch (mirrors TalkView): off only on an explicit up-

@@ -71,6 +71,7 @@ export default function EventRow({
 
   return (
     <tr
+      data-evt-id={evt.id}
       onClick={onSelect}
       className={"event-row" + (selected ? " selected" : "")}
       style={{ cursor: "pointer", userSelect: "none" }}
