@@ -68,9 +68,6 @@ build-miq:
 		-o "$(APP)/Contents/MacOS/niq-menubar"
 	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
-	mkdir -p "$(APP)/Contents/Resources"
-	cp app/webui/assets/src/assets/pin.svg app/webui/assets/src/assets/pinw.svg \
-		"$(APP)/Contents/Resources/"
 	@echo "app: building ./bin/miq (launcher)…"
 	go build -o ./bin/miq ./app/menubar/miq
 	@echo "app: built — run: ./bin/miq"
