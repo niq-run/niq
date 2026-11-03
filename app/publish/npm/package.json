@@ -13,6 +13,9 @@
   "files": [
     "bin/"
   ],
+  "scripts": {
+    "postinstall": "node bin/postinstall.js"
+  },
   "optionalDependencies": {
     "@niq.run/niq-darwin-arm64": "0.0.0",
     "@niq.run/niq-darwin-x64": "0.0.0",
