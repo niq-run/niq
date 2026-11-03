@@ -24,10 +24,33 @@ func main() {
 		fmt.Fprintln(os.Stderr, "niqm:", err)
 		os.Exit(1)
 	}
-	if err := exec.Command("open", "-a", app).Run(); err != nil {
+	args := []string{"-a", app}
+	// Hand the app the CLI that sits beside this launcher: the two were built
+	// together, and the app launched by LaunchServices sees neither the shell's
+	// PATH nor its environment.
+	if niq, err := sibling("niq"); err == nil {
+		args = append(args, "--args", "--niq", niq)
+	}
+	if err := exec.Command("open", args...).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "niqm: open %s: %v\n", app, err)
 		os.Exit(1)
 	}
+}
+
+// sibling returns the path of another binary installed next to this one.
+func sibling(name string) (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = resolved
+	}
+	path := filepath.Join(filepath.Dir(exe), name)
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		return "", fmt.Errorf("%s not found next to niqm", name)
+	}
+	return path, nil
 }
 
 // findApp looks where the bundle can reasonably be: NIQ_APP, ~/Applications,

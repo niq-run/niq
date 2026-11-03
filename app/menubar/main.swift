@@ -108,9 +108,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private static var resolvedBinary: String?
 
+    /// `--niq <path>`, handed over by niqm: the CLI next to the launcher is the
+    /// one that matches this build, and LaunchServices does not pass the
+    /// environment a terminal would have.
+    private static let overrideBinary: String? = {
+        let args = CommandLine.arguments
+        for (index, arg) in args.enumerated() {
+            if arg == "--niq", index + 1 < args.count { return args[index + 1] }
+            if arg.hasPrefix("--niq=") { return String(arg.dropFirst("--niq=".count)) }
+        }
+        return nil
+    }()
+
     private static func niqBinary() -> String? {
         if let cached = resolvedBinary, FileManager.default.isExecutableFile(atPath: cached) {
             return cached
+        }
+        if let override = overrideBinary, FileManager.default.isExecutableFile(atPath: override) {
+            resolvedBinary = override
+            return override
         }
         var candidates: [String] = []
         if let override = ProcessInfo.processInfo.environment["NIQ_BIN"], !override.isEmpty {
