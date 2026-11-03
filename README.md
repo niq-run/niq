@@ -234,10 +234,11 @@ needs right-click → Open (or `xattr -d com.apple.quarantine niq.app`).
 It refreshes itself when the menu opens, so there is no Refresh item to
 remember. It is a front end, not a second implementation: the status comes from
 `niq status --json`, every action is a `niq` command (`niq project restart <id>`,
-`niq restart -p`, …), so the app cannot drift from the CLI. `miq` finds the
-bundle through `NIQ_APP`, `~/Applications`, `/Applications`, or the checkout it
-was built in, and hands the app the `niq` next to it (`--niq <path>`), since a
-GUI launch does not inherit the shell's PATH.
+`niq restart -p`, …), so the app cannot drift from the CLI. `miq` is a shell
+script that finds the bundle beside itself first — the one this build produced —
+then `NIQ_APP`, `~/Applications` and `/Applications`, and hands the app the `niq`
+next to it (`--niq <path>`), since a GUI launch does not inherit the shell's
+PATH.
 
 ## Project layout
 

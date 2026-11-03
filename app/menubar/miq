@@ -1,0 +1,48 @@
+#!/bin/sh
+# miq — open the niq menu bar app ("niq" with an m for menu bar).
+#
+# The app is a bundle; this only finds it and hands it to LaunchServices, so
+# running miq again focuses the instance already in the menu bar instead of
+# starting a second one. Everything the menu shows and does comes from the niq
+# CLI, so this is an entry point, not a second implementation.
+#
+# A bundle next to this script wins: that is the one the same build produced
+# (bin/miq → ../dist/niq.app, or the zip's ./niq.app), so `make build miq && miq`
+# cannot open a stale copy from /Applications.
+set -eu
+
+# Follow symlinks: `make install` links ~/.local/bin/miq to <repo>/bin/miq.
+self=$0
+while [ -L "$self" ]; do
+	link=$(readlink "$self")
+	case $link in
+	/*) self=$link ;;
+	*) self=$(dirname "$self")/$link ;;
+	esac
+done
+dir=$(cd "$(dirname "$self")" && pwd)
+
+app=
+for candidate in "${NIQ_APP:-}" "$dir/niq.app" "$dir/../dist/niq.app" \
+                 "$dir/../../dist/niq.app" "$HOME/Applications/niq.app" \
+                 /Applications/niq.app "$PWD/dist/niq.app"; do
+	[ -n "$candidate" ] || continue
+	if [ -f "$candidate/Contents/Info.plist" ]; then
+		app=$(cd "$candidate" && pwd)
+		break
+	fi
+done
+
+if [ -z "$app" ]; then
+	echo "miq: niq.app not found — build it with 'make build miq', or point NIQ_APP at it" >&2
+	exit 1
+fi
+
+# Hand the app the CLI that sits beside this script: the two were built
+# together, and a LaunchServices start inherits neither the shell's PATH nor its
+# environment.
+set -- -a "$app"
+if [ -x "$dir/niq" ]; then
+	set -- "$@" --args --niq "$dir/niq"
+fi
+exec open "$@"

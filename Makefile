@@ -88,12 +88,9 @@ miq:
 	mkdir -p "$(APP)/Contents/Resources"
 	cp app/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
-	@echo "app: building ./bin/miq (launcher)…"
-	@# miq-universal leaves a lipo'd fat binary here, and go refuses to
-	@# overwrite an existing file it does not recognise as an object file (its
-	@# magic list has thin Mach-O but not the fat one), so clear it first.
-	rm -f ./bin/miq
-	go build -o ./bin/miq ./app/menubar/miq
+	@echo "app: installing ./bin/miq (launcher)…"
+	cp app/menubar/miq ./bin/miq
+	chmod +x ./bin/miq
 	@echo "app: built — run: ./bin/miq"
 
 # Universal build + zip for the release: the app is small, so compiling it twice
@@ -104,7 +101,7 @@ MENUBAR_ZIP := dist/niq_menubar_darwin_universal.zip
 
 miq-universal:
 	@echo "app: building $(APP) (universal)…"
-	rm -rf "$(APP)" build/niq-menubar-* build/miq-*
+	rm -rf "$(APP)" build/niq-menubar-*
 	mkdir -p "$(APP)/Contents/MacOS" build bin
 	swiftc -O -swift-version 5 -target arm64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
 		app/menubar/main.swift -o build/niq-menubar-arm64
@@ -115,14 +112,13 @@ miq-universal:
 	mkdir -p "$(APP)/Contents/Resources"
 	cp app/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
-	@echo "app: building ./bin/miq (universal launcher)…"
-	GOOS=darwin GOARCH=arm64 go build -o build/miq-arm64 ./app/menubar/miq
-	GOOS=darwin GOARCH=amd64 go build -o build/miq-amd64 ./app/menubar/miq
-	lipo -create -output ./bin/miq build/miq-arm64 build/miq-amd64
-	@# lipo invalidates the linker's ad-hoc signature, and an unsigned arm64
-	@# binary will not run at all — re-sign the bundle.
+	@# miq is a shell script and has no architectures; only the bundle needs
+	@# signing. lipo invalidates the linker's ad-hoc signature, and an unsigned
+	@# arm64 binary will not run at all — re-sign the bundle.
 	codesign --force --sign - --timestamp=none "$(APP)"
-	codesign --force --sign - --timestamp=none ./bin/miq
+	@echo "app: installing ./bin/miq (launcher)…"
+	cp app/menubar/miq ./bin/miq
+	chmod +x ./bin/miq
 	@echo "app: built (universal)"
 
 # Zip for the GitHub release: a folder with the app and the launcher, so it
