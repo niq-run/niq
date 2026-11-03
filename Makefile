@@ -7,7 +7,7 @@ WEBUI := app/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build build-niq build-miq app webui snapshot npm-publish
+.PHONY: install build build-niq build-miq build-miq-universal dist-miq app webui snapshot npm-publish
 
 # `make build` rebuilds the SPA first — it is go:embed-ed, so skipping that
 # would ship whatever UI was last built. For Go-only iteration:
@@ -71,6 +71,46 @@ build-miq:
 	@echo "app: building ./bin/miq (launcher)…"
 	go build -o ./bin/miq ./app/menubar/miq
 	@echo "app: built — run: ./bin/miq"
+
+# Universal build + zip for the release: the app is small, so compiling it twice
+# and lipo-ing costs a few seconds and saves shipping two downloads. The zip
+# holds niq.app and the miq launcher together, which is how they are used.
+APP_MIN_MACOS := 13.0
+MENUBAR_ZIP := dist/niq_menubar_darwin_universal.zip
+
+build-miq-universal:
+	@echo "app: building $(APP) (universal)…"
+	rm -rf "$(APP)" build/niq-menubar-* build/miq-*
+	mkdir -p "$(APP)/Contents/MacOS" build
+	swiftc -O -swift-version 5 -target arm64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
+		app/menubar/main.swift -o build/niq-menubar-arm64
+	swiftc -O -swift-version 5 -target x86_64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
+		app/menubar/main.swift -o build/niq-menubar-x86_64
+	lipo -create -output "$(APP)/Contents/MacOS/niq-menubar" build/niq-menubar-arm64 build/niq-menubar-x86_64
+	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
+	@echo "app: building ./bin/miq (universal launcher)…"
+	GOOS=darwin GOARCH=arm64 go build -o build/miq-arm64 ./app/menubar/miq
+	GOOS=darwin GOARCH=amd64 go build -o build/miq-amd64 ./app/menubar/miq
+	lipo -create -output ./bin/miq build/miq-arm64 build/miq-amd64
+	@# lipo invalidates the linker's ad-hoc signature, and an unsigned arm64
+	@# binary will not run at all — re-sign the bundle.
+	codesign --force --sign - --timestamp=none "$(APP)"
+	codesign --force --sign - --timestamp=none ./bin/miq
+	@echo "app: built (universal)"
+
+# Zip for the GitHub release: a folder with the app and the launcher, so it
+# unpacks into something you can run without reading instructions.
+dist-miq: build-miq-universal
+	@echo "app: packaging $(MENUBAR_ZIP)…"
+	rm -rf dist/niq-menubar
+	mkdir -p dist/niq-menubar
+	cp -R "$(APP)" dist/niq-menubar/
+	cp ./bin/miq dist/niq-menubar/
+	@# --norsrc/--noextattr: no AppleDouble ._ entries in the archive
+	cd dist && ditto -c -k --norsrc --noextattr --noqtn --noacl \
+		--keepParent niq-menubar "$(notdir $(MENUBAR_ZIP))"
+	@echo "app: $(MENUBAR_ZIP)"
 
 # `make app` is the older spelling of build-miq.
 app: build-miq

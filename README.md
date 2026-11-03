@@ -227,6 +227,10 @@ when the control plane is down), then one entry per project — `pin · running`
 each a submenu of **Open WebUI / Start / Stop / Restart**, with the entries that
 instance cannot perform greyed out. **Open GitHub** and **Quit** close it.
 
+Releases ship a universal build as `niq_menubar_darwin_universal.zip`, holding
+`niq.app` and `miq`. It is ad-hoc signed, not notarized, so the first launch
+needs right-click → Open (or `xattr -d com.apple.quarantine niq.app`).
+
 It refreshes itself when the menu opens, so there is no Refresh item to
 remember. It is a front end, not a second implementation: the status comes from
 `niq status --json`, every action is a `niq` command (`niq project restart <id>`,
