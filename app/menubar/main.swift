@@ -81,10 +81,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 16pt: a touch under the 18pt a status item allows, which reads as the
         // same weight as the system icons beside it.
         let side: CGFloat = 16
-        // Drawn at 2x. A 1x bitmap is stretched on a Retina display, and the
-        // softened edges make the squares look larger and the margins thinner
-        // than the web UI's logo, which is vector at every size.
-        let scale: CGFloat = 2
+        // Drawn at 4x (64px for 16pt). A 1x or 2x bitmap is stretched on a
+        // Retina display, and the softened edges make the squares look larger
+        // and the margins thinner than the web UI's logo, which is vector at
+        // every size.
+        let scale: CGFloat = 4
         let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil,
             pixelsWide: Int(side * scale), pixelsHigh: Int(side * scale),
