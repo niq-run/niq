@@ -10,16 +10,23 @@
 // answers both questions the old gesture bookkeeping tried to infer.
 import { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react'
 import type { EventPayload } from '../../types'
+import { captureScrollAnchor, settleScrollAnchor, type ScrollAnchor } from './scrollAnchor'
 
 // MAX_TALK_BACKFILL caps how many history pages the talk view will page back
 // through when its timeline is empty (recent events all filtered out). Bounds
 // the backfill so a project with no real conversation can't spin.
 const MAX_TALK_BACKFILL = 30
 
-// LOAD_EARLY_PX is how far below the top the view starts prefetching older
-// events, so the historical page lands while there is still room to scroll
-// instead of stalling exactly at the earliest message.
-const LOAD_EARLY_PX = 480
+// NEAR_TOP_PX caps the prefetch distance. It is scaled down to a third of the
+// viewport: a flat 480px is most of a phone's height, so the smallest flick
+// already paged history in.
+const NEAR_TOP_PX = 480
+
+// nearTopPx is how close to the top the next page is pulled in. Exported so the
+// events list uses the same distance.
+export function nearTopPx(el: HTMLElement): number {
+  return Math.min(NEAR_TOP_PX, Math.round(el.clientHeight / 3))
+}
 
 // AT_BOTTOM_PX is "the reader is at the end", in px. Sub-pixel layout leaves
 // scrollTop a fraction short of the maximum, so it is a window rather than 0.
@@ -41,10 +48,6 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   // While the container scrolls itself (smooth jump to bottom / to an event),
   // the scroll events it produces must not be read as the reader moving.
   const programmaticUntilRef = useRef(0)
-  // scrollHeight as of the last scroll event, so a scroll that only exists
-  // because the content shrank (a collapsed block clamping scrollTop) can be
-  // told apart from the reader actually moving towards the top.
-  const lastHeightRef = useRef(0)
   const manualRef = useRef(false)
   const manualTimerRef = useRef(0)
   const markManual = useCallback(() => {
@@ -72,9 +75,6 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
     const el = scrollRef.current
     if (!el) return
     if (atBottomRef.current && !manualRef.current) el.scrollTop = el.scrollHeight
-    // lastHeightRef is deliberately NOT refreshed here: it must still hold the
-    // height from before this commit, or the shrink clamp's own scroll event
-    // would look like the reader moving and page history in.
     setFollow(isAtEnd(el))
   }, [setFollow])
 
@@ -82,10 +82,10 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   // newest row now", without an animation to read scroll events from.
   const jumpToBottom = useCallback(() => {
     setFollow(true)
+    prependAnchorRef.current = null
     const el = scrollRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
-    lastHeightRef.current = el.scrollHeight
   }, [setFollow])
 
   const lastScrollSignal = useRef(scrollToBottomSignal)
@@ -139,41 +139,38 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   const loadMoreRef = useRef(onLoadMore)
   loadMoreRef.current = onLoadMore
 
-  const prependAnchorRef = useRef<{ top: number; height: number } | null>(null)
+  // The row the reader is looking at, held across a history prepend (and across
+  // the live appends that race it). See scrollAnchor.ts for why the anchor is a
+  // row rather than a scrollHeight snapshot.
+  const prependAnchorRef = useRef<ScrollAnchor | null>(null)
   const captureTopAnchor = () => {
     if (atBottomRef.current) return
-    const el = scrollRef.current
-    if (!el) return
-    prependAnchorRef.current = { top: el.scrollTop, height: el.scrollHeight }
+    prependAnchorRef.current = captureScrollAnchor(scrollRef.current, '[data-evt-id]')
   }
 
-  // Unified load-more controller: 'short' (timeline doesn't fill the container)
-  // and 'nearTop' (user scrolled near the top) both funnel here, behind one
-  // in-flight latch + backfill cap, and pre-capture the prepend anchor.
+  // One rule for paging history: pull the next page whenever the top of the
+  // timeline is within nearTopPx() of the viewport. A timeline shorter than the
+  // screen has scrollTop 0, so the same condition covers it — there is no
+  // separate "fill the screen" pass. Re-evaluated on scroll and after every
+  // commit; one in-flight latch stops re-entry while a page is on its way.
   const loadingRef = useRef(false)
-  const backfillCountRef = useRef(0)
-  const maybeLoadMore = (reason: 'short' | 'nearTop') => {
+  const fillCountRef = useRef(0)
+  const maybeLoadMore = () => {
     const sc = scrollRef.current
-    if (!sc || !loadMoreRef.current) return
-    const need = reason === 'short'
-      ? sc.scrollHeight <= sc.clientHeight + 1
-      : sc.scrollTop <= LOAD_EARLY_PX
-    if (!need) {
-      if (reason === 'short') backfillCountRef.current = 0
-      return
+    if (!sc || !loadMoreRef.current || loadingRef.current) return
+    const short = sc.scrollHeight <= sc.clientHeight + 1
+    if (!short) fillCountRef.current = 0
+    if (sc.scrollTop > nearTopPx(sc)) return
+    // A timeline that never fills up (every recent event filtered out of the
+    // conversation) is topped up a bounded number of pages, never forever.
+    if (short) {
+      if (fillCountRef.current >= MAX_TALK_BACKFILL) return
+      fillCountRef.current++
     }
-    if (reason === 'short' && backfillCountRef.current >= MAX_TALK_BACKFILL) return
-    // One in-flight load at a time. An idle reader resting at the very top is
-    // still served: the prepend re-pin raises scrollTop back above LOAD_EARLY_PX
-    // for a normal-sized page, and while a load is pending this latch blocks the
-    // re-pin's own scroll event, so there is no runaway loop — no per-gesture
-    // direction gate or hard page cap is needed (mirroring the events view).
-    if (loadingRef.current) return
     loadingRef.current = true
-    if (reason === 'short') backfillCountRef.current++
     captureTopAnchor()
     loadMoreRef.current()
-    setTimeout(() => { loadingRef.current = false }, 400)
+    window.setTimeout(() => { loadingRef.current = false }, 400)
   }
   const maybeLoadMoreRef = useRef(maybeLoadMore)
   maybeLoadMoreRef.current = maybeLoadMore
@@ -181,29 +178,20 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
     if (!el) return
-    const height = el.scrollHeight
-    const shrank = height < lastHeightRef.current
-    lastHeightRef.current = height
+    // Absorb the reader's own movement into the anchor as it happens, so a
+    // page that lands mid-gesture (touch momentum especially) is still measured
+    // against the position they just came to.
+    const anchor = prependAnchorRef.current
+    if (anchor && !settleScrollAnchor(el, anchor)) prependAnchorRef.current = null
     // A self-driven smooth scroll (button, quote jump) fires scroll events too;
     // the flag is already set for it, so ignore them until it lands.
     if (Date.now() >= programmaticUntilRef.current) setFollow(isAtEnd(el))
-    // Near-top history prefetch: fire whenever the reader is resting in the top
-    // zone (no scroll-direction requirement, so sitting at the true top still
-    // loads each page) and the list actually overflows. A single in-flight latch
-    // blocks re-entry, and the prepend re-pin raises scrollTop back above the
-    // zone on a normal page, so it can't loop.
-    //
-    // Not when the content just shrank: collapsing a tall block clamps scrollTop
-    // towards the top and fires a scroll event, which used to look like the
-    // reader arriving at the top — one collapse could page history in (and push
-    // the viewport far above the block that was folded).
-    if (!shrank && el.scrollTop <= LOAD_EARLY_PX && height > el.clientHeight + 1) {
-      maybeLoadMoreRef.current?.('nearTop')
-    }
+    maybeLoadMoreRef.current?.()
   }, [])
 
   const scrollToBottom = useCallback(() => {
     setFollow(true)
+    prependAnchorRef.current = null
     programmaticUntilRef.current = Date.now() + 600
     const el = scrollRef.current
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
@@ -222,27 +210,22 @@ export function useChatScroll({ relevantEvents, events, onLoadMore, scrollToBott
     el.scrollTo({ top, behavior: 'smooth' })
   }, [setFollow])
 
-  // 'short' auto-fill: re-evaluate after rows change whether the timeline fills
-  // the container and top up if not (bounded).
-  useEffect(() => {
-    if (!onLoadMore || events.length === 0) return
-    maybeLoadMoreRef.current?.('short')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relevantEvents])
-
-  // If a history prepend is in flight, keep the same viewport region anchored:
-  // content grew by `grew` px above what the reader was looking at, so raise
-  // scrollTop by exactly that much. Unconditional (even when the reader is
-  // mid-gesture or at the true top) so a prepend never reads as a jump.
+  // Reconcile the prepend anchor after every commit rather than on a guessed
+  // one: a live append leaves the anchor row untouched (nothing to do), and the
+  // history page moves it exactly once, when it lands. Until then the anchor is
+  // kept; once it has done its job it is dropped.
   useLayoutEffect(() => {
     const a = prependAnchorRef.current
-    if (!a) return
-    prependAnchorRef.current = null
-    const el = scrollRef.current
-    if (!el) return
-    const grew = el.scrollHeight - a.height
-    if (grew > 0) el.scrollTop = a.top + grew
-  }, [relevantEvents])
+    if (a && !settleScrollAnchor(scrollRef.current, a)) prependAnchorRef.current = null
+  })
+
+  // Then re-evaluate the top of the timeline: a live append, a landed page or a
+  // collapsed block can all move it into or out of the zone, and a timeline
+  // shorter than the screen never scrolls at all. Ordered after the anchor so a
+  // pending prepend is settled before a new one is captured.
+  useLayoutEffect(() => {
+    if (events.length > 0) maybeLoadMoreRef.current?.()
+  })
 
   return { scrollRef, atBottom, handleScroll, markManual, scrollToBottom, scrollToEvent }
 }
