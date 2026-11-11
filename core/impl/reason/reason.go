@@ -752,6 +752,15 @@ func (w *BaseReasonWorker) handleToolCalls(ctx context.Context, toolCalls []llm.
 		w.invokeCapability(context.Background(), cap.Event, cap.Source, argsMap, tc.ToolCallID, traceID)
 		dispatched++
 	}
+
+	// The round is now waiting on at least one reply. If the model did not arm a
+	// timeout itself, arm one from the system side: a peer that never answers
+	// would otherwise stall this worker silently — no event is coming, and
+	// nothing else would ever schedule the next round.
+	if dispatched > 0 && w.activeTimeout == "" {
+		w.armRoundWatchdog(traceID)
+	}
+
 	if len(unavailable) > 0 {
 		// Surface the fact that some tool calls could not be dispatched, so
 		// the user sees it in the stream instead of a silent stall.

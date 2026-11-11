@@ -243,6 +243,19 @@ tool-call timeout (provider-agnostic — the timer worker need not be named
 resolved from the discovered universe, recorded as `activeTimeoutProvider` at
 set time, and cancelled on completion (or acted on when the timeout fires).
 
+The model is expected to arm that timer itself (the tool appears as
+`provider__timeout`, and a `request` routed to event `timeout` arms it too). It
+may not — it can forget, or a narrowed tool list can hide the tool — and a peer
+that never answers would then leave the worker waiting with no event to wake it
+(nothing is pending locally, and `Resolved()` gates both the next round and
+schedule-mode input). So whenever a round dispatches work without a timeout
+already set, the mechanism arms one itself (`watchdogTimeout`, ten minutes —
+generous on purpose, longer than any tool's own default) under a synthesized
+call id. The round then resolves as a timeout exactly like a model-armed timer,
+instead of stalling silently. The watchdog shares the whole lifecycle above:
+cancelled once every request settles, parked (cause=timeout) when it fires, and
+stale fires whose id no longer matches the round are discarded.
+
 ### Abort recall
 
 On abort, reason sends directed `request.cancel` events to each target worker —
