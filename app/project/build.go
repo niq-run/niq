@@ -53,6 +53,12 @@ type BuildContext struct {
 
 // RegisterBuilders registers a Builder for every known worker type onto service.
 func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
+	// Each type's spawn-parameter check is registered with its builder: the
+	// builder is where the valid parameter set lives, so drift between the two
+	// is a visible edit rather than a silent gap.
+	for typ, params := range spawnParamsByType {
+		svc.RegisterParamCheck(typ, checkSpawnParams(typ, params))
+	}
 	svc.RegisterBuilder("reason", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		return buildReasonSpec(ctx, cfg)
 	})

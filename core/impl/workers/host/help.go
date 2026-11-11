@@ -57,6 +57,14 @@ Common:
 Type-specific arguments are passed as top-level properties next to ` + "`type`" + `.
 For example workspace takes ` + "`path`" + ` (or ` + "`mounts`" + `) and ` + "`approver`" + `.
 
+## Parameters are checked
+
+Every type accepts only the parameters it reads. A parameter the type does not
+read fails the call instead of being ignored, and the error lists what that type
+does accept. That is deliberate: a silently dropped ` + "`prompt`" + ` (reason reads
+` + "`instruction`" + ` and ` + "`goal`" + `) would look like a successful spawn that never
+initialised anything.
+
 ## Type-specific guides
 
 Ask again with ` + "`params.worker`" + ` set to the type you are about to spawn:
@@ -154,6 +162,13 @@ Stripped before the builder sees them; they land in the worker declaration:
 - ` + "`label`" + ` — display name (备注名) shown in place of the id.
 - ` + "`tags`" + ` — array or comma-separated slash-path labels, e.g. ` + "`\"ops/backlog\"`" + `.
 - ` + "`description`" + ` — one-line purpose note.
+
+## Collaboration scope
+
+- ` + "`collaborators`" + ` (array of reason worker ids) — the reason peers this worker
+  may collaborate with. Omitted means every reason worker is visible; when given
+  it is an allowlist (empty means none). Out-of-scope reason peers are invisible
+  to it and cannot be messaged or called; capability workers are unaffected.
 
 ## Note on the selector
 
