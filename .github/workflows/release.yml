@@ -21,11 +21,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          registry-url: https://registry.npmjs.org
-
       # Release notes: one archived file per release under
       # app/publish/release-notes, named after the tag. app/publish/RELEASE_NOTES.md
       # holds the current release's notes; it is used as a fallback only when it
@@ -56,16 +51,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # goreleaser leaves cross-platform archives in dist/; turn them into
-      # npm packages and publish (subpackages first, then the main package).
-      - name: Publish npm packages
-        run: ./app/publish/npm/publish-npm.sh "${GITHUB_REF_NAME#v}" ./dist
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  # The menu bar app is Swift, so it cannot ride along in the goreleaser run on
-  # linux: a Mac builds it, universal, and attaches the zip to the release the
-  # job above created.
+  # The menu bar app is Swift and the npm package carries it, so both happen on
+  # a Mac — goreleaser runs on linux and cannot build either. The CLI archives
+  # are fetched back from the release it just published.
   menubar:
     needs: release
     runs-on: macos-latest
@@ -76,6 +64,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: https://registry.npmjs.org
+
       - name: Build the menu bar app (universal)
         run: make dist-miq
 
@@ -83,3 +76,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" dist/niq_menubar_darwin_universal.zip --clobber
+
+      - name: Fetch the CLI archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$GITHUB_REF_NAME" --dir dist --pattern 'niq_*' --clobber
+
+      # Subpackages first, then the main package — which now carries miq and
+      # niq.app alongside the JS shim.
+      - name: Publish npm packages
+        run: ./app/publish/npm/publish-npm.sh "${GITHUB_REF_NAME#v}" ./dist
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

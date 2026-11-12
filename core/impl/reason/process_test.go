@@ -1,6 +1,7 @@
 package reason
 
 import (
+	"context"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -14,6 +15,8 @@ import (
 // Tests for process.go's event-to-input translation: DefaultConverter,
 // resultOutcome, and convertEvent's source-filtered converter selection.
 // (EventPattern.Matches semantics are tested in core/event.)
+// Watchdog fallback: a round timeout the mechanism arms itself is covered in
+// capability_test (arming) and TestWatchdogFireParksTheUnansweredCall below.
 
 // TestDefaultConverterText verifies a payload with a "text" field produces a
 // user message leading with that text (without repeating the payload).
@@ -233,6 +236,31 @@ func TestLateToolResult(t *testing.T) {
 	if len(last.Content) < 2 || !strings.Contains(last.Content[1].Text, "late-out") {
 		t.Fatalf("late message should carry the outcome, got %+v", last.Content)
 	}
+}
+
+// TestWatchdogFireParksTheUnansweredCall pins the payoff of the round watchdog:
+// when it fires, the leftover wait is parked (cause=timeout) and the next round
+// runs — a request that never answers can no longer leave the worker waiting
+// forever with nothing to wake it.
+func TestWatchdogFireParksTheUnansweredCall(t *testing.T) {
+	w, ch, _ := startWorker(t, &staticProvider{})
+	announceCaps(w, "timer", "timer", "timeout")
+	announceCaps(w, "workspace", "workspace", "bash")
+
+	// Dispatch a call that will never be answered.
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace__bash"},
+	}, "trace1")
+	watchdog := w.activeTimeout
+	if watchdog == "" {
+		t.Fatal("watchdog was not armed for the pending call")
+	}
+
+	// The timer worker fires the armed timer.
+	ch.in <- event.New(TypeTimerTimeout, "timer", map[string]any{timerIDField: watchdog})
+
+	waitCond(t, testTimeout, w.requestTracker.Resolved, "leftover wait parked after the watchdog fired")
 }
 
 // TestLateToolResultWakesReason verifies a late result for a call that an input

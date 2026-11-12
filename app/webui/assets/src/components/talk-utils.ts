@@ -284,6 +284,32 @@ export function toolContent(evt: EventPayload, formatted: boolean): string {
   return format(args)
 }
 
+// toolSource returns the program source a code-running tool call carries. The
+// bus puts it in `source`; some callers spell it `script`. A tool card shows
+// that as code, not as an escaped one-line string inside JSON — it is the
+// interesting half of a `run` call, and it is what a reader scans for.
+export function toolSource(evt: EventPayload): string {
+  // Only the code-running tool: other calls can legitimately carry a `source`
+  // argument (a file to copy, an import path) that must stay in the JSON.
+  if (isToolResult(evt.type) || (evt.type !== 'run' && !evt.type.endsWith('.run'))) return ''
+  const p = evt.payload || {}
+  const src = p.source ?? p.script
+  return typeof src === 'string' ? src : ''
+}
+
+// toolArgs is the invocation's payload minus the source: the leftover knobs
+// (timeout, program name, ...) that still belong under the code.
+export function toolArgs(evt: EventPayload, formatted: boolean): string {
+  const p = evt.payload
+  if (!p) return ''
+  const rest: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(p)) {
+    if (k !== 'source' && k !== 'script') rest[k] = v
+  }
+  if (Object.keys(rest).length === 0) return ''
+  return formatted ? JSON.stringify(rest, null, 2) : JSON.stringify(rest)
+}
+
 // formatContentBlocks renders a multi-modal reply without dumping base64: text
 // blocks are joined, other blocks are summarized (the full payload is still in
 // the event log).

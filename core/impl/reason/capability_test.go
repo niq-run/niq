@@ -352,6 +352,101 @@ func TestOwnCapabilitiesDeclareResponse(t *testing.T) {
 	}
 }
 
+// announceCaps makes a peer's capabilities discoverable, as its worker.ready
+// broadcast would.
+func announceCaps(w *BaseReasonWorker, id, typ string, events ...string) {
+	watch := make([]map[string]any, 0, len(events))
+	for _, e := range events {
+		watch = append(watch, map[string]any{"event": e})
+	}
+	w.HandleWorkerReady(event.New(event.TypeWorkerReady, id, map[string]any{
+		"worker_id": id,
+		"type":      typ,
+		"watch":     watch,
+	}))
+}
+
+// TestRoundWatchdogArmedWhenModelOmitsTimeout pins the fallback for a silent
+// stall: when a round dispatches work without the model arming a timeout, the
+// mechanism arms one itself. Otherwise an unanswered request would leave the
+// worker waiting with no event that could ever wake it.
+func TestRoundWatchdogArmedWhenModelOmitsTimeout(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+	announceCaps(w, "timer", "timer", "timeout", "elapse")
+	announceCaps(w, "workspace", "workspace", "bash")
+
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace__bash"},
+	}, "trace1")
+
+	if w.activeTimeout == "" {
+		t.Fatal("no watchdog armed: an unanswered request would stall the worker")
+	}
+	if w.activeTimeoutProvider != "timer" {
+		t.Fatalf("activeTimeoutProvider = %q, want timer", w.activeTimeoutProvider)
+	}
+	evts := ch.eventsOf(event.EventType(timeoutTool))
+	if len(evts) != 1 {
+		t.Fatalf("watchdog timeout events = %d, want 1", len(evts))
+	}
+	if evts[0].RequestId != w.activeTimeout {
+		t.Fatalf("timer id = %q, want the armed id %q", evts[0].RequestId, w.activeTimeout)
+	}
+	if ms, _ := evts[0].Payload["duration_ms"].(int64); ms != watchdogTimeout.Milliseconds() {
+		t.Fatalf("duration_ms = %v, want %d", evts[0].Payload["duration_ms"], watchdogTimeout.Milliseconds())
+	}
+}
+
+// TestRoundWatchdogRespectsModelArmedTimeout pins that an explicit choice wins:
+// a round whose model called the timeout tool must not get a second timer armed
+// over it, nor have its id replaced.
+func TestRoundWatchdogRespectsModelArmedTimeout(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+	announceCaps(w, "timer", "timer", "timeout", "elapse")
+	announceCaps(w, "workspace", "workspace", "bash")
+
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "timer__timeout",
+			ToolArguments: `{"duration_ms":1000}`},
+		{Type: llm.ContentToolCall, ToolCallID: "c2", ToolName: "workspace__bash"},
+	}, "trace1")
+
+	if w.activeTimeout != "c1" {
+		t.Fatalf("activeTimeout = %q, want the model's call id c1", w.activeTimeout)
+	}
+	if evts := ch.eventsOf(event.EventType(timeoutTool)); len(evts) != 1 {
+		t.Fatalf("timer events = %d, want only the model's one: %+v", len(evts), evts)
+	}
+}
+
+// TestRoundWatchdogNeedsTimeoutProvider pins the honest limit: with no peer
+// offering the timeout capability there is nothing to arm, so no event is sent
+// and the call stays awaited (a waking event must still come from somewhere).
+func TestRoundWatchdogNeedsTimeoutProvider(t *testing.T) {
+	ch := newTestChannel()
+	w := newTestWorker(nil, ch)
+	announceCaps(w, "workspace", "workspace", "bash")
+
+	w.mu.Lock()
+	w.handleToolCalls(context.Background(), []llm.ContentBlock{
+		{Type: llm.ContentToolCall, ToolCallID: "c1", ToolName: "workspace__bash"},
+	}, "trace1")
+
+	if w.activeTimeout != "" {
+		t.Fatalf("activeTimeout = %q, want none without a timeout provider", w.activeTimeout)
+	}
+	if evts := ch.eventsOf(event.EventType(timeoutTool)); len(evts) != 0 {
+		t.Fatalf("watchdog armed without a provider: %+v", evts)
+	}
+	if w.requestTracker.Resolved() {
+		t.Fatal("the dispatched call must stay awaited until a reply or a timeout")
+	}
+}
+
 // TestRequestRoutedTimeoutArmsRoundTimer pins that the timeout convention does
 // not depend on the tool-list policy: with the timer worker's tools hidden
 // (request-only), a request(target, "timeout") still arms the round timer, so a

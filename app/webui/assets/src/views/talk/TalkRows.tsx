@@ -2,7 +2,7 @@
 // right-alignment rule, the trailing run markers, and the per-event-type
 // dispatch to the row components. TalkView hands it the scoped events plus the
 // resolved per-request lookups; this module turns them into the row list.
-import { useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useLayoutEffect, useRef, useState } from 'react'
 import { fontSizes } from '../../theme'
 import {
   isReasonBoundary, isToolEvent, isToolInvocation, isToolResult, toolCallId,
@@ -108,15 +108,26 @@ function TrailMarker({ workerId, usage, ctx }: { workerId: string; usage?: Usage
 // mode folds away, so a turn reads as input → [12 process events] → response.
 const KEEP_VISIBLE = new Set(['worker.input', 'reason.response', 'approval.request', 'worker.abort', 'timer.timeout'])
 
-// ProcessGroup is the collapsed stand-in for a run of process rows: one chip
-// that names what was folded, expandable in place. It never hides the run's
-// trailing speaker marker (that rides below the chip when collapsed), so the
-// block still says whose output it was.
-function ProcessGroup({ count, tools, thinking, other, open, badge, onToggle, children, ctx }: {
-  count: number
+// A foldable run: consecutive process rows from ONE speaker on ONE side. Both
+// halves matter — a right-aligned program event wedged between two left-side
+// reason rows is its own block, not something the left chip can swallow, and a
+// run never straddles a speaker change because its chip shows a single badge.
+interface RowRun {
+  rows: number[]
+  ids: string[]
+  workerId: string
+  alignRight: boolean
   tools: number
   thinking: number
   other: number
+}
+
+// ProcessGroup is the folded stand-in for a run: one chip naming what was
+// folded, expandable in place. Because a run is one speaker on one side, the
+// chip's badge and its edge are unambiguous; the run's trailing marker still
+// renders below the chip when folded, so the block keeps its speaker hint.
+function ProcessGroup({ run, open, badge, onToggle, children, ctx }: {
+  run: RowRun
   open: boolean
   // The run's opening speaker badge, shown only while folded: expanded, the
   // first row renders its own.
@@ -127,9 +138,9 @@ function ProcessGroup({ count, tools, thinking, other, open, badge, onToggle, ch
 }) {
   const { colors, t } = ctx
   const detail = [
-    tools > 0 ? t('talk.processGroup.tools', { n: tools }) : '',
-    thinking > 0 ? t('talk.processGroup.thinking', { n: thinking }) : '',
-    other > 0 ? t('talk.processGroup.other', { n: other }) : '',
+    run.tools > 0 ? t('talk.processGroup.tools', { n: run.tools }) : '',
+    run.thinking > 0 ? t('talk.processGroup.thinking', { n: run.thinking }) : '',
+    run.other > 0 ? t('talk.processGroup.other', { n: run.other }) : '',
   ].filter(Boolean).join(' · ')
   return (
     // Full-width wrapper, NOT capped at bubbleMax: the rows inside carry their
@@ -138,12 +149,18 @@ function ProcessGroup({ count, tools, thinking, other, open, badge, onToggle, ch
     <div style={{ marginBottom: 12, width: '100%', minWidth: 0 }}>
       {badge}
       <div
+        // A block, not background: the timeline's click-away rule leaves
+        // anything inside [data-block] alone, so folding a run never wipes the
+        // tool card the reader had open.
+        data-block=""
         onClick={(e) => onToggle(e.currentTarget)}
         role="button"
         className="btn-hover"
         title={open ? t('talk.processGroup.collapse') : t('talk.processGroup.expand')}
         style={{
           display: 'flex', alignItems: 'center', gap: 8, width: '100%', maxWidth: ctx.bubbleMax, boxSizing: 'border-box',
+          // A right-side run's chip sits on the right, where its rows would be.
+          marginLeft: run.alignRight ? 'auto' : undefined,
           cursor: 'pointer', userSelect: 'none',
           background: colors.bgLight, border: '1px solid ' + colors.border, borderRadius: 2,
           padding: '4px 10px', fontSize: fontSizes.xs, lineHeight: '18px', color: colors.textDim,
@@ -162,7 +179,7 @@ function ProcessGroup({ count, tools, thinking, other, open, badge, onToggle, ch
             transition: 'transform 0.12s',
           }}
         />
-        <span style={{ flexShrink: 0 }}>{t('talk.processGroup', { n: count })}</span>
+        <span style={{ flexShrink: 0 }}>{t('talk.processGroup', { n: run.rows.length })}</span>
         {detail && <span style={{ color: colors.textDimmed, marginLeft: 'auto', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{detail}</span>}
       </div>
       {open && <div style={{ marginTop: 6 }}>{children}</div>}
@@ -171,10 +188,11 @@ function ProcessGroup({ count, tools, thinking, other, open, badge, onToggle, ch
 }
 
 export default function TalkRows({ relevantEvents, allEvents, responseOnly, talkWorkers, resultByRequestId, decisionByRequestId, toolPartials, ctx }: TalkRowsProps) {
-  // Which collapsed groups the reader has opened, keyed by the group's first
-  // event id (stable across live appends). Purely local: reopening the view
-  // starts folded again.
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
+  // The rows the reader has unfolded. A set of event ids rather than one flag
+  // per "group head": a run grows, shrinks and can gain a row at its head when
+  // a late event lands, so its identity is the ids it contains — any of them
+  // being here keeps the run open. Purely local; reopening the view folds again.
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set())
   // Folding/unfolding changes the timeline height by however tall the group is
   // (a big tool list is thousands of pixels), and the chip loses its badge above
   // it when it opens. Keep the chip the finger is on where it was: one row
@@ -239,21 +257,6 @@ export default function TalkRows({ relevantEvents, allEvents, responseOnly, talk
     }
   }
 
-  // Every run of consecutive process rows folds, down to a single row: with the
-  // switch on, the very first thinking/tool event of a turn already arrives as
-  // a folded chip. Waiting for a second row to appear would show that first row
-  // expanded and then snap it shut a moment later while the turn streams in.
-  const runEnd: Record<number, number> = {}
-  if (ctx.collapseEvents) {
-    for (let i = 0; i < rowFacts.length; ) {
-      if (KEEP_VISIBLE.has(rowFacts[i].evt.type)) { i++; continue }
-      let j = i
-      while (j + 1 < rowFacts.length && !KEEP_VISIBLE.has(rowFacts[j + 1].evt.type)) j++
-      runEnd[i] = j
-      i = j + 1
-    }
-  }
-
   const renderRow = (i: number, suppressBadge = false): React.ReactNode => {
     const { evt, alignRight } = rowFacts[i]
     const showBadge = rowFacts[i].showBadge && !suppressBadge
@@ -286,65 +289,99 @@ export default function TalkRows({ relevantEvents, allEvents, responseOnly, talk
   }
 
   // The speaker marker closes a run; it travels with whatever ends the run, so
-  // a collapsed group keeps it too (below the chip) rather than swallowing it.
+  // a collapsed run keeps it too (below the chip) rather than swallowing it.
   const trailFor = (i: number): React.ReactNode => {
     const trail = trails[i]
     if (!trail || rowFacts[i].alignRight) return null
     return <TrailMarker key={rowFacts[i].evt.id + '-trail'} workerId={trail} usage={trailUsage[i]} ctx={ctx} />
   }
 
-  const nodes: React.ReactNode[] = []
-  for (let i = 0; i < rowFacts.length; i++) {
-    const end = runEnd[i]
-    if (end !== undefined) {
-      const key = rowFacts[i].evt.id
-      const open = !!openGroups[key]
-      let tools = 0, thinking = 0, other = 0
-      const inner: React.ReactNode[] = []
-      for (let j = i; j <= end; j++) {
-        switch (rowFacts[j].evt.type) {
-          case 'reason.thinking':
-            thinking++
-            break
-          case 'reason.interrupted':
-          case 'request.cancel':
-            other++
-            break
-          default:
-            tools++
-        }
-        if (open) {
-          inner.push(renderRow(j, j === i), trailFor(j))
+  // The timeline is a list of blocks: a single row, or a foldable run. One pass
+  // decides the split AND the run's summary, so the render loop never re-counts
+  // — and the run's boundaries (`fold` below) are the whole grouping rule.
+  const blocks: ({ kind: 'row'; index: number } | { kind: 'run'; run: RowRun })[] = []
+  {
+    let run: RowRun | null = null
+    const flush = () => {
+      if (run) blocks.push({ kind: 'run', run })
+      run = null
+    }
+    for (let i = 0; i < rowFacts.length; i++) {
+      const f = rowFacts[i]
+      const fold = ctx.collapseEvents && !KEEP_VISIBLE.has(f.evt.type)
+      if (!fold) {
+        flush()
+        blocks.push({ kind: 'row', index: i })
+        continue
+      }
+      if (run && (run.alignRight !== f.alignRight || run.workerId !== f.evt.worker_id)) flush()
+      if (!run) {
+        run = {
+          rows: [], ids: [], workerId: f.evt.worker_id, alignRight: f.alignRight,
+          tools: 0, thinking: 0, other: 0,
         }
       }
-      const head = rowFacts[i]
+      run.rows.push(i)
+      run.ids.push(f.evt.id)
+      if (f.evt.type === 'reason.thinking') run.thinking++
+      else if (f.evt.type === 'reason.interrupted' || f.evt.type === 'request.cancel') run.other++
+      else run.tools++
+    }
+    flush()
+  }
+
+  const runOpen = (run: RowRun) => run.ids.some(id => openIds.has(id))
+  // Opening/closing writes every id in the run, so the state survives a run
+  // that gains a row at its head (a late event) or at its tail (live output).
+  const toggleRun = (run: RowRun) => setOpenIds(prev => {
+    const next = new Set(prev)
+    const open = run.ids.some(id => prev.has(id))
+    for (const id of run.ids) {
+      if (open) next.delete(id)
+      else next.add(id)
+    }
+    return next
+  })
+
+  const nodes: React.ReactNode[] = []
+  for (const block of blocks) {
+    if (block.kind === 'row') {
       nodes.push(
-        <ProcessGroup
-          key={key}
-          count={end - i + 1}
-          tools={tools}
-          thinking={thinking}
-          other={other}
-          open={open}
-          ctx={ctx}
-          badge={<RowBadge ctx={ctx} workerId={head.evt.worker_id} showBadge={head.showBadge} extraPad />}
-          onToggle={(chip) => {
-            const scroller = chip.closest('.' + TALK_SCROLL_CLASS) as HTMLElement | null
-            const following = !!scroller &&
-              scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= AT_BOTTOM_PX
-            const anchor = scroller && !following ? captureElementAnchor(chip, scroller) : null
-            anchorRef.current = scroller && anchor ? { scroller, anchor } : null
-            setOpenGroups((g) => ({ ...g, [key]: !g[key] }))
-          }}
-        >
-          {inner}
-        </ProcessGroup>,
+        <Fragment key={rowFacts[block.index].evt.id}>
+          {renderRow(block.index)}
+          {trailFor(block.index)}
+        </Fragment>,
       )
-      if (!open) nodes.push(trailFor(end))
-      i = end
       continue
     }
-    nodes.push(renderRow(i), trailFor(i))
+    const { run } = block
+    const head = run.rows[0]
+    const open = runOpen(run)
+    nodes.push(
+      <ProcessGroup
+        key={run.ids[0]}
+        run={run}
+        open={open}
+        ctx={ctx}
+        badge={<RowBadge ctx={ctx} workerId={run.workerId} showBadge={rowFacts[head].showBadge} alignRight={run.alignRight} extraPad />}
+        onToggle={(chip) => {
+          const scroller = chip.closest('.' + TALK_SCROLL_CLASS) as HTMLElement | null
+          const following = !!scroller &&
+            scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= AT_BOTTOM_PX
+          const anchor = scroller && !following ? captureElementAnchor(chip, scroller) : null
+          anchorRef.current = scroller && anchor ? { scroller, anchor } : null
+          toggleRun(run)
+        }}
+      >
+        {open && run.rows.map(j => (
+          <Fragment key={rowFacts[j].evt.id}>
+            {renderRow(j, j === head)}
+            {trailFor(j)}
+          </Fragment>
+        ))}
+      </ProcessGroup>,
+    )
+    if (!open) nodes.push(trailFor(run.rows[run.rows.length - 1]))
   }
   return <>{nodes}</>
 }

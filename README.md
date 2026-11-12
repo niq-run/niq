@@ -29,6 +29,11 @@ and scripts see only the SDK the worker injects — no `process`, `require`,
 npm install -g @niq.run/niq
 ```
 
+On macOS that installs three things: the `niq` command, `miq`, and `niq.app`
+(copied to `~/Applications`, so Spotlight and Finder see it). `miq` opens the
+menu bar app; it is the same menu whether you start it that way or by
+double-clicking the app.
+
 **Install script** (no npm; the binary goes to `~/.niq/bin`):
 
 ```sh
@@ -213,9 +218,12 @@ The `reason` worker talks to an LLM provider. Provider settings (endpoint, model
 The same report, one click away.
 
 ```sh
-make build-miq   # builds dist/niq.app and ./bin/miq
+make build miq   # builds dist/niq.app and ./bin/miq
 miq              # puts niq in the menu bar; running it again focuses it
 ```
+
+A `npm install -g @niq.run/niq` on macOS gives you all three already: `niq`,
+`miq`, and `niq.app` in `~/Applications`. `make build miq` is for a checkout.
 
 The icon is the web UI's logo as a template image: a tile in the menu bar's own
 text colour with the 品 knocked out of it. macOS draws templates white on a dark
@@ -234,10 +242,11 @@ needs right-click → Open (or `xattr -d com.apple.quarantine niq.app`).
 It refreshes itself when the menu opens, so there is no Refresh item to
 remember. It is a front end, not a second implementation: the status comes from
 `niq status --json`, every action is a `niq` command (`niq project restart <id>`,
-`niq restart -p`, …), so the app cannot drift from the CLI. `miq` finds the
-bundle through `NIQ_APP`, `~/Applications`, `/Applications`, or the checkout it
-was built in, and hands the app the `niq` next to it (`--niq <path>`), since a
-GUI launch does not inherit the shell's PATH.
+`niq restart -p`, …), so the app cannot drift from the CLI. `miq` is a shell
+script that finds the bundle beside itself first — the one this build produced —
+then `NIQ_APP`, `~/Applications` and `/Applications`, and hands the app the `niq`
+next to it (`--niq <path>`), since a GUI launch does not inherit the shell's
+PATH.
 
 ## Project layout
 
@@ -257,19 +266,25 @@ go build ./... && go vet ./...
 go test ./core/impl/eventbus/ -count=1
 ```
 
-The WebUI bundle is committed (it is `go:embed`-ed). `make build-niq` rebuilds
-it from `app/webui/assets/src` before compiling the Go binary, so the binary
-never ships a stale UI. The commit still matters for `go build ./...`,
-`go test ./...` and the release workflow (goreleaser and CI do not run Node), so
-commit the rebuilt `app/webui/assets/dist` with the change:
+The WebUI bundle is committed (it is `go:embed`-ed), and `make build niq` takes
+it exactly as it is: rebuilding the SPA is its own step. A plain `make build`
+does both, in order — bundle, CLI, app. The commit still matters for
+`go build ./...`, `go test ./...` and the release workflow (goreleaser and CI do
+not run Node), so commit the rebuilt `app/webui/assets/dist` with the change:
 
 ```sh
-make build            # everything this machine can build
-make build-niq        # the CLI (rebuilds the SPA first)
-SKIP_WEBUI=1 make build-niq   # Go only, no SPA rebuild
-make build-miq        # the menu bar app
-make install          # links what is already built — it does not build
+make build              # everything this machine can build
+make build webui        # just the bundle
+make build niq          # just the CLI, embedding the bundle as it is
+make build niq webui    # the bundle, then the CLI
+make build miq          # the menu bar app
+make install            # links what is already built — it does not build
 ```
+
+The word after `build` is a target, not an argument — make runs both — so
+`make niq`, `make webui` and `make miq` work on their own too, and `make build`
+alone still means everything. Naming `niq` and `webui` together builds the
+bundle first whichever order you type them in.
 
 `make install` never builds: if `./bin/niq` is missing it says so and stops, so
 an install cannot quietly turn into a long npm/vite run.

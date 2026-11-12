@@ -15,9 +15,11 @@ package reason
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
@@ -283,6 +285,13 @@ const (
 	timerIDField = "timer_id"
 )
 
+// watchdogTimeout is how long a round may wait for its dispatched requests
+// before the mechanism gives up on them on the model's behalf. It is not a
+// per-tool policy: it only bounds the case where no reply of any kind arrives
+// (see armRoundWatchdog), so it is deliberately generous — longer than any
+// tool's own default (a script program run, for instance, is capped at 120s).
+const watchdogTimeout = 10 * time.Minute
+
 // invokeCapability puts one capability invocation on the bus: the capability's
 // own event type, caller = this worker, directed to target, echoing requestID
 // (empty = notification) and traceID. The single place a capability invocation
@@ -319,6 +328,34 @@ func (w *BaseReasonWorker) invokeElapseReminder(durationMS int64, purpose, reque
 		"duration_ms": durationMS,
 		"purpose":     purpose,
 	}, requestID, traceID)
+}
+
+// armRoundWatchdog arms the round's tool-call timeout from the mechanism side.
+// The model is expected to arm it itself (a `provider__timeout` tool call, or a
+// request routed to event `timeout`), but it may not — it can simply forget, or
+// a narrowed tool list can hide the tool. A peer that never answers would then
+// leave this worker waiting forever: nothing is pending in its own state, so it
+// has no event coming that would wake it (Resolved gates both the next round and
+// schedule-mode input). Whenever a round dispatched work without a timeout
+// already set, arm one here so an unanswered request always resolves as a
+// timeout instead of a silent stall. The synthesized call id becomes the timer
+// id, exactly as a model-armed call's own id would.
+//
+// Requires w.mu held. Absent a peer offering the timeout capability there is
+// nothing to arm — that absence is logged, and the round waits for its replies.
+func (w *BaseReasonWorker) armRoundWatchdog(traceID string) {
+	provider, ok := w.findProvider(timeoutTool)
+	if !ok {
+		log.Printf("[reason %s] no peer offers the %q capability; round watchdog not armed", w.ID(), timeoutTool)
+		return
+	}
+	callID := fmt.Sprintf("niq_wd_%d", time.Now().UnixNano())
+	w.activeTimeout = callID
+	w.activeTimeoutProvider = provider
+	w.invokeCapability(context.Background(), timeoutTool, provider, map[string]any{
+		"duration_ms": watchdogTimeout.Milliseconds(),
+		"purpose":     "round watchdog: no reply from the dispatched request(s)",
+	}, callID, traceID)
 }
 
 // --- outbound presence ------------------------------------------------------

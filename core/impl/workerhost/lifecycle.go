@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"sort"
 	"sync"
 
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -38,19 +39,24 @@ type workerEntry struct {
 // or subscriptions — it only knows about worker.SpawnSpec, ManagedWorker and
 // lifecycle operations.
 type WorkerService struct {
-	entries   []workerEntry
-	builders  map[string]Builder
-	store     WorkerStore     // optional; nil disables persistence
-	protected map[string]bool // essential worker ids: cannot be suspended/destroyed
-	onSpawn   func(cfg worker.WorkerConfig) error
-	mu        sync.Mutex
+	entries  []workerEntry
+	builders map[string]Builder
+	// paramChecks is the per-type spawn-parameter validator, registered next to
+	// the builder: "which parameters this type reads" is type knowledge the
+	// mechanism does not have.
+	paramChecks map[string]func(params map[string]any) error
+	store       WorkerStore     // optional; nil disables persistence
+	protected   map[string]bool // essential worker ids: cannot be suspended/destroyed
+	onSpawn     func(cfg worker.WorkerConfig) error
+	mu          sync.Mutex
 }
 
 // New creates an empty WorkerService.
 func New() *WorkerService {
 	return &WorkerService{
-		builders:  make(map[string]Builder),
-		protected: map[string]bool{},
+		builders:    make(map[string]Builder),
+		paramChecks: make(map[string]func(map[string]any) error),
+		protected:   map[string]bool{},
 	}
 }
 
@@ -79,14 +85,56 @@ func (s *WorkerService) RegisterBuilder(typ string, b Builder) {
 	s.builders[typ] = b
 }
 
+// RegisterParamCheck registers the spawn-parameter validator for a worker type.
+// It is registered next to its builder because the valid set is that type's own
+// knowledge. CreateWorker runs it before building, so a caller learns that a
+// parameter would be ignored instead of receiving a worker that quietly does not
+// do what was asked. Recovery (RestoreAndRun / RestoreSuspended) deliberately
+// skips it: a declaration already accepted must not be stranded by a stricter
+// check added later.
+func (s *WorkerService) RegisterParamCheck(typ string, check func(params map[string]any) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.paramChecks[typ] = check
+}
+
+// paramCheck returns the registered validator for typ, or nil.
+func (s *WorkerService) paramCheck(typ string) func(map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.paramChecks[typ]
+}
+
+// RegisteredTypes returns the worker types this service can build, sorted. It
+// is the set CreateWorker accepts; the assembly layer uses it to keep its
+// per-type knowledge (such as spawn-parameter validation) in step with the
+// builders it registered.
+func (s *WorkerService) RegisteredTypes() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	types := make([]string, 0, len(s.builders))
+	for typ := range s.builders {
+		types = append(types, typ)
+	}
+	sort.Strings(types)
+	return types
+}
+
 // CreateWorker builds and starts a worker from a serializable config. It
-// dispatches to the registered builder for cfg.Type, then spawns it.
+// dispatches to the registered builder for cfg.Type, then spawns it. The type's
+// spawn-parameter check runs first, so an unsupported parameter fails here
+// rather than being silently dropped by the builder.
 func (s *WorkerService) CreateWorker(ctx context.Context, cfg worker.WorkerConfig) error {
 	s.mu.Lock()
 	b, ok := s.builders[cfg.Type]
 	s.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("workerhost: no builder for type %q", cfg.Type)
+	}
+	if check := s.paramCheck(cfg.Type); check != nil {
+		if err := check(cfg.Params); err != nil {
+			return fmt.Errorf("workerhost: build %q: %w", cfg.ID, err)
+		}
 	}
 	spec, err := b(cfg)
 	if err != nil {

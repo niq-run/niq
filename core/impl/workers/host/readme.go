@@ -50,5 +50,9 @@ worker who exists) and not the project's declarations.
 
 - Host manages lifecycles only: it does not list, search or delete workers.
 - Spawn is a normal tool, not a privileged API; a reason worker may spawn peers.
+- Spawn parameters are checked per type: a key the type does not read fails the
+  call and the error lists what it accepts. ` + "`prompt`" + ` is not a reason
+  argument — a reason worker's standing instructions are ` + "`instruction`" + `, its
+  mission ` + "`goal`" + `. Ask worker.help for the type before a non-trivial spawn.
 - worker.readme (this text) and worker.help (one event's guide) are generic bus
   conventions: every worker may serve either.`

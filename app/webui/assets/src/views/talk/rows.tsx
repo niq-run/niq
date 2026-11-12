@@ -12,7 +12,7 @@ import ThinkingBlock from '../../components/ThinkingBlock'
 import ResponseBlock from '../../components/ResponseBlock'
 import SystemReminderBlock from '../../components/SystemReminderBlock'
 import {
-  isToolResult, toolContent, toolSummary,
+  isToolResult, toolContent, toolSummary, toolSource, toolArgs,
   formatTime, findReferencedInput, splitSystemReminder, inputContent,
 } from '../../components/talk-utils'
 import type { EventPayload } from '../../types'
@@ -296,8 +296,24 @@ function ToolRowImpl({ evt, alignRight, showBadge, resultEvt, partial, ctx }: { 
   const isExpanded = ctx.openToolId === evt.id
   const content = toolContent(evt, isExpanded)
   const mergedResult = resultEvt ? toolContent(resultEvt, isExpanded) : ''
-  const displayContent = mergedResult ? (content ? content + '\n\n—— result ——\n\n' + mergedResult : mergedResult) : content
-  const contentLen = toolContent(evt, false).length + (resultEvt ? toolContent(resultEvt, false).length : 0)
+  // A code-running call (`run`) is read as code: its source is the body, the
+  // remaining payload is arguments, and the reply is the result. Everything
+  // else is still an argument object. One ordered list, one renderer.
+  const source = toolSource(evt)
+  const args = source ? toolArgs(evt, isExpanded) : ''
+  const sections: { label?: string; code: string; language: string }[] = []
+  if (source) {
+    sections.push({ code: source, language: 'javascript' })
+    if (args) sections.push({ label: t('talk.arguments'), code: args, language: 'json' })
+    if (mergedResult) sections.push({ label: t('talk.result'), code: mergedResult, language: 'json' })
+  } else if (resultEvt) {
+    sections.push({ label: t('talk.arguments'), code: content, language: 'json' })
+    sections.push({ label: t('talk.result'), code: mergedResult, language: 'json' })
+  } else if (content) {
+    sections.push({ code: content, language: 'json' })
+  }
+  const contentLen = (source || toolContent(evt, false)).length +
+    (resultEvt ? toolContent(resultEvt, false).length : 0)
   const summary = toolSummary(evt)
   const statusColor = resultEvt
     ? resultEvt.type === 'request.completed' ? colors.toolCompleted
@@ -362,21 +378,21 @@ function ToolRowImpl({ evt, alignRight, showBadge, resultEvt, partial, ctx }: { 
             <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}>{formatTime(evt.timestamp)}</span>
           </div>
         )}
-        {isExpanded && displayContent && (
-          <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
-            {resultEvt ? (
-              <>
-                <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('talk.arguments')}</div>
-                <CollapsibleCode code={content} language="json" />
-                <div style={{ margin: '10px 0 6px', height: 1, background: dark ? 'rgba(128,128,128,0.25)' : 'rgba(128,128,128,0.18)' }} />
-                <div style={{ fontSize: fontSizes.xs, color: resultEvt.type === 'request.failed' ? colors.toolFailed : resultEvt.type === 'request.rejected' ? colors.textDimmed : colors.toolCompleted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('talk.result')}</div>
-                <CollapsibleCode code={mergedResult} language="json" />
-              </>
-            ) : (
-              <CollapsibleCode code={content} language="json" />
+        {isExpanded && sections.map((sec, i) => (
+          <div
+            key={i}
+            style={{
+              marginTop: i === 0 ? 6 : 10,
+              paddingTop: i === 0 ? 6 : 10,
+              borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)'),
+            }}
+          >
+            {sec.label && (
+              <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{sec.label}</div>
             )}
+            <CollapsibleCode code={sec.code} language={sec.language} />
           </div>
-        )}
+        ))}
         {partialText && (
           <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid ' + (dark ? 'rgba(128,128,128,0.2)' : 'rgba(128,128,128,0.15)') }}>
             <CollapsibleCode code={partialText} language="json" />

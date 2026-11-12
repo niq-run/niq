@@ -27,7 +27,7 @@ func (w *HostWorker) registerExtensions() {
 	w.Register(baseworker.Extension{
 		Event:       TypeSpawn,
 		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"created"}}, "type": map[string]any{"type": "string"}}),
-		Description: "Create a new worker. Type determines worker kind (reason, workspace, ...). Type-specific arguments (e.g. path, provider, model, programs, events) are passed as top-level properties.",
+		Description: "Create a new worker. Type determines worker kind (reason, workspace, ...). Type-specific arguments (e.g. path, provider, model, programs, events) are passed as top-level properties. Parameters are validated per type: one the type does not read fails the call and the error lists what that type accepts, so a mistake is not silently ignored.",
 		Parameters: obj(map[string]any{
 			"type": map[string]any{
 				"type":        "string",

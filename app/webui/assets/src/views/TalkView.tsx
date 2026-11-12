@@ -315,13 +315,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
           onPointerDown={markManual}
           onTouchStart={markManual}
           onClick={(e) => {
-            // A click anywhere outside a card closes the open ones: tool cards
-            // are a single-open accordion, approvals are their own set. The
-            // test is "did this land in a card", not "was this the scroller" —
-            // the latter only matched the padding and row wrappers, so blank
-            // space anywhere else (to the right of a bubble, between rows) did
-            // nothing. Clicks inside a card are left alone: its header toggles
-            // it and its body must stay selectable.
+            // Any click outside a block closes the open ones: tool cards are a
+            // single-open accordion, approvals their own set. A "block" is
+            // anything that owns its clicks — cards, and a folded run's chip
+            // (data-block) — so folding a run never wipes the card the reader
+            // had open. Everything else is background: to the right of a
+            // bubble, between rows, the padding.
             if (expandedContent.size === 0 && openToolId === null) return
             const el = e.target as Element
             if (el?.closest?.('[data-block]')) return
