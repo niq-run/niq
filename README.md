@@ -192,16 +192,17 @@ authenticates every connection with a signed worker token.
 niq --addr :9527 --auth alice:s3cret
 ```
 
-A non-loopback bind requires credentials. With basic auth configured, requests
-from any non-loopback address are answered with a 401 until they authenticate,
-while requests from the machine itself stay password-free. `--auth` (control
-plane) and `--webui-auth` (a project started by hand) persist to and read from
-the same `~/.niq/common/auth.json`, so one pair of credentials covers everything.
+A non-loopback bind is not required to have credentials — auth is opt-in. With
+basic auth configured, requests from any non-loopback address are answered with
+a 401 until they authenticate, while requests from the machine itself stay
+password-free. `--auth` (control plane) and `--webui-auth` (a project started by
+hand) persist to and read from the same `~/.niq/common/auth.json`, so one pair
+of credentials covers everything.
 
-Without credentials niq refuses to start on a remote-reachable address: it never
-serves another machine anonymously. If an unconfigured server is somehow reached
-from a non-loopback address anyway, the request is rejected (403) rather than
-served.
+With no credentials configured the server enforces nothing: every caller that
+can reach it is served. That is why the control plane listens on loopback by
+default — pass an explicit `--addr` (and, ideally, `--auth`) to accept remote
+connections.
 
 Basic auth sends the credentials on every request, so terminate TLS in front (or
 tunnel through SSH/WireGuard) before exposing niq to the open internet — niq

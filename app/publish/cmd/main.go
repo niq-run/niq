@@ -109,7 +109,7 @@ func runControl(args []string) error {
 		args = args[1:]
 	}
 	fs := flag.NewFlagSet("niq", flag.ContinueOnError)
-	addr := fs.String("addr", defaultAddr, "Control-plane listen address (non-loopback requires --auth or auth.json)")
+	addr := fs.String("addr", defaultAddr, "Control-plane listen address (a non-loopback bind is unauthenticated unless --auth is set)")
 	auth := fs.String("auth", "", "Basic auth 'user:pass' for non-localhost access; persists to ~/.niq/common/auth.json (empty = read that file)")
 	foreground := fs.Bool("foreground", false, "Run attached to this terminal instead of in the background")
 	fs.BoolVar(foreground, "f", false, "Shorthand for --foreground")
@@ -215,7 +215,7 @@ func runProject(args []string) error {
 	case len(args) >= 2 && args[0] == "run":
 		id := args[1]
 		busAddr := fs.String("bus", "", "httptrans bus listen address (empty reuses the project's persisted port)")
-		webUIAddr := fs.String("webui", "", "WebUI listen address (empty reuses the project's persisted port; non-loopback requires --webui-auth or auth.json)")
+		webUIAddr := fs.String("webui", "", "WebUI listen address (empty reuses the project's persisted port; a non-loopback bind is unauthenticated unless --webui-auth is set)")
 		webUIAuth := fs.String("webui-auth", "", "Basic auth 'user:pass' for non-localhost WebUI access; persists to ~/.niq/common/auth.json (empty = read that file)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
@@ -321,7 +321,7 @@ func printUsage() {
 
 	fmt.Printf("\n%s\n", bracketed("start flags"))
 	printUsageRows([][2]string{
-		{"--addr <host:port>", "listen address, default 127.0.0.1:9527; non-loopback requires --auth"},
+		{"--addr <host:port>", "listen address, default 127.0.0.1:9527; add --auth to protect a non-loopback bind"},
 		{"--auth <user:pass>", "basic auth for non-localhost access; saved to ~/.niq/common/auth.json"},
 	})
 
@@ -358,6 +358,6 @@ func printProjectUsage() {
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
 		{"niq project start|stop|restart <id>", "act on one instance, without the picker"},
 		{"niq project create <id> [--template <name>]", "create a project from a template"},
-		{"niq project run <id> [--bus :0] [--webui 127.0.0.1:0] [--webui-auth user:pass]", "run an instance in this terminal (a non-loopback --webui requires webui-auth)"},
+		{"niq project run <id> [--bus :0] [--webui 127.0.0.1:0] [--webui-auth user:pass]", "run an instance in this terminal (non-loopback webui is unauthenticated without webui-auth)"},
 	})
 }

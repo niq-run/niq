@@ -165,17 +165,16 @@ func runAssembly(opts assemblyOptions) error {
 	defer cancel()
 
 	// Resolve WebUI auth up front: enabling it when credentials are available,
-	// and failing closed when a remote-reachable bind has no auth configured.
-	// Loopback-only binds need no auth at all.
+	// and warning when a remote-reachable bind has no auth configured. Auth is
+	// opt-in: a loopback bind needs none, and an exposed bind without credentials
+	// is the operator's explicit choice.
 	var webUIAuthUser, webUIAuthPass string
 	var webUIAuthEnabled bool
 	if opts.WebUIAddr != "" {
 		user, pass, enabled, warning := webui.StartupAuth(opts.WebUIAddr, opts.WebUIAuth, webui.AuthPath())
 		webUIAuthUser, webUIAuthPass, webUIAuthEnabled = user, pass, enabled
 		if warning != "" {
-			// Same rule as the control plane: never serve a WebUI reachable from
-			// other machines without credentials.
-			return fmt.Errorf("project: %s", warning)
+			fmt.Fprintln(os.Stderr, warning)
 		}
 	}
 

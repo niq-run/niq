@@ -284,38 +284,25 @@ func TestBasicAuthNonLoopback(t *testing.T) {
 	}
 }
 
-// TestBasicAuthDisabledRejectsNonLoopback asserts an unconfigured server fails
-// closed: loopback stays open, but a remote peer is rejected instead of being
-// served anonymously. The answer is 403 (not 401) because no credential exists
-// that the client could present to satisfy a challenge.
-func TestBasicAuthDisabledRejectsNonLoopback(t *testing.T) {
+// TestBasicAuthUnconfiguredPassesThrough asserts auth is opt-in: with no
+// credentials configured the gate lets every caller through rather than forcing
+// a login the operator never asked for. Whether to expose an unauthenticated
+// server is the operator's call (the bind address is their choice), not the
+// server's.
+func TestBasicAuthUnconfiguredPassesThrough(t *testing.T) {
 	s := New(nil, nil, nil, nil, nil, ":0", false) // no credentials configured
 	hit := false
 	h := s.basicAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
 
-	// Same-machine access is still password-free.
-	req := httptest.NewRequest("GET", "/api/context", nil)
-	req.RemoteAddr = "127.0.0.1:5555"
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if !hit || rr.Code != http.StatusOK {
-		t.Fatalf("loopback: hit=%v code=%d, want served with 200", hit, rr.Code)
-	}
-
-	// A remote peer must not reach the handler when auth is unconfigured.
-	hit = false
-	req = httptest.NewRequest("GET", "/api/context", nil)
-	req.RemoteAddr = "203.0.113.7:5555"
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if hit {
-		t.Fatal("non-loopback: handler ran without configured auth (fail-open)")
-	}
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("non-loopback: code=%d, want 403", rr.Code)
-	}
-	if rr.Header().Get("WWW-Authenticate") != "" {
-		t.Fatal("unconfigured server must not send a challenge it cannot satisfy")
+	for _, remote := range []string{"127.0.0.1:5555", "203.0.113.7:5555"} {
+		hit = false
+		req := httptest.NewRequest("GET", "/api/context", nil)
+		req.RemoteAddr = remote
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if !hit || rr.Code != http.StatusOK {
+			t.Fatalf("peer %s: hit=%v code=%d, want pass-through 200", remote, hit, rr.Code)
+		}
 	}
 }
 

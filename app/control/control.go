@@ -33,8 +33,8 @@ import (
 
 // ControlOptions configures the control-plane service.
 type ControlOptions struct {
-	Addr string // default "127.0.0.1:9527"; a remote-reachable addr requires Auth
-	Auth string // optional user:pass basic-auth spec (required for non-localhost binds; empty reads the auth file)
+	Addr string // default "127.0.0.1:9527"; pass an explicit addr to accept remote connections
+	Auth string // optional user:pass basic-auth spec (protects non-localhost access; empty disables auth)
 	// OnReady, when set, runs once the listen socket is bound and before
 	// serving starts. It receives the resolved address (e.g. "[::]:9527") so a
 	// launcher can record where the daemon actually landed instead of guessing
@@ -52,17 +52,14 @@ func RunControl(opts ControlOptions) error {
 		log.Printf("[control] seed templates: %v", err)
 	}
 	c := NewControl(opts.Addr)
-	user, pass, enabled, warning := webui.StartupAuth(opts.Addr, opts.Auth, webui.AuthPath())
-	if enabled {
+	if user, pass, enabled, warning := webui.StartupAuth(opts.Addr, opts.Auth, webui.AuthPath()); enabled {
 		c.SetBasicAuth(user, pass)
 		log.Printf("[control] WebUI remote access protected with basic auth (localhost stays open)")
 	} else if warning != "" {
-		// Fail closed before binding: a remote-reachable address without
-		// credentials would answer every remote request with 403, and binding it
-		// first would briefly open a port nobody can use. Also log it, because a
-		// background start has no stderr to show.
+		// Auth is opt-in. Say clearly that an exposed bind is unauthenticated, and
+		// also put it in the service log: a background start has no stderr to show.
 		log.Printf("[control] %s", warning)
-		return fmt.Errorf("%s", warning)
+		fmt.Fprintln(os.Stderr, warning)
 	}
 	// Bind here rather than inside Start so OnReady can report the resolved
 	// address; Start reuses the already-bound listener.
@@ -95,8 +92,8 @@ type Control struct {
 }
 
 // NewControl creates a control-plane service bound to addr ("127.0.0.1:9527"
-// when empty). The default is loopback: exposing the control plane to other
-// machines requires an explicit --addr plus basic auth.
+// when empty). The default is loopback so a credential-less server stays on this
+// machine; passing an explicit addr is what exposes it.
 func NewControl(addr string) *Control {
 	if addr == "" {
 		addr = "127.0.0.1:9527"
@@ -113,23 +110,8 @@ func (c *Control) SetBasicAuth(user, pass string) {
 	c.authUser, c.authPass = user, pass
 }
 
-// validateAuthBinding refuses a remote-reachable bind with no basic auth:
-// loopback is the only address niq serves without credentials, so a wildcard or
-// LAN bind must be protected.
-func (c *Control) validateAuthBinding() error {
-	if webui.IsLocalOnlyAddr(c.addr) || webui.AuthEnabled(c.authUser, c.authPass) {
-		return nil
-	}
-	return fmt.Errorf("control: refusing to listen on %s without basic auth: pass --auth user:pass or bind loopback (127.0.0.1:9527)", c.addr)
-}
-
 // Bind binds the listen socket and returns the resolved host:port.
 func (c *Control) Bind() (string, error) {
-	// The guard lives here rather than in Start so no socket is ever opened for
-	// an address that cannot be served: Start binds through the same path.
-	if err := c.validateAuthBinding(); err != nil {
-		return "", err
-	}
 	if c.listener != nil {
 		return c.bound, nil
 	}
