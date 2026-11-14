@@ -1,8 +1,8 @@
-// Control-plane HTTP service: the fixed-port (default :9527) control plane a
-// user opens when no project is attached. It serves the same SPA in "control"
-// mode — project management only — and can start a project, which runs as its
-// own process on its own dynamically-assigned bus/WebUI ports; the user is then
-// redirected to the project's WebUI.
+// Control-plane HTTP service: the fixed-port (default 127.0.0.1:9527) control
+// plane a user opens when no project is attached. It serves the same SPA in
+// "control" mode — project management only — and can start a project, which
+// runs as its own process on its own dynamically-assigned bus/WebUI ports; the
+// user is then redirected to the project's WebUI.
 //
 // Project instances are not children of this process in any way that matters:
 // an instance is identified by the ports persisted in its project.json, so one
@@ -33,8 +33,8 @@ import (
 
 // ControlOptions configures the control-plane service.
 type ControlOptions struct {
-	Addr string // default ":9527"
-	Auth string // optional user:pass basic-auth spec (non-localhost access; empty disables)
+	Addr string // default "127.0.0.1:9527"; a remote-reachable addr requires Auth
+	Auth string // optional user:pass basic-auth spec (required for non-localhost binds; empty reads the auth file)
 	// OnReady, when set, runs once the listen socket is bound and before
 	// serving starts. It receives the resolved address (e.g. "[::]:9527") so a
 	// launcher can record where the daemon actually landed instead of guessing
@@ -52,13 +52,17 @@ func RunControl(opts ControlOptions) error {
 		log.Printf("[control] seed templates: %v", err)
 	}
 	c := NewControl(opts.Addr)
-	if user, pass, enabled, warning := webui.StartupAuth(opts.Addr, opts.Auth, webui.AuthPath()); enabled {
+	user, pass, enabled, warning := webui.StartupAuth(opts.Addr, opts.Auth, webui.AuthPath())
+	if enabled {
 		c.SetBasicAuth(user, pass)
 		log.Printf("[control] WebUI remote access protected with basic auth (localhost stays open)")
 	} else if warning != "" {
-		// Also into the service log: a background start has no stderr to show.
+		// Fail closed before binding: a remote-reachable address without
+		// credentials would answer every remote request with 403, and binding it
+		// first would briefly open a port nobody can use. Also log it, because a
+		// background start has no stderr to show.
 		log.Printf("[control] %s", warning)
-		fmt.Fprintln(os.Stderr, warning)
+		return fmt.Errorf("%s", warning)
 	}
 	// Bind here rather than inside Start so OnReady can report the resolved
 	// address; Start reuses the already-bound listener.
@@ -90,10 +94,12 @@ type Control struct {
 	authPass string
 }
 
-// NewControl creates a control-plane service bound to addr (":9527" when empty).
+// NewControl creates a control-plane service bound to addr ("127.0.0.1:9527"
+// when empty). The default is loopback: exposing the control plane to other
+// machines requires an explicit --addr plus basic auth.
 func NewControl(addr string) *Control {
 	if addr == "" {
-		addr = ":9527"
+		addr = "127.0.0.1:9527"
 	}
 	c := &Control{addr: addr}
 	c.proxy = c.newProjectProxy()
@@ -107,8 +113,23 @@ func (c *Control) SetBasicAuth(user, pass string) {
 	c.authUser, c.authPass = user, pass
 }
 
+// validateAuthBinding refuses a remote-reachable bind with no basic auth:
+// loopback is the only address niq serves without credentials, so a wildcard or
+// LAN bind must be protected.
+func (c *Control) validateAuthBinding() error {
+	if webui.IsLocalOnlyAddr(c.addr) || webui.AuthEnabled(c.authUser, c.authPass) {
+		return nil
+	}
+	return fmt.Errorf("control: refusing to listen on %s without basic auth: pass --auth user:pass or bind loopback (127.0.0.1:9527)", c.addr)
+}
+
 // Bind binds the listen socket and returns the resolved host:port.
 func (c *Control) Bind() (string, error) {
+	// The guard lives here rather than in Start so no socket is ever opened for
+	// an address that cannot be served: Start binds through the same path.
+	if err := c.validateAuthBinding(); err != nil {
+		return "", err
+	}
 	if c.listener != nil {
 		return c.bound, nil
 	}

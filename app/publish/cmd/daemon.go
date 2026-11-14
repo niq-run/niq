@@ -35,7 +35,9 @@ type controlState struct {
 }
 
 // defaultAddr is where the control plane listens unless --addr says otherwise.
-const defaultAddr = ":9527"
+// Loopback by default: exposing the plane to other machines is an explicit
+// choice that also requires basic auth.
+const defaultAddr = "127.0.0.1:9527"
 
 func controlStatePath() string { return filepath.Join(niqhome.Root(), "control.json") }
 

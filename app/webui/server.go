@@ -39,7 +39,6 @@ import (
 	workspaceBase "github.com/niq-run/niq/core/impl/workers/workspace"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 )
 
 //go:embed assets/dist/*
@@ -1961,12 +1960,12 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 }
 
 // parseWorkerRoles reads the ?role= multi values into worker-traffic roles
-// (store.RoleSent / store.RoleReceived). Unknown values are dropped; an empty
+// (event.RoleSent / event.RoleReceived). Unknown values are dropped; an empty
 // result means both roles match.
 func parseWorkerRoles(q url.Values) []string {
 	var roles []string
 	for _, r := range q["role"] {
-		if (r == store.RoleSent || r == store.RoleReceived) && !slices.Contains(roles, r) {
+		if (r == event.RoleSent || r == event.RoleReceived) && !slices.Contains(roles, r) {
 			roles = append(roles, r)
 		}
 	}
@@ -2061,9 +2060,9 @@ func (s *Server) basicAuth(next http.Handler) http.Handler {
 
 // BasicAuth wraps a handler with HTTP basic auth that applies only to
 // non-loopback clients: same-machine (loopback) access stays open, while
-// remote peers must present valid credentials. With no user/pass configured
-// the handler is a straight pass-through. Works for both the project WebUI and
-// the control-plane SPA.
+// remote peers must present valid credentials. With no user/pass configured,
+// non-loopback requests are rejected (403) instead of being served anonymously —
+// auth fails closed. Works for both the project WebUI and the control-plane SPA.
 func BasicAuth(user, pass string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !authGate(w, r, user, pass) {
@@ -2074,11 +2073,20 @@ func BasicAuth(user, pass string, next http.Handler) http.Handler {
 }
 
 // authGate reports whether the request may proceed; when it may not it has
-// already answered 401 with a challenge. Auth is disabled entirely without
-// configured credentials, and loopback peers are always let through.
+// already answered the client. Loopback peers are always let through. Remote
+// peers fail closed: without configured credentials they are refused outright,
+// so an unconfigured server never serves another machine by accident.
 func authGate(w http.ResponseWriter, r *http.Request, user, pass string) bool {
-	if !authEnabled(user, pass) || isLoopbackRemote(r.RemoteAddr) {
+	if isLoopbackRemote(r.RemoteAddr) {
 		return true
+	}
+	if !AuthEnabled(user, pass) {
+		// 403 rather than 401: no credential exists that the client could present,
+		// so a challenge would only trap the browser in a prompt loop.
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprintln(w, "remote access requires basic auth: restart with --auth user:pass (control) or --webui-auth user:pass (project), or bind a loopback address")
+		return false
 	}
 	gotUser, gotPass, ok := r.BasicAuth()
 	if !ok || !secureEqual(gotUser, user) || !secureEqual(gotPass, pass) {
@@ -2100,9 +2108,10 @@ func isLoopbackRemote(remoteAddr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// authEnabled reports whether basic auth has been configured (both a user and a
-// password must be present).
-func authEnabled(user, pass string) bool {
+// AuthEnabled reports whether basic auth has been configured (both a user and a
+// password must be present). Exported because the control plane and the project
+// runner refuse to bind a remote-reachable address without it.
+func AuthEnabled(user, pass string) bool {
 	return user != "" && pass != ""
 }
 

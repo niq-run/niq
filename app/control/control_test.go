@@ -73,6 +73,27 @@ func TestControlBasicAuthLoopbackOpen(t *testing.T) {
 	}
 }
 
+// TestControlRefusesRemoteBindWithoutAuth asserts the bind guard: loopback needs
+// no credentials, a remote-reachable bind does, so an unconfigured server can
+// never open a port it would answer with 403.
+func TestControlRefusesRemoteBindWithoutAuth(t *testing.T) {
+	for _, addr := range []string{"0.0.0.0:9527", ":9527", "[::]:9527", "192.168.1.10:9527"} {
+		if err := NewControl(addr).validateAuthBinding(); err == nil {
+			t.Fatalf("addr %q: expected refusal without auth", addr)
+		}
+	}
+	for _, addr := range []string{"127.0.0.1:9527", "127.0.0.1:0", "[::1]:9527"} {
+		if err := NewControl(addr).validateAuthBinding(); err != nil {
+			t.Fatalf("addr %q: loopback must be allowed: %v", addr, err)
+		}
+	}
+	c := NewControl("0.0.0.0:9527")
+	c.SetBasicAuth("alice", "s3cret")
+	if err := c.validateAuthBinding(); err != nil {
+		t.Fatalf("remote bind with auth must be allowed: %v", err)
+	}
+}
+
 func TestControlContextAndList(t *testing.T) {
 	setupProjectsRoot(t)
 	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {

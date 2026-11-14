@@ -79,10 +79,12 @@ func IsLocalOnlyAddr(addr string) bool {
 // the user to "niq") is persisted to the auth file and used immediately;
 // otherwise credentials are loaded from the file when present.
 //
-// It never blocks startup. enabled is false when no credentials are configured.
-// warning, when non-empty, is a user-facing note to print: it carries a
+// It never blocks startup by itself. enabled is false when no credentials are
+// configured. warning, when non-empty, is a user-facing note: it carries a
 // "local-only" notice when the server binds a remote-reachable address but no
-// auth is configured (so remote callers would be blocked until auth is set up).
+// auth is configured (remote callers are rejected with 403 until auth is set
+// up). Callers that bind remotely treat this warning as fatal and refuse to
+// start, so a misconfigured server is never exposed.
 func StartupAuth(addr, spec, path string) (user, pass string, enabled bool, warning string) {
 	if strings.TrimSpace(spec) != "" {
 		if u, p, ok := ParseAuthSpec(spec); ok {
@@ -102,9 +104,8 @@ func StartupAuth(addr, spec, path string) (user, pass string, enabled bool, warn
 	}
 
 	warning = fmt.Sprintf(
-		"no basic auth configured: remote access to %s is disabled, only local access works.\n"+
-			"Remote (non-loopback) callers will be blocked until you enable auth.\n\n"+
-			"To enable remote access, create %s with your credentials and restart, e.g.:\n\n"+
+		"no basic auth configured: requests to %s from other machines will be rejected (403); only local access works.\n\n"+
+			"To allow remote access, create %s with your credentials and restart, e.g.:\n\n"+
 			"  { \"user\": \"alice\", \"pass\": \"s3cret\" }\n\n"+
 			"or start once with --auth (control) / --webui-auth (project) to generate it for you.",
 		addr, path,

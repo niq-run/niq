@@ -24,7 +24,7 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/workerhost"
 	"github.com/niq-run/niq/core/impl/workers/hiw"
-	"github.com/niq-run/niq/core/itfs/store"
+	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
 
@@ -51,8 +51,9 @@ func RunProject(opts ProjectRunOptions) error {
 
 	// Ports are stable: reuse the project's persisted bus/WebUI ports across runs
 	// so a restarted project lands on the same addresses. Only fall back to an
-	// ephemeral (:0) port when none is persisted yet (first run) or the caller
-	// explicitly overrides with --bus/--webui.
+	// ephemeral port when none is persisted yet (first run) or the caller
+	// explicitly overrides with --bus/--webui. The WebUI falls back to a loopback
+	// ephemeral port: first run must not expose it on every interface.
 	// Validate persisted ports up front: an invalid value (>65535 or <=0) would
 	// fail to bind and silently fall back to a random port — warn instead.
 	if p.Ports.Bus != 0 && !validPort(p.Ports.Bus) {
@@ -80,7 +81,7 @@ func RunProject(opts ProjectRunOptions) error {
 		if p.Ports.WebUI != 0 {
 			webUIAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
 		} else {
-			webUIAddr = ":0"
+			webUIAddr = "127.0.0.1:0"
 		}
 	}
 
@@ -164,15 +165,17 @@ func runAssembly(opts assemblyOptions) error {
 	defer cancel()
 
 	// Resolve WebUI auth up front: enabling it when credentials are available,
-	// and warning (but not blocking) when a remote-reachable bind has no auth
-	// configured. Loopback-only binds need no auth at all.
+	// and failing closed when a remote-reachable bind has no auth configured.
+	// Loopback-only binds need no auth at all.
 	var webUIAuthUser, webUIAuthPass string
 	var webUIAuthEnabled bool
 	if opts.WebUIAddr != "" {
 		user, pass, enabled, warning := webui.StartupAuth(opts.WebUIAddr, opts.WebUIAuth, webui.AuthPath())
 		webUIAuthUser, webUIAuthPass, webUIAuthEnabled = user, pass, enabled
 		if warning != "" {
-			fmt.Fprintln(os.Stderr, warning)
+			// Same rule as the control plane: never serve a WebUI reachable from
+			// other machines without credentials.
+			return fmt.Errorf("project: %s", warning)
 		}
 	}
 
@@ -199,7 +202,7 @@ func runAssembly(opts assemblyOptions) error {
 
 	// Event bus engine with an event store: SQLite (per project) when configured,
 	// else in-memory.
-	var evtStore store.AppendStore
+	var evtStore event.AppendStore
 	if opts.EventsDB != "" {
 		if err := os.MkdirAll(filepath.Dir(opts.EventsDB), 0755); err != nil {
 			return fmt.Errorf("project: mkdir events db: %w", err)
@@ -487,19 +490,33 @@ func InterruptPortHolders(port int) int {
 }
 
 // bindServer binds a listener at reqAddr via start; if a specific (non-":0")
-// address fails to bind (e.g. a stale process still owns the port), it falls back
-// to an ephemeral ":0" port so a restarted project still comes up. The resolved
-// (possibly fallback) host:port is returned to the caller to be persisted.
+// address fails to bind (e.g. a stale process still owns the port), it falls
+// back to an ephemeral port on the same host so a restarted project still comes
+// up. The resolved (possibly fallback) host:port is returned to the caller to be
+// persisted.
 func bindServer(reqAddr string, start func(addr string) (string, error)) (string, error) {
 	resolved, err := start(reqAddr)
 	if err == nil || reqAddr == ":0" {
 		return resolved, err
 	}
-	log.Printf("[project] addr %s unavailable (%v); falling back to an ephemeral port", reqAddr, err)
-	if resolved2, err2 := start(":0"); err2 == nil {
+	fallback := ephemeralAddr(reqAddr)
+	log.Printf("[project] addr %s unavailable (%v); falling back to %s", reqAddr, err, fallback)
+	if resolved2, err2 := start(fallback); err2 == nil {
 		return resolved2, nil
 	}
 	return "", err
+}
+
+// ephemeralAddr maps reqAddr to port 0 on the same host, so the fallback keeps
+// the requested exposure: a loopback bind stays loopback (a project WebUI must
+// never widen to all interfaces just because its port was taken), while a
+// wildcard or explicit LAN bind keeps that interface.
+func ephemeralAddr(reqAddr string) string {
+	host, _, err := net.SplitHostPort(reqAddr)
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		return ":0" // already the widest exposure
+	}
+	return net.JoinHostPort(host, "0")
 }
 
 // LocalhostURL turns a resolved listen address (e.g. "[::]:19763") into a
