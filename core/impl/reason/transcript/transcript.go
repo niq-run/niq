@@ -52,8 +52,8 @@ type Transcript interface {
 	// messages followed by the caller-selected retained tail, then merges any
 	// Apply inputs buffered during the edit and strips dangling tool calls.
 	// head is the caller's new leading content (e.g. a digest message it built);
-	// tail is the retained recent history it chose (see TailTokensBudget /
-	// TailRoundsClean for the pairing-safe selectors). How to trim, whether to
+	// tail is the retained recent history it chose (see TailTokensBudget for the
+	// pairing-safe selector). How to trim, whether to
 	// fold, and what head to prepend are the caller's policy — this only
 	// assembles head + tail and finalizes the editing state. It returns true if
 	// an edit was in progress (the rewrite was applied); false if no edit was in

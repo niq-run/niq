@@ -95,8 +95,8 @@ Registered as worker type **`coding`**; params of interest:
 |---|---|
 | `tool_mode` | `normal` (default) or `ptc` |
 
-Everything else (`provider` / `model` / `context_window` / `budget_*` /
-`tail_tokens` / `compact_directive` / `goal` / `brief` / `readme` / `publish` /
+Everything else (`provider` / `model` / `budget_*` / `tail_tokens` /
+`compact_directive` / `goal` / `brief` / `readme` / `publish` /
 `subscriptions` / `programs`) is shared with the generic reason worker.
 
 ## Files

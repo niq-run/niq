@@ -32,18 +32,15 @@ type Config struct {
 	Transcript transcript.Transcript
 
 	// Context budget (see handleContextBudget in pkg/reason/reason.go).
-	// ContextWindow is the model's window in tokens; 0 disables budget
-	// handling. BudgetSoft/BudgetHard are occupancy ratios; TailTokens is the
-	// token budget of recent transcript retained after a compaction (pairing-
-	// preserved); RotateRounds is how many recent user/assistant rounds
-	// context.rotate retains (tool messages discarded); CompactDirective
-	// overrides the worker's own fallback summarizer prompt (the mechanism
-	// never sees it).
-	ContextWindow    int
+	// The window is derived from the selected model (provider.json's per-model
+	// context_window or the provider API), never configured here. BudgetSoft/
+	// BudgetHard are occupancy ratios; TailTokens is the token budget of recent
+	// transcript retained after a compaction (pairing-preserved);
+	// CompactDirective overrides the worker's own fallback summarizer prompt (the
+	// mechanism never sees it).
 	BudgetSoft       float64
 	BudgetHard       float64
 	TailTokens       int
-	RotateRounds     int
 	CompactDirective string
 
 	// MaxPayloadBytes caps a single text payload folded into the transcript
@@ -101,11 +98,9 @@ func NewWorker(cfg Config) *Worker {
 		Transcript:      cfg.Transcript,
 		ReasoningEffort: cfg.ReasoningEffort,
 		OnDurableChange: cfg.OnDurableChange,
-		ContextWindow:   cfg.ContextWindow,
 		BudgetSoft:      cfg.BudgetSoft,
 		BudgetHard:      cfg.BudgetHard,
 		TailTokens:      cfg.TailTokens,
-		RotateRounds:    cfg.RotateRounds,
 		MaxPayloadBytes: cfg.MaxPayloadBytes,
 		SeedMessages:    cfg.SeedMessages,
 		Readme:          cfg.Readme,
@@ -116,12 +111,11 @@ func NewWorker(cfg Config) *Worker {
 	})
 
 	// The default worker layers its own toolkit on top of the base
-	// extensions: send_message / request / context.compress /
-	// context.rotate. The context ops are this worker's own strategy — it
-	// responds to the context.compress convention event by editing its
-	// transcript directly (see compact.go), not by installing a compactor
-	// object into the mechanism. The compaction directive override is this
-	// worker's own config, not the mechanism's.
+	// extensions: send_message / request / context.compress. The context op is
+	// this worker's own strategy — it responds to the context.compress
+	// convention event by editing its transcript directly (see compact.go), not
+	// by installing a compactor object into the mechanism. The compaction
+	// directive override is this worker's own config, not the mechanism's.
 	registerDefaultExtensions(base, cfg.CompactDirective)
 
 	return &Worker{BaseReasonWorker: base}

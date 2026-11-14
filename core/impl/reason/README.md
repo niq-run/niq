@@ -40,7 +40,8 @@ Division between the loop and dispatch:
 | `provider.go` | provider management, exposed through the extension mechanism: `ProviderSources` / `ProviderInfo` + `registerBaseExtensions` (provider.switch/list/current) + `setActiveProvider` / `resolveContextWindow` |
 | `readme.go` | the worker's self-description: the generic `worker.readme` read capability + the advertised `worker.readme.update` write, seeded from `params.readme`, with runtime updates persisted in the snapshot |
 | `llmerror.go` | LLM error policy: context overflow → compression request, rate limit → backoff reminder, 4xx → fail, else retry |
-| `systemprompt.go` | renders the system prompt from programs |
+| `systemprompt.go` | renders the system prompt from the applied program set (a pure function of it — see "System prompt stability" below) |
+| `programs.go` | the program attribute: `Applied` (what the system prompt renders) + `Delta` (ledger of attach/detach operations not applied yet) + the `Apply` that folds them, and the export-side accessors the worker's program extensions use |
 
 Self-contained sub-domains extracted as subpackages:
 
@@ -138,6 +139,47 @@ the same auditable bus path as every other invocation. The completion echoes
 the request's id via the same `request.*` convention. The system-side
 compaction triggers (hard budget, `ErrorContextLength`) funnel through the
 same `context.compress` event.
+
+### System prompt stability and the program ledger
+
+The system prompt is the **head** of every request, so changing it invalidates
+the provider's entire prefix cache: every message behind it is re-read at full
+price. The invariant is therefore structural, not a convention:
+
+- the prompt is a pure function of `programState.Applied`, and
+- `Applied` may only change between two consecutive requests **when the cache
+  cost is already being paid** — before the first request ever sent (nothing is
+  cached), after a compaction that actually rewrote the transcript, or on a
+  `provider.switch` (a fresh provider starts cold).
+
+`program.attach` / `program.detach` hence record a **delta** (`programState.Delta`)
+instead of editing `Applied`: the operation is in force immediately through a
+`[system]` note appended to the transcript (an attached instruction carries its
+full text), and it reaches the prompt at the next reset boundary. `prepareReasoning`
+performs the fold inside the same critical section that builds the request, so
+"new transcript with the old prompt" is never sent. The boundary is armed by
+`CommitTranscript`, which finishes the transcript edit and arms in one critical
+section. It reads the boundary from the edit rather than from a caller-declared
+flag: a commit that installs a **head** replaced the transcript's front (the
+digest that folded older history), while a commit without one is a compression
+that folded nothing — it still ends the edit and merges buffered inputs, but
+changes no bytes, so the prompt (and its warm cache) is left alone.
+`provider.switch` settles the ledger immediately (a fresh provider starts cold),
+and `ApplyProgramsAtNextRound` is the arming hook for a future boundary that
+rewrites nothing the mechanism can see.
+
+The applied set and its ledger are one persisted attribute: `Snapshot` writes
+`program_state` (`{applied, delta, apply_pending}`) and `Restore` reads it, falling
+back to a bare `programs` list for snapshots taken before the ledger existed.
+`ApplyPending` travels with the state because the compaction and the fold can
+straddle a checkpoint: the stored transcript may already be the post-compaction
+one, whose program text the digest summarized away, so only a prompt render can
+still carry it. `program.query` reports the **effective** set (`Applied` + delta)
+— what the worker is really holding — which keeps attach's additive-name and
+locked rules checking against the right list.
+
+Also on the head of the request: the tool list. Its ordering is pinned
+(`defaultToolListBuilder` sorts by name) so re-discovery cannot reorder it mid-episode.
 
 ### Self-description (readme)
 

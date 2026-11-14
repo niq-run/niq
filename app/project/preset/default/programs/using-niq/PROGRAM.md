@@ -126,6 +126,9 @@ spawned worker joins `project.json`, so it survives a project restart;
   program worker's (`program.touch`, `program.update`, `program.write`,
   `program.edit`, `program.read`).
   Do not repeat standing rules in conversation — write them down once.
+  An attach or detach takes effect immediately as a `[system]` note in your
+  conversation; the system prompt's program section is re-rendered at the next
+  context compression, so the change is already in force before then.
 - **README is identity** — `worker.readme.update` is how peers understand you.
   Refresh the "current focus" half when it moves; keep it short and first person.
 

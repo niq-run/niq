@@ -39,14 +39,14 @@ var spawnParamsByType = map[string][]string{
 	"reason": {
 		"instruction", "goal", "brief", "programs", "events", "readme",
 		"provider", "model", "collaborators",
-		"context_window", "budget_soft", "budget_hard",
-		"tail_tokens", "keep_tail", "rotate_rounds", "compact_directive",
+		"budget_soft", "budget_hard",
+		"tail_tokens", "keep_tail", "compact_directive",
 	},
 	"coding": {
 		"instruction", "goal", "brief", "programs", "events", "readme",
 		"provider", "model", "collaborators",
-		"context_window", "budget_soft", "budget_hard",
-		"tail_tokens", "keep_tail", "rotate_rounds", "compact_directive",
+		"budget_soft", "budget_hard",
+		"tail_tokens", "keep_tail", "compact_directive",
 		"tool_mode",
 	},
 	// workspace / program: mounts (or the single-mount "path" sugar) and, for

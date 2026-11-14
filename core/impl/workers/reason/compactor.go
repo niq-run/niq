@@ -1,5 +1,5 @@
 // The default worker's context strategy: it shrinks this worker's transcript
-// in response to the context.compress / context.rotate convention events. This
+// in response to the context.compress convention event. This
 // is NOT a reason-package interface implementation — it is the worker's own
 // strategy. The mechanism fires context.compress under window pressure; this
 // package responds by editing the transcript directly (via the exported
@@ -28,17 +28,26 @@ Preserve: the task/goal, decisions made and their reasons, established facts (pa
 open TODOs, and the latest state. Drop: process detail, failed exploration steps (keep one-line lessons),
 verbose tool output. Output only the summary, in a compact structured form.`
 
-// compactTranscript rewrites w's transcript to shrink it. When rotate is false
-// it summarizes older history into a carried digest (context.compress); when
-// rotate is true it starts a fresh context keeping only the most recent
-// user/assistant rounds and discarding tool messages (context.rotate). The
-// summarize call runs without the mechanism lock; the transcript
-// self-buffers concurrent Apply inputs during the edit and merges them on
-// commit. It returns whether the transcript was actually rewritten: a compress
-// can be a no-op when the whole transcript already fits within the tail token
-// budget (no digest head applied), which callers must observe rather than
+// programDigestHint keeps the digest from becoming a second, stale copy of the
+// worker's programs. Those live out of band, in the system prompt (instructions
+// in full, playbooks by reference), so the summary should not reproduce them —
+// except a change that so far exists only as a [system] note in the transcript:
+// that note may not have reached the prompt yet (the fold happens only when a
+// compression really rewrites the transcript), so its essentials must survive.
+const programDigestHint = "\n\nThe worker's mounted programs live in the system prompt, supplied out of band: " +
+	"do not reproduce their text in the summary. Exception: a program change recorded only " +
+	"as a [system] note in the transcript may not have reached the system prompt yet — keep " +
+	"the essentials of such a note (the rule it states), without copying long text verbatim."
+
+// compactTranscript rewrites w's transcript to shrink it: it summarizes older
+// history into a carried digest (context.compress) and keeps a token-budgeted,
+// pairing-preserved tail. The summarize call runs without the mechanism lock;
+// the transcript self-buffers concurrent Apply inputs during the edit and merges
+// them on commit. It returns whether the transcript was actually rewritten: a
+// compress can be a no-op when the whole transcript already fits within the tail
+// token budget (no digest head applied), which callers must observe rather than
 // report a misleading success.
-func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, rotate bool, directive string) (bool, error) {
+func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, directive string) (bool, error) {
 	t := w.Transcript()
 	msgs := t.BeginEdit()
 	projection := projectTranscript(msgs)
@@ -60,40 +69,32 @@ func compactTranscript(w *reason.BaseReasonWorker, ctx context.Context, rotate b
 	}
 
 	head := []llm.Message{digestMessage(digest)}
-	var tail []llm.Message
-	var rewrote bool
-	if rotate {
-		// Rotate keeps the digest plus the last few clean user/assistant rounds,
-		// discarding tool traffic, keyed on round count (not tokens).
-		rounds := w.RotateRounds()
-		tail = transcript.TailRoundsClean(msgs, rounds)
-		rewrote = len(msgs) > 0
-		t.Commit(head, tail)
-		log.Printf("[reason] transcript rotated (rounds=%d, digest=%d chars, update=%v, rewrote=%v)",
-			rounds, len(digest), previousDigest != "", rewrote)
-		return rewrote, nil
-	}
-	tail = transcript.TailTokensBudget(msgs, w.TailTokens())
+	tail := transcript.TailTokensBudget(msgs, w.TailTokens())
 	// The digest head is only added when something was actually folded away;
 	// otherwise the whole transcript already fits within the tail budget and the
 	// edit is a no-op (no digest, no fold).
-	rewrote = len(tail) < len(msgs)
+	rewrote := len(tail) < len(msgs)
 	if !rewrote {
 		head = nil
 	}
-	t.Commit(head, tail)
+	// A real rewrite installs the digest as the transcript's new head, and that is
+	// what CommitTranscript reads to record the reset boundary: the next round
+	// pays a cache reset anyway, so it is also where a pending program change
+	// reaches the system prompt. A no-op compression commits with no head and
+	// therefore changes no bytes, leaving the prompt (and its warm cache) alone.
+	w.CommitTranscript(head, tail)
 	log.Printf("[reason] transcript compacted (tailTokens=%d, digest=%d chars, update=%v, rewrote=%v)",
 		w.TailTokens(), len(digest), previousDigest != "", rewrote)
 	return rewrote, nil
 }
 
 // compactionNote is the human-readable description of a completed compaction,
-// used as the tool result text the model sees for the compress/rotate pair (and
-// the completion echoed to observers). rewrote distinguishes a real rewrite
-// from a no-op (already within budget). On a no-op it reports the current
-// transcript token estimate and the tail budget, so the model can judge whether
-// its tail_tokens parameter is larger than necessary.
-func compactionNote(label string, rewrote bool, usedTokens, tailTokens int) string {
+// used as the tool result text the model sees for the compress tool (and the
+// completion echoed to observers). rewrote distinguishes a real rewrite from a
+// no-op (already within budget). On a no-op it reports the current transcript
+// token estimate and the tail budget, so the model can judge whether its
+// tail_tokens parameter is larger than necessary.
+func compactionNote(rewrote bool, usedTokens, tailTokens int) string {
 	if !rewrote {
 		// Record the attempted action factually: a compression was triggered
 		// (there is a matching assistant tool_call for this result), but the
@@ -101,10 +102,7 @@ func compactionNote(label string, rewrote bool, usedTokens, tailTokens int) stri
 		return fmt.Sprintf("[system] A context compression was attempted but skipped: the transcript is ~%d tokens, within the %d-token tail budget, so nothing was folded.",
 			usedTokens, tailTokens)
 	}
-	if label == "rotate" {
-		return "[system] episode rotated: history was compacted into a carried digest and a fresh context started. Continue the task."
-	}
-	return "[system] context compressed: older messages were summarized into a digest. Continue the task with the recent context."
+	return "[system] context compressed: older messages were summarized into a digest. Continue the task with the recent context. The system prompt now carries this worker's currently mounted programs."
 }
 
 // autoCompressDoneNote is the system note appended to the transcript after an

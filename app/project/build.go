@@ -128,11 +128,9 @@ type reasonFamilyIn struct {
 	events           []reason.EventConverter
 	providerSources  reasonbase.ProviderSources
 	pname, pmodel    string
-	contextWindow    int
 	budgetSoft       float64
 	budgetHard       float64
 	tailTokens       int
-	rotateRounds     int
 	compactDirective string
 	readme           string
 	seedBrief        []llm.Message
@@ -197,7 +195,6 @@ func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, 
 		}}
 	}
 
-	contextWindow := pInt(p, "context_window")
 	budgetSoft, _ := p["budget_soft"].(float64)
 	budgetHard, _ := p["budget_hard"].(float64)
 	// Tail retention is a token budget now, not a fixed message count. Accept
@@ -206,7 +203,6 @@ func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, 
 	if tailTokens == 0 {
 		tailTokens = pInt(p, "keep_tail")
 	}
-	rotateRounds := pInt(p, "rotate_rounds")
 	compactDirective, _ := p["compact_directive"].(string)
 	readme, _ := p["readme"].(string)
 	// collaborators: absent = unrestricted; present (even []) = whitelist.
@@ -224,11 +220,9 @@ func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, 
 		providerSources:  providerSources,
 		pname:            pname,
 		pmodel:           pmodel,
-		contextWindow:    contextWindow,
 		budgetSoft:       budgetSoft,
 		budgetHard:       budgetHard,
 		tailTokens:       tailTokens,
-		rotateRounds:     rotateRounds,
 		compactDirective: compactDirective,
 		readme:           readme,
 		seedBrief:        seedBrief,
@@ -254,11 +248,9 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 			Programs:         in.programs,
 			EventConverters:  in.events,
 			Bus:              ch,
-			ContextWindow:    in.contextWindow,
 			BudgetSoft:       in.budgetSoft,
 			BudgetHard:       in.budgetHard,
 			TailTokens:       in.tailTokens,
-			RotateRounds:     in.rotateRounds,
 			CompactDirective: in.compactDirective,
 			Readme:           in.readme,
 			Collaborators:    in.collaborators,
@@ -301,11 +293,9 @@ func buildCodingSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 			Programs:         in.programs,
 			EventConverters:  in.events,
 			Bus:              ch,
-			ContextWindow:    in.contextWindow,
 			BudgetSoft:       in.budgetSoft,
 			BudgetHard:       in.budgetHard,
 			TailTokens:       in.tailTokens,
-			RotateRounds:     in.rotateRounds,
 			CompactDirective: in.compactDirective,
 			Readme:           in.readme,
 			Collaborators:    in.collaborators,

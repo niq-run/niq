@@ -555,6 +555,17 @@ func (p *summarizeProvider) prompt() string {
 	return p.seenPrompt
 }
 
+// windowSources reports one provider whose model declares the given context
+// window. A test needs a window the way production gets one: derived from the
+// selected model's metadata (a worker has no window knob of its own).
+func windowSources(prov llm.LLMProvider, window int) ProviderSources {
+	return &fakeSources{
+		infos: []ProviderInfo{{Name: "p", Default: "m",
+			ModelDetails: []llm.ModelInfo{{ID: "m", ContextWindow: window}}}},
+		provs: map[string]llm.LLMProvider{"p": prov},
+	}
+}
+
 // TestSoftBudgetInjectsReminder verifies crossing the soft threshold appends
 // exactly one system reminder per crossing, and no compression event is emitted.
 func TestSoftBudgetInjectsReminder(t *testing.T) {
@@ -563,7 +574,8 @@ func TestSoftBudgetInjectsReminder(t *testing.T) {
 			Usage:   &llm.Usage{InputTokens: 900, OutputTokens: 10},
 			Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "ok"}}}}
 	w := NewBaseReasonWorker(Config{ID: "r1", Provider: prov, Bus: newTestChannel(),
-		ContextWindow: 1000, BudgetSoft: 0.85, BudgetHard: 0.97})
+		ProviderSources: windowSources(prov, 1000), ProviderName: "p", ProviderModel: "m",
+		BudgetSoft: 0.85, BudgetHard: 0.97})
 
 	w.handleContextBudget(context.Background(), llm.Message{Usage: &llm.Usage{InputTokens: 900, OutputTokens: 10}})
 
@@ -587,7 +599,8 @@ func TestSoftBudgetInjectsReminder(t *testing.T) {
 func TestSoftBudgetReminderStaysAfterToolResult(t *testing.T) {
 	prov := &summarizeProvider{summarized: "unused"}
 	w := NewBaseReasonWorker(Config{ID: "r1", Provider: prov, Bus: newTestChannel(),
-		ContextWindow: 1000, BudgetSoft: 0.85, BudgetHard: 0.97})
+		ProviderSources: windowSources(prov, 1000), ProviderName: "p", ProviderModel: "m",
+		BudgetSoft: 0.85, BudgetHard: 0.97})
 
 	// Mirror finishReasoning's order: assistant tool_call, then the placeholders
 	// (inserted before the budget check), then handleContextBudget appends the
@@ -641,7 +654,8 @@ func TestHardBudgetEmitsMetaRequest(t *testing.T) {
 		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
 	ch := newTestChannel()
 	w := NewBaseReasonWorker(Config{ID: "r1", Provider: prov, Bus: ch,
-		ContextWindow: 1000, BudgetSoft: 0.85, BudgetHard: 0.97, TailTokens: 2})
+		ProviderSources: windowSources(prov, 1000), ProviderName: "p", ProviderModel: "m",
+		BudgetSoft: 0.85, BudgetHard: 0.97, TailTokens: 2})
 
 	seed := func(n int) {
 		for i := 0; i < n; i++ {

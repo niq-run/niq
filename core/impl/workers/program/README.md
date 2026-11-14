@@ -151,3 +151,12 @@ call instead of one reasoning round per call — the round-compression PTC
 provides. The reason worker's own program tools (`program_query` /
 `program_attach` / `program_detach`) manage *its* program list; content and
 execution live here.
+
+Attaching or detaching a program on a reason worker does not rewrite its system
+prompt immediately: the prompt is the head of every request, so changing it would
+invalidate the provider's whole prefix cache. The operation is recorded in a
+ledger, stated in the conversation as a `[system]` note (so it is in force at
+once), and only folded into the system prompt at the next compaction — see
+"System prompt stability and the program ledger" in `core/impl/reason/README.md`.
+`program_query` therefore reports the effective list, including a change whose
+prompt render is still pending.

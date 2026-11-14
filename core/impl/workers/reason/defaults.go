@@ -1,19 +1,21 @@
 // The default reason worker's extension toolkit: the generic tools
-// (send_message / request) and the context meta ops (compress / rotate).
+// (send_message / request) and the context meta op (compress).
 // These are deliberately outside pkg/reason — they are the default worker's
 // own choice of tools, not part of the shared reasoning mechanism. They are
 // implemented entirely through the mechanism's exported accessors
 // (ReplyCompleted / ReplyFailed / CurrentTraceID / Transcript / TryReason /
 // Channel), so nothing here reaches into unexported
 // state. The
-// context.compress / context.rotate handlers are this worker's own context
-// strategy: they edit the transcript directly and book their own completion.
+// context.compress handler is this worker's own context
+// strategy: it edits the transcript directly and books its own completion.
 package reason
 
 import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
 	reasonBase "github.com/niq-run/niq/core/impl/reason"
@@ -26,7 +28,7 @@ import (
 // registerDefaultExtensions registers the toolkit the generic reason worker
 // adds on top of the base extensions (provider.switch / provider.list /
 // provider.current): send_message, request, context.compress,
-// context.rotate. A reason-family worker that wants a different toolkit simply
+// program.query / program.attach / program.detach. A reason-family worker that wants a different toolkit simply
 // does not call this. compactDirective is the program-provided summarizer
 // override (empty for the built-in fallback); it is owned by this worker, not
 // the mechanism, and captured here so the context strategy can resolve it.
@@ -133,22 +135,6 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		handleContextOp(w, evt, compactDirective)
 	})
 
-	// context.rotate is TEMPORARILY DISABLED (backing off its design while the
-	// context strategy settles; the handler + TypeContextRotate stay for later
-	// re-enable). Re-register to expose the tool again.
-	/*
-		w.Register(baseworker.Extension{
-			Event:       TypeContextRotate,
-			Description: "Rotate your context: summarize the current transcript as a carried digest and start a fresh context.",
-			Parameters: obj(map[string]any{
-				"carry": map[string]any{"type": "string",
-					"description": "Optional instruction for what to carry into the digest."},
-			}),
-		}, func(evt event.Event) {
-			handleContextOp(w, evt, compactDirective)
-		})
-	*/
-
 	// Program management: query or mutate this worker's instruction/playbook
 	// list. Deliberately advertised (not Internal): the list is meant to be
 	// edited by other authorized workers (e.g. webui-hiw); bus permissions gate
@@ -160,7 +146,8 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		Response: baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "content_type": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}, "tags": baseworker.ArraySchema(map[string]any{"type": "string"}), "locked": map[string]any{"type": "boolean"}, "path": map[string]any{"type": "string"}})),
 		Description: "List this worker's instruction and playbook programs (name, type, description, tags, locked, path). " +
 			"Instructions carry their content here; playbooks are references — only metadata is listed, and their content " +
-			"is read from the program worker by passing the path to program__read.",
+			"is read from the program worker by passing the path to program__read. A program is listed as soon as it is " +
+			"mounted, including one whose change has not been rendered into the system prompt yet.",
 		Parameters: obj(map[string]any{}),
 	}, func(evt event.Event) {
 		handleProgramQuery(w, evt)
@@ -173,7 +160,9 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 			"system prompt — self-contained, nothing to set up elsewhere. Playbook: only name/description/tags are " +
 			"kept here (surfaced in the prompt); its content lives in the program worker, so create it there first " +
 			"(touch then write) and read it with program__read(\"<name>\"). Attaching a name that is already mounted " +
-			"fails — detach it first to replace it.",
+			"fails — detach it first to replace it. The program is in force immediately (a [system] note carries its " +
+			"text into the conversation); the system prompt's program section is only re-rendered at the next context " +
+			"compression, because changing it mid-episode would invalidate the provider's prompt cache.",
 		Parameters: obj(map[string]any{
 			"name": map[string]any{"type": "string", "description": "program name — also its root path"},
 			"content_type": map[string]any{"type": "string", "enum": []string{"instruction", "playbook"},
@@ -191,7 +180,7 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 	w.Register(baseworker.Extension{
 		Event:       TypeProgramDetach,
 		Response:    baseworker.StringSchema("confirmation naming the detached program"),
-		Description: "Detach a program from this worker by name. The program itself is not deleted — only this worker's mounting of it. Locked programs cannot be detached.",
+		Description: "Detach a program from this worker by name. The program itself is not deleted — only this worker's mounting of it. Locked programs cannot be detached. The detach is in force immediately (a [system] note states it); the system prompt's program section follows at the next context compression.",
 		Parameters: obj(map[string]any{
 			"name": map[string]any{"type": "string", "description": "program name to unmount"},
 		}),
@@ -199,10 +188,6 @@ func registerDefaultExtensions(w *reasonBase.BaseReasonWorker, compactDirective 
 		handleProgramDetach(w, evt)
 	})
 }
-
-// TypeContextRotate is the default worker's context-rotate event — its own
-// extra beyond the mechanism's context.compress convention, so it lives here.
-const TypeContextRotate event.EventType = "context.rotate"
 
 // The default worker's own LLM-facing tools, each its own event type (see the
 // request-response convention in pkg/reason). The fleet roster deliberately
@@ -264,12 +249,12 @@ func handleSendMessage(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 	w.ReplyCompleted(callerID, callID, fmt.Sprintf("message sent to %s", target), traceID)
 }
 
-// handleContextOp responds to a context.compress / context.rotate request: it
-// is the default worker's context strategy. It shrinks the transcript itself
+// handleContextOp responds to a context.compress request: it is the default
+// worker's context strategy. It shrinks the transcript itself
 // (compactTranscript).
 //
 // Two paths: when the request carries a tool call id (the model called the
-// compress/rotate tool), the call is already tracked as a normal tool with its
+// compress tool), the call is already tracked as a normal tool with its
 // placeholder in the transcript — the replace with the placeholder survives the
 // edit because compaction keeps a token-budgeted, pairing-preserved tail —
 // so the handler
@@ -283,29 +268,28 @@ func handleSendMessage(w *reasonBase.BaseReasonWorker, callID, toolName, callerI
 // schedules the next round directly via TryReason.
 // overrideDirective is the program-provided summarizer prompt (empty for the
 // built-in fallback); the requester may additionally carry a directive (compress
-// focus) or a carry (rotate) in the payload, and both are appended to the
-// resolved compaction directive.
+// focus) in the payload, which is appended to the resolved compaction directive.
 func handleContextOp(w *reasonBase.BaseReasonWorker, evt event.Event, overrideDirective string) {
-	isRotate := evt.Type == TypeContextRotate
 	traceID := evt.TraceID
 
 	directive := overrideDirective
 	if directive == "" {
 		directive = FallbackCompactDirective
 	}
-	if extra, _ := evt.Payload["directive"].(string); !isRotate && extra != "" {
+	if extra, _ := evt.Payload["directive"].(string); extra != "" {
 		directive = directive + "\nCaller focus: " + extra
 	}
-	if carry, _ := evt.Payload["carry"].(string); isRotate && carry != "" {
-		directive = directive + "\nCarry into the new episode: " + carry
-	}
+	// The mounted programs live in the system prompt, out of band; the hint keeps
+	// the summary from holding a second (stale) copy of them while still preserving
+	// a change that has not reached the prompt yet.
+	directive = directive + programDigestHint
 
-	// The model-invoked path carries the compress/rotate tool call id in
+	// The model-invoked path carries the compress tool call id in
 	// RequestId; the auto-fired event (hard budget) has none.
 	callID := evt.RequestId
 
 	go func() {
-		rewrote, err := compactTranscript(w, context.Background(), isRotate, directive)
+		rewrote, err := compactTranscript(w, context.Background(), directive)
 		log.Printf("[reason %s] context op %s done: rewrote=%v err=%v", w.ID(), evt.Type, rewrote, err)
 		if callID != "" {
 			// Model-invoked: resolve the already-tracked request via the normal
@@ -315,15 +299,11 @@ func handleContextOp(w *reasonBase.BaseReasonWorker, evt event.Event, overrideDi
 				w.ReplyFailed(w.ID(), callID, err.Error(), traceID)
 				return
 			}
-			label := "compress"
-			if isRotate {
-				label = "rotate"
-			}
 			// Tell the model the real outcome, including how much of the tail budget
 			// the transcript currently occupies so it can size tail_tokens sensibly
 			// when compression is a no-op.
 			usedTokens := w.Transcript().EstimatedTokens()
-			w.ReplyCompleted(w.ID(), callID, compactionNote(label, rewrote, usedTokens, w.TailTokens()), traceID)
+			w.ReplyCompleted(w.ID(), callID, compactionNote(rewrote, usedTokens, w.TailTokens()), traceID)
 			return
 		}
 		// Auto-fired (hard budget): no tool call, so no pairing — broadcast a
@@ -349,20 +329,19 @@ func handleContextOp(w *reasonBase.BaseReasonWorker, evt event.Event, overrideDi
 		_ = w.Channel.Broadcast(context.Background(), done)
 		// Only schedule the next round when something actually changed; a no-op
 		// compress must not pull the model back for another (fruitless) round.
-		reasonForRound := rewrote
-		if isRotate {
-			reasonForRound = true
-		}
-		if reasonForRound {
+		if rewrote {
 			w.TryReason(context.Background())
 		}
 	}()
 }
 
-// handleProgramQuery serves the program.query tool: it returns the worker's
-// current instruction/playbook list as a request.completed whose "result" is
-// the JSON-encoded list. The next reasoning round re-renders the system prompt
-// from this same list via buildInstruction.
+// handleProgramQuery serves the program.query tool: it returns the programs
+// this worker is holding — the applied set plus the pending ledger, i.e. what is
+// in force right now — as a request.completed whose "result" is the JSON-encoded
+// list. Only the applied set renders into the system prompt (buildInstruction);
+// a program whose change is still pending is already in force through the
+// [system] note that recorded it, and reaches the prompt at the next reset
+// boundary.
 //
 // Extension handlers are invoked from process(), which holds w.mu for the
 // whole dispatch — use the *Locked accessors and never take w.mu here
@@ -375,27 +354,35 @@ func handleProgramQuery(w *reasonBase.BaseReasonWorker, evt event.Event) {
 }
 
 // handleProgramAttach serves program.attach: mount one program on this worker.
-// It errors if the name is already mounted (purely additive — detach first to
-// replace). On success it raises the durable-change signal so the worker
-// snapshots the new list, and replies through the normal path, which schedules
-// the next reasoning round.
+// It errors if the name is already held — attach is purely additive, detach
+// first to replace it.
+//
+// The mutation lands in the ledger, not in the applied set the system prompt
+// renders (see pkg/reason/programs.go): the prompt is the head of every request,
+// so re-rendering it here would invalidate the provider's entire cached prefix.
+// The change is therefore carried into the conversation as a [system] note and
+// reaches the prompt at the next reset boundary. It still raises the
+// durable-change signal, so the ledger (and its debt) survives a restart.
 //
 // The two kinds are deliberately asymmetric: an instruction is self-contained
-// (its content is supplied here and inlined into the prompt), while a playbook
-// is only a reference — name/description/tags live here, and its content stays
-// in the program worker to be read on demand. See buildInstruction.
+// (its content is supplied here and belongs on this worker), while a playbook is
+// only a reference — name/description/tags live here, and its content stays in
+// the program worker to be read on demand. See buildInstruction.
 //
 // Runs inside process() with w.mu held (see handleProgramQuery).
 func handleProgramAttach(w *reasonBase.BaseReasonWorker, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	p, err := programFromArgs(tc.Args)
-	if err == nil {
-		err = w.AddProgramLocked(p)
-	}
 	if err != nil {
 		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
 		return
 	}
+	op, err := w.AttachProgramLocked(p)
+	if err != nil {
+		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
+		return
+	}
+	noteProgramOp(w, op)
 	w.NotifyDurableChange()
 	w.ReplyCompleted(tc.CallerID, tc.CallID, "attached program "+p.Name, tc.TraceID)
 }
@@ -403,6 +390,10 @@ func handleProgramAttach(w *reasonBase.BaseReasonWorker, evt event.Event) {
 // handleProgramDetach serves program.detach: unmount one program by name. It
 // errors if the program is absent or Locked. The program's content is never
 // touched — detaching only removes this worker's mounting of it.
+//
+// Like attach, the mutation lands in the ledger: the removal is stated in the
+// conversation immediately, the system prompt stops carrying the program at the
+// next reset boundary.
 //
 // Runs inside process() with w.mu held (see handleProgramQuery).
 func handleProgramDetach(w *reasonBase.BaseReasonWorker, evt event.Event) {
@@ -412,12 +403,88 @@ func handleProgramDetach(w *reasonBase.BaseReasonWorker, evt event.Event) {
 		w.ReplyFailed(tc.CallerID, tc.CallID, "name is required", tc.TraceID)
 		return
 	}
-	if err := w.RemoveProgramLocked(name); err != nil {
+	op, err := w.DetachProgramLocked(name)
+	if err != nil {
 		w.ReplyFailed(tc.CallerID, tc.CallID, err.Error(), tc.TraceID)
 		return
 	}
+	noteProgramOp(w, op)
 	w.NotifyDurableChange()
 	w.ReplyCompleted(tc.CallerID, tc.CallID, "detached program "+name, tc.TraceID)
+}
+
+// programNoteMaxBytes bounds the instruction text carried in a note. A very
+// large instruction is handed over as a pointer instead of a truncated rule:
+// cutting a constraint off mid-sentence is worse than telling the model where
+// the authoritative copy is. (The transcript's own payload cap would truncate
+// it anyway, silently.)
+const programNoteMaxBytes = 8 * 1024
+
+// noteProgramOp records a program operation in the conversation. The system
+// prompt renders only the applied set, so while a prompt has already gone out,
+// a change waits for the next reset boundary — the note is what keeps it in
+// force in the meantime. A worker that has never sent a request folds the
+// change into the prompt directly (see prepareReasoning), so a note there would
+// only duplicate it.
+func noteProgramOp(w *reasonBase.BaseReasonWorker, op reasonBase.ProgramOp) {
+	if !w.PromptSentLocked() {
+		return
+	}
+	w.Transcript().Apply(transcript.InputPatch{Messages: []llm.Message{{
+		Role:    llm.RoleUser,
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: programOpNote(op)}},
+	}}})
+}
+
+// programOpNote renders one ledger entry as the [system] note the model reads.
+// It is derived from the same ProgramOp the ledger stores, so the account and
+// the transcript cannot disagree.
+func programOpNote(op reasonBase.ProgramOp) string {
+	switch op.Kind {
+	case reasonBase.ProgramOpAttach:
+		if op.Program == nil {
+			return fmt.Sprintf("[system] Program %q was attached.", op.Name)
+		}
+		p := *op.Program
+		if p.ContentType == program.ContentTypeInstruction {
+			content := p.EntryContent.Content
+			if len(content) > programNoteMaxBytes {
+				cut := programNoteMaxBytes
+				for cut > 0 && !utf8.RuneStart(content[cut]) {
+					cut-- // never split a multi-byte character
+				}
+				content = content[:cut] +
+					"\n...[instruction truncated here; read the full text with program__read(" + fmt.Sprintf("%q", programPath(p)) + ")]"
+			}
+			return fmt.Sprintf("[system] A new instruction program %q is now in force and stays so until it is detached. Its text:\n%s",
+				p.Name, content)
+		}
+		description := p.Description
+		if description == "" {
+			description = "(no description)"
+		}
+		fields := []string{"path: " + programPath(p)}
+		if tags := strings.Join(p.Tags, ", "); tags != "" {
+			fields = append(fields, "tags: "+tags)
+		}
+		return fmt.Sprintf("[system] A new playbook program %q is now available to you: %s [%s]. Read it with program__read(%q) when the situation fits.",
+			p.Name, description, strings.Join(fields, ", "), programPath(p))
+	case reasonBase.ProgramOpDetach:
+		if op.ContentType == program.ContentTypeInstruction {
+			return fmt.Sprintf("[system] Instruction program %q has been detached: its rules are no longer in force — disregard them from now on.", op.Name)
+		}
+		return fmt.Sprintf("[system] Playbook program %q has been detached; do not consult it any more.", op.Name)
+	}
+	return fmt.Sprintf("[system] Program %q changed.", op.Name)
+}
+
+// programPath is the address program.query hands out and program__read takes: a
+// program's Path, falling back to its name (the two are the same by convention).
+func programPath(p program.Program) string {
+	if p.Path != "" {
+		return p.Path
+	}
+	return p.Name
 }
 
 // programFromArgs builds a program.Program from a tool-call argument map. The

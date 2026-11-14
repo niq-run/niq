@@ -1,7 +1,9 @@
 // system prompt template.
 //
-// The system prompt is built from a fixed template and the worker's loaded
-// Programs. Instruction Programs contribute their full content; Playbook
+// The system prompt is a pure function of the worker's APPLIED program set
+// (programState.Applied), never of the pending ledger: the prompt is the head of
+// every request, so it may only change when a cache reset is already being paid
+// for (see programs.go). Instruction Programs contribute their full content; Playbook
 // Programs contribute only their metadata (name, path, description, tags) —
 // the path is what the model passes to program.read to pull the content.
 //
@@ -87,13 +89,13 @@ var systemPromptTmpl = template.Must(
 )
 
 // buildInstruction executes the system prompt template with the worker's
-// current programs. Instruction Programs provide full content; Playbook
+// applied programs. Instruction Programs provide full content; Playbook
 // Programs provide only metadata plus the path that addresses their content.
 func (w *BaseReasonWorker) buildInstruction() string {
 	var data templateData
 	data.WorkerID = w.ID()
 
-	for _, p := range w.programs {
+	for _, p := range w.programs.Applied {
 		switch p.ContentType {
 		case "instruction":
 			if p.EntryContent.Content != "" {

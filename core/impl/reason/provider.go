@@ -129,26 +129,21 @@ func (w *BaseReasonWorker) setActiveProvider(name, model string) error {
 }
 
 // resolveContextWindow sets w.contextWindow to the effective context-window size
-// for the currently selected provider/model. An explicit params.context_window
-// (contextWindowExplicit) always wins; otherwise the window is re-derived from
-// the selected model's reported metadata. Called at init and on every provider
-// switch. Expects w.mu held.
+// for the currently selected provider/model, read from that model's reported
+// metadata. Called at init and on every provider switch.
 //
 // The derivation must run on EVERY switch, not just when the field is still
 // zero: the window is model-specific, and a previous resolution (say 1024k from
 // the startup model) would otherwise survive a switch to a 262k model and keep
-// reporting — and budgeting against — the old size. Only the explicit user
-// override is sticky, which is why it is tracked separately.
+// reporting — and budgeting against — the old size.
 //
 // Only the exact selected model is consulted. Models on the same provider can
 // have very different windows, so borrowing another model's would silently
-// apply a wrong budget. If the selected model reports no window,
-// w.contextWindow stays 0 and budget handling remains disabled.
+// apply a wrong budget. If the selected model reports no window, w.contextWindow
+// stays 0 and budget handling remains disabled: the window is a property of the
+// model, so declaring one is provider.json's job (a per-model context_window),
+// not something a worker overrides.
 func (w *BaseReasonWorker) resolveContextWindow() {
-	if w.contextWindowExplicit > 0 {
-		w.contextWindow = w.contextWindowExplicit
-		return
-	}
 	w.contextWindow = 0
 	if w.providerSources == nil {
 		return
@@ -227,6 +222,10 @@ func (w *BaseReasonWorker) handleSetLLMProvider(evt event.Event) {
 		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
 		return
 	}
+	// A switch starts on a fresh provider, whose prompt cache is cold anyway: the
+	// cheapest moment to settle the program ledger (the same reasoning that makes
+	// a compaction a reset boundary).
+	w.applyProgramsLocked()
 	w.NotifyDurableChange()
 	w.ReplyCompleted(evt.WorkerId, evt.RequestId,
 		fmt.Sprintf("switched to provider %s model %s", name, model), evt.TraceID)

@@ -143,17 +143,17 @@ endpoint, add it as a provider entry and reference it by name.
 
 ## Context budget
 
-- ` + "`context_window`" + ` (int) — model window in tokens; 0 disables budget handling.
-  Normally supplied by the provider/model config.
 - ` + "`budget_soft`" + ` (ratio, default 0.85) and ` + "`budget_hard`" + ` (ratio, default 0.97) —
   window occupancy that triggers a compression reminder / forced compression.
+  The window itself is never configured here: it is the selected model's
+  window, taken from provider.json's per-model ` + "`context_window`" + ` (or the
+  provider API). If neither declares one, budget handling stays off rather
+  than guessing a size.
 - ` + "`tail_tokens`" + ` (int, default 10000; legacy alias ` + "`keep_tail`" + `) — token budget of
   recent transcript kept verbatim after compression. A tool call and its
   results are never split.
 - ` + "`compact_directive`" + ` (string) — overrides the built-in summarizer prompt used
   when compressing.
-- ` + "`rotate_rounds`" + ` (int, default 2) — rounds retained by ` + "`context.rotate`" + `; that
-  tool is currently disabled.
 
 ## Display metadata
 
