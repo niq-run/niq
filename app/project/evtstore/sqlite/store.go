@@ -1,4 +1,4 @@
-// Package sqlite implements [store.AppendStore] backed by a local SQLite database.
+// Package sqlite implements [event.AppendStore] backed by a local SQLite database.
 package sqlite
 
 import (
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 
 	_ "modernc.org/sqlite"
 )
@@ -131,7 +130,7 @@ func (s *Store) migrate() error {
 	return err
 }
 
-// Append implements [store.AppendStore].
+// Append implements [event.AppendStore].
 func (s *Store) Append(ctx context.Context, events ...event.Event) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -188,11 +187,11 @@ func insertRecipients(ctx context.Context, tx *sql.Tx, evt event.Event) error {
 	return nil
 }
 
-// ByWorker implements [store.EventStore].
+// ByWorker implements [event.EventStore].
 
-// Replay implements [store.EventStore].
+// Replay implements [event.EventStore].
 
-func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts) ([]event.Event, error) {
+func (s *Store) List(ctx context.Context, workerID string, opts event.QueryOpts) ([]event.Event, error) {
 	query := `SELECT id, type, worker_id, payload, timestamp, target_worker_id,
 			recipients, trace_id, request_id, specversion, dataschema
 			FROM events WHERE 1=1`
@@ -203,8 +202,8 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 		// both. Recipient matching goes through the normalized table — exact
 		// and indexed (the old LIKE '%id%' on the JSON column full-scanned AND
 		// false-matched substring ids like niq vs niq-workspace).
-		sent := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, store.RoleSent)
-		received := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, store.RoleReceived)
+		sent := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, event.RoleSent)
+		received := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, event.RoleReceived)
 		var branches []string
 		for _, wid := range opts.WorkerIDs {
 			switch {
@@ -318,7 +317,7 @@ func (s *Store) List(ctx context.Context, workerID string, opts store.QueryOpts)
 	return s.query(ctx, query, args...)
 }
 
-// Get implements [store.EventStore]: a point lookup by event ID, returning the
+// Get implements [event.EventStore]: a point lookup by event ID, returning the
 // full event (undisturbed by the worker-scoped filtering or pagination of
 // List). Returns (event, false) when the id is unknown.
 func (s *Store) Get(ctx context.Context, id string) (event.Event, bool, error) {

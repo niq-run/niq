@@ -33,7 +33,6 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
 	programpkg "github.com/niq-run/niq/core/itfs/program"
-	"github.com/niq-run/niq/core/itfs/store"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
 
@@ -44,7 +43,7 @@ type BuildContext struct {
 	Engine       *eventbus.Engine
 	WorkerSvc    *workerhost.WorkerService
 	EventLog     *eventbusapi.EventLog
-	EventStore   store.EventStore
+	EventStore   event.EventStore
 	ProgramsRoot string
 	// StateDir is the per-project workers state directory (`<proj>/workers`);
 	// built-in workers persist their own state here (one dir per id).

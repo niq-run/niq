@@ -15,14 +15,13 @@ import (
 
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 )
 
 // Filter controls which events a subscriber receives.
 type Filter struct {
 	WorkerIDs []string // filter by source, target, or recipient worker
 	// WorkerRoles narrows which side of the worker's traffic WorkerIDs
-	// matches: store.RoleSent (source) / store.RoleReceived (target or
+	// matches: event.RoleSent (source) / event.RoleReceived (target or
 	// recipient). Empty means both.
 	WorkerRoles []string
 	TraceID     string          // filter by trace ID
@@ -93,8 +92,8 @@ func hiddenType(t string, exclude, prefixes, keep []string) bool {
 // IDs on at least one of the requested roles (sent = source, received =
 // target or recipient; empty roles means both).
 func workerMatchesAny(evt event.Event, ids, roles []string) bool {
-	sent := len(roles) == 0 || slices.Contains(roles, store.RoleSent)
-	received := len(roles) == 0 || slices.Contains(roles, store.RoleReceived)
+	sent := len(roles) == 0 || slices.Contains(roles, event.RoleSent)
+	received := len(roles) == 0 || slices.Contains(roles, event.RoleReceived)
 	for _, id := range ids {
 		if sent && evt.WorkerId == id {
 			return true
@@ -116,14 +115,14 @@ type subscriber struct {
 // It attaches to an Engine via Hook and provides the data source for the API server.
 type EventLog struct {
 	engine      *eventbus.Engine
-	store       store.EventStore
+	store       event.EventStore
 	mu          sync.Mutex
 	subscribers []*subscriber
 }
 
 // NewEventLog creates an EventLog attached to the given Engine and store.
 // The store is used for historical queries; the engine provides real-time events.
-func NewEventLog(engine *eventbus.Engine, store store.EventStore) *EventLog {
+func NewEventLog(engine *eventbus.Engine, store event.EventStore) *EventLog {
 	return &EventLog{
 		engine: engine,
 		store:  store,
@@ -206,7 +205,7 @@ func (l *EventLog) FollowLive(ctx context.Context, filter Filter) (<-chan event.
 	// matches this subscription's filter.
 	watermark := ""
 	var gapEvt event.Event
-	if latest, err := l.store.List(ctx, "*", store.QueryOpts{Limit: 1, Desc: true}); err == nil && len(latest) > 0 {
+	if latest, err := l.store.List(ctx, "*", event.QueryOpts{Limit: 1, Desc: true}); err == nil && len(latest) > 0 {
 		watermark = latest[0].ID
 		if matchesFilter(latest[0], filter) {
 			gapEvt = latest[0]
@@ -249,7 +248,7 @@ func (l *EventLog) LoadBefore(ctx context.Context, filter Filter, anchor string,
 	if limit <= 0 {
 		limit = 50
 	}
-	return l.store.List(ctx, "*", store.QueryOpts{
+	return l.store.List(ctx, "*", event.QueryOpts{
 		BeforeID:            anchor,
 		Limit:               limit,
 		Desc:                true,
@@ -272,5 +271,5 @@ func (l *EventLog) ListByRequest(ctx context.Context, requestID string) ([]event
 	if requestID == "" {
 		return nil, nil
 	}
-	return l.store.List(ctx, "*", store.QueryOpts{RequestID: requestID})
+	return l.store.List(ctx, "*", event.QueryOpts{RequestID: requestID})
 }

@@ -1,12 +1,14 @@
-// Package store defines the read-side interface for event persistence.
-// Workers query events via this interface; writes happen on the bus side.
-package store
+package event
 
-import (
-	"context"
+import "context"
 
-	"github.com/niq-run/niq/core/itfs/event"
-)
+// Event persistence: the read-side contract. Workers query persisted events
+// through these interfaces; writes happen on the bus side, during routing.
+//
+// The whole family lives here rather than in a package of its own because every
+// type below is expressed purely in terms of Event: a store exists to hand back
+// events, and QueryOpts exists to select them. Compare program.Store, the same
+// arrangement for Programs.
 
 // EventStore is the read-side interface for querying persisted events.
 // Workers consume this to replay history or display past interactions.
@@ -14,13 +16,13 @@ type EventStore interface {
 	// List returns events for a single worker, filtered by opts.
 	// Use Desc=true for display (newest first), Desc=false for replay (oldest first).
 	// When AfterID is set, only events after that event are returned (for rebuild).
-	List(ctx context.Context, workerID string, opts QueryOpts) ([]event.Event, error)
+	List(ctx context.Context, workerID string, opts QueryOpts) ([]Event, error)
 
 	// Get returns the single event with the given ID, or (zero, false) when
 	// no such event has been persisted. It is the store's point lookup, used
 	// by detail/introspection views that need one full event without the
 	// worker-scoped filtering and pagination of List.
-	Get(ctx context.Context, id string) (event.Event, bool, error)
+	Get(ctx context.Context, id string) (Event, bool, error)
 }
 
 // Append writes events to the store. Workers should not call this directly;
@@ -31,7 +33,7 @@ type AppendStore interface {
 	EventStore
 
 	// Append persists one or more events.
-	Append(ctx context.Context, events ...event.Event) error
+	Append(ctx context.Context, events ...Event) error
 }
 
 // Worker traffic roles, used by QueryOpts.WorkerRoles (and the API layer's
