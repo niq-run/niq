@@ -57,6 +57,7 @@ type Worker struct {
 	tools      map[string][]toolInfo        // per-server cached tool list
 	toolEvents map[string][]event.EventType // ready mode: tool events bound per server
 	started    bool
+	runCtx     context.Context
 	cancel     context.CancelFunc
 }
 
@@ -93,6 +94,38 @@ func (w *Worker) seedStaticServers() {
 	}
 }
 
+// serve registers an extension whose handler runs on its own goroutine.
+//
+// A handler may sit on the network for as long as the remote server takes —
+// a tools/call is a full HTTP round trip, tools/list and server.add connect
+// first — and the worker has ONE event loop: a synchronous handler would make
+// every later request (including mcp.server.list, a purely local read) wait
+// behind it. Dispatch therefore only starts the work; the answer travels over
+// the bus as request.completed / request.failed whenever the handler actually
+// finishes, so the caller still sees the usual request/response pair. The
+// workspace worker's tools dispatch the same way.
+func (w *Worker) serve(ext baseworker.Extension, h func(context.Context, event.Event)) {
+	w.Register(ext, func(evt event.Event) {
+		// Capture the run context at dispatch, not inside the goroutine: a
+		// request accepted while the worker runs must be cancelled by Stop
+		// even when its goroutine starts late.
+		ctx := w.ctx()
+		go h(ctx, evt)
+	})
+}
+
+// ctx is the run context handlers give to remote calls: cancelled by Stop, so
+// an in-flight call is aborted instead of outliving the worker. Background
+// before Start (unit tests drive handlers directly).
+func (w *Worker) ctx() context.Context {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.runCtx != nil {
+		return w.runCtx
+	}
+	return context.Background()
+}
+
 func (w *Worker) registerExtensions() {
 	obj := func(props map[string]any) map[string]any {
 		return map[string]any{"type": "object", "properties": props}
@@ -107,14 +140,14 @@ func (w *Worker) registerExtensions() {
 		"Read this worker's usage guide: what it proxies, the event list, and how to discover "+
 			"and call remote tools. Read it first, then drive the concrete events.",
 		w.readmeText, w.cfg.Params)
-	w.Register(baseworker.Extension{
+	w.serve(baseworker.Extension{
 		Event:    EvtServerList,
 		Response: baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "url": map[string]any{"type": "string"}, "protocol": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"configured", "connected"}}, "tools": map[string]any{"type": "number", "description": "cached tool count"}})),
 		Description: "List configured MCP servers (name, url, tool count, status). " +
 			"Call this first to discover what remote MCP servers are available.",
 		Parameters: obj(map[string]any{}),
 	}, w.handleServerList)
-	w.Register(baseworker.Extension{
+	w.serve(baseworker.Extension{
 		Event:       EvtToolList,
 		Response:    baseworker.ArraySchema(baseworker.ObjectSchema(map[string]any{"name": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}, "schema": map[string]any{"type": "object", "description": "the tool's input schema"}, "response": map[string]any{"type": "object", "description": "the tool's declared output schema, when the server declares one"}})),
 		Description: "List the tools exposed by one MCP server (provide server).",
@@ -122,7 +155,7 @@ func (w *Worker) registerExtensions() {
 			"server": map[string]any{"type": "string", "description": "server name from mcp.server.list"},
 		}),
 	}, w.handleToolList)
-	w.Register(baseworker.Extension{
+	w.serve(baseworker.Extension{
 		Event:       EvtToolCall,
 		Response:    baseworker.StringSchema("the remote tool's content as text; when the server returns structured output, its JSON follows the text"),
 		Description: "Call a tool on a remote MCP server. Provide server, tool, and arguments.",
@@ -135,7 +168,7 @@ func (w *Worker) registerExtensions() {
 	// Runtime mutation and mode switching are opt-out: a fixed worker is a
 	// config-only tool provider (connect at start, expose tools, done).
 	if !w.cfg.Fixed {
-		w.Register(baseworker.Extension{
+		w.serve(baseworker.Extension{
 			Event:       EvtServerAdd,
 			Response:    baseworker.StringSchema("confirmation naming the server"),
 			Description: "Add an MCP server at runtime (persisted). Provide name, url, and optional headers/protocol.",
@@ -146,7 +179,7 @@ func (w *Worker) registerExtensions() {
 				"protocol": map[string]any{"type": "string"},
 			}),
 		}, w.handleServerAdd)
-		w.Register(baseworker.Extension{
+		w.serve(baseworker.Extension{
 			Event:       EvtServerRemove,
 			Response:    baseworker.StringSchema("confirmation naming the server"),
 			Description: "Remove an MCP server at runtime (persisted). Provide name.",
@@ -154,7 +187,7 @@ func (w *Worker) registerExtensions() {
 				"name": map[string]any{"type": "string"},
 			}),
 		}, w.handleServerRemove)
-		w.Register(baseworker.Extension{
+		w.serve(baseworker.Extension{
 			Event:       EvtServerUpdate,
 			Response:    baseworker.StringSchema("confirmation naming the server"),
 			Description: "Update an MCP server's url/headers/protocol at runtime (persisted). Provide name and the fields to change.",
@@ -165,7 +198,7 @@ func (w *Worker) registerExtensions() {
 				"protocol": map[string]any{"type": "string"},
 			}),
 		}, w.handleServerUpdate)
-		w.Register(baseworker.Extension{
+		w.serve(baseworker.Extension{
 			Event:    EvtExpose,
 			Response: baseworker.ObjectSchema(map[string]any{"mode": map[string]any{"type": "string", "enum": []any{ExposeAgentic, ExposeReady}}}),
 			Description: "Get or set the exposure mode. agentic exposes a fixed discovery surface " +
@@ -190,6 +223,7 @@ func (w *Worker) Start(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
+	w.runCtx = runCtx
 	w.started = true
 	expose := w.cfg.Expose
 	w.mu.Unlock()
@@ -214,17 +248,28 @@ func (w *Worker) Start(ctx context.Context) error {
 
 func (w *Worker) Stop() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if !w.started {
+		w.mu.Unlock()
 		return nil
 	}
+	clients := make([]*serverClient, 0, len(w.clients))
 	for _, c := range w.clients {
+		clients = append(clients, c)
+	}
+	cancel := w.cancel
+	w.runCtx = nil
+	w.started = false
+	w.mu.Unlock()
+
+	// Cancel first, then disconnect, both OFF the worker lock: a tool call may
+	// be in flight holding its client, and it must observe the cancellation
+	// instead of waiting for the lock to be released.
+	if cancel != nil {
+		cancel()
+	}
+	for _, c := range clients {
 		c.Close()
 	}
-	if w.cancel != nil {
-		w.cancel()
-	}
-	w.started = false
 	return nil
 }
 
@@ -312,7 +357,7 @@ func (w *Worker) process(evt event.Event) {
 
 // ── agentic discovery handlers ──
 
-func (w *Worker) handleServerList(evt event.Event) {
+func (w *Worker) handleServerList(ctx context.Context, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
 		return
@@ -323,7 +368,7 @@ func (w *Worker) handleServerList(evt event.Event) {
 	for _, name := range sortedKeys(w.clients) {
 		sc := w.clients[name].cfg
 		status := "configured"
-		if w.clients[name].session != nil {
+		if w.clients[name].connected() {
 			status = "connected"
 		}
 		list = append(list, map[string]any{
@@ -429,13 +474,13 @@ func (w *Worker) readmeText() string {
 	return b.String()
 }
 
-func (w *Worker) handleToolList(evt event.Event) {
+func (w *Worker) handleToolList(ctx context.Context, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
 		return
 	}
 	server := argString(tc.Args, "server")
-	info, err := w.toolsFor(context.Background(), server)
+	info, err := w.toolsFor(ctx, server)
 	if err != nil {
 		w.reply(tc, "", err.Error())
 		return
@@ -454,7 +499,7 @@ func (w *Worker) handleToolList(evt event.Event) {
 	w.reply(tc, list, "")
 }
 
-func (w *Worker) handleToolCall(evt event.Event) {
+func (w *Worker) handleToolCall(ctx context.Context, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
 		return
@@ -478,7 +523,7 @@ func (w *Worker) handleToolCall(evt event.Event) {
 		return
 	}
 	// A failed call drops the session, so the next call reconnects.
-	result, err := cl.CallTool(context.Background(), tool, args)
+	result, err := cl.CallTool(ctx, tool, args)
 	if err != nil {
 		w.reply(tc, "", err.Error())
 		return
@@ -488,7 +533,7 @@ func (w *Worker) handleToolCall(evt event.Event) {
 
 // ── runtime management handlers (persisted) ──
 
-func (w *Worker) handleServerAdd(evt event.Event) {
+func (w *Worker) handleServerAdd(ctx context.Context, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
 		return
@@ -511,11 +556,15 @@ func (w *Worker) handleServerAdd(evt event.Event) {
 
 	// Prime the tool cache (and, in ready mode, the dynamic watch contract). On
 	// failure, roll back (the server may be offline) and surface the error.
-	if _, err := w.toolsFor(context.Background(), sc.Name); err != nil {
+	if _, err := w.toolsFor(ctx, sc.Name); err != nil {
 		w.mu.Lock()
-		delete(w.clients, sc.Name)
-		cl.Close()
+		// Only withdraw the client WE added: a concurrent remove already
+		// dropped it (and closed it), and a later add may own the name now.
+		if w.clients[sc.Name] == cl {
+			delete(w.clients, sc.Name)
+		}
 		w.mu.Unlock()
+		cl.Close()
 		w.reply(tc, "", err.Error())
 		return
 	}
@@ -524,7 +573,7 @@ func (w *Worker) handleServerAdd(evt event.Event) {
 	w.reply(tc, fmt.Sprintf("added server %s (%d tools)", sc.Name, w.toolsForCached(sc.Name)), "")
 }
 
-func (w *Worker) handleServerRemove(evt event.Event) {
+func (w *Worker) handleServerRemove(ctx context.Context, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
 		return
@@ -533,7 +582,6 @@ func (w *Worker) handleServerRemove(evt event.Event) {
 	w.mu.Lock()
 	cl, ok := w.clients[name]
 	if ok {
-		cl.Close()
 		delete(w.clients, name)
 		w.setTools(name, nil)
 	}
@@ -542,12 +590,15 @@ func (w *Worker) handleServerRemove(evt event.Event) {
 		w.reply(tc, "", fmt.Sprintf("unknown server %q", name))
 		return
 	}
+	// Close off the lock: disconnecting is a network round trip, and the event
+	// loop no longer has to wait for it either.
+	cl.Close()
 	w.NotifyDurableChange()
 	w.announceIfReady()
 	w.reply(tc, fmt.Sprintf("removed server %s", name), "")
 }
 
-func (w *Worker) handleServerUpdate(evt event.Event) {
+func (w *Worker) handleServerUpdate(ctx context.Context, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
 		return
@@ -571,17 +622,16 @@ func (w *Worker) handleServerUpdate(evt event.Event) {
 	if hm, ok := tc.Args["headers"].(map[string]any); ok {
 		sc.Headers = stringMap(hm)
 	}
-	cl.Close()
-	next := newServerClient(sc)
-	w.clients[name] = next
+	w.clients[name] = newServerClient(sc)
 	w.setTools(name, nil) // stale until re-listed against the new endpoint
 	w.mu.Unlock()
+	cl.Close()
 
 	w.NotifyDurableChange()
 	// Re-list against the new endpoint off the reply path, then re-announce;
 	// best-effort — an unreachable server simply has no tools until it recovers.
 	go func() {
-		if _, err := w.toolsFor(context.Background(), name); err != nil {
+		if _, err := w.toolsFor(ctx, name); err != nil {
 			log.Printf("[mcp %s] refresh tools for %s: %v", w.ID(), name, err)
 		}
 		w.announceIfReady()
@@ -589,7 +639,7 @@ func (w *Worker) handleServerUpdate(evt event.Event) {
 	w.reply(tc, fmt.Sprintf("updated server %s", name), "")
 }
 
-func (w *Worker) handleExpose(evt event.Event) {
+func (w *Worker) handleExpose(ctx context.Context, evt event.Event) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
 		return
@@ -629,7 +679,7 @@ func (w *Worker) applyExpose(mode string) {
 	w.NotifyDurableChange()
 	w.announce()
 	if mode == ExposeReady && started {
-		go w.primeReadyTools(context.Background())
+		go w.primeReadyTools(w.ctx())
 	}
 }
 
@@ -751,7 +801,7 @@ func (w *Worker) setTools(server string, info []toolInfo) {
 			// calling.
 			ext.Response = mapToStringSchema(t.OutputSchema)
 		}
-		w.Register(ext, func(e event.Event) { w.handleDirectCall(e, serverName, toolName) })
+		w.serve(ext, func(ctx context.Context, e event.Event) { w.handleDirectCall(ctx, e, serverName, toolName) })
 		events = append(events, evt)
 	}
 	w.toolEvents[server] = events
@@ -813,7 +863,7 @@ func (w *Worker) primeReadyTools(ctx context.Context) {
 	w.announceIfReady()
 }
 
-func (w *Worker) handleDirectCall(evt event.Event, server, tool string) {
+func (w *Worker) handleDirectCall(ctx context.Context, evt event.Event, server, tool string) {
 	tc := baseworker.ParseToolCall(evt)
 	if tc.CallID == "" {
 		return
@@ -829,7 +879,7 @@ func (w *Worker) handleDirectCall(evt event.Event, server, tool string) {
 		w.reply(tc, "", fmt.Sprintf("unknown server %q", server))
 		return
 	}
-	result, err := cl.CallTool(context.Background(), tool, args)
+	result, err := cl.CallTool(ctx, tool, args)
 	if err != nil {
 		w.reply(tc, "", err.Error())
 		return
