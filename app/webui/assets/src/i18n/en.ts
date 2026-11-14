@@ -639,7 +639,7 @@ export const en = {
   'wd.managed': 'Managed',
   'wd.credential': 'Credential',
   'wd.params': 'Params',
-  'wd.params.saved': 'saved — restart the worker to apply',
+  'wd.params.saved': 'saved — applied when the worker restarts (provider, programs, readme, mounts and MCP servers keep their runtime state)',
   'wd.yes': 'yes',
   'wd.no': 'no',
   'wd.publishAllow': 'Publish Allow',

@@ -1663,8 +1663,11 @@ func (s *Server) handleUnmanagedStop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUnmanagedRestart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	// A managed worker has no supervisor entry: restart it by rebuilding it from
-	// its declaration (destroy + spawn), which is what applies a params edit.
+	// A managed worker has no supervisor entry: restart it from its declaration.
+	// It is the same start every other path uses — config supplies the
+	// construction inputs, the persisted snapshot supplies the worker's own
+	// state — so a declaration edit reaches the worker without discarding what
+	// it learned.
 	if s.workerSvc != nil && s.workerSvc.HasWorker(id) {
 		if s.managedRestart == nil {
 			http.Error(w, "managed worker restart unavailable", http.StatusNotFound)

@@ -418,20 +418,89 @@ func (s *WorkerService) DestroyWorker(id string) error {
 	return fmt.Errorf("workerhost: worker %s not found", id)
 }
 
-// RestartWorker replaces a worker with a fresh instance built from cfg.
+// RestartWorker brings a worker up again from cfg while keeping the state it
+// already persisted.
 //
-// A restart is deliberately a rebuild, not a resume: it exists to apply a
-// changed definition (e.g. an edited params map), so the persisted snapshot is
-// dropped rather than restored over the new config. The id does not have to be
-// live — an unknown id is simply created, which lets callers use one path for
-// "restart" and "start from declaration".
+// A restart is the same sequence every start follows — build the instance from
+// the (current) definition, then replay the persisted snapshot over it — so
+// "first start", "process recovery", "resume" and "restart" all mean one
+// thing: config supplies the construction inputs, the snapshot supplies what
+// the worker learned. Construction-only params (budgets, context window, tail
+// retention, subscriptions, publish grants, approver) therefore follow a
+// declaration edit on the next start; fields the snapshot owns — a reason
+// worker's provider selection, its programs and readme, a workspace's mounts,
+// an mcp worker's servers, a timer's armed set — survive it, and are changed
+// through the runtime events that own them (provider.switch,
+// worker.readme.update, mount.add, mcp.server.add, …), not by editing config.
+//
+// A running instance is snapshotted before it is replaced, so a restart never
+// loses what the worker learned. A type change is the one case that cannot
+// carry a snapshot: the blob belongs to a different worker implementation, so
+// it is dropped rather than replayed into an instance that cannot read it.
+//
+// The id does not have to be live — an unknown id is simply started, which lets
+// callers use one path for "restart" and "start from declaration".
 func (s *WorkerService) RestartWorker(ctx context.Context, cfg worker.WorkerConfig) error {
-	if s.HasWorker(cfg.ID) {
-		if err := s.DestroyWorker(cfg.ID); err != nil {
-			return err
+	if !s.HasWorker(cfg.ID) {
+		return s.RestoreAndRun(ctx, cfg, s.persistedSnapshot(cfg.ID))
+	}
+
+	s.mu.Lock()
+	if s.protected[cfg.ID] {
+		s.mu.Unlock()
+		return fmt.Errorf("workerhost: worker %s is protected and cannot be restarted", cfg.ID)
+	}
+	s.mu.Unlock()
+
+	// Suspend snapshots before stopping and persists the result, so the state a
+	// restart has to keep is on disk before the live instance goes away.
+	if err := s.SuspendWorker(cfg.ID); err != nil {
+		return fmt.Errorf("workerhost: restart %q: %w", cfg.ID, err)
+	}
+
+	s.mu.Lock()
+	e := s.findLocked(cfg.ID)
+	var prevType string
+	var cached []byte
+	if e != nil {
+		prevType = e.typ
+		cached = e.snapshot
+		s.entries = slices.DeleteFunc(s.entries, func(en workerEntry) bool { return en.spec.ID() == cfg.ID })
+	}
+	s.mu.Unlock()
+
+	// Prefer the instance's own snapshot: it was taken just now, while the disk
+	// copy is only as fresh as the last successful persist. Only a worker that is
+	// not live here has nothing cached, and then the disk is the only copy.
+	snap := cached
+	if len(snap) == 0 {
+		snap = s.persistedSnapshot(cfg.ID)
+	}
+	if prevType != "" && prevType != cfg.Type {
+		log.Printf("[workerhost] restart %s: type %s -> %s, dropping the %s snapshot", cfg.ID, prevType, cfg.Type, prevType)
+		snap = nil
+	}
+	return s.RestoreAndRun(ctx, cfg, snap)
+}
+
+// persistedSnapshot returns the snapshot persisted for id, or nil when there is
+// none: no store, no record for that worker, or an unreadable store. It is the
+// disk copy of the state a start has to replay.
+func (s *WorkerService) persistedSnapshot(id string) []byte {
+	if s.store == nil {
+		return nil
+	}
+	recs, err := s.store.LoadAll()
+	if err != nil {
+		log.Printf("[workerhost] read persisted state %s: %v", id, err)
+		return nil
+	}
+	for _, rec := range recs {
+		if rec.ID == id {
+			return rec.Snapshot
 		}
 	}
-	return s.CreateWorker(ctx, cfg)
+	return nil
 }
 
 // ShutdownSnapshot snapshots every running worker and persists it, so a clean

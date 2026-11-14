@@ -249,9 +249,12 @@ func (u webuiParamsUpdater) UpdateWorkerParams(id string, params map[string]any)
 	return UpdateWorkerParams(u.projectID, id, params)
 }
 
-// webuiManagedRestarter implements webui.ManagedRestarter: it rebuilds a
-// host-managed worker from its declaration. This is the path that makes a
-// params edit reach a live worker.
+// webuiManagedRestarter implements webui.ManagedRestarter: it brings a
+// host-managed worker up again from its declaration. Construction-only params
+// (budgets, context window, subscriptions, publish grants, …) follow the edit;
+// fields the worker persists (a reason worker's provider selection, programs and
+// readme; a workspace's mounts; an mcp worker's servers) are restored from the
+// snapshot and are changed by their own runtime events instead.
 type webuiManagedRestarter struct {
 	svc       *workerhost.WorkerService
 	projectID string

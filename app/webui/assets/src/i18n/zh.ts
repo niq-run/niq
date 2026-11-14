@@ -627,7 +627,7 @@ export const zh: Record<StringKey, string> = {
   'wd.managed': '托管',
   'wd.credential': '凭证',
   'wd.params': '参数配置',
-  'wd.params.saved': '已保存，重启该 worker 后生效',
+  'wd.params.saved': '已保存，重启该 worker 后生效（provider、programs、readme、mounts、MCP 服务器保留其运行时状态）',
   'wd.yes': '是',
   'wd.no': '否',
   'wd.publishAllow': '发布许可',
