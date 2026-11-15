@@ -83,9 +83,20 @@ type Backend interface {
 	SetHandler(h Handler)
 }
 
-// Stateful is the optional durable state of an interface worker, owned by its
-// backend (e.g. a bridge's recipient bindings). Supplied through
-// Config.State because only the builder knows which backend holds it.
+// Runnable is implemented by a backend that needs a lifetime of its own: a
+// remote link, a render loop, a subscription pump. Worker.Start calls Start
+// after SetHandler, and Worker.Stop calls Stop in reverse order, so a backend
+// can open its outward side knowing the inward handles already exist.
+type Runnable interface {
+	Start(ctx context.Context) error
+	Stop() error
+}
+
+// Stateful is implemented by a backend whose state must survive a restart (a
+// bridge's recipient bindings, an editor's open files). The worker keeps none of
+// its own: Snapshot/Restore delegate to the first backend that implements this,
+// so what gets persisted is exactly what the backend owns. A worker with several
+// stateful backends should compose them behind one that owns the shape.
 type Stateful interface {
 	Snapshot() ([]byte, error)
 	Restore(state []byte) error

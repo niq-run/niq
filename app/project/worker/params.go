@@ -218,7 +218,7 @@ var SpawnParamsByType = map[string][]string{
 	"hiw":       {},
 	"history":   {"max_list_events", "max_list_item_bytes", "readme", "readme_append"},
 	"mcp":       {"expose", "fixed", "servers", "allowed_tools", "mcp", "readme", "readme_append"},
-	"niw":       {"remote_url", "remote_worker_id", "remote_credential", "recipient", "remote_recipient"},
+	"niq":       {"remote_url", "remote_worker_id", "remote_credential", "recipient", "remote_recipient"},
 }
 
 // spawnParamAliases names the mistakes worth pointing at. Only applied when the

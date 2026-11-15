@@ -149,7 +149,7 @@ use when you passed none.
 
 Required:
 - ` + "`type`" + ` — worker type: reason, coding, workspace, program, timer, history,
-  directory, mcp, niw, or hiw. For ` + "`in-process`" + ` it selects the builder; for a
+  directory, mcp, niq, or interface. For ` + "`in-process`" + ` it selects the builder; for a
   process placement it labels the worker's identity.
 
 Placement:

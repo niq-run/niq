@@ -29,7 +29,7 @@ func TestResolveSecret(t *testing.T) {
 }
 
 // TestBuildRemoteIdentityDefaults verifies the default ACLs: a dialect-in
-// worker gets the broad wildcard, while a remote-niw peer gets only what the
+// worker gets the broad wildcard, while a niq link's far-side identity gets only what the
 // bridge needs on the far side.
 func TestBuildRemoteIdentityDefaults(t *testing.T) {
 	normal := BuildRemoteIdentity(&IdentitySpec{ID: "w", Type: "mcp"})
@@ -43,12 +43,12 @@ func TestBuildRemoteIdentityDefaults(t *testing.T) {
 		t.Fatal("a third-party identity must be marked Remote")
 	}
 
-	niw := BuildRemoteIdentity(&IdentitySpec{ID: "far", Type: "remote-niw"})
-	if len(niw.SubscribeAllow) != 2 {
-		t.Fatalf("remote-niw subscribe = %+v, want worker.input + worker.discover", niw.SubscribeAllow)
+	peer := BuildRemoteIdentity(&IdentitySpec{ID: "far", Type: "niq"})
+	if len(peer.SubscribeAllow) != 2 {
+		t.Fatalf("niq subscribe = %+v, want worker.input + worker.discover", peer.SubscribeAllow)
 	}
-	if len(niw.PublishAllow) != 3 {
-		t.Fatalf("remote-niw publish = %+v, want worker.input + request.* + worker.ready", niw.PublishAllow)
+	if len(peer.PublishAllow) != 3 {
+		t.Fatalf("niq publish = %+v, want worker.input + request.* + worker.ready", peer.PublishAllow)
 	}
 }
 

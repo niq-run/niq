@@ -40,7 +40,7 @@ func TestCheckSpawnParamsAcceptsDocumentedPayloads(t *testing.T) {
 			"servers":       []any{map[string]any{"name": "gh", "url": "https://x"}},
 			"allowed_tools": []any{"search"},
 		},
-		"niw": {
+		"niq": {
 			"remote_url": "http://b", "remote_worker_id": "far",
 			"remote_credential": "env:TOKEN", "recipient": "reason.local",
 		},

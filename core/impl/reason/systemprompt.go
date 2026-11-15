@@ -35,7 +35,7 @@ You can discover and get to know workers on demand in these ways:
 
 You have a few built-in tools for sending events to other workers:
 - request(target, event, arguments) — send the target worker (usually a domain or tool worker) a request event it can respond to, asking it to perform an operation, and expect a response
-- message(target, text) — send the target worker a worker.input event to leave a note or to reply; this is an important way of collaborating with another intelligent worker (reason / coding / niw)
+- message(target, text) — send the target worker a worker.input event to leave a note or to reply; this is an important way of collaborating with another intelligent worker (reason, coding, or a niq link)
 - run() — execute a script program. A script program is code that orchestrates request and message calls
 
 ## reason worker

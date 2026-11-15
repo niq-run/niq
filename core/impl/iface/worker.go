@@ -29,9 +29,6 @@ type Config struct {
 	// Publishes is the presence contract announced via worker.ready: the event
 	// types this worker emits, described for peers and the directory roster.
 	Publishes []map[string]any
-	// State is the optional durable state owned by a backend. Nil means this
-	// worker keeps nothing across a restart.
-	State Stateful
 	// RequestTimeout overrides DefaultRequestTimeout.
 	RequestTimeout time.Duration
 }
@@ -46,7 +43,7 @@ type Worker struct {
 	typ      string
 	backends []Backend
 	pubs     []map[string]any
-	state    Stateful
+	state    Stateful // first backend that is Stateful, resolved at construction
 	timeout  time.Duration
 
 	h *handler
@@ -62,12 +59,18 @@ func New(cfg Config) *Worker {
 	if timeout <= 0 {
 		timeout = DefaultRequestTimeout
 	}
+	var state Stateful
+	for _, b := range cfg.Backends {
+		if s, ok := b.(Stateful); ok && state == nil {
+			state = s
+		}
+	}
 	w := &Worker{
 		BaseWorker: baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
 		typ:        cfg.Type,
 		backends:   cfg.Backends,
 		pubs:       cfg.Publishes,
-		state:      cfg.State,
+		state:      state,
 		timeout:    timeout,
 	}
 	w.h = newHandler(cfg.ID, cfg.Bus, timeout)
@@ -93,6 +96,15 @@ func (w *Worker) Start(ctx context.Context) error {
 			continue
 		}
 		b.SetHandler(w.h)
+	}
+	// Then give each backend its own lifetime. A backend whose Start fails would
+	// leave the worker deaf, so it is a start error.
+	for _, b := range w.backends {
+		if r, ok := b.(Runnable); ok {
+			if err := r.Start(ctx); err != nil {
+				return fmt.Errorf("iface: %s: backend start: %w", w.ID(), err)
+			}
+		}
 	}
 
 	busCh, err := w.Channel.Receive(ctx)
@@ -168,6 +180,15 @@ func (w *Worker) Stop() error {
 
 	if cancel != nil {
 		cancel()
+	}
+	// Backends stop before the subscriptions close, so a backend's last delivery
+	// can still reach the bus.
+	for i := len(w.backends) - 1; i >= 0; i-- {
+		if r, ok := w.backends[i].(Runnable); ok {
+			if err := r.Stop(); err != nil {
+				logf("%s: backend stop: %v", w.ID(), err)
+			}
+		}
 	}
 	w.h.close()
 	if w.Channel != nil {

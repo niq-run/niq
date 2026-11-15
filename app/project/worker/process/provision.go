@@ -29,14 +29,13 @@ import (
 func BuildRemoteIdentity(spec *IdentitySpec) corebus.Identity {
 	subAllow := spec.Subscriptions
 	if len(subAllow) == 0 {
-		// A NIW far-side identity only needs to receive the collaborative
+		// A niq link's far-side identity only needs the collaborative
 		// worker.input plus worker.discover (so it can be found / announced on
-		// the far side). Defaulting it to `*` would ingest the WHOLE far-side
-		// bus broadcast, and the bridge would relay (reason.start etc.) as
-		// conversation — the flood seen on the far side. Other third-party
-		// workers keep the `*` fallback for backward compatibility with
-		// broadcast-driven peers.
-		if spec.Type == "remote-niw" {
+		// that bus). Defaulting it to `*` would ingest the WHOLE far-side bus
+		// broadcast, and the link would relay (reason.start etc.) as
+		// conversation. Other third-party workers keep the `*` fallback for
+		// backward compatibility with broadcast-driven peers.
+		if spec.Type == "niq" {
 			subAllow = []event.EventPattern{
 				event.NewPattern(event.TypeWorkerInput),
 				event.NewPattern("worker.discover"),
@@ -47,12 +46,12 @@ func BuildRemoteIdentity(spec *IdentitySpec) corebus.Identity {
 	}
 	pubAllow := spec.Publish
 	if len(pubAllow) == 0 {
-		// A NIW far-side identity only publishes what the bridge needs on that
-		// bus: forward collaborative worker.input, reply to control (request.*),
-		// and announce presence. Defaulting it to `*` would let the dialed-in
-		// NIW publish arbitrary event types / reach any worker on the far side.
-		// Other third-party workers keep the `*` fallback.
-		if spec.Type == "remote-niw" {
+		// A niq link's far-side identity only publishes what the link needs on
+		// that bus: forward collaborative worker.input, reply to control
+		// (request.*), and announce presence. Defaulting it to `*` would let the
+		// dialed-in worker publish arbitrary event types / reach any worker on
+		// the far side. Other third-party workers keep the `*` fallback.
+		if spec.Type == "niq" {
 			pubAllow = []event.PublishPattern{
 				event.NewPublishPattern("worker.input"),
 				event.NewPublishPattern("request.*"),

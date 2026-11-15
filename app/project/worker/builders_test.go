@@ -12,8 +12,8 @@ import (
 	providerpkg "github.com/niq-run/niq/app/project/provider"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
+	"github.com/niq-run/niq/core/impl/iface"
 	"github.com/niq-run/niq/core/impl/workers/hiw"
-	"github.com/niq-run/niq/core/impl/workers/niw"
 	"github.com/niq-run/niq/core/impl/workersvc"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -72,21 +72,21 @@ func TestParseMountsParamPathSugar(t *testing.T) {
 func TestBuildNIWSpecRequiresRemoteParams(t *testing.T) {
 	var empty BuildContext
 
-	if _, err := buildNIWSpec(empty, coreworker.WorkerConfig{ID: "peer"}); err == nil {
+	if _, err := buildNIQSpec(empty, coreworker.WorkerConfig{ID: "peer"}); err == nil {
 		t.Fatal("expected error for missing remote params, got nil")
 	}
 
 	// remote_worker_id alone (no URL) is still invalid.
-	if _, err := buildNIWSpec(empty, coreworker.WorkerConfig{
+	if _, err := buildNIQSpec(empty, coreworker.WorkerConfig{
 		ID:     "peer",
-		Params: map[string]any{"remote_worker_id": "remote-niw"},
+		Params: map[string]any{"remote_worker_id": "far"},
 	}); err == nil {
 		t.Fatal("expected error for missing remote_url")
 	}
 
 	// A recipient is NOT required at build time: it is only the seed — the live
-	// binding is a runtime property set via niw.recipient.* (like lark).
-	if _, err := buildNIWSpec(empty, coreworker.WorkerConfig{
+	// binding is a runtime property set via niq.recipient.* (like lark).
+	if _, err := buildNIQSpec(empty, coreworker.WorkerConfig{
 		ID: "peer",
 		Params: map[string]any{
 			"remote_url":        "http://127.0.0.1:19763",
@@ -98,12 +98,12 @@ func TestBuildNIWSpecRequiresRemoteParams(t *testing.T) {
 	}
 }
 
-// TestBuildNIWSpecReadsParams verifies the NIW spec picks up remote_url,
+// TestBuildNIQSpecReadsParams verifies the niq spec picks up remote_url,
 // remote_worker_id and recipient from Params (validated before connectivity, so
 // a zero BuildContext is fine — specConnect is not reached past this check).
-func TestBuildNIWSpecReadsParams(t *testing.T) {
+func TestBuildNIQSpecReadsParams(t *testing.T) {
 	var empty BuildContext
-	spec, err := buildNIWSpec(empty, coreworker.WorkerConfig{
+	spec, err := buildNIQSpec(empty, coreworker.WorkerConfig{
 		ID: "peer",
 		Params: map[string]any{
 			"remote_url":       "http://127.0.0.1:19763",
@@ -112,17 +112,17 @@ func TestBuildNIWSpecReadsParams(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("buildNIWSpec: %v", err)
+		t.Fatalf("buildNIQSpec: %v", err)
 	}
-	if spec.Type() != "niw" || spec.ID() != "peer" {
+	if spec.Type() != "niq" || spec.ID() != "peer" {
 		t.Fatalf("unexpected spec: type=%s id=%s", spec.Type(), spec.ID())
 	}
 	// The Build closure carries the config; invoke it with a nil channel to
-	// confirm it constructs a *niw.Worker.
+	// confirm it constructs an interface worker over the niq backend.
 	if w := spec.Build(nil); w == nil {
 		t.Fatal("Build returned nil worker")
-	} else if _, ok := w.(*niw.Worker); !ok {
-		t.Fatalf("build returned %T, want *niw.Worker", w)
+	} else if _, ok := w.(*iface.Worker); !ok {
+		t.Fatalf("build returned %T, want *iface.Worker", w)
 	}
 }
 

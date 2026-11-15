@@ -23,6 +23,7 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
+	"github.com/niq-run/niq/core/impl/iface"
 	reasonbase "github.com/niq-run/niq/core/impl/reason"
 	"github.com/niq-run/niq/core/impl/workers/coding"
 	"github.com/niq-run/niq/core/impl/workers/directory"
@@ -30,7 +31,7 @@ import (
 	"github.com/niq-run/niq/core/impl/workers/hiw"
 	"github.com/niq-run/niq/core/impl/workers/host"
 	"github.com/niq-run/niq/core/impl/workers/mcp"
-	"github.com/niq-run/niq/core/impl/workers/niw"
+	"github.com/niq-run/niq/core/impl/workers/niq"
 	programworker "github.com/niq-run/niq/core/impl/workers/program"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 	"github.com/niq-run/niq/core/impl/workers/program/quickjsexec"
@@ -103,8 +104,8 @@ func RegisterBuilders(ctx BuildContext, svc *workersvc.WorkerService) {
 	svc.RegisterBuilder("hiw", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildHIWSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("niw", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
-		return buildNIWSpec(ctx, cfg)
+	svc.RegisterBuilder("niq", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+		return buildNIQSpec(ctx, cfg)
 	})
 	svc.RegisterBuilder("program", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildProgramSpec(ctx, cfg)
@@ -612,48 +613,38 @@ func buildHIWSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Spa
 	}, nil
 }
 
-// ── niw ──
+// ── niq ──
 
 // buildNIWSpec builds a NIW (niq interface worker) — a managed worker that, at
 // Start, dials another niq instance's bus as an HTTP-transport remote worker.
 // Its local identity is registered like any managed worker; the remote
 // connection (remote URL / remote worker id / remote credential) comes from
 // Params.
-func buildNIWSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildNIQSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
-		id = "niw"
+		return coreworker.SpawnSpec{}, fmt.Errorf("niq: id is required")
 	}
 	remoteURL, _ := p["remote_url"].(string)
 	remoteWorkerID, _ := p["remote_worker_id"].(string)
 	remoteCredRaw, _ := p["remote_credential"].(string)
 	remoteCred := projprocess.ResolveSecret(remoteCredRaw)
 	// recipient seeds the LOCAL binding, remote_recipient the REMOTE one. Both
-	// are runtime properties (set via niw.recipient.*); the seeds just avoid a
-	// bootstrap control event. Empty seed is fine.
+	// are runtime properties (set via niq.recipient.*); the seeds just avoid a
+	// bootstrap control event.
 	recipient, _ := p["recipient"].(string)
 	remoteRecipient, _ := p["remote_recipient"].(string)
 	if remoteURL == "" || remoteWorkerID == "" {
-		return coreworker.SpawnSpec{}, fmt.Errorf("niw %s: params remote_url and remote_worker_id are required", id)
+		return coreworker.SpawnSpec{}, fmt.Errorf("niq %s: params remote_url and remote_worker_id are required", id)
 	}
 
-	// Local identity, modelled on the lark worker. NIW listens for its peers'
-	// worker.input and delivers far-side events onward as a worker.input DIRECTED
-	// at whichever local worker is currently bound as the recipient. That binding
-	// is runtime-mutable (niw.recipient.*), and the worker cannot update the
-	// identity's PublishAllow per change — so the local grant defaults to the
-	// same "*" the reason worker uses for its dynamically routed sends. The far
-	// side's own PublishAllow is the security boundary for the remote identity
-	// (what it may direct-send on B); see the design doc. A params.publish entry
-	// narrows the LOCAL grant.
-	//
-	// The LOCAL default is narrowed to exactly what a bridge needs to operate:
+	// This worker is a bridge, so its grant is exactly what a bridge needs:
 	// forward collaborative worker.input, answer request.* control replies, and
-	// announce presence (worker.ready). No `*` — NIW should not be free to
-	// broadcast arbitrary event types on its own bus. Targets stay runtime
-	// (the recipient binding), so grants are type-scoped, not target-scoped.
-	connect := specConnect(ctx, id, "niw", cfg,
+	// announce presence. No "*" — it must not be free to broadcast arbitrary
+	// types on its own bus. Targets stay runtime (the recipient binding), so
+	// grants are type-scoped, not target-scoped.
+	connect := specConnect(ctx, id, niq.Type, cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("worker.input"),
 			event.NewPublishPattern("request.*"),
@@ -664,25 +655,34 @@ func buildNIWSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Spa
 			event.NewPattern("worker.discover"),
 		})
 	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
-		return niw.New(niw.Config{
+		// A re-bound recipient must survive a restart; the assembly layer
+		// checkpoints the worker the same way it does any worker with state.
+		backend := niq.New(niq.Config{
 			ID:               id,
-			Bus:              ch,
 			Recipient:        recipient,
 			RemoteRecipient:  remoteRecipient,
 			RemoteURL:        remoteURL,
 			RemoteWorkerID:   remoteWorkerID,
 			RemoteCredential: remoteCred,
-			// A re-bound recipient must survive a restart; the assembly layer
-			// checkpoints the worker the same way it does hiw/timer.
 			OnDurableChange: func() {
 				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
 					log.Printf("[project] checkpoint %s: %v", id, err)
 				}
 			},
 		})
+		w := iface.New(iface.Config{
+			ID:       id,
+			Type:     niq.Type,
+			Bus:      ch,
+			Backends: []iface.Backend{backend},
+		})
+		// The builder is the only place that knows both halves, so it is where a
+		// backend's tools get attached to the worker that serves them.
+		backend.RegisterTools(w)
+		return w
 	}
 	cfg.ID = id
-	cfg.Type = "niw"
+	cfg.Type = niq.Type
 	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,

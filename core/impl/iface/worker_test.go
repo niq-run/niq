@@ -338,7 +338,8 @@ func TestSubscriberPanicIsIsolated(t *testing.T) {
 func TestSnapshotDelegatesToBackend(t *testing.T) {
 	be := newFakeBackend()
 	state := &fakeState{}
-	w := New(Config{ID: "w1", Bus: newPipe(), Backends: []Backend{be}, State: state})
+	_ = be
+	w := New(Config{ID: "w1", Bus: newPipe(), Backends: []Backend{state}})
 
 	state.value = []byte(`{"local":"a"}`)
 	snap, err := w.Snapshot()
@@ -358,7 +359,64 @@ func TestSnapshotDelegatesToBackend(t *testing.T) {
 	}
 }
 
+// fakeState is a backend that is also the worker's durable state.
 type fakeState struct{ value []byte }
 
+func (s *fakeState) SetHandler(Handler)        {}
 func (s *fakeState) Snapshot() ([]byte, error) { return s.value, nil }
 func (s *fakeState) Restore(b []byte) error    { s.value = b; return nil }
+
+// TestRunnableBackendGetsItsOwnLifetime verifies a backend that needs a lifetime
+// (a link, a render loop) is started after injection and stopped before the bus
+// is released — and that a failing start fails the worker, since a deaf worker
+// must not come up.
+func TestRunnableBackendGetsItsOwnLifetime(t *testing.T) {
+	be := &runnableBackend{failStart: false}
+	w := New(Config{ID: "w1", Bus: newPipe(), Backends: []Backend{be}})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	be.mu.Lock()
+	if !be.setHandler || !be.started {
+		t.Fatalf("setHandler=%v started=%v, want injection before start", be.setHandler, be.started)
+	}
+	be.mu.Unlock()
+
+	if err := w.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	be.mu.Lock()
+	defer be.mu.Unlock()
+	if !be.stopped {
+		t.Fatal("backend was not stopped")
+	}
+
+	bad := &runnableBackend{failStart: true}
+	if err := New(Config{ID: "w2", Bus: newPipe(), Backends: []Backend{bad}}).Start(ctx); err == nil {
+		t.Fatal("a backend whose Start failed did not fail the worker")
+	}
+}
+
+type runnableBackend struct {
+	mu         sync.Mutex
+	setHandler bool
+	started    bool
+	stopped    bool
+	failStart  bool
+}
+
+func (b *runnableBackend) SetHandler(Handler) { b.mu.Lock(); b.setHandler = true; b.mu.Unlock() }
+
+func (b *runnableBackend) Start(context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.failStart {
+		return errors.New("cannot start")
+	}
+	b.started = true
+	return nil
+}
+
+func (b *runnableBackend) Stop() error { b.mu.Lock(); b.stopped = true; b.mu.Unlock(); return nil }
