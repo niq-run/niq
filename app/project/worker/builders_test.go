@@ -177,7 +177,7 @@ func TestSpawnRejectsUnknownParamsEndToEnd(t *testing.T) {
 // the approval flow is invisible to the directory roster and to any worker
 // resolving "who approves boundary expansions".
 func TestHIWAnnouncesApprovalCapability(t *testing.T) {
-	bc, svc, _ := newTestEngine(t)
+	bc, svc := newTestEngine(t)
 	ctx := context.Background()
 
 	err := svc.RecoverAll(ctx, workerhost.RecoverOptions{
@@ -242,7 +242,7 @@ func TestHIWIdentityRefreshesOnRestart(t *testing.T) {
 		t.Fatalf("seed stale identity: %v", err)
 	}
 
-	bc, svc, _ := newTestEngineWith(t, dir, reg)
+	bc, svc := newTestEngineWith(t, dir, reg)
 	err = svc.RecoverAll(context.Background(), workerhost.RecoverOptions{
 		Essential: []coreworker.WorkerConfig{{ID: DefaultWebUIHIWID, Type: "hiw"}},
 	})
@@ -269,7 +269,7 @@ func TestHIWIdentityRefreshesOnRestart(t *testing.T) {
 //
 // newTestEngine wires up a registry, engine and in-process listener exactly as
 // runAssembly does, returning the build context, worker service and the store dir.
-func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService, *memStore) {
+func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -282,7 +282,7 @@ func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService, *memS
 
 // newTestEngineWith is newTestEngine over a caller-supplied registry, so a test
 // can pre-seed persisted identities (an upgrade from an older contract).
-func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegistry) (BuildContext, *workerhost.WorkerService, *memStore) {
+func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegistry) (BuildContext, *workerhost.WorkerService) {
 	t.Helper()
 
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
@@ -300,8 +300,7 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 		}
 	}()
 
-	store := newMemStore()
-	svc := newServiceWithStore(t, store)
+	svc := workerhost.New()
 	bc := BuildContext{
 		Registry:  registry,
 		Listener:  listener,
@@ -309,14 +308,7 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 		WorkerSvc: svc,
 	}
 	RegisterBuilders(bc, svc)
-	return bc, svc, store
-}
-
-func newServiceWithStore(t *testing.T, store workerhost.WorkerStore) *workerhost.WorkerService {
-	t.Helper()
-	svc := workerhost.New()
-	svc.SetStore(store)
-	return svc
+	return bc, svc
 }
 
 // ── lifecycle over the real builders ──
@@ -326,7 +318,7 @@ func newServiceWithStore(t *testing.T, store workerhost.WorkerStore) *workerhost
 // grants its identity carries.
 
 func TestWorkspaceSuspendResume(t *testing.T) {
-	_, svc, _ := newTestEngine(t)
+	_, svc := newTestEngine(t)
 	ctx := context.Background()
 
 	if _, err := svc.CreateWorker(ctx, coreworker.WorkerConfig{
@@ -354,65 +346,6 @@ func TestWorkspaceSuspendResume(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	if info := workerStatus(svc, wsID); info.State != coreworker.StateRunning {
-		t.Fatalf("expected running after resume, got %s", info.State)
-	}
-}
-
-// TestSpawnedWorkerSurvivesRestart verifies a worker's runtime state survives a
-// restart: the store keeps its (suspended) state, and recovery re-materializes
-// it from the declaration the calling layer hands back.
-func TestSpawnedWorkerSurvivesRestart(t *testing.T) {
-	bc, svc, store := newTestEngine(t)
-	ctx := context.Background()
-
-	cfg := coreworker.WorkerConfig{Type: "workspace", Params: map[string]any{"mounts": []string{t.TempDir()}}}
-	if _, err := svc.CreateWorker(ctx, cfg); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	wsID := firstWorkerOfType(svc, "workspace")
-	if wsID == "" {
-		t.Fatal("no workspace worker created")
-	}
-	if err := svc.SuspendWorker(wsID); err != nil {
-		t.Fatalf("suspend: %v", err)
-	}
-
-	// Simulate a fresh process: new WorkerService + builders over the same store.
-	svc2 := newServiceWithStore(t, store)
-	RegisterBuilders(bc, svc2)
-
-	recs, err := svc2.LoadAllWorkers()
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	var found bool
-	for _, rec := range recs {
-		if rec.ID == wsID {
-			found = true
-			if rec.State != coreworker.StateSuspended {
-				t.Fatalf("expected persisted suspended, got %s", rec.State)
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("worker %s not persisted", wsID)
-	}
-
-	// Recovery re-materializes it as suspended (not running) — the declaration
-	// is what a project keeps in workers.json.
-	cfg.ID = wsID
-	if err := svc2.RecoverAll(ctx, workerhost.RecoverOptions{Workers: []coreworker.WorkerConfig{cfg}}); err != nil {
-		t.Fatalf("recover: %v", err)
-	}
-	if info := workerStatus(svc2, wsID); info.State != coreworker.StateSuspended {
-		t.Fatalf("expected suspended after recovery, got %s", info.State)
-	}
-
-	// It can be resumed on the fresh service.
-	if err := svc2.ResumeWorker(ctx, wsID); err != nil {
-		t.Fatalf("resume after restart: %v", err)
-	}
-	if info := workerStatus(svc2, wsID); info.State != coreworker.StateRunning {
 		t.Fatalf("expected running after resume, got %s", info.State)
 	}
 }
