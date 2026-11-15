@@ -80,6 +80,20 @@ type Declaration struct {
 | `store.go` | The declaration storage boundary: `DeclStore` (`Get/List/Add/Update/Delete/SetCredential/Archive/Archived`), implemented by `app/project` over workers.json + workers.archived.json. Runtime state uses `workersvc.WorkerStore` (defined once in the in-process engine) and is injected through `BackendConfig.StateStore`; the concrete project layout lives in `app/project/store.go`. |
 | `backend.go` | The lifecycle backend: placement routing, create / suspend / resume / restart / destroy, declaration edits (`Update`), archive, catalog, recovery, remote-identity seeding, protected ids, per-id serialization. |
 
+## Where a backend comes from
+
+Two sources, and the rule is one line: **what a declaration can describe, the
+builder constructs; what it cannot, the assembly injects.**
+
+| backend | source | why |
+|---|---|---|
+| workspace / program / mcp | builder, from `params` (mounts, roots, servers) | derivable from the declaration |
+| host (lifecycle), niq (far-side link) | builder, from `params` + ambient services (`WorkerBackend`, `ACLAdmin`, `Checkpoint`) | params are the input; the rest is process infrastructure |
+| interface worker (`webui`, type `interface`) | **assembly**, through `iface.Config.Backends` | its backend is a process-local object (the app), which no declaration can express |
+
+So `type: interface` has no builder and is not spawnable: `SpawnParamsByType`
+contains exactly the types whose backend can be constructed from values.
+
 ## Flow
 
 ```

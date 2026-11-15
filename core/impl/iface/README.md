@@ -34,6 +34,26 @@ Calls go both ways: the worker injects the handler, the backend calls it.
   `Stateful` (a bridge's bindings), so what survives a restart is exactly what the
   backend owns.
 
+## Approvals (opt-in)
+
+`Config.Approvals` turns on the human-in-the-loop inbox. It is a switch rather
+than a backend because serving approvals is a DECLARATION on the bus: the worker
+advertises `approval.request` in its watch contract (with a schema) and must be
+granted it — and a backend cannot register watch entries.
+
+```go
+if inbox, ok := h.(iface.Inbox); ok {   // h is the injected Handler
+    inbox.Pending(); inbox.Decided()
+    inbox.Decide(ctx, requestID, approved, note)   // publishes approval.decision
+    inbox.OnChange(func() { /* refresh a badge, pop a notification */ })
+    inbox.Seed(requests, decisions)                // recovery: replay the log
+}
+```
+
+The inbox is memory-only — an app-hosted worker is not snapshotted — so recovery
+is a replay of durable `approval.request`/`approval.decision` events, which also
+heals a request parked before a restart.
+
 ## Deliveries and failures
 
 - Each `OnEvent` subscription has its own queue and goroutine: a slow or panicking
