@@ -8,12 +8,13 @@ import (
 	"path/filepath"
 
 	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/project/template"
 )
 
 // handleListTemplates returns the available project template names for the
 // new-project dropdown.
 func (c *Control) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-	names, err := project.ListTemplates()
+	names, err := template.List()
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 500)
 		return
@@ -24,7 +25,7 @@ func (c *Control) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Reque
 // handleTemplateDetail returns a template's JSON content (its workers etc.).
 func (c *Control) handleTemplateDetail(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	name := r.PathValue("name")
-	raw, err := project.ReadTemplateRaw(project.TemplatesDir(), name)
+	raw, err := template.ReadRaw(template.TemplatesDir(), name)
 	if err != nil {
 		stdhttp.Error(w, "template not found", 404)
 		return
@@ -56,39 +57,39 @@ func (c *Control) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 		return
 	}
 
-	destDir := project.TemplateDir(project.TemplatesDir(), body.ID)
+	destDir := template.Dir(template.TemplatesDir(), body.ID)
 	if _, err := os.Stat(destDir); err == nil {
 		stdhttp.Error(w, "template already exists", 409)
 		return
 	}
 
 	if len(body.Template) == 0 {
-		srcDir := project.TemplateDir(project.TemplatesDir(), body.CopyFrom)
-		if _, err := os.Stat(project.TemplatePath(project.TemplatesDir(), body.CopyFrom)); err != nil {
+		srcDir := template.Dir(template.TemplatesDir(), body.CopyFrom)
+		if _, err := os.Stat(template.Path(template.TemplatesDir(), body.CopyFrom)); err != nil {
 			// Not on disk: clone from the embedded built-in, if there is one.
-			raw, err := project.ReadTemplateRaw(project.TemplatesDir(), body.CopyFrom)
+			raw, err := template.ReadRaw(template.TemplatesDir(), body.CopyFrom)
 			if err != nil {
 				stdhttp.Error(w, "unknown template: "+body.CopyFrom, 400)
 				return
 			}
-			if err := writeTemplate(project.TemplatePath(project.TemplatesDir(), body.ID), raw); err != nil {
+			if err := writeTemplate(template.Path(template.TemplatesDir(), body.ID), raw); err != nil {
 				stdhttp.Error(w, err.Error(), 500)
 				return
 			}
 			// The built-in's programs/ travel along, so cloning it is a
 			// whole-template clone and not just a JSON file.
-			if _, err := project.CopyTemplatePrograms(project.TemplatesDir(), body.CopyFrom, destDir); err != nil {
+			if _, err := template.CopyPrograms(template.TemplatesDir(), body.CopyFrom, destDir); err != nil {
 				stdhttp.Error(w, "copy programs: "+err.Error(), 500)
 				return
 			}
 			w.WriteHeader(stdhttp.StatusCreated)
 			return
 		}
-		if err := os.MkdirAll(project.TemplatesDir(), 0755); err != nil {
+		if err := os.MkdirAll(template.TemplatesDir(), 0755); err != nil {
 			stdhttp.Error(w, err.Error(), 500)
 			return
 		}
-		if err := project.CopyDir(srcDir, destDir); err != nil {
+		if err := template.CopyDir(srcDir, destDir); err != nil {
 			stdhttp.Error(w, err.Error(), 500)
 			return
 		}
@@ -96,7 +97,7 @@ func (c *Control) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 		return
 	}
 
-	tmpl, err := project.ValidateTemplate(body.Template)
+	tmpl, err := template.Parse(body.Template)
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 400)
 		return
@@ -106,7 +107,7 @@ func (c *Control) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 		stdhttp.Error(w, err.Error(), 500)
 		return
 	}
-	if err := writeTemplate(project.TemplatePath(project.TemplatesDir(), body.ID), append(raw, '\n')); err != nil {
+	if err := writeTemplate(template.Path(template.TemplatesDir(), body.ID), append(raw, '\n')); err != nil {
 		stdhttp.Error(w, err.Error(), 500)
 		return
 	}
@@ -124,7 +125,7 @@ func (c *Control) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 // cannot be changed here.
 func (c *Control) handleUpdateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	name := r.PathValue("name")
-	dest := project.TemplatePath(project.TemplatesDir(), name)
+	dest := template.Path(template.TemplatesDir(), name)
 	if _, err := os.Stat(dest); err != nil {
 		stdhttp.Error(w, "template not found", 404)
 		return
@@ -134,7 +135,7 @@ func (c *Control) handleUpdateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 		stdhttp.Error(w, err.Error(), 400)
 		return
 	}
-	tmpl, err := project.ValidateTemplate(body)
+	tmpl, err := template.Parse(body)
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 400)
 		return
@@ -174,7 +175,7 @@ func (c *Control) handleTemplatePreview(w stdhttp.ResponseWriter, r *stdhttp.Req
 // an id, the zip's wrapping folder name is used; an invalid/missing id is an
 // error. Nothing is written unless the whole package validates.
 func (c *Control) handleImportTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-	if err := r.ParseMultipartForm(project.MaxTemplateImportBytes() + 1); err != nil {
+	if err := r.ParseMultipartForm(template.MaxImportBytes() + 1); err != nil {
 		stdhttp.Error(w, "import template: multipart form: "+err.Error(), 400)
 		return
 	}
@@ -185,16 +186,16 @@ func (c *Control) handleImportTemplate(w stdhttp.ResponseWriter, r *stdhttp.Requ
 		return
 	}
 	defer fh.Close()
-	data, err := io.ReadAll(io.LimitReader(fh, project.MaxTemplateImportBytes()+1))
+	data, err := io.ReadAll(io.LimitReader(fh, template.MaxImportBytes()+1))
 	if err != nil {
 		stdhttp.Error(w, "import template: read file: "+err.Error(), 400)
 		return
 	}
-	if int64(len(data)) > project.MaxTemplateImportBytes() {
+	if int64(len(data)) > template.MaxImportBytes() {
 		stdhttp.Error(w, "import template: file too large", 400)
 		return
 	}
-	if _, err := project.ImportTemplateZip(id, data); err != nil {
+	if _, err := template.ImportZip(id, data); err != nil {
 		stdhttp.Error(w, err.Error(), 400)
 		return
 	}
@@ -212,7 +213,7 @@ func writeTemplate(dest string, src []byte) error {
 // handleDeleteTemplate removes an on-disk template directory.
 func (c *Control) handleDeleteTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	name := r.PathValue("name")
-	if err := os.RemoveAll(project.TemplateDir(project.TemplatesDir(), name)); err != nil {
+	if err := os.RemoveAll(template.Dir(template.TemplatesDir(), name)); err != nil {
 		stdhttp.Error(w, "template not found", 404)
 		return
 	}

@@ -75,7 +75,8 @@ func TestWorkerHelpSpawnGeneral(t *testing.T) {
 }
 
 // TestWorkerHelpIndexAndGenericTools verifies the no-argument index and that
-// an event without a custom guide (suspend) renders its declared contract.
+// the lifecycle verbs share one guide (they differ only in what they do to the
+// target, so repeating four near-identical pages would be noise).
 func TestWorkerHelpIndexAndGenericTools(t *testing.T) {
 	ch := &recordingChannel{}
 	w := New(Config{ID: "host", Bus: ch})
@@ -87,10 +88,12 @@ func TestWorkerHelpIndexAndGenericTools(t *testing.T) {
 		}
 	}
 
-	guide := ask(t, w, ch, map[string]any{"event_name": "suspend"})
-	for _, want := range []string{"# suspend", "Suspend a running worker", `"worker_id"`} {
-		if !strings.Contains(guide, want) {
-			t.Fatalf("generic suspend guide missing %q:\n%s", want, guide)
+	for _, evt := range []string{"suspend", "resume", "restart", "destroy"} {
+		guide := ask(t, w, ch, map[string]any{"event_name": evt})
+		for _, want := range []string{"# suspend / resume / restart / destroy", `"worker_id"`, "pending_approval"} {
+			if !strings.Contains(guide, want) {
+				t.Fatalf("%s guide missing %q:\n%s", evt, want, guide)
+			}
 		}
 	}
 }

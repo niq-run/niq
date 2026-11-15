@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -15,6 +16,8 @@ const (
 	TypeSpawn   event.EventType = "spawn"
 	TypeSuspend event.EventType = "suspend"
 	TypeResume  event.EventType = "resume"
+	TypeRestart event.EventType = "restart"
+	TypeDestroy event.EventType = "destroy"
 )
 
 // registerExtensions declares the host tools: each is an extension served by
@@ -26,16 +29,30 @@ func (w *HostWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeSpawn,
-		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"created"}}, "type": map[string]any{"type": "string"}}),
-		Description: "Create a new worker. Type determines worker kind (reason, workspace, ...). Type-specific arguments (e.g. path, provider, model, programs, events) are passed as top-level properties. Parameters are validated per type: one the type does not read fails the call and the error lists what that type accepts, so a mistake is not silently ignored.",
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"created"}}, "type": map[string]any{"type": "string"}, "placement": map[string]any{"type": "string"}}),
+		Description: "Create a worker and start it immediately. `type` selects the kind (reason, workspace, mcp, ...); `placement` selects where it runs: in-process (default, host builds it), managed-process (host launches the command and supervises the OS process), or unmanaged-process (a third party dials in on its own; nothing is launched here). Type-specific arguments are passed as top-level properties. For managed-process, every argument other than the fixed fields (type/id/placement/command/cwd/label/tags/description) becomes a child environment variable. Parameters are validated per type: one the type does not read fails the call and the error lists what that type accepts.",
 		Parameters: obj(map[string]any{
 			"type": map[string]any{
 				"type":        "string",
-				"description": "Worker type to spawn (reason, workspace, ...).",
+				"description": "Worker type label (reason, workspace, mcp, timer, ...). It names the identity and, for in-process placement, the builder to run.",
 			},
 			"id": map[string]any{
 				"type":        "string",
-				"description": "Optional worker ID. Builders may derive a default (e.g. workspace from path).",
+				"description": "Optional worker ID. Builders may derive a default (e.g. workspace from path); the reply carries the id actually used.",
+			},
+			"placement": map[string]any{
+				"type":        "string",
+				"enum":        []string{"in-process", "managed-process", "unmanaged-process"},
+				"description": "Where the worker runs. in-process (default): built by the host and runs inside the host process. managed-process: the host launches `command` as an OS process and supervises it (crash restart, start/stop). unmanaged-process: the third party starts itself and dials the bus; the host only declares it and issues a bus credential, which is NOT returned here.",
+			},
+			"command": map[string]any{
+				"type":        "array",
+				"description": "Required for placement=managed-process: argv of the process, e.g. [\"npx\",\"-y\",\"@modelcontextprotocol/server-filesystem\",\"/data\"]. Rejected for other placements.",
+				"items":       map[string]any{"type": "string"},
+			},
+			"cwd": map[string]any{
+				"type":        "string",
+				"description": "Working directory for a managed-process child (must exist).",
 			},
 			"path": map[string]any{
 				"type":        "string",
@@ -74,13 +91,13 @@ func (w *HostWorker) registerExtensions() {
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
 		result, err := w.handleSpawn(tc)
-		w.reply(evt, string(TypeSpawn), result, err)
+		w.reply(evt, result, err)
 	})
 
 	w.Register(baseworker.Extension{
 		Event:       TypeSuspend,
 		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"suspended"}}}),
-		Description: "Suspend a running worker: snapshots its state, stops its goroutine and releases its bus connection. The worker can later be resumed.",
+		Description: "Suspend a running worker: an in-process worker is snapshotted, stopped and its bus connection released; a managed-process worker's OS process is stopped (it persists its own state). The worker stays declared and can be resumed.",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{
 				"type":        "string",
@@ -90,13 +107,13 @@ func (w *HostWorker) registerExtensions() {
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
 		result, err := w.handleSuspend(tc)
-		w.reply(evt, string(TypeSuspend), result, err)
+		w.reply(evt, result, err)
 	})
 
 	w.Register(baseworker.Extension{
 		Event:       TypeResume,
 		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"running"}}}),
-		Description: "Resume a suspended worker: reconnects its bus channel, restores its snapshot and starts it.",
+		Description: "Resume a worker that is declared but not running: an in-process worker reconnects and restores its snapshot; a managed-process worker is relaunched; an unmanaged-process worker only gets its bus identity re-ensured (it starts itself).",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{
 				"type":        "string",
@@ -106,12 +123,46 @@ func (w *HostWorker) registerExtensions() {
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
 		result, err := w.handleResume(tc)
-		w.reply(evt, string(TypeResume), result, err)
+		w.reply(evt, result, err)
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeRestart,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"running"}}}),
+		Description: "Restart a worker from its declaration. Construction params follow the declaration edit; what the worker itself persisted survives (an in-process worker's snapshot, a managed-process worker's own state directory).",
+		Parameters: obj(map[string]any{
+			"worker_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the worker to restart.",
+			},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		result, err := w.handleRestart(tc)
+		w.reply(evt, result, err)
+	})
+
+	w.registerDestroyApproval()
+
+	w.Register(baseworker.Extension{
+		Event:       TypeDestroy,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"destroyed", "pending_approval"}}, "approval_id": map[string]any{"type": "string"}}),
+		Description: "Destroy a worker: stop it, delete its declaration, its persisted state, its bus connection and its identity. This is irreversible. When the project configures a destroy approver, the call returns status=pending_approval and the removal happens only after the human approves.",
+		Parameters: obj(map[string]any{
+			"worker_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the worker to destroy.",
+			},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		result, err := w.handleDestroy(tc)
+		w.reply(evt, result, err)
 	})
 }
 
 // reply answers a tool invocation with request.completed / request.failed.
-func (w *HostWorker) reply(evt event.Event, toolName string, result any, err error) {
+func (w *HostWorker) reply(evt event.Event, result any, err error) {
 	if err != nil {
 		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
 		return
@@ -119,11 +170,9 @@ func (w *HostWorker) reply(evt event.Event, toolName string, result any, err err
 	w.ReplyCompleted(evt.WorkerId, evt.RequestId, result, evt.TraceID)
 }
 
-// handleSpawn forwards the spawn request to the WorkerService, which
-// dispatches to the registered builder for the requested type.
 // liftDisplayMeta strips the display-only spawn arguments (label / tags /
 // description) out of the construction params and returns them, so builders
-// never see them. They travel on typed fields and land in the project.json
+// never see them. They travel on typed fields and land in the project
 // declaration for the WebUI selector/filter; the params map is mutated in place
 // and keeps every type-specific key.
 func liftDisplayMeta(args map[string]any) (label string, tags []string, desc string) {
@@ -140,40 +189,112 @@ func liftDisplayMeta(args map[string]any) (label string, tags []string, desc str
 	return label, tags, desc
 }
 
+// liftPlacement strips the placement/launch arguments out of the params map:
+// they describe HOW the worker runs, not what type it is, so a builder must
+// never see them.
+// liftACL pulls the optional publish/subscriptions grants out of the spawn
+// args. They are identity data, not construction params.
+func liftACL(args map[string]any) (pub []event.PublishPattern, sub []event.EventPattern) {
+	if raw, ok := args["publish"]; ok {
+		b, _ := json.Marshal(raw)
+		_ = json.Unmarshal(b, &pub)
+		delete(args, "publish")
+	}
+	if raw, ok := args["subscriptions"]; ok {
+		b, _ := json.Marshal(raw)
+		_ = json.Unmarshal(b, &sub)
+		delete(args, "subscriptions")
+	}
+	return pub, sub
+}
+
+func liftPlacement(args map[string]any) (placement worker.Placement, command []string, cwd string) {
+	placement = worker.Placement(strings.TrimSpace(baseworker.ArgString(args, "placement")))
+	command = baseworker.ArgStrings(args, "command")
+	cwd = baseworker.ArgString(args, "cwd")
+	delete(args, "placement")
+	delete(args, "command")
+	delete(args, "cwd")
+	return placement, command, cwd
+}
+
 func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 	typ := baseworker.ArgString(tc.Args, "type")
 	if typ == "" {
 		return "", fmt.Errorf("type is required")
 	}
 	id := baseworker.ArgString(tc.Args, "id")
+	// type/id are identity fields, not construction params. The declaration
+	// carries them; a builder must not see them inside params (and a
+	// managed-process child must not receive them as env).
+	delete(tc.Args, "type")
+	delete(tc.Args, "id")
 
 	label, tags, desc := liftDisplayMeta(tc.Args)
-	cfg := worker.WorkerConfig{ID: id, Type: typ, Params: tc.Args, Label: label, Tags: tags, Description: desc}
-	if err := w.engine.CreateWorker(context.Background(), cfg); err != nil {
+	placement, command, cwd := liftPlacement(tc.Args)
+	publish, subscribe := liftACL(tc.Args)
+	spec := worker.WorkerSpec{
+		Placement: placement,
+		Command:   command,
+		Cwd:       cwd,
+	}
+	spec.ID = id
+	spec.Type = typ
+	spec.Params = tc.Args
+	spec.Label = label
+	spec.Tags = tags
+	spec.Description = desc
+	spec.PublishAllow = publish
+	spec.SubscribeAllow = subscribe
+	info, err := w.engine.Create(context.Background(), spec)
+	if err != nil {
 		return "", err
 	}
-	// The builder may derive a default ID (e.g. workspace from path).
-	info, _ := w.engine.WorkerType(id)
-	return map[string]any{"worker_id": id, "status": "created", "type": info}, nil
+	return map[string]any{
+		"worker_id": info.ID,
+		"status":    "created",
+		"type":      info.Type,
+		"placement": string(info.Placement),
+	}, nil
 }
 
-func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (any, error) {
+// workerIDArg pulls the target id out of a lifecycle call.
+func workerIDArg(tc baseworker.ToolCall) (string, error) {
 	id := baseworker.ArgString(tc.Args, "worker_id")
 	if id == "" {
 		return "", fmt.Errorf("worker_id is required")
 	}
-	if err := w.engine.SuspendWorker(id); err != nil {
+	return id, nil
+}
+
+func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	if err := w.engine.Suspend(context.Background(), id); err != nil {
 		return "", err
 	}
 	return map[string]any{"worker_id": id, "status": "suspended"}, nil
 }
 
 func (w *HostWorker) handleResume(tc baseworker.ToolCall) (any, error) {
-	id := baseworker.ArgString(tc.Args, "worker_id")
-	if id == "" {
-		return "", fmt.Errorf("worker_id is required")
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
 	}
-	if err := w.engine.ResumeWorker(context.Background(), id); err != nil {
+	if err := w.engine.Resume(context.Background(), id); err != nil {
+		return "", err
+	}
+	return map[string]any{"worker_id": id, "status": "running"}, nil
+}
+
+func (w *HostWorker) handleRestart(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	if err := w.engine.Restart(context.Background(), id); err != nil {
 		return "", err
 	}
 	return map[string]any{"worker_id": id, "status": "running"}, nil

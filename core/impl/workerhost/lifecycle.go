@@ -120,13 +120,13 @@ func (s *WorkerService) RegisteredTypes() []string {
 	return types
 }
 
-// CreateWorker builds and starts a worker from a serializable config. It
-// dispatches to the registered builder for cfg.Type, then spawns it. The type's
-// spawn-parameter check runs first, so an unsupported parameter fails here
-// rather than being silently dropped by the builder.
-func (s *WorkerService) CreateWorker(ctx context.Context, cfg worker.WorkerConfig) error {
+// ValidateSpawn reports whether a config could be built: a builder is
+// registered for its type and that type's spawn-parameter check passes. It
+// lets a caller validate before persisting a declaration, so a rejected spawn
+// leaves nothing behind.
+func (s *WorkerService) ValidateSpawn(cfg worker.WorkerConfig) error {
 	s.mu.Lock()
-	b, ok := s.builders[cfg.Type]
+	_, ok := s.builders[cfg.Type]
 	s.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("workerhost: no builder for type %q", cfg.Type)
@@ -136,22 +136,42 @@ func (s *WorkerService) CreateWorker(ctx context.Context, cfg worker.WorkerConfi
 			return fmt.Errorf("workerhost: build %q: %w", cfg.ID, err)
 		}
 	}
+	return nil
+}
+
+// CreateWorker builds and starts a worker from a serializable config. It
+// dispatches to the registered builder for cfg.Type, then spawns it. The type's
+// spawn-parameter check runs first, so an unsupported parameter fails here
+// rather than being silently dropped by the builder.
+//
+// It returns the config the builder actually built (the spec's Config, not the
+// input): a builder may derive the worker's id or complete its params, and that
+// resolved config — not the request — is the worker's identity on the bus and in
+// its declaration.
+func (s *WorkerService) CreateWorker(ctx context.Context, cfg worker.WorkerConfig) (worker.WorkerConfig, error) {
+	if err := s.ValidateSpawn(cfg); err != nil {
+		return worker.WorkerConfig{}, err
+	}
+	s.mu.Lock()
+	b := s.builders[cfg.Type]
+	s.mu.Unlock()
 	spec, err := b(cfg)
 	if err != nil {
-		return fmt.Errorf("workerhost: build %q: %w", cfg.ID, err)
+		return worker.WorkerConfig{}, fmt.Errorf("workerhost: build %q: %w", cfg.ID, err)
 	}
 	if err := s.spawn(ctx, spec); err != nil {
-		return err
+		return worker.WorkerConfig{}, err
 	}
 	// The worker is running; let the declaring layer record it (a project
 	// appends it to project.json). Recovery never comes through here, and a
-	// declaration that is already there is left alone.
+	// declaration that is already there is left alone. The declared config is
+	// the RESOLVED one, so a derived id is never lost.
 	if s.onSpawn != nil {
-		if err := s.onSpawn(cfg); err != nil {
-			log.Printf("[workerhost] declare worker %s: %v", cfg.ID, err)
+		if err := s.onSpawn(spec.Config); err != nil {
+			log.Printf("[workerhost] declare worker %s: %v", spec.ID(), err)
 		}
 	}
-	return nil
+	return spec.Config, nil
 }
 
 // spawn connects, builds and starts a worker from a SpawnSpec, then records it.
@@ -645,6 +665,11 @@ type RecoverOptions struct {
 	// (e.g. the webui worker when the webui is not started). Ignored for
 	// Essential workers.
 	Suspend []string
+	// Protect lists ids that are protected from suspend / restart / destroy
+	// without being forced to run. Essential ids are always protected; this is
+	// for control-plane workers the assembly wants to keep alive (the host)
+	// without materializing them when a template does not declare them.
+	Protect []string
 }
 
 // RecoverAll restores the whole worker set: every declared worker is
@@ -666,6 +691,9 @@ func (s *WorkerService) RecoverAll(ctx context.Context, opts RecoverOptions) err
 	for _, cfg := range opts.Essential {
 		essentialIDs[cfg.ID] = true
 	}
+	for _, id := range opts.Protect {
+		essentialIDs[id] = true
+	}
 	s.mu.Lock()
 	s.protected = essentialIDs
 	s.mu.Unlock()
@@ -685,7 +713,8 @@ func (s *WorkerService) RecoverAll(ctx context.Context, opts RecoverOptions) err
 			if len(rec.Snapshot) > 0 {
 				return s.RestoreAndRun(ctx, cfg, rec.Snapshot)
 			}
-			return s.CreateWorker(ctx, cfg)
+			_, err := s.CreateWorker(ctx, cfg)
+			return err
 		}
 		return s.RestoreSuspended(cfg, rec.Snapshot)
 	}

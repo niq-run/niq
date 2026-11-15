@@ -1,0 +1,665 @@
+// The lifecycle backend: one place that owns every worker's lifecycle,
+// whatever its placement. It is what the host worker calls over the bus, and
+// what the project assembly calls at startup and shutdown — so a spawn from an
+// agent, a start button in the WebUI and a recovery on boot all walk the same
+// code path.
+package worker
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"sync"
+
+	projprocess "github.com/niq-run/niq/app/project/worker/process"
+	"github.com/niq-run/niq/core/impl/eventbus"
+	"github.com/niq-run/niq/core/impl/workerhost"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
+	"github.com/niq-run/niq/core/itfs/event"
+	coreworker "github.com/niq-run/niq/core/itfs/worker"
+)
+
+// BackendConfig is everything the lifecycle needs. Every dependency is an
+// interface or a value the assembly layer owns; the backend itself decides
+// nothing about where the project file or the event bus live.
+type BackendConfig struct {
+	// ProjectID labels lifecycle log lines when several projects share one
+	// process log. Declarations arrive through Decls; nothing else uses it.
+	ProjectID string
+	// Service builds in-process workers. Required.
+	Service *workerhost.WorkerService
+	// Supervisor supervises managed-process workers. Optional: when nil,
+	// placement managed-process is rejected (a project without an HTTP bus has
+	// nothing for a child to connect to).
+	Supervisor *projprocess.ProcessSupervisor
+	// Registry and Signer provision third-party identities. Required for the
+	// two process placements.
+	Registry corebus.IdentityRegistry
+	Signer   *eventbus.TokenSigner
+	// Engine is used to drop a destroyed worker's live bus channel (which also
+	// broadcasts worker.gone). Optional.
+	Engine *eventbus.Engine
+	// Decls is the declaration store. Required.
+	Decls DeclStore
+	// Logf defaults to log.Printf.
+	Logf func(string, ...any)
+}
+
+// workerHostBackend implements core worker.Backend over an in-process worker
+// service, a process supervisor and a declaration store.
+type workerHostBackend struct {
+	projectID  string
+	service    *workerhost.WorkerService
+	supervisor *projprocess.ProcessSupervisor
+	registry   corebus.IdentityRegistry
+	signer     *eventbus.TokenSigner
+	engine     *eventbus.Engine
+	decls      DeclStore
+	logf       func(string, ...any)
+
+	mu        sync.Mutex
+	protected map[string]bool
+	// locks serializes lifecycle operations per worker id, so a create/destroy
+	// race cannot leave two live instances or resurrect a deleted worker.
+	locks map[string]*sync.Mutex
+}
+
+// NewBackend wires a lifecycle backend. It installs the worker service's spawn
+// hook itself: a worker created at runtime records its declaration from the
+// config the builder actually produced, which is what makes a runtime spawn
+// survive a restart.
+func NewBackend(cfg BackendConfig) *workerHostBackend {
+	logf := cfg.Logf
+	if logf == nil {
+		logf = log.Printf
+	}
+	b := &workerHostBackend{
+		projectID:  cfg.ProjectID,
+		service:    cfg.Service,
+		supervisor: cfg.Supervisor,
+		registry:   cfg.Registry,
+		signer:     cfg.Signer,
+		engine:     cfg.Engine,
+		decls:      cfg.Decls,
+		logf:       logf,
+		protected:  map[string]bool{},
+		locks:      map[string]*sync.Mutex{},
+	}
+	if b.service != nil && b.decls != nil {
+		b.service.SetSpawnHook(func(cfg coreworker.WorkerConfig) error {
+			d := DeclFromSpec(coreworker.WorkerSpec{WorkerConfig: cfg})
+			if _, ok, err := b.decls.Get(d.ID); err != nil || ok {
+				return err
+			}
+			return b.decls.Add(&d)
+		})
+	}
+	return b
+}
+
+// idLock returns the per-worker mutex for id.
+func (b *workerHostBackend) idLock(id string) *sync.Mutex {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	l, ok := b.locks[id]
+	if !ok {
+		l = &sync.Mutex{}
+		b.locks[id] = l
+	}
+	return l
+}
+
+// Protected implements worker.Lifecycle: the ids the assembly marked
+// essential, plus whatever Recover added to Protect.
+func (b *workerHostBackend) Protected(id string) bool { return b.isProtected(id) }
+
+func (b *workerHostBackend) isProtected(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.protected[id]
+}
+
+// placementOfSpec resolves a spec's placement, defaulting to in-process.
+func placementOfSpec(spec coreworker.WorkerSpec) coreworker.Placement {
+	if spec.Placement == "" {
+		return coreworker.PlacementInProcess
+	}
+	return spec.Placement
+}
+
+// ── Create ──
+
+// Create brings a worker into existence in the requested placement and records
+// its declaration. Validation happens before anything is persisted, so a
+// rejected call leaves no trace.
+func (b *workerHostBackend) Create(ctx context.Context, spec coreworker.WorkerSpec) (coreworker.WorkerInfo, error) {
+	placement := placementOfSpec(spec)
+	if err := b.validateCreate(spec, placement); err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	if spec.ID != "" {
+		l := b.idLock(spec.ID)
+		l.Lock()
+		defer l.Unlock()
+	}
+	switch placement {
+	case coreworker.PlacementInProcess:
+		return b.createInProcess(ctx, spec)
+	case coreworker.PlacementManagedProcess:
+		return b.createManagedProcess(spec)
+	case coreworker.PlacementUnmanagedProcess:
+		return b.createUnmanagedProcess(spec)
+	}
+	return coreworker.WorkerInfo{}, fmt.Errorf("worker: unknown placement %q", placement)
+}
+
+func (b *workerHostBackend) validateCreate(spec coreworker.WorkerSpec, placement coreworker.Placement) error {
+	if spec.Type == "" {
+		return fmt.Errorf("type is required")
+	}
+	if placement != coreworker.PlacementInProcess {
+		if spec.ID == "" {
+			return fmt.Errorf("id is required for placement %s", placement)
+		}
+		if SanitizeID(spec.ID) != spec.ID {
+			return fmt.Errorf("id may only contain letters, digits, '-', '_', '.'")
+		}
+		if err := ValidateMeta(Declaration{Label: spec.Label, Tags: spec.Tags, Description: spec.Description}); err != nil {
+			return err
+		}
+	}
+	if spec.ID != "" {
+		if _, ok, err := b.decls.Get(spec.ID); err != nil {
+			return err
+		} else if ok {
+			return fmt.Errorf("worker %s already exists", spec.ID)
+		}
+		if b.service != nil && b.service.HasWorker(spec.ID) {
+			return fmt.Errorf("worker %s already exists", spec.ID)
+		}
+		if b.registry != nil {
+			if _, ok := b.registry.Lookup(spec.ID); ok {
+				return fmt.Errorf("worker %s already exists", spec.ID)
+			}
+		}
+	}
+	switch placement {
+	case coreworker.PlacementInProcess:
+		if len(spec.Command) > 0 || spec.Cwd != "" {
+			return fmt.Errorf("placement in-process does not take command/cwd")
+		}
+		return b.service.ValidateSpawn(spec.WorkerConfig)
+	case coreworker.PlacementManagedProcess:
+		if b.supervisor == nil {
+			return fmt.Errorf("placement managed-process needs a bus: no process supervisor configured")
+		}
+		if len(spec.Command) == 0 {
+			return fmt.Errorf("command is required for placement managed-process")
+		}
+		if err := validateProcessLaunch(spec); err != nil {
+			return err
+		}
+		return ValidateProcessParams(spec.Params)
+	case coreworker.PlacementUnmanagedProcess:
+		if len(spec.Command) > 0 {
+			return fmt.Errorf("placement unmanaged-process must not carry a command: it starts itself")
+		}
+		if len(spec.Params) > 0 {
+			return fmt.Errorf("placement unmanaged-process cannot carry params: the host has no channel to pass them to a self-started worker")
+		}
+		if b.registry == nil || b.signer == nil {
+			return fmt.Errorf("placement unmanaged-process needs a bus identity registry")
+		}
+		return nil
+	}
+	return nil
+}
+
+func validateProcessLaunch(spec coreworker.WorkerSpec) error {
+	if strings.TrimSpace(spec.Command[0]) == "" {
+		return fmt.Errorf("command[0] is empty")
+	}
+	if spec.Cwd != "" {
+		info, err := os.Stat(spec.Cwd)
+		if err != nil {
+			return fmt.Errorf("cwd %q: %w", spec.Cwd, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("cwd %q is not a directory", spec.Cwd)
+		}
+	}
+	return nil
+}
+
+// createInProcess builds a worker in the host process. The declaration is
+// written by the service's spawn hook, from the resolved config.
+func (b *workerHostBackend) createInProcess(ctx context.Context, spec coreworker.WorkerSpec) (coreworker.WorkerInfo, error) {
+	resolved, err := b.service.CreateWorker(ctx, spec.WorkerConfig)
+	if err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	return coreworker.WorkerInfo{
+		ID:        resolved.ID,
+		Type:      resolved.Type,
+		Placement: coreworker.PlacementInProcess,
+		State:     "running",
+	}, nil
+}
+
+// createManagedProcess declares + provisions + launches an OS process.
+func (b *workerHostBackend) createManagedProcess(spec coreworker.WorkerSpec) (coreworker.WorkerInfo, error) {
+	d := DeclFromSpec(spec)
+	d.Placement = coreworker.PlacementManagedProcess
+	if err := b.decls.Add(&d); err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	ident := identitySpec(d)
+	if err := projprocess.ProvisionManagedProcess(b.registry, b.signer, &ident); err != nil {
+		// Declaration stays: the worker shows as declared-but-stopped and a
+		// Resume retries the launch.
+		return coreworker.WorkerInfo{}, err
+	}
+	if err := b.supervisor.Start(launchSpec(d, ident.Credential)); err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	return coreworker.WorkerInfo{
+		ID: d.ID, Type: d.Type, Placement: d.Placement, State: "running",
+	}, nil
+}
+
+// createUnmanagedProcess declares + provisions a dial-in worker. Nothing is
+// launched: the third party connects on its own with the issued credential,
+// which is deliberately NOT part of the reply (it is read from the
+// declaration by the UI).
+func (b *workerHostBackend) createUnmanagedProcess(spec coreworker.WorkerSpec) (coreworker.WorkerInfo, error) {
+	d := DeclFromSpec(spec)
+	d.Placement = coreworker.PlacementUnmanagedProcess
+	if err := b.decls.Add(&d); err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	ident := identitySpec(d)
+	if err := projprocess.ProvisionUnmanagedProcess(b.registry, b.signer, b.decls, &ident); err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	d.Credential = ident.Credential
+	return coreworker.WorkerInfo{
+		ID: d.ID, Type: d.Type, Placement: d.Placement, State: "stopped",
+	}, nil
+}
+
+// ── Suspend / Resume / Restart / Destroy ──
+
+func (b *workerHostBackend) declaration(id string) (*Declaration, error) {
+	d, ok, err := b.decls.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return d, nil
+	}
+	return nil, fmt.Errorf("worker %s is not declared", id)
+}
+
+func (b *workerHostBackend) Suspend(ctx context.Context, id string) error {
+	l := b.idLock(id)
+	l.Lock()
+	defer l.Unlock()
+	if b.isProtected(id) {
+		return fmt.Errorf("worker %s is protected and cannot be suspended", id)
+	}
+	d, err := b.declaration(id)
+	if err != nil {
+		// A live worker without a declaration (transient state) still obeys its
+		// owner.
+		if b.service != nil && b.service.HasWorker(id) {
+			return b.service.SuspendWorker(id)
+		}
+		return err
+	}
+	switch PlacementOf(*d) {
+	case coreworker.PlacementManagedProcess:
+		if b.supervisor == nil {
+			return fmt.Errorf("worker %s: no process supervisor", id)
+		}
+		return b.supervisor.Stop(id)
+	case coreworker.PlacementUnmanagedProcess:
+		return fmt.Errorf("worker %s runs outside this host and cannot be suspended", id)
+	default:
+		return b.service.SuspendWorker(id)
+	}
+}
+
+func (b *workerHostBackend) Resume(ctx context.Context, id string) error {
+	l := b.idLock(id)
+	l.Lock()
+	defer l.Unlock()
+	d, err := b.declaration(id)
+	if err != nil {
+		return err
+	}
+	switch PlacementOf(*d) {
+	case coreworker.PlacementManagedProcess:
+		if b.supervisor == nil {
+			return fmt.Errorf("worker %s: no process supervisor", id)
+		}
+		ident := identitySpec(*d)
+		if err := projprocess.ProvisionManagedProcess(b.registry, b.signer, &ident); err != nil {
+			return err
+		}
+		return b.supervisor.Start(launchSpec(*d, ident.Credential))
+	case coreworker.PlacementUnmanagedProcess:
+		ident := identitySpec(*d)
+		if err := projprocess.ProvisionUnmanagedProcess(b.registry, b.signer, b.decls, &ident); err != nil {
+			return err
+		}
+		d.Credential = ident.Credential
+		return nil
+	default:
+		if b.service.HasWorker(id) {
+			return b.service.ResumeWorker(ctx, id)
+		}
+		_, err := b.service.CreateWorker(ctx, SpawnConfig(*d))
+		return err
+	}
+}
+
+func (b *workerHostBackend) Restart(ctx context.Context, id string) error {
+	l := b.idLock(id)
+	l.Lock()
+	defer l.Unlock()
+	if b.isProtected(id) {
+		return fmt.Errorf("worker %s is protected and cannot be restarted", id)
+	}
+	d, err := b.declaration(id)
+	if err != nil {
+		return err
+	}
+	switch PlacementOf(*d) {
+	case coreworker.PlacementManagedProcess:
+		if b.supervisor == nil {
+			return fmt.Errorf("worker %s: no process supervisor", id)
+		}
+		if err := b.supervisor.Remove(id); err != nil {
+			return err
+		}
+		ident := identitySpec(*d)
+		if err := projprocess.ProvisionManagedProcess(b.registry, b.signer, &ident); err != nil {
+			return err
+		}
+		return b.supervisor.Start(launchSpec(*d, ident.Credential))
+	case coreworker.PlacementUnmanagedProcess:
+		return fmt.Errorf("worker %s runs outside this host and cannot be restarted", id)
+	default:
+		return b.service.RestartWorker(ctx, SpawnConfig(*d))
+	}
+}
+
+func (b *workerHostBackend) Destroy(ctx context.Context, id string) error {
+	l := b.idLock(id)
+	l.Lock()
+	defer l.Unlock()
+	if b.isProtected(id) {
+		return fmt.Errorf("worker %s is protected and cannot be destroyed", id)
+	}
+
+	// Stop the live side first, so nothing is writing into the state directory
+	// we are about to remove.
+	if b.service != nil && b.service.HasWorker(id) {
+		if err := b.service.DestroyWorker(id); err != nil {
+			return err
+		}
+	} else if b.supervisor != nil {
+		if err := b.supervisor.Remove(id); err != nil {
+			return err
+		}
+	}
+
+	// Drop the declaration, then the persisted state, then the bus side.
+	if err := b.decls.Delete(id); err != nil {
+		return err
+	}
+	if err := b.decls.RemoveState(id); err != nil {
+		b.logf("[worker %s] %s: remove state: %v", b.projectID, id, err)
+	}
+	if b.engine != nil && b.engine.Channel(id) != nil {
+		b.engine.Disconnect(id) // also broadcasts worker.gone
+	}
+	if b.registry != nil {
+		if _, ok := b.registry.Lookup(id); ok {
+			if err := b.registry.Revoke(id); err != nil {
+				return err
+			}
+		}
+	}
+	b.logf("[worker %s] destroyed %s", b.projectID, id)
+	return nil
+}
+
+// ── Catalog ──
+
+func (b *workerHostBackend) infoFor(d *Declaration) coreworker.WorkerInfo {
+	vi := coreworker.WorkerInfo{ID: d.ID, Type: d.Type, Placement: PlacementOf(*d), State: "stopped"}
+	switch vi.Placement {
+	case coreworker.PlacementManagedProcess:
+		if b.supervisor != nil {
+			if st, ok := b.supervisor.Get(d.ID); ok {
+				vi.State = st.State
+			}
+		}
+	case coreworker.PlacementUnmanagedProcess:
+		// Nothing local to report: it is "stopped" from this host's point of
+		// view (whether it is connected is the registry's business).
+	default:
+		if b.service != nil {
+			for _, wi := range b.service.ListWorkers("") {
+				if wi.ID == d.ID {
+					vi.State = string(wi.State)
+				}
+			}
+		}
+	}
+	return vi
+}
+
+// Get returns one worker's lifecycle view.
+func (b *workerHostBackend) Get(id string) (coreworker.WorkerInfo, bool, error) {
+	d, ok, err := b.decls.Get(id)
+	if err != nil {
+		return coreworker.WorkerInfo{}, false, err
+	}
+	if ok {
+		return b.infoFor(d), true, nil
+	}
+	// A live worker that has no declaration yet (a spawn in flight).
+	if b.service != nil {
+		for _, wi := range b.service.ListWorkers("") {
+			if wi.ID == id {
+				return coreworker.WorkerInfo{ID: wi.ID, Type: wi.Type, Placement: coreworker.PlacementInProcess, State: string(wi.State)}, true, nil
+			}
+		}
+	}
+	if b.supervisor != nil {
+		if st, ok := b.supervisor.Get(id); ok {
+			return coreworker.WorkerInfo{ID: st.ID, Type: st.Type, Placement: coreworker.PlacementManagedProcess, State: st.State}, true, nil
+		}
+	}
+	return coreworker.WorkerInfo{}, false, nil
+}
+
+// List returns every declared worker plus any live worker not (yet) declared.
+func (b *workerHostBackend) List() []coreworker.WorkerInfo {
+	decls, err := b.decls.List()
+	if err != nil {
+		b.logf("[worker %s] list declarations: %v", b.projectID, err)
+	}
+	seen := make(map[string]bool, len(decls))
+	out := make([]coreworker.WorkerInfo, 0, len(decls))
+	for _, d := range decls {
+		seen[d.ID] = true
+		out = append(out, b.infoFor(d))
+	}
+	if b.service != nil {
+		for _, wi := range b.service.ListWorkers("") {
+			if seen[wi.ID] {
+				continue
+			}
+			out = append(out, coreworker.WorkerInfo{ID: wi.ID, Type: wi.Type, Placement: coreworker.PlacementInProcess, State: string(wi.State)})
+		}
+	}
+	if b.supervisor != nil {
+		for _, st := range b.supervisor.List() {
+			if seen[st.ID] {
+				continue
+			}
+			out = append(out, coreworker.WorkerInfo{ID: st.ID, Type: st.Type, Placement: coreworker.PlacementManagedProcess, State: st.State})
+		}
+	}
+	return out
+}
+
+// SeedRemoteIdentities registers the active unmanaged-process workers in the
+// in-memory identity registry before the bus starts serving remote connections.
+// Their credential is persisted in workers.json; an empty one is minted here.
+func (b *workerHostBackend) SeedRemoteIdentities(ctx context.Context) error {
+	decls, err := b.decls.List()
+	if err != nil {
+		return err
+	}
+	for _, d := range decls {
+		if PlacementOf(*d) != coreworker.PlacementUnmanagedProcess {
+			continue
+		}
+		ident := identitySpec(*d)
+		if err := projprocess.ProvisionUnmanagedProcess(b.registry, b.signer, b.decls, &ident); err != nil {
+			return fmt.Errorf("seed %s: %w", d.ID, err)
+		}
+	}
+	return nil
+}
+
+// ── Recover / Run ──
+
+// Recover materializes the declared set: in-process workers through the worker
+// service (with its snapshot/store machinery), process workers through their
+// own start path. Protect/Essential are handed to the service and mirrored in
+// the backend, so a protected id is refused for every placement.
+func (b *workerHostBackend) Recover(ctx context.Context, opts coreworker.RecoverOptions) error {
+	b.mu.Lock()
+	for _, id := range opts.Protect {
+		b.protected[id] = true
+	}
+	for _, spec := range opts.Essential {
+		b.protected[spec.ID] = true
+	}
+	b.mu.Unlock()
+
+	inProc := func(specs []coreworker.WorkerSpec) []coreworker.WorkerConfig {
+		out := make([]coreworker.WorkerConfig, 0, len(specs))
+		for _, s := range specs {
+			if placementOfSpec(s) == coreworker.PlacementInProcess {
+				out = append(out, s.WorkerConfig)
+			}
+		}
+		return out
+	}
+
+	// The declaration store is authoritative for the declared set; the specs
+	// handed in are the ones the caller built from it. Process workers are
+	// started after the in-process set, so the bus-facing control plane exists
+	// first.
+	if err := b.service.RecoverAll(ctx, workerhost.RecoverOptions{
+		Workers:   inProc(opts.Declared),
+		Essential: inProc(opts.Essential),
+		Suspend:   opts.Suspend,
+		Protect:   opts.Protect,
+	}); err != nil {
+		return err
+	}
+
+	essential := make(map[string]bool, len(opts.Essential))
+	for _, s := range opts.Essential {
+		essential[s.ID] = true
+	}
+	suspended := make(map[string]bool, len(opts.Suspend))
+	for _, id := range opts.Suspend {
+		suspended[id] = true
+	}
+
+	// One pass over essential ∪ declared: an essential worker is usually also
+	// declared, and resuming it twice would restart the child it just launched.
+	seen := make(map[string]bool, len(opts.Declared)+len(opts.Essential))
+	for _, spec := range append(append([]coreworker.WorkerSpec{}, opts.Essential...), opts.Declared...) {
+		if placementOfSpec(spec) == coreworker.PlacementInProcess {
+			continue
+		}
+		if seen[spec.ID] {
+			continue
+		}
+		seen[spec.ID] = true
+		if !essential[spec.ID] && suspended[spec.ID] {
+			continue
+		}
+		if placementOfSpec(spec) == coreworker.PlacementManagedProcess && len(spec.Command) == 0 {
+			b.logf("[worker %s] managed-process %s: empty command, skipping", b.projectID, spec.ID)
+			continue
+		}
+		if err := b.Resume(ctx, spec.ID); err != nil {
+			b.logf("[worker %s] resume %s: %v", b.projectID, spec.ID, err)
+		}
+	}
+	return nil
+}
+
+// Run blocks until ctx is done, then releases every worker it owns.
+func (b *workerHostBackend) Run(ctx context.Context) error {
+	err := b.service.Run(ctx)
+	if b.supervisor != nil {
+		b.supervisor.Shutdown()
+	}
+	return err
+}
+
+// ── Declaration → process package inputs ──
+
+// identitySpec lowers a declaration's ACL into the provisioning input. The
+// declaration's typed SubscriptionSpec/PublishSpec become bus patterns here so
+// the process package needs no dependency on the declaration model.
+func identitySpec(d Declaration) projprocess.IdentitySpec {
+	subs := make([]event.EventPattern, 0, len(d.Subscriptions))
+	for _, s := range d.Subscriptions {
+		subs = append(subs, s.ToPattern())
+	}
+	pubs := make([]event.PublishPattern, 0, len(d.Publish))
+	for _, p := range d.Publish {
+		pubs = append(pubs, p.ToPublishPattern())
+	}
+	return projprocess.IdentitySpec{
+		ID:              d.ID,
+		Type:            d.Type,
+		Credential:      d.Credential,
+		Subscriptions:   subs,
+		Publish:         pubs,
+		TokenTTLSeconds: d.TokenTTLSeconds,
+	}
+}
+
+// launchSpec lowers a declaration into the supervisor's launch input. The
+// credential is the freshly minted one (managed-process never persists it).
+func launchSpec(d Declaration, credential string) projprocess.Spec {
+	env := make(map[string]string, len(d.Params))
+	for k, v := range d.Params {
+		if s, ok := v.(string); ok {
+			env[k] = projprocess.ResolveSecret(s)
+		}
+	}
+	return projprocess.Spec{
+		ID:         d.ID,
+		Type:       d.Type,
+		Command:    d.Command,
+		Env:        env,
+		Cwd:        d.Cwd,
+		Credential: credential,
+	}
+}

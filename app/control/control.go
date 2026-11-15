@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/project/template"
 	"github.com/niq-run/niq/app/webui"
 )
 
@@ -48,7 +49,7 @@ func RunControl(opts ControlOptions) error {
 	defer cancel()
 	// Make sure the built-in project templates are on disk so the new-project
 	// dropdown has something to offer on first run.
-	if err := project.SeedTemplates(project.TemplatesDir()); err != nil {
+	if err := template.Seed(template.TemplatesDir()); err != nil {
 		log.Printf("[control] seed templates: %v", err)
 	}
 	c := NewControl(opts.Addr)

@@ -9,11 +9,21 @@ import (
 
 // registerHelp declares worker.help on the host: asking for "spawn" returns
 // either the general spawn reference or, when params.worker names a worker
-// type, a guide specialized for that type.
+// type, a guide specialized for that type. The lifecycle verbs share one
+// reference, since the placement/approval rules that matter are common to them.
 func (w *HostWorker) registerHelp() {
 	w.RegisterHelp(map[event.EventType]baseworker.HelpFunc{
-		TypeSpawn: spawnHelp,
+		TypeSpawn:   spawnHelp,
+		TypeSuspend: staticHelp(lifecycleHelp),
+		TypeResume:  staticHelp(lifecycleHelp),
+		TypeRestart: staticHelp(lifecycleHelp),
+		TypeDestroy: staticHelp(lifecycleHelp),
 	})
+}
+
+// staticHelp adapts a fixed guide to a HelpFunc.
+func staticHelp(text string) baseworker.HelpFunc {
+	return func(map[string]any) (string, bool) { return text, true }
 }
 
 // spawnHelp answers worker.help for spawn. params.worker selects the guide —
@@ -31,24 +41,71 @@ func spawnHelp(params map[string]any) (string, bool) {
 	}
 }
 
-const spawnGeneralHelp = `# spawn
+// lifecycleHelp is the shared guide for suspend / resume / restart / destroy:
+// all four take one worker id and differ only in what they do to it.
+const lifecycleHelp = `# suspend / resume / restart / destroy
 
-Create a worker and start it immediately. The host registers the new worker's
-bus identity and builds it in-process; the reply is:
+All four lifecycle tools take one argument:
 
 ` + "```json" + `
-{"worker_id": "<id>", "status": "created", "type": "<type>"}
+{"worker_id": "<id from spawn or the directory roster>"}
 ` + "```" + `
+
+- ` + "`suspend`" + ` — stop it. An in-process worker is snapshotted, stopped and
+  disconnected; a managed-process worker's OS process is stopped (it persists
+  its own state). The worker stays declared and can be resumed.
+- ` + "`resume`" + ` — start a declared-but-stopped worker. This is the start action:
+  an in-process worker builds from its declaration (or resumes from its
+  snapshot), a managed-process worker is relaunched, an unmanaged-process worker
+  only gets its identity re-ensured — it starts itself.
+- ` + "`restart`" + ` — rebuild from the declaration. Construction params follow the
+  declaration edit; what the worker itself persisted survives.
+- ` + "`destroy`" + ` — stop it and remove its declaration, persisted state, bus
+  connection and identity. Irreversible. When the project configures a destroy
+  approver, the reply is ` + "`{status: \"pending_approval\", approval_id}`" + ` and the
+  removal happens only after the human approves; the decision replies to that
+  same ` + "`approval_id`" + `.
+
+## Notes
+
+- ` + "`unmanaged-process`" + ` workers have no local lifecycle: suspend/restart are
+  refused, because the host does not run them.
+- A protected worker (the host itself, the WebUI's HIW) cannot be suspended,
+  restarted or destroyed.
+`
+
+const spawnGeneralHelp = `# spawn
+
+Create a worker and start it. The reply is:
+
+` + "```json" + `
+{"worker_id": "<id>", "status": "created", "type": "<type>", "placement": "<placement>"}
+` + "```" + `
+
+` + "`worker_id`" + ` is the id actually used: some builders derive one (a workspace from
+its ` + "`path`" + `), so it can differ from the ` + "`id`" + ` you passed — or be the id you must
+use when you passed none.
 
 ## Arguments
 
 Required:
-- ` + "`type`" + ` — worker type to spawn: reason, coding, workspace, program, timer,
-  history, directory, mcp, niw, or hiw.
+- ` + "`type`" + ` — worker type: reason, coding, workspace, program, timer, history,
+  directory, mcp, niw, or hiw. For ` + "`in-process`" + ` it selects the builder; for a
+  process placement it labels the worker's identity.
+
+Placement:
+- ` + "`placement`" + ` — ` + "`in-process`" + ` (default), ` + "`managed-process`" + ` or
+  ` + "`unmanaged-process`" + `.
+- ` + "`command`" + ` — argv array. Required for ` + "`managed-process`" + `: the host launches it
+  as an OS process and supervises it. Rejected elsewhere. No shell: the array is
+  executed as-is.
+- every other argument — for ` + "`managed-process`" + `, all remaining keys become the
+  child's environment variables (flat string values). Prefer ` + "`env:VAR`" + `
+  references for secrets.
+- ` + "`cwd`" + ` — child working directory (` + "`managed-process`" + ` only; must exist).
 
 Common:
-- ` + "`id`" + ` — worker id, unique on the bus. Some builders derive one (workspace
-  derives it from ` + "`path`" + `); reason and coding require it.
+- ` + "`id`" + ` — worker id, unique on the bus. Required for a process placement.
 - ` + "`tags`" + ` — array or comma-separated string of slash-path labels for the WebUI
   selector, e.g. ` + "`[\"ops/backlog\"]`" + `.
 - ` + "`description`" + ` — one-line purpose note for the WebUI.
@@ -56,6 +113,24 @@ Common:
 
 Type-specific arguments are passed as top-level properties next to ` + "`type`" + `.
 For example workspace takes ` + "`path`" + ` (or ` + "`mounts`" + `) and ` + "`approver`" + `.
+
+## Process example
+
+` + "```json" + `
+{
+  "type": "mcp",
+  "id": "mcp-filesystem",
+  "placement": "managed-process",
+  "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"],
+  "GITHUB_TOKEN": "env:GITHUB_TOKEN"
+}
+` + "```" + `
+
+A process worker connects back to the bus on its own: the host injects
+` + "`NIQ_BUS_URL`" + `, ` + "`NIQ_WORKER_ID`" + `, ` + "`NIQ_WORKER_CREDENTIAL`" + ` and a persistent
+` + "`NIQ_STATE_DIR`" + `. An ` + "`unmanaged-process`" + ` worker gets a durable credential instead
+and is never launched here — do not ask for its credential through spawn; it is
+the declaration's field.
 
 ## Parameters are checked
 

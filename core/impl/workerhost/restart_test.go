@@ -17,7 +17,7 @@ func TestRestartWorkerKeepsState(t *testing.T) {
 	built := registerFakeBuilder(svc)
 	ctx := context.Background()
 
-	if err := svc.CreateWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake", Params: map[string]any{"v": "old"}}); err != nil {
+	if _, err := svc.CreateWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake", Params: map[string]any{"v": "old"}}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 	// Suspend so the store holds a snapshot and the worker is not running: a
@@ -61,7 +61,7 @@ func TestRestartWorkerSnapshotsRunning(t *testing.T) {
 	built := registerFakeBuilder(svc)
 	ctx := context.Background()
 
-	if err := svc.CreateWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
+	if _, err := svc.CreateWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 	// Newer state than the store holds (spawn persisted no snapshot).
@@ -88,7 +88,7 @@ func TestRestartWorkerTypeChangeDropsSnapshot(t *testing.T) {
 	_, other := registerTwoFakeBuilders(svc)
 	ctx := context.Background()
 
-	if err := svc.CreateWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
+	if _, err := svc.CreateWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 	if err := svc.SuspendWorker("w"); err != nil {

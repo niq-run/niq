@@ -1,4 +1,4 @@
-package project
+package process
 
 import (
 	"os"
@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/niq-run/niq/core/impl/eventbus"
 )
 
-func boolPtr(b bool) *bool { return &b }
-
-func testSupervisor() *UnmanagedSupervisor {
-	sv := NewUnmanagedSupervisor("http://127.0.0.1:1", "", func(string, ...any) {})
+// testSupervisor builds a supervisor whose children log to a temp dir rather
+// than inheriting the test process's stdout: a leaked child holding the test
+// binary's output pipe would keep `go test` waiting for it long after PASS.
+func testSupervisor(t *testing.T) *ProcessSupervisor {
+	t.Helper()
+	sv := NewProcessSupervisor("http://127.0.0.1:1", t.TempDir(), func(string, ...any) {})
 	sv.initialDelay = 10 * time.Millisecond
 	sv.maxDelay = 30 * time.Millisecond
 	sv.stableAfter = time.Hour
@@ -40,12 +40,12 @@ func waitMarker(t *testing.T, path string, min int, timeout time.Duration) {
 	t.Fatalf("marker %s did not reach %d runs", path, min)
 }
 
-// TestUnmanagedSupervisorRestartAndStop verifies a crashing external worker is
+// TestProcessSupervisorRestartAndStop verifies a crashing external worker is
 // restarted with backoff, and Stop prevents further restarts.
-func TestUnmanagedSupervisorRestartAndStop(t *testing.T) {
+func TestProcessSupervisorRestartAndStop(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "runs.log")
-	sv := testSupervisor()
-	spec := WorkerConfig{
+	sv := testSupervisor(t)
+	spec := Spec{
 		ID: "crashy", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo run >> " + marker + "; exit 1"},
 	}
@@ -68,12 +68,12 @@ func TestUnmanagedSupervisorRestartAndStop(t *testing.T) {
 	}
 }
 
-// TestUnmanagedSupervisorManualRestart verifies Restart kills the running
+// TestProcessSupervisorManualRestart verifies Restart kills the running
 // process and launches a fresh one.
-func TestUnmanagedSupervisorManualRestart(t *testing.T) {
+func TestProcessSupervisorManualRestart(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "runs.log")
-	sv := testSupervisor()
-	spec := WorkerConfig{
+	sv := testSupervisor(t)
+	spec := Spec{
 		ID: "svc", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo run >> " + marker + "; sleep 60"},
 	}
@@ -89,12 +89,12 @@ func TestUnmanagedSupervisorManualRestart(t *testing.T) {
 	sv.Shutdown()
 }
 
-// TestUnmanagedSupervisorShutdown verifies Shutdown stops every worker and the
+// TestProcessSupervisorShutdown verifies Shutdown stops every worker and the
 // supervision loops exit (no hang).
-func TestUnmanagedSupervisorShutdown(t *testing.T) {
-	sv := testSupervisor()
+func TestProcessSupervisorShutdown(t *testing.T) {
+	sv := testSupervisor(t)
 	for _, id := range []string{"a", "b"} {
-		if err := sv.Start(WorkerConfig{ID: id, Type: "x", Command: []string{"/bin/sh", "-c", "sleep 60"}}); err != nil {
+		if err := sv.Start(Spec{ID: id, Type: "x", Command: []string{"/bin/sh", "-c", "sleep 60"}}); err != nil {
 			t.Fatalf("Start %s: %v", id, err)
 		}
 	}
@@ -115,14 +115,14 @@ func TestUnmanagedSupervisorShutdown(t *testing.T) {
 	}
 }
 
-// TestUnmanagedSupervisorSingleInstance verifies that starting the same worker
+// TestProcessSupervisorSingleInstance verifies that starting the same worker
 // id twice while one is running kills the old child first (no two live
 // processes shadowing the bus session). The second Start replaces the first, so
 // the marker advances by exactly one fresh launch and only one child is alive.
-func TestUnmanagedSupervisorSingleInstance(t *testing.T) {
+func TestProcessSupervisorSingleInstance(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "runs.log")
-	sv := testSupervisor()
-	spec := WorkerConfig{
+	sv := testSupervisor(t)
+	spec := Spec{
 		ID: "lark", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo run >> " + marker + "; sleep 60"},
 	}
@@ -148,16 +148,16 @@ func TestUnmanagedSupervisorSingleInstance(t *testing.T) {
 	}
 }
 
-// TestUnmanagedSupervisorStdoutLog verifies a worker's stdout is written to
+// TestProcessSupervisorStdoutLog verifies a worker's stdout is written to
 // <workersRoot>/<id>/stdout.log instead of being lost on the supervisor's own
 // output.
-func TestUnmanagedSupervisorStdoutLog(t *testing.T) {
+func TestProcessSupervisorStdoutLog(t *testing.T) {
 	root := t.TempDir()
-	sv := NewUnmanagedSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
+	sv := NewProcessSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
 	sv.initialDelay = 10 * time.Millisecond
 	sv.maxDelay = 30 * time.Millisecond
 	sv.stableAfter = time.Hour
-	spec := WorkerConfig{
+	spec := Spec{
 		ID: "lark", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo hello-from-worker; sleep 1"},
 	}
@@ -185,15 +185,15 @@ func TestUnmanagedSupervisorStdoutLog(t *testing.T) {
 	}
 }
 
-// TestUnmanagedSupervisorStateDir verifies each external worker gets a
+// TestProcessSupervisorStateDir verifies each external worker gets a
 // NIQ_STATE_DIR pointing at its persistent state directory.
-func TestUnmanagedSupervisorStateDir(t *testing.T) {
+func TestProcessSupervisorStateDir(t *testing.T) {
 	root := t.TempDir()
-	sv := NewUnmanagedSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
+	sv := NewProcessSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
 	sv.initialDelay = 10 * time.Millisecond
 	sv.maxDelay = 30 * time.Millisecond
 	sv.stableAfter = time.Hour
-	spec := WorkerConfig{
+	spec := Spec{
 		ID: "lark", Type: "x",
 		Command: []string{"/bin/sh", "-c", "echo \"$NIQ_STATE_DIR\" > $NIQ_STATE_DIR/where.log; sleep 60"},
 	}
@@ -224,67 +224,11 @@ func TestUnmanagedSupervisorStateDir(t *testing.T) {
 	}
 }
 
-func findStatus(sts []UnmanagedStatus, id string) *UnmanagedStatus {
+func findStatus(sts []ProcessStatus, id string) *ProcessStatus {
 	for i := range sts {
 		if sts[i].ID == id {
 			return &sts[i]
 		}
 	}
 	return nil
-}
-
-// TestProvisionUnmanaged verifies a credential is generated and persisted on
-// first launch, reused afterwards, and the identity is registered with the
-// declared allow lists.
-func TestProvisionUnmanaged(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	p, err := CreateProject("proj", "", &TemplateConfig{Workers: []WorkerConfig{
-		{Type: "mcp", ID: "ext", Managed: boolPtr(false), Command: []string{"npx", "x"}, Subscriptions: []SubscriptionSpec{{Type: "*"}}},
-	}})
-	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(t.TempDir(), "id", "identities.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer := eventbus.NewTokenSigner([]byte("test-secret"))
-
-	spec := p.Workers[0]
-	if err := provisionUnmanaged(registry, "proj", &spec, signer); err != nil {
-		t.Fatalf("provision: %v", err)
-	}
-	if spec.Credential == "" {
-		t.Fatal("credential not generated")
-	}
-
-	// Credential persisted to project.json.
-	reloaded, err := LoadProject("proj")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reloaded.Workers[0].Credential != spec.Credential {
-		t.Fatalf("credential not persisted: got %q", reloaded.Workers[0].Credential)
-	}
-
-	// Identity registered with credential + declared subscriptions.
-	id, ok := registry.Lookup("ext")
-	if !ok {
-		t.Fatal("identity not registered")
-	}
-	if id.Credential != spec.Credential {
-		t.Fatalf("registry credential mismatch")
-	}
-	if len(id.SubscribeAllow) != 1 {
-		t.Fatalf("subscribe allow = %v, want 1 pattern", id.SubscribeAllow)
-	}
-
-	// Re-provision reuses the persisted credential.
-	spec2 := reloaded.Workers[0]
-	if err := provisionUnmanaged(registry, "proj", &spec2, signer); err != nil {
-		t.Fatalf("re-provision: %v", err)
-	}
-	if spec2.Credential != spec.Credential {
-		t.Fatalf("credential regenerated: %q → %q", spec.Credential, spec2.Credential)
-	}
 }

@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/project/template"
 )
 
 // version is injected at build time via -ldflags:
@@ -201,7 +202,7 @@ func runProject(args []string) error {
 		if _, err := project.LoadProject(id); err == nil {
 			return fmt.Errorf("project %q already exists at %s", id, path)
 		}
-		tmpl, err := project.LoadTemplate(project.TemplatesDir(), *templateName)
+		tmpl, err := template.Load(template.TemplatesDir(), *templateName)
 		if err != nil {
 			return err
 		}

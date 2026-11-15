@@ -1,6 +1,6 @@
 //go:build windows
 
-package project
+package process
 
 import (
 	"os/exec"

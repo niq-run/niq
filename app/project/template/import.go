@@ -1,15 +1,16 @@
-// Template import from a shared zip package. A reusable template is a
-// directory with a template.json and an optional programs/ subtree; zipping
-// that directory is what a user shares. This file turns such a zip back into an
-// on-disk template under the templates dir, validating the payload (a valid
-// template.json must be present) and guarding the extraction (no path
-// traversal, a bounded archive so a malformed zip cannot exhaust disk).
-package project
+// Zip import: a reusable template is a directory with a template.json and an
+// optional programs/ subtree; zipping that directory is what a user shares.
+// This file turns such a zip back into an on-disk template under the templates
+// dir, validating the payload (a valid template.json must be present) and
+// guarding the extraction (no path traversal, a bounded archive so a malformed
+// zip cannot exhaust disk).
+package template
 
 import (
 	"archive/zip"
 	"bytes"
 	"fmt"
+	projworker "github.com/niq-run/niq/app/project/worker"
 	"io"
 	"os"
 	"path"
@@ -17,26 +18,26 @@ import (
 	"strings"
 )
 
-// maxTemplateImportBytes bounds the total uncompressed size of an imported
+// maxImportBytes bounds the total uncompressed size of an imported
 // template package. Templates are small (a JSON file plus a handful of program
 // resources); the cap stops a malformed or hostile zip from writing unbounded
 // data during extraction.
-const maxTemplateImportBytes = 64 << 20 // 64 MiB
+const maxImportBytes = 64 << 20 // 64 MiB
 
-// MaxTemplateImportBytes returns the cap on an imported template package's size.
+// MaxImportBytes returns the cap on an imported template package's size.
 // It is exposed so the HTTP layer can bound the request body before handing the
 // bytes to ImportTemplateZip.
-func MaxTemplateImportBytes() int64 { return maxTemplateImportBytes }
+func MaxImportBytes() int64 { return maxImportBytes }
 
 // ImportTemplateZip extracts a shared template package into the on-disk
 // templates dir under name. The zip may carry the template at its root
 // (template.json and optional programs/) or inside a single wrapping folder
 // (e.g. <name>/template.json) which is stripped. The imported template must
 // parse and validate; on any error nothing is written.
-func ImportTemplateZip(name string, data []byte) (*TemplateConfig, error) {
+func ImportZip(name string, data []byte) (*Template, error) {
 	root := TemplatesDir()
 	if name != "" {
-		if _, err := os.Stat(TemplateDir(root, name)); err == nil {
+		if _, err := os.Stat(Dir(root, name)); err == nil {
 			return nil, fmt.Errorf("project: template %q already exists", name)
 		}
 	}
@@ -50,7 +51,7 @@ func ImportTemplateZip(name string, data []byte) (*TemplateConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	tmpl, err := parseConfig(tmplRaw)
+	tmpl, err := Parse(tmplRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -61,12 +62,12 @@ func ImportTemplateZip(name string, data []byte) (*TemplateConfig, error) {
 		if base == "" {
 			return nil, fmt.Errorf("project: template id is required (zip has no wrapping folder)")
 		}
-		if name = sanitizeID(base); name == "" {
+		if name = projworker.SanitizeID(base); name == "" {
 			return nil, fmt.Errorf("project: invalid template id derived from zip")
 		}
 	}
 
-	destDir := TemplateDir(root, name)
+	destDir := Dir(root, name)
 	if err := extractTemplateZip(zr, base, destDir); err != nil {
 		return nil, err
 	}
@@ -99,7 +100,7 @@ func templateZipRoot(zr *zip.Reader) (string, []byte, error) {
 		if err != nil {
 			return "", nil, fmt.Errorf("project: read template.json: %w", err)
 		}
-		raw, err := io.ReadAll(io.LimitReader(r, maxTemplateImportBytes))
+		raw, err := io.ReadAll(io.LimitReader(r, maxImportBytes))
 		r.Close()
 		if err != nil {
 			return "", nil, fmt.Errorf("project: read template.json: %w", err)
@@ -176,7 +177,7 @@ func extractTemplateZip(zr *zip.Reader, base, destDir string) error {
 		}
 		// Bound the copy so a single oversized entry cannot exhaust the budget
 		// (the +1 flags "one byte too many" from a LimitReader as overflow).
-		budget := maxTemplateImportBytes - wrote
+		budget := maxImportBytes - wrote
 		if f.UncompressedSize64 > uint64(budget) {
 			os.RemoveAll(destDir)
 			return fmt.Errorf("project: template package too large")

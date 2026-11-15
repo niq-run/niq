@@ -1,39 +1,33 @@
 // WebUI ↔ project bridge: the adapters the project WebUI server is wired with,
-// mapping webui interface methods onto project.json declarations, the worker
-// service and the unmanaged supervisor. run.go only assembles these; the
-// project-specific logic lives here.
+// mapping webui interface methods onto worker declarations.
+//
+// The WebUI never drives a lifecycle directly. Creating a worker persists its
+// declaration here; STARTING it (create/start/restart/stop/delete) is a bus
+// request to the host worker, so the UI, an agent and the boot-time recovery
+// all walk the same lifecycle path.
 package project
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
-	"strings"
 
+	projworker "github.com/niq-run/niq/app/project/worker"
 	"github.com/niq-run/niq/app/webui"
-	"github.com/niq-run/niq/core/impl/eventbus"
-	"github.com/niq-run/niq/core/impl/workerhost"
-	corebus "github.com/niq-run/niq/core/itfs/bus"
+	"github.com/niq-run/niq/core/itfs/event"
+	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
-// webuiDeclCreator implements webui.WorkerDeclCreator: it persists a worker
-// declaration from the WebUI's create form into project.json and launches it.
-// workers are provisioned and started here; managed workers come back with a
-// spawn-event payload that the WebUI server sends to the host worker, so the
-// spawn rides the auditable bus instead of a direct worker-service call.
+// webuiDeclCreator implements webui.WorkerDeclCreator: it validates a worker
+// declaration from the WebUI's create form and persists it into workers.json.
+// It launches nothing — the caller sends the host worker a `resume` for the new
+// id, which is what materializes it (in whatever placement the declaration
+// names). A launch that fails therefore leaves a declared-but-stopped worker
+// the start button (the same `resume`) can retry.
 type webuiDeclCreator struct {
-	supervisor *UnmanagedSupervisor
-	registry   corebus.IdentityRegistry
-	signer     *eventbus.TokenSigner
-	workerSvc  *workerhost.WorkerService // may be nil; used for duplicate checks only
-	projectID  string
+	store     projworker.DeclStore
+	projectID string
 }
 
-// Create persists the declaration and launches the worker. The spawned config
-// is validated against the existing declarations, the worker service and the
-// bus registry — any of them already holding the id is an "already exists"
-// error (the WebUI maps it to 409).
 func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, error) {
 	if c.projectID == "" {
 		return webui.WorkerCreated{}, fmt.Errorf("worker creation requires a project")
@@ -42,149 +36,80 @@ func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, er
 	if err := json.Unmarshal(body, &wc); err != nil {
 		return webui.WorkerCreated{}, fmt.Errorf("bad worker definition: %w", err)
 	}
-	if wc.Type == "" {
-		return webui.WorkerCreated{}, fmt.Errorf("type is required")
-	}
-	if wc.ID == "" {
-		return webui.WorkerCreated{}, fmt.Errorf("id is required")
-	}
-	if sanitizeID(wc.ID) != wc.ID {
-		return webui.WorkerCreated{}, fmt.Errorf("id may only contain letters, digits, '-', '_', '.'")
-	}
-	if err := validateWorkerMeta(wc); err != nil {
+	wc = projworker.Instantiate(wc, c.projectID)
+	if err := validateDeclaration(wc); err != nil {
 		return webui.WorkerCreated{}, err
 	}
-
-	p, err := LoadProject(c.projectID)
-	if err != nil {
+	if _, ok, err := c.store.Get(wc.ID); err != nil {
 		return webui.WorkerCreated{}, err
-	}
-	if _, ok := FindWorker(p, wc.ID); ok {
+	} else if ok {
 		return webui.WorkerCreated{}, fmt.Errorf("worker %s already exists", wc.ID)
 	}
-	if c.workerSvc != nil && c.workerSvc.HasWorker(wc.ID) {
-		return webui.WorkerCreated{}, fmt.Errorf("worker %s already exists", wc.ID)
-	}
-	if _, ok := c.registry.Lookup(wc.ID); ok {
-		return webui.WorkerCreated{}, fmt.Errorf("worker %s already exists", wc.ID)
-	}
-
-	wc = instantiateWorker(wc, c.projectID)
-
-	if isManagedWorker(wc) {
-		// The declaration carries the whole config, so persisting it is all
-		// it takes for the worker to survive a restart; the spawn payload
-		// rides the bus and the host worker creates the live instance.
-		p.Workers = append(p.Workers, wc)
-		if err := SaveProject(p); err != nil {
-			return webui.WorkerCreated{}, err
-		}
-		payload := map[string]any{"type": wc.Type, "id": wc.ID}
-		for k, v := range workerParams(wc) {
-			payload[k] = v
-		}
-		return webui.WorkerCreated{ID: wc.ID, Type: wc.Type, Managed: true, Spawn: payload}, nil
-	}
-
-	// A remote (third-party) worker is an external declaration with no local
-	// command to launch: the project registers its identity and issues a
-	// credential, and the worker connects to the bus on its own. No supervisor
-	// entry, no process — just the persisted declaration and the provisioned
-	// identity/credential the WebUI surfaces for the third party to copy.
-	if wc.Remote {
-		p.Workers = append(p.Workers, wc)
-		if err := SaveProject(p); err != nil {
-			return webui.WorkerCreated{}, err
-		}
-		if err := provisionUnmanaged(c.registry, c.projectID, &wc, c.signer); err != nil {
-			return webui.WorkerCreated{}, err
-		}
-		return webui.WorkerCreated{ID: wc.ID, Type: wc.Type, Remote: true, Credential: wc.Credential}, nil
-	}
-
-	if len(wc.Command) == 0 {
-		return webui.WorkerCreated{}, fmt.Errorf("command is required for an external worker")
-	}
-	p.Workers = append(p.Workers, wc)
-	if err := SaveProject(p); err != nil {
+	if err := c.store.Add(&wc); err != nil {
 		return webui.WorkerCreated{}, err
 	}
-	if err := provisionTemp(c.registry, c.signer, &wc); err != nil {
-		return webui.WorkerCreated{}, err
+
+	placement := projworker.PlacementOf(wc)
+	created := webui.WorkerCreated{
+		ID:        wc.ID,
+		Type:      wc.Type,
+		Managed:   placement == coreworker.PlacementInProcess,
+		Remote:    placement == coreworker.PlacementUnmanagedProcess,
+		Placement: string(placement),
 	}
-	if c.supervisor == nil {
-		return webui.WorkerCreated{}, fmt.Errorf("worker creation requires a bus")
+	// A dial-in worker's credential is issued when it is resumed. The UI shows
+	// it so the third party can connect; it is read from the declaration, never
+	// returned by the host's bus reply.
+	if placement == coreworker.PlacementUnmanagedProcess && wc.Credential != "" {
+		created.Credential = wc.Credential
 	}
-	if err := c.supervisor.Start(wc); err != nil {
-		return webui.WorkerCreated{}, err
-	}
-	return webui.WorkerCreated{ID: wc.ID, Type: wc.Type}, nil
+	return created, nil
 }
 
-// validateWorkerMeta checks a worker's display metadata (tags / description)
-// from the create form. Tags form a slash-path hierarchy, so each segment may
-// carry letters, digits and '_-.'; the slash is the path separator. Segments
-// must be non-empty (no "//", no leading/trailing slash). Description is free
-// text but trimmed; empty values are dropped.
-func validateWorkerMeta(wc WorkerConfig) error {
-	// Label is a display name shown in place of the id, so it only needs to
-	// stay one short, printable line — the id remains the identity.
-	if label := strings.TrimSpace(wc.Label); label != wc.Label {
-		return fmt.Errorf("label may not have leading or trailing whitespace")
+// validateDeclaration checks everything that can be checked before a worker
+// exists: identity, display metadata, placement consistency, and the launch
+// spec a process worker needs.
+func validateDeclaration(wc WorkerConfig) error {
+	if wc.Type == "" {
+		return fmt.Errorf("type is required")
 	}
-	if n := len([]rune(wc.Label)); n > 64 {
-		return fmt.Errorf("label is %d characters, at most 64 are allowed", n)
+	if wc.ID == "" {
+		return fmt.Errorf("id is required")
 	}
-	for _, r := range wc.Label {
-		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf("label may not contain control characters")
-		}
+	if projworker.SanitizeID(wc.ID) != wc.ID {
+		return fmt.Errorf("id may only contain letters, digits, '-', '_', '.'")
 	}
-	for _, t := range wc.Tags {
-		t = strings.TrimSpace(t)
-		if t == "" {
-			return fmt.Errorf("tags may not be empty")
+	if err := projworker.ValidateMeta(wc); err != nil {
+		return err
+	}
+	switch projworker.PlacementOf(wc) {
+	case coreworker.PlacementInProcess:
+		if len(wc.Command) > 0 || wc.Cwd != "" {
+			return fmt.Errorf("an in-process worker does not take command/cwd")
 		}
-		for _, seg := range strings.Split(t, "/") {
-			if seg == "" {
-				return fmt.Errorf("tag %q: empty segment (no leading/trailing/double slash)", t)
-			}
-			for _, r := range seg {
-				if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
-					return fmt.Errorf("tag %q: segments may only contain letters, digits, '-', '_', '.'", t)
-				}
-			}
+	case coreworker.PlacementManagedProcess:
+		if len(wc.Command) == 0 {
+			return fmt.Errorf("command is required for a managed-process worker")
 		}
+		if err := projworker.ValidateProcessParams(wc.Params); err != nil {
+			return err
+		}
+	case coreworker.PlacementUnmanagedProcess:
+		if len(wc.Command) > 0 {
+			return fmt.Errorf("an unmanaged-process worker starts itself; it must not carry a command")
+		}
+		if len(wc.Params) > 0 {
+			return fmt.Errorf("an unmanaged-process worker cannot carry params: the host has no channel to pass them")
+		}
+	default:
+		return fmt.Errorf("unknown placement %q", wc.Placement)
 	}
 	return nil
 }
 
-// ManagedSpawn returns the spawn-event payload for a declared managed worker,
-// built from its project.json declaration. managed is false when the id is not
-// a declared managed worker (the caller falls through to the external start
-// path).
-func (c *webuiDeclCreator) ManagedSpawn(id string) (map[string]any, bool, error) {
-	if c.projectID == "" {
-		return nil, false, fmt.Errorf("worker creation requires a project")
-	}
-	p, err := LoadProject(c.projectID)
-	if err != nil {
-		return nil, false, err
-	}
-	wc, ok := FindWorker(p, id)
-	if !ok || !isManagedWorker(wc) {
-		return nil, false, nil
-	}
-	payload := map[string]any{"type": wc.Type, "id": wc.ID}
-	for k, v := range workerParams(wc) {
-		payload[k] = v
-	}
-	return payload, true, nil
-}
-
 // workerMetaFromDecl builds the WebUI's worker display-metadata map (id ⇒
-// tags / description) from the declared worker set, for the workers view and
-// the talk target picker. Only declared hosts carry metadata.
+// label / tags / description) from the declared worker set, for the workers
+// view and the talk target picker. Only declared hosts carry metadata.
 func workerMetaFromDecl(workers []WorkerConfig) map[string]webui.WorkerMeta {
 	if len(workers) == 0 {
 		return nil
@@ -200,19 +125,19 @@ func workerMetaFromDecl(workers []WorkerConfig) map[string]webui.WorkerMeta {
 }
 
 // webuiParamsProvider implements webui.WorkerParamsProvider: it returns the
-// declared construction params (project.json `params`) of every worker, read
+// declared construction params (`params`) of every active worker, read
 // fresh each call so the worker view reflects runtime create/delete.
 type webuiParamsProvider struct {
 	projectID string
 }
 
 func (p webuiParamsProvider) WorkerParamsMap() map[string]map[string]any {
-	proj, err := LoadProject(p.projectID)
+	set, err := LoadWorkers(p.projectID)
 	if err != nil {
 		return nil
 	}
 	m := make(map[string]map[string]any)
-	for _, wc := range proj.Workers {
+	for _, wc := range set.Workers {
 		if len(wc.Params) > 0 {
 			m[wc.ID] = wc.Params
 		}
@@ -221,9 +146,10 @@ func (p webuiParamsProvider) WorkerParamsMap() map[string]map[string]any {
 }
 
 // webuiMetaUpdater implements webui.WorkerMetaUpdater: it persists a worker's
-// display metadata (tags / description) to its project.json declaration. Tags
-// are pure WebUI management metadata — the running worker ignores them, so
-// this is a declaration edit only, with no live worker operation.
+// display metadata (label / tags / description) to its workers.json
+// declaration. Tags are pure WebUI management metadata — the running worker
+// ignores them, so this is a declaration edit only, with no live worker
+// operation.
 type webuiMetaUpdater struct {
 	projectID string
 }
@@ -235,8 +161,19 @@ func (u webuiMetaUpdater) UpdateWorkerMeta(id string, meta webui.WorkerMeta) err
 	return UpdateWorkerMeta(u.projectID, id, meta.Label, meta.Tags, meta.Description)
 }
 
+// webuiACLUpdater implements webui.WorkerACLUpdater: bus ACL edits are
+// persisted into workers.json/workers.archived.json.
+type webuiACLUpdater struct{ projectID string }
+
+func (u webuiACLUpdater) UpdateWorkerACL(id string, publish []event.PublishPattern, subscribe []event.EventPattern) error {
+	if u.projectID == "" {
+		return fmt.Errorf("worker ACL update requires a project")
+	}
+	return UpdateWorkerACL(u.projectID, id, publish, subscribe)
+}
+
 // webuiParamsUpdater implements webui.WorkerParamsUpdater: a params edit lands
-// in the project.json declaration only, so the running worker keeps its current
+// in the workers.json declaration only, so the running worker keeps its current
 // definition until it is restarted.
 type webuiParamsUpdater struct {
 	projectID string
@@ -247,136 +184,4 @@ func (u webuiParamsUpdater) UpdateWorkerParams(id string, params map[string]any)
 		return fmt.Errorf("worker params update requires a project")
 	}
 	return UpdateWorkerParams(u.projectID, id, params)
-}
-
-// webuiManagedRestarter implements webui.ManagedRestarter: it brings a
-// host-managed worker up again from its declaration. Construction-only params
-// (budgets, context window, subscriptions, publish grants, …) follow the edit;
-// fields the worker persists (a reason worker's provider selection, programs and
-// readme; a workspace's mounts; an mcp worker's servers) are restored from the
-// snapshot and are changed by their own runtime events instead.
-type webuiManagedRestarter struct {
-	svc       *workerhost.WorkerService
-	projectID string
-}
-
-func (r webuiManagedRestarter) RestartManaged(id string) error {
-	if r.projectID == "" {
-		return fmt.Errorf("managed restart requires a project")
-	}
-	p, err := LoadProject(r.projectID)
-	if err != nil {
-		return err
-	}
-	wc, ok := FindWorker(p, id)
-	if !ok {
-		return fmt.Errorf("worker %s is not declared", id)
-	}
-	if !isManagedWorker(wc) {
-		return fmt.Errorf("worker %s is not managed", id)
-	}
-	return r.svc.RestartWorker(context.Background(), spawnConfig(wc))
-}
-
-// webuiDeclRemover implements webui.WorkerDeclRemover for a specific project,
-// letting the WebUI remove a managed worker's project.json declaration on delete.
-type webuiDeclRemover struct {
-	projectID string
-}
-
-func (r webuiDeclRemover) RemoveDecl(id string) error {
-	if err := RemoveWorkerDecl(r.projectID, id); err != nil {
-		return err
-	}
-	return removeWorkerStateDir(r.projectID, id)
-}
-
-// webuiUnmanagedAdapter implements webui.UnmanagedController, routing the
-// project WebUI's external-worker controls to the project supervisor.
-type webuiUnmanagedAdapter struct {
-	supervisor *UnmanagedSupervisor
-	registry   corebus.IdentityRegistry
-	signer     *eventbus.TokenSigner
-	workerSvc  *workerhost.WorkerService // optional; identifies live managed workers
-	projectID  string
-}
-
-func (a *webuiUnmanagedAdapter) Start(id string) error {
-	if a.projectID == "" {
-		return fmt.Errorf("unmanaged control requires a project")
-	}
-	p, err := LoadProject(a.projectID)
-	if err != nil {
-		return err
-	}
-	spec, ok := FindWorker(p, id)
-	if !ok {
-		return fmt.Errorf("worker %s not found", id)
-	}
-	if isManagedWorker(spec) {
-		return fmt.Errorf("worker %s is managed, not an external process", id)
-	}
-	if spec.Remote {
-		return fmt.Errorf("worker %s is a remotely-connected worker; it connects on its own", id)
-	}
-	if err := provisionTemp(a.registry, a.signer, &spec); err != nil {
-		return err
-	}
-	return a.supervisor.Start(spec)
-}
-
-func (a *webuiUnmanagedAdapter) Stop(id string) error    { return a.supervisor.Stop(id) }
-func (a *webuiUnmanagedAdapter) Restart(id string) error { return a.supervisor.Restart(id) }
-
-// Remove stops the worker (if supervised) and deletes its project.json
-// declaration so it is not relaunched next start.
-func (a *webuiUnmanagedAdapter) Remove(id string) error {
-	_ = a.supervisor.Stop(id)
-	if a.projectID == "" {
-		return fmt.Errorf("unmanaged control requires a project")
-	}
-	if err := RemoveWorkerDecl(a.projectID, id); err != nil {
-		return err
-	}
-	return removeWorkerStateDir(a.projectID, id)
-}
-
-func (a *webuiUnmanagedAdapter) List() []webui.UnmanagedStatus {
-	out := make([]webui.UnmanagedStatus, 0, 4)
-	for _, st := range a.supervisor.List() {
-		out = append(out, webui.UnmanagedStatus{ID: st.ID, Type: st.Type, State: st.State, Alive: st.Alive})
-	}
-	return out
-}
-
-// Declared returns every worker project.json declares, merging the
-// supervisor's live state so declared-but-not-started externals show as
-// stopped. Managed declarations always report "stopped" — a live managed
-// worker's state belongs to the worker service, and the WebUI filters these
-// out via the registry / workerSvc before rendering. They drive the UI's
-// start buttons for declared-but-idle workers of both kinds.
-func (a *webuiUnmanagedAdapter) Declared() []webui.UnmanagedStatus {
-	if a.projectID == "" {
-		return nil
-	}
-	p, err := LoadProject(a.projectID)
-	if err != nil {
-		return nil
-	}
-	running := map[string]bool{}
-	for _, st := range a.supervisor.List() {
-		running[st.ID] = st.State == "running"
-	}
-	var out []webui.UnmanagedStatus
-	for _, spec := range p.Workers {
-		managed := isManagedWorker(spec)
-		st := webui.UnmanagedStatus{ID: spec.ID, Type: spec.Type, Managed: managed, Remote: spec.Remote, State: "stopped"}
-		if !managed && !spec.Remote && running[spec.ID] {
-			st.State = "running"
-			st.Alive = true
-		}
-		out = append(out, st)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
 }

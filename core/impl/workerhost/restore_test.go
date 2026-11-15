@@ -241,7 +241,7 @@ func TestProtectedWorkersCannotBeSuspendedOrDestroyed(t *testing.T) {
 	}
 	// A non-essential worker is not protected.
 	store.SaveState("plain", worker.StateRunning, nil)
-	if err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "plain", Type: "fake"}); err != nil {
+	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "plain", Type: "fake"}); err != nil {
 		t.Fatalf("create plain: %v", err)
 	}
 	if err := svc.SuspendWorker("plain"); err != nil {
@@ -282,7 +282,7 @@ func TestCheckpointPersistsRunningState(t *testing.T) {
 	built := registerFakeBuilder(svc)
 
 	cfg := worker.WorkerConfig{ID: "reason-worker", Type: "fake"}
-	if err := svc.CreateWorker(context.Background(), cfg); err != nil {
+	if _, err := svc.CreateWorker(context.Background(), cfg); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 	// The worker's state changed after it was created (e.g. a provider switch).
@@ -313,7 +313,7 @@ func TestCheckpointRejectsNonRunning(t *testing.T) {
 	svc := newServiceWithStore(t, t.TempDir())
 	registerFakeBuilder(svc)
 
-	if err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
+	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 	if err := svc.SuspendWorker("w"); err != nil {

@@ -1,4 +1,4 @@
-package project
+package template
 
 import (
 	"archive/zip"
@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/niq-run/niq/app/niqhome"
 )
 
 // makeZip builds a zip archive in memory from a map of name -> content.
@@ -31,12 +33,12 @@ func makeZip(t *testing.T, files map[string]string) []byte {
 const validTmpl = `{"workers":[{"type":"reason","id":"niq"},{"type":"program","id":"program"}]}`
 
 func TestImportTemplateZipAtRoot(t *testing.T) {
-	setupProjectsRoot(t)
+	setupHome(t)
 	data := makeZip(t, map[string]string{
 		"template.json":            validTmpl,
 		"programs/prog/PROGRAM.md": "# prog",
 	})
-	cfg, err := ImportTemplateZip("z1", data)
+	cfg, err := ImportZip("z1", data)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -44,20 +46,20 @@ func TestImportTemplateZipAtRoot(t *testing.T) {
 		t.Fatalf("workers = %d, want 2", len(cfg.Workers))
 	}
 	// Programs dir must have landed on disk.
-	if _, err := os.Stat(TemplateProgramsDir(TemplatesDir(), "z1")); err != nil {
+	if _, err := os.Stat(ProgramsDir(TemplatesDir(), "z1")); err != nil {
 		t.Fatalf("programs dir: %v", err)
 	}
-	if _, err := os.Stat(TemplatePath(TemplatesDir(), "z1")); err != nil {
+	if _, err := os.Stat(Path(TemplatesDir(), "z1")); err != nil {
 		t.Fatalf("template.json missing: %v", err)
 	}
 }
 
 func TestImportTemplateZipWrapped(t *testing.T) {
-	setupProjectsRoot(t)
+	setupHome(t)
 	data := makeZip(t, map[string]string{
 		"wrapped/template.json": validTmpl,
 	})
-	cfg, err := ImportTemplateZip("z2", data)
+	cfg, err := ImportZip("z2", data)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -67,33 +69,33 @@ func TestImportTemplateZipWrapped(t *testing.T) {
 }
 
 func TestImportTemplateZipDerivesNameFromWrapper(t *testing.T) {
-	setupProjectsRoot(t)
+	setupHome(t)
 	data := makeZip(t, map[string]string{
 		"my-shared-template/template.json": validTmpl,
 	})
-	cfg, err := ImportTemplateZip("", data)
+	cfg, err := ImportZip("", data)
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
 	if len(cfg.Workers) != 2 {
 		t.Fatalf("workers = %d, want 2", len(cfg.Workers))
 	}
-	if _, err := os.Stat(TemplatePath(TemplatesDir(), "my-shared-template")); err != nil {
+	if _, err := os.Stat(Path(TemplatesDir(), "my-shared-template")); err != nil {
 		t.Fatalf("derived name missing: %v", err)
 	}
 }
 
 func TestImportTemplateZipRejectsNameRequired(t *testing.T) {
-	setupProjectsRoot(t)
+	setupHome(t)
 	// No wrapping folder and no id -> nothing to key the template on.
 	data := makeZip(t, map[string]string{"template.json": validTmpl})
-	if _, err := ImportTemplateZip("", data); err == nil {
+	if _, err := ImportZip("", data); err == nil {
 		t.Fatal("expected error for missing id")
 	}
 }
 
 func TestImportTemplateZipRejectsInvalid(t *testing.T) {
-	setupProjectsRoot(t)
+	setupHome(t)
 	tests := []struct {
 		name  string
 		files map[string]string
@@ -106,7 +108,7 @@ func TestImportTemplateZipRejectsInvalid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := ImportTemplateZip("ztest", makeZip(t, tt.files)); err == nil {
+			if _, err := ImportZip("ztest", makeZip(t, tt.files)); err == nil {
 				t.Fatal("expected import to fail")
 			}
 		})
@@ -114,11 +116,11 @@ func TestImportTemplateZipRejectsInvalid(t *testing.T) {
 }
 
 func TestImportTemplateZipRejectsDuplicate(t *testing.T) {
-	setupProjectsRoot(t)
-	if _, err := ImportTemplateZip("dup", makeZip(t, map[string]string{"template.json": validTmpl})); err != nil {
+	setupHome(t)
+	if _, err := ImportZip("dup", makeZip(t, map[string]string{"template.json": validTmpl})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ImportTemplateZip("dup", makeZip(t, map[string]string{"template.json": validTmpl})); err == nil {
+	if _, err := ImportZip("dup", makeZip(t, map[string]string{"template.json": validTmpl})); err == nil {
 		t.Fatal("expected duplicate to fail")
 	}
 }
@@ -126,7 +128,7 @@ func TestImportTemplateZipRejectsDuplicate(t *testing.T) {
 // TestImportTemplateZipSlipGuard asserts an entry cannot escape the destination
 // directory through path traversal.
 func TestImportTemplateZipSlipGuard(t *testing.T) {
-	setupProjectsRoot(t)
+	setupHome(t)
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
 	f, err := w.Create("template.json")
@@ -137,10 +139,20 @@ func TestImportTemplateZipSlipGuard(t *testing.T) {
 	evil, _ := w.Create("../../escape.txt")
 	evil.Write([]byte("x"))
 	w.Close()
-	if _, err := ImportTemplateZip("safe", buf.Bytes()); err == nil {
+	if _, err := ImportZip("safe", buf.Bytes()); err == nil {
 		t.Fatal("expected traversal to be rejected")
 	}
 	if _, err := os.Stat(filepath.Join(TemplatesDir(), "..", "escape.txt")); err == nil {
 		t.Fatal("traversal file escaped the templates dir")
 	}
+}
+
+// setupHome isolates the template root (and the niq root it derives from) under
+// a temp HOME, so tests never touch a real ~/.niq.
+func setupHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_ = os.Unsetenv(niqhome.Env)
+	return filepath.Join(home, ".niq")
 }

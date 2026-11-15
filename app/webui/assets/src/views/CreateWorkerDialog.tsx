@@ -149,53 +149,42 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     if (!/^[A-Za-z0-9._-]+$/.test(id)) { setNote(t('workers.create.errId')); return null }
     if (isExternal && !command.trim()) { setNote(t('workers.create.errCommand')); return null }
 
+    // All construction parameters live in ONE params bag. The form's typed
+    // fields are a frontend convenience only; they are lowered here.
+    const params: Record<string, unknown> = {}
     const env: Record<string, string> = {}
     for (const row of envRows) {
       const k = row.key.trim()
       if (k) env[k] = row.value
     }
+    const placement = isManaged ? 'in-process' : isRemote ? 'unmanaged-process' : 'managed-process'
     const body: Record<string, unknown> = {
       type: effType,
       id: id.trim(),
-      managed: isManaged,
+      placement,
     }
-    // A remote (third-party) worker: host-managed=false, remote=true, and no
-    // local command — the worker connects to the bus on its own.
-    if (isRemote) body.remote = true
     // Display metadata: label (the name shown instead of the id), slash-path
-    // tags (grouping) and a purpose note. Applies to every worker kind, managed
-    // or external; carried in the declaration.
+    // tags (grouping) and a purpose note.
     if (workerLabel.trim()) body.label = workerLabel.trim()
     const tagList = tags.split(',').map(x => x.trim()).filter(Boolean)
     if (tagList.length > 0) body.tags = tagList
     if (description.trim()) body.description = description.trim()
     if (isManaged) {
       if (isReasonFamilyType(effType)) {
-        if (instruction.trim()) body.instruction = instruction.trim()
-        if (provider.trim()) body.provider = provider.trim()
-        if (model.trim()) body.model = model.trim()
-        // Spawn seeding has no typed declaration field: it is a param
-        // (context-builder: goal → system prompt, brief → first message).
-        const params: Record<string, unknown> = {}
+        if (instruction.trim()) params.instruction = instruction.trim()
+        if (provider.trim()) params.provider = provider.trim()
+        if (model.trim()) params.model = model.trim()
+        // Spawn seeding is a param now (context-builder: goal → system prompt,
+        // brief → first message).
         if (goal.trim()) params.goal = goal.trim()
         if (brief.trim()) params.brief = brief.trim()
-        // Self-description (worker.readme). A param, not display metadata: the
-        // worker can revise it at runtime and other workers read it by recall.
         if (readme.trim()) params.readme = readme.trim()
-        // Coding's only knob: the tool-list policy. Which peers PTC keeps is
-        // part of the PTC contract (program for invocation, directory for
-        // discovery), not configuration.
         if (effType === 'coding') params.tool_mode = toolMode
-        if (Object.keys(params).length > 0) body.params = params
       }
       if ((effType === 'workspace' || effType === 'program') && rootDir.trim()) {
-        // WorkerConfig takes a mounts array (first entry = primary mount).
-        // More mounts can be added at runtime via the workspace's mount.add.
-        body.mounts = [rootDir.trim()]
+        params.mounts = [rootDir.trim()]
       }
       if (effType === 'mcp') {
-        // MCP worker: params.mcp carries the expose mode + remote servers.
-        // headers may reference env as ${VAR}; plaintext is accepted for now.
         let servers: unknown[] = []
         if (mcpServersText.trim()) {
           try {
@@ -212,27 +201,19 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           }
         }
         const allowedTools = mcpAllowedTools.split(',').map(x => x.trim()).filter(Boolean)
-        body.params = {
-          expose: mcpExpose,
-          fixed: mcpFixed,
-          servers,
-          ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
-        }
+        params.expose = mcpExpose
+        params.fixed = mcpFixed
+        params.servers = servers
+        if (allowedTools.length > 0) params.allowed_tools = allowedTools
       }
     } else if (isExternal) {
       body.command = command.trim().split(/\s+/)
       if (cwd.trim()) body.cwd = cwd.trim()
-      if (Object.keys(env).length > 0) body.env = env
+      // A managed-process worker's params ARE its child environment.
+      Object.assign(params, env)
     }
     if (isManaged && effType === 'niw') {
-      // NIW is a MANAGED bridge worker: map the pasted far-side config onto
-      // the NIW construction params (remote_url / remote_worker_id /
-      // remote_credential) plus the optional local recipient seed. This is
-      // intentionally scoped to managed mode — a THIRD-PARTY worker typing
-      // "niw" (or "remote-niw") is a remote peer, not a local bridge, and
-      // must not hit the local-niw parameter requirements.
       const c = parseNiwConfig(niwConfig)
-      const params: Record<string, unknown> = {}
       if (c.NIQ_BUS_URL) params.remote_url = c.NIQ_BUS_URL
       if (c.NIQ_WORKER_ID) params.remote_worker_id = c.NIQ_WORKER_ID
       if (c.NIQ_WORKER_CREDENTIAL) params.remote_credential = c.NIQ_WORKER_CREDENTIAL
@@ -241,19 +222,17 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         setNote(t('workers.create.niwErr'))
         return null
       }
-      body.params = params
     }
-    // Optional token lifetime override for workers whose credential WE issue
-    // (external second-party and remote third-party workers).
-    if ((isExternal || isRemote) && tokenTtl.trim()) {
+    // token_ttl_seconds is only meaningful for a persisted remote credential;
+    // a managed-process credential is process-lifetime.
+    if (isRemote && tokenTtl.trim()) {
       const d = Number(tokenTtl.trim())
       if (Number.isFinite(d) && d > 0) body.token_ttl_seconds = Math.round(d * 86400)
     }
+    if (Object.keys(params).length > 0) body.params = params
     const subs = subscriptions.filter((r) => r.type.trim() !== '')
     const pubs = publish.filter((r) => r.type.trim() !== '')
     if (subs.length > 0) {
-      // An empty source is the legacy spelling of "any source"; write the
-      // canonical wildcard so the declaration matches what the backend stores.
       body.subscriptions = subs.map((r) => ({ type: r.type.trim(), source: r.source.trim() || '*' }))
     }
     if (pubs.length > 0) {

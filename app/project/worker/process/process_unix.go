@@ -1,6 +1,6 @@
 //go:build unix
 
-package project
+package process
 
 import (
 	"os/exec"

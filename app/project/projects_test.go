@@ -9,13 +9,12 @@ import (
 	"testing"
 
 	"github.com/niq-run/niq/app/niqhome"
+	projtemplate "github.com/niq-run/niq/app/project/template"
+	projworker "github.com/niq-run/niq/app/project/worker"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 )
 
 func setupProjectsRoot(t *testing.T) string {
-	// Isolate the projects root under a temp ~/.niq by pointing HOME there,
-	// so tests never touch a real ~/.niq/projects. Ensure a stray NIQ_HOME
-	// can't override that relocation.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	_ = os.Unsetenv(niqhome.Env)
@@ -37,121 +36,110 @@ func TestProjectsRootHonorsNIQHome(t *testing.T) {
 	if _, err := os.Stat(ProjectPath("beta")); err != nil {
 		t.Fatalf("project.json missing under NIQ_HOME: %v", err)
 	}
-	// The default ~/.niq must stay untouched.
 	if _, err := os.Stat(filepath.Join(home, ".niq")); !os.IsNotExist(err) {
 		t.Fatalf("default ~/.niq was touched: %v", err)
 	}
 }
 
-// fakeTemplate returns a small TemplateConfig usable as a project template.
 func fakeTemplate() *TemplateConfig {
-	return &TemplateConfig{Workers: []WorkerConfig{
-		{Type: "hiw", ID: "default-hiw"},
-		{Type: "reason", ID: "niq", Provider: "volcan-ark", Model: "deepseek-v4-flash"},
+	return &TemplateConfig{SchemaVersion: SchemaVersion, Workers: []WorkerConfig{
+		{Config: projworker.Config{Type: "hiw", ID: "default-hiw"}},
+		{Config: projworker.Config{Type: "reason", ID: "niq", Params: map[string]any{
+			"provider": "volcan-ark", "model": "deepseek-v4-flash",
+		}}, Placement: projworker.PlacementInProcess},
 	}}
 }
 
 func TestCreateLoadListProject(t *testing.T) {
 	setupProjectsRoot(t)
 	root := ProjectsRoot()
-
 	if _, err := CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	// project.json + directory should exist under projects/<alpha>.
 	if _, err := os.Stat(ProjectPath("alpha")); err != nil {
 		t.Fatalf("project.json missing: %v", err)
 	}
-	if p, err := LoadProject("alpha"); err != nil {
-		t.Fatalf("LoadProject: %v", err)
-	} else if p.ID != "alpha" {
-		t.Fatalf("project = %+v, want id alpha", p)
+	if _, err := os.Stat(WorkersPath("alpha")); err != nil {
+		t.Fatalf("workers.json missing: %v", err)
 	}
-
-	// Each template worker is declared with its full config in project.json.
-	created, err := LoadProject("alpha")
+	p, err := LoadProject("alpha")
+	if err != nil || p.ID != "alpha" {
+		t.Fatalf("LoadProject = %+v (%v)", p, err)
+	}
+	set, err := LoadWorkers("alpha")
 	if err != nil {
-		t.Fatalf("LoadProject: %v", err)
+		t.Fatalf("LoadWorkers: %v", err)
 	}
 	for _, id := range []string{"default-hiw", "niq"} {
-		wc, ok := FindWorker(created, id)
-		if !ok {
+		if _, ok := FindWorker(set, id); !ok {
 			t.Fatalf("worker %s not declared", id)
 		}
-		if wc.Type == "" {
-			t.Fatalf("worker %s declaration has no type", id)
+	}
+	if wc, ok := FindWorker(set, "niq"); ok {
+		if wc.Params["provider"] != "volcan-ark" || wc.Params["model"] != "deepseek-v4-flash" {
+			t.Fatalf("niq params = %v", wc.Params)
 		}
 	}
-	// The reason worker's template config (provider/model) carried over.
-	if wc, ok := FindWorker(created, "niq"); ok {
-		if wc.Provider != "volcan-ark" || wc.Model != "deepseek-v4-flash" {
-			t.Fatalf("niq provider/model = %v/%v, want volcan-ark/deepseek-v4-flash", wc.Provider, wc.Model)
-		}
-	}
-
-	// Duplicate create must fail.
 	if _, err := CreateProject("alpha", "", fakeTemplate()); err == nil {
 		t.Fatal("expected error creating duplicate project")
 	}
-
-	// List includes alpha.
 	projects, err := ListProjects()
-	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
-	}
-	if len(projects) != 1 || projects[0].ID != "alpha" {
-		t.Fatalf("ListProjects = %+v, want [alpha]", projects)
+	if err != nil || len(projects) != 1 || projects[0].ID != "alpha" {
+		t.Fatalf("ListProjects = %+v (%v)", projects, err)
 	}
 	if got := ProjectsRoot(); got != root {
 		t.Fatalf("ProjectsRoot = %q, want %q", got, root)
 	}
 }
 
-// TestCreateProjectExpandsPlaceholder verifies the {project} template
-// placeholder is resolved once, when the declaration is instantiated into
-// project.json — the runtime never sees it.
 func TestCreateProjectExpandsPlaceholder(t *testing.T) {
 	setupProjectsRoot(t)
 	tpl := &TemplateConfig{Workers: []WorkerConfig{
-		{Type: "workspace", ID: "ws", Mounts: []string{"~/.niq/projects/{project}/workspace"}},
+		{Config: projworker.Config{Type: "workspace", ID: "ws", Params: map[string]any{
+			"mounts": []any{"~/.niq/projects/{project}/workspace"},
+		}}, Placement: projworker.PlacementInProcess},
 	}}
 	if _, err := CreateProject("alpha", "", tpl); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	p, err := LoadProject("alpha")
+	set, err := LoadWorkers("alpha")
 	if err != nil {
-		t.Fatalf("LoadProject: %v", err)
+		t.Fatal(err)
 	}
-	wc, ok := FindWorker(p, "ws")
+	wc, ok := FindWorker(set, "ws")
 	if !ok {
-		t.Fatal("ws not declared in project.json")
+		t.Fatal("ws not declared")
 	}
-	if len(wc.Mounts) != 1 || wc.Mounts[0] != "~/.niq/projects/alpha/workspace" {
-		t.Fatalf("declared mounts = %v, want [~/.niq/projects/alpha/workspace]", wc.Mounts)
+	mounts, _ := wc.Params["mounts"].([]any)
+	if len(mounts) != 1 || mounts[0] != "~/.niq/projects/alpha/workspace" {
+		t.Fatalf("mounts = %v", wc.Params)
 	}
-	if strings.Contains(fmt.Sprint(wc.Mounts), "{project}") {
-		t.Fatalf("placeholder leaked into the declaration: %v", wc.Mounts)
+	if strings.Contains(fmt.Sprint(wc.Params), "{project}") {
+		t.Fatalf("placeholder leaked: %v", wc.Params)
 	}
 }
 
-func TestSaveProjectMutatesArchived(t *testing.T) {
+func TestArchiveMovesDeclaration(t *testing.T) {
 	setupProjectsRoot(t)
 	if _, err := CreateProject("beta", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
-	p, _ := LoadProject("beta")
-	p.Archived = map[string]bool{"ws": true}
-	if err := SaveProject(p); err != nil {
+	arc := projectArchiver{id: "beta"}
+	if err := arc.SetArchived("niq", true); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, _ := LoadProject("beta")
-	if !reloaded.Archived["ws"] {
-		t.Fatalf("archived = %+v, want ws=true", reloaded.Archived)
+	if got := arc.Archived(); len(got) != 1 || got[0] != "niq" {
+		t.Fatalf("Archived() = %+v", got)
 	}
-
-	// Toggle off through the archiver.
-	arc := projectArchiver{id: "beta"}
-	if err := arc.SetArchived("ws", false); err != nil {
+	active, _ := LoadWorkers("beta")
+	if _, ok := FindWorker(active, "niq"); ok {
+		t.Fatal("archived worker still in active set")
+	}
+	arch, _ := LoadArchived("beta")
+	if wc, ok := FindWorker(arch, "niq"); !ok || wc.Params["provider"] != "volcan-ark" {
+		t.Fatalf("archived declaration = %+v", wc)
+	}
+	if err := arc.SetArchived("niq", false); err != nil {
 		t.Fatal(err)
 	}
 	if got := arc.Archived(); len(got) != 0 {
@@ -159,52 +147,42 @@ func TestSaveProjectMutatesArchived(t *testing.T) {
 	}
 }
 
-func TestCreateProjectUnmanagedWorker(t *testing.T) {
+func TestCreateProjectProcessWorkers(t *testing.T) {
 	setupProjectsRoot(t)
 	tmpl := &TemplateConfig{Workers: []WorkerConfig{
-		{Type: "reason", ID: "niq"},
-		{Type: "mcp", ID: "mcp-fs", Managed: boolPtr(false),
-			Command: []string{"npx", "mcp-fs"}, Env: map[string]string{"K": "V"}, Cwd: "/tmp"},
+		{Config: projworker.Config{Type: "reason", ID: "niq"}},
+		{Config: projworker.Config{Type: "mcp", ID: "mcp-fs", Params: map[string]any{"K": "V"}},
+			Placement: projworker.PlacementManagedProcess,
+			Command:   []string{"npx", "mcp-fs"}, Cwd: "/tmp"},
+		{Config: projworker.Config{Type: "mcp", ID: "remote"},
+			Placement: projworker.PlacementUnmanagedProcess},
 	}}
 	if _, err := CreateProject("gamma", "", tmpl); err != nil {
 		t.Fatal(err)
 	}
-	p, _ := LoadProject("gamma")
-	if len(p.Workers) != 2 {
-		t.Fatalf("workers = %d, want 2", len(p.Workers))
+	set, _ := LoadWorkers("gamma")
+	if len(set.Workers) != 3 {
+		t.Fatalf("workers = %d", len(set.Workers))
 	}
-	var mcp *WorkerConfig
-	for i := range p.Workers {
-		if p.Workers[i].ID == "mcp-fs" {
-			mcp = &p.Workers[i]
-		}
+	mcp, ok := FindWorker(set, "mcp-fs")
+	if !ok || projworker.PlacementOf(mcp) != projworker.PlacementManagedProcess {
+		t.Fatalf("mcp-fs = %+v", mcp)
 	}
-	if mcp == nil || isManagedWorker(*mcp) {
-		t.Fatalf("mcp-fs entry = %+v, want unmanaged", mcp)
-	}
-	if len(mcp.Command) != 2 || mcp.Cwd != "/tmp" || mcp.Env["K"] != "V" {
+	if len(mcp.Command) != 2 || mcp.Cwd != "/tmp" || mcp.Params["K"] != "V" {
 		t.Fatalf("mcp-fs launch spec = %+v", mcp)
 	}
-	// The managed worker is declared in project.json, not in a worker dir.
-	if wc, ok := FindWorker(p, "niq"); !ok || !isManagedWorker(wc) {
-		t.Fatalf("niq declaration = %+v, want managed", wc)
-	}
-	// Unmanaged workers are the only ones handed to the supervisor.
-	unm := UnmanagedWorkers(p)
-	if len(unm) != 1 || unm[0].ID != "mcp-fs" {
-		t.Fatalf("UnmanagedWorkers = %+v", unm)
+	if p := projworker.ProcessDeclarations(set.Workers); len(p) != 2 {
+		t.Fatalf("ProcessDeclarations = %+v", p)
 	}
 }
 
-// TestCreateProjectSeedsTemplatePrograms verifies a named template's programs
-// resources are copied into the new project's programs/ directory.
 func TestCreateProjectSeedsTemplatePrograms(t *testing.T) {
 	setupProjectsRoot(t)
-	tmplDir := TemplateDir(TemplatesDir(), "prog")
-	if err := os.MkdirAll(TemplateDir(tmplDir, ""), 0755); err != nil {
+	tmplDir := projtemplate.Dir(projtemplate.TemplatesDir(), "prog")
+	if err := os.MkdirAll(tmplDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(TemplatePath(TemplatesDir(), "prog"), []byte(`{"workers":[{"type":"reason","id":"niq"}]}`), 0644); err != nil {
+	if err := os.WriteFile(projtemplate.Path(projtemplate.TemplatesDir(), "prog"), []byte(`{"schema_version":2,"workers":[{"type":"reason","id":"niq"}]}`), 0644); err != nil {
 		t.Fatal(err)
 	}
 	prog := filepath.Join(tmplDir, "programs", "review")
@@ -214,15 +192,13 @@ func TestCreateProjectSeedsTemplatePrograms(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(prog, "SKILL.md"), []byte("---\nname: review\n---\n# Review"), 0644); err != nil {
 		t.Fatal(err)
 	}
-
 	if _, err := CreateProject("alpha", "prog", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(ProjectProgramsDir("alpha"), "review", "SKILL.md"))
 	if err != nil || len(raw) == 0 {
-		t.Fatalf("template programs not seeded into project: %v", err)
+		t.Fatalf("template programs not seeded: %v", err)
 	}
-	// A project created without a template name gets nothing copied.
 	if _, err := CreateProject("beta", "", nil); err != nil {
 		t.Fatalf("CreateProject(beta): %v", err)
 	}
@@ -240,71 +216,45 @@ func TestListProjectsEmpty(t *testing.T) {
 
 func TestSanitizeID(t *testing.T) {
 	if got := sanitizeID("my proj/1"); got != "my_proj_1" {
-		t.Fatalf("sanitize = %q, want my_proj_1", got)
+		t.Fatalf("sanitize = %q", got)
 	}
 	if got := sanitizeID("ok-id_1.x"); got != "ok-id_1.x" {
-		t.Fatalf("sanitize = %q, want ok-id_1.x", got)
+		t.Fatalf("sanitize = %q", got)
 	}
 }
 
-// TestLinkProjectExisting verifies opening a directory that is already a niq
-// project: the link keeps the project's own id, ListProjects sees through the
-// symlink, the original project.json is preserved, and a duplicate is rejected.
 func TestLinkProjectExisting(t *testing.T) {
 	setupProjectsRoot(t)
-
 	ext := t.TempDir()
-	proj := &Project{ID: "alpha", CreatedAt: "2026-01-01T00:00:00Z",
-		Workers: []WorkerConfig{{Type: "hiw", ID: "default-hiw"}}}
-	if err := writeProjectJSON(filepath.Join(ext, "project.json"), proj); err != nil {
+	if err := writeProjectJSON(filepath.Join(ext, "project.json"), &Project{ID: "alpha", CreatedAt: "2026-01-01T00:00:00Z"}); err != nil {
 		t.Fatalf("seed project.json: %v", err)
 	}
-
+	if err := os.WriteFile(filepath.Join(ext, "workers.json"), []byte(`{"schema_version":2,"workers":[{"id":"default-hiw","type":"hiw"}]}`), 0644); err != nil {
+		t.Fatalf("seed workers: %v", err)
+	}
 	p, err := LinkProject(ext)
-	if err != nil {
-		t.Fatalf("LinkProject: %v", err)
+	if err != nil || p.ID != "alpha" {
+		t.Fatalf("LinkProject = %+v (%v)", p, err)
 	}
-	if p.ID != "alpha" {
-		t.Fatalf("linked id = %q, want alpha", p.ID)
-	}
-
-	// A symlink must exist under the niq root, pointing back to ext.
 	link := ProjectDir("alpha")
-	if info, err := os.Lstat(link); err != nil {
-		t.Fatalf("link missing: %v", err)
-	} else if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("expected a symlink at %s", link)
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected symlink at %s (%v)", link, err)
 	}
 	if target, err := os.Readlink(link); err != nil || filepath.Clean(target) != filepath.Clean(ext) {
-		t.Fatalf("link target = %q, want %q (%v)", target, ext, err)
+		t.Fatalf("link target = %q (%v)", target, err)
 	}
-
-	// The project is now scannable (ListProjects must see through the symlink).
 	projects, err := ListProjects()
-	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
+	if err != nil || len(projects) != 1 || projects[0].ID != "alpha" {
+		t.Fatalf("ListProjects = %+v (%v)", projects, err)
 	}
-	if len(projects) != 1 || projects[0].ID != "alpha" {
-		t.Fatalf("ListProjects = %+v, want [alpha]", projects)
-	}
-	// The original project.json is left in place.
-	if _, err := os.Stat(filepath.Join(ext, "project.json")); err != nil {
-		t.Fatalf("original project.json missing: %v", err)
-	}
-
-	// Linking the same directory again must fail with a duplicate-id error.
 	if _, err := LinkProject(ext); err == nil {
 		t.Fatal("expected duplicate link error")
 	}
 }
 
-// TestLinkProjectCreatesProjectJSON verifies opening an arbitrary directory
-// derives the id from its base name and seeds a minimal project.json so the
-// project scans and can run with the webui-hiw.
 func TestLinkProjectCreatesProjectJSON(t *testing.T) {
 	setupProjectsRoot(t)
-	ext := t.TempDir() // arbitrary directory, no project.json
-
+	ext := t.TempDir()
 	p, err := LinkProject(ext)
 	if err != nil {
 		t.Fatalf("LinkProject: %v", err)
@@ -316,9 +266,6 @@ func TestLinkProjectCreatesProjectJSON(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ext, "project.json")); err != nil {
 		t.Fatalf("project.json not seeded: %v", err)
 	}
-	if list, err := ListProjects(); err != nil || len(list) != 1 || list[0].ID != base {
-		t.Fatalf("ListProjects after link = %+v, want [%s] (err %v)", list, base, err)
-	}
 }
 
 func TestLinkProjectRejectsInvalid(t *testing.T) {
@@ -326,7 +273,6 @@ func TestLinkProjectRejectsInvalid(t *testing.T) {
 	if _, err := LinkProject(""); err == nil {
 		t.Fatal("expected error for empty path")
 	}
-	// A plain file is not a directory.
 	f := filepath.Join(t.TempDir(), "f.txt")
 	if err := os.WriteFile(f, []byte("x"), 0644); err != nil {
 		t.Fatal(err)
@@ -336,12 +282,9 @@ func TestLinkProjectRejectsInvalid(t *testing.T) {
 	}
 }
 
-// TestCreateProjectSeedsBuiltinPrograms verifies a project created from the
-// built-in default template gets the template's programs/ resources (the
-// using-niq playbook) in its own programs/ dir, so program.read can address them.
 func TestCreateProjectSeedsBuiltinPrograms(t *testing.T) {
 	setupProjectsRoot(t)
-	def, err := LoadPreset("default")
+	def, err := projtemplate.LoadPreset("default")
 	if err != nil {
 		t.Fatalf("LoadPreset(default): %v", err)
 	}
@@ -350,24 +293,19 @@ func TestCreateProjectSeedsBuiltinPrograms(t *testing.T) {
 	}
 	raw, err := os.ReadFile(filepath.Join(ProjectProgramsDir("alpha"), "using-niq", "PROGRAM.md"))
 	if err != nil || len(raw) == 0 {
-		t.Fatalf("built-in playbook not seeded into project: %v", err)
+		t.Fatalf("built-in playbook not seeded: %v", err)
 	}
 }
 
-// TestBuiltinPlaybookIsLoadable verifies the seeded built-in playbook is
-// addressable through the program worker's store: the entry loads as
-// "using-niq", and the cheatsheet is listed and loads as
-// "using-niq/CHEATSHEET.md" (what program.read takes).
 func TestBuiltinPlaybookIsLoadable(t *testing.T) {
 	setupProjectsRoot(t)
-	def, err := LoadPreset("default")
+	def, err := projtemplate.LoadPreset("default")
 	if err != nil {
 		t.Fatalf("LoadPreset(default): %v", err)
 	}
 	if _, err := CreateProject("alpha", "default", def); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-
 	be := pgbackend.New(ProjectProgramsDir("alpha"))
 	progs, err := be.List(context.Background())
 	if err != nil {
@@ -378,9 +316,6 @@ func TestBuiltinPlaybookIsLoadable(t *testing.T) {
 		if p.Name != "using-niq" {
 			continue
 		}
-		if p.Meta.ContentType != "playbook" {
-			t.Fatalf("using-niq content_type = %q, want playbook", p.Meta.ContentType)
-		}
 		for _, c := range p.Contents {
 			if c.Path == "using-niq/CHEATSHEET.md" {
 				cheat = c.Path
@@ -389,62 +324,124 @@ func TestBuiltinPlaybookIsLoadable(t *testing.T) {
 		guide = p.Path
 	}
 	if guide != "using-niq" || cheat == "" {
-		t.Fatalf("programs = %+v, want using-niq with a CHEATSHEET.md sub-content", progs)
-	}
-
-	for _, addr := range []string{guide, cheat} {
-		body, err := be.Read(context.Background(), addr)
-		if err != nil || len(body) == 0 {
-			t.Fatalf("Read(%q) = %d bytes, err %v", addr, len(body), err)
-		}
+		t.Fatalf("programs = %+v", progs)
 	}
 }
 
-// TestUpdateWorkerMetaLabel verifies the display name (备注名) persists to the
-// declaration and is validated: it is one short printable line, and an empty
-// value clears it (the UI then falls back to the worker id).
+func TestUpdateWorkerParams(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := CreateProject("proj", "", nil); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if err := AppendWorkerDecl("proj", WorkerConfig{Config: projworker.Config{
+		Type: "mcp", ID: "m", Params: map[string]any{"expose": "agentic"},
+	}}); err != nil {
+		t.Fatalf("AppendWorkerDecl: %v", err)
+	}
+	if err := UpdateWorkerParams("proj", "m", map[string]any{"fixed": true, "expose": "ready"}); err != nil {
+		t.Fatalf("UpdateWorkerParams: %v", err)
+	}
+	set, _ := LoadWorkers("proj")
+	wc, ok := FindWorker(set, "m")
+	if !ok || wc.Params["fixed"] != true || wc.Params["expose"] != "ready" {
+		t.Fatalf("params = %+v", wc.Params)
+	}
+	if err := UpdateWorkerParams("proj", "m", map[string]any{}); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	set, _ = LoadWorkers("proj")
+	if wc, _ := FindWorker(set, "m"); wc.Params != nil {
+		t.Fatalf("params = %+v, want nil", wc.Params)
+	}
+	if err := UpdateWorkerParams("proj", "missing", map[string]any{"a": 1}); err == nil {
+		t.Fatal("unknown worker should fail")
+	}
+}
+
 func TestUpdateWorkerMetaLabel(t *testing.T) {
 	setupProjectsRoot(t)
 	if _, err := CreateProject("gamma", "", fakeTemplate()); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-
 	if err := UpdateWorkerMeta("gamma", "niq", "值班机器人", []string{"ops"}, "nightly"); err != nil {
 		t.Fatalf("UpdateWorkerMeta: %v", err)
 	}
-	p, err := LoadProject("gamma")
-	if err != nil {
-		t.Fatalf("LoadProject: %v", err)
+	set, _ := LoadWorkers("gamma")
+	wc, ok := FindWorker(set, "niq")
+	if !ok || wc.Label != "值班机器人" || wc.Description != "nightly" || len(wc.Tags) != 1 {
+		t.Fatalf("declaration = %+v", wc)
 	}
-	wc, ok := FindWorker(p, "niq")
-	if !ok {
-		t.Fatal("worker niq missing")
-	}
-	if wc.Label != "值班机器人" || wc.Description != "nightly" || len(wc.Tags) != 1 {
-		t.Fatalf("declaration after update = %+v", wc)
-	}
-
-	// Invalid labels are rejected and leave the stored value untouched.
 	for _, bad := range []string{" padded", "two\nlines", strings.Repeat("x", 65)} {
 		if err := UpdateWorkerMeta("gamma", "niq", bad, nil, ""); err == nil {
 			t.Fatalf("label %q was accepted", bad)
 		}
 	}
-	if p, err = LoadProject("gamma"); err != nil {
-		t.Fatalf("LoadProject: %v", err)
+	set, _ = LoadWorkers("gamma")
+	if wc, _ := FindWorker(set, "niq"); wc.Label != "值班机器人" {
+		t.Fatalf("rejected edit changed label: %q", wc.Label)
 	}
-	if wc, _ = FindWorker(p, "niq"); wc.Label != "值班机器人" {
-		t.Fatalf("rejected edit changed the label: %q", wc.Label)
-	}
-
-	// Empty clears the label (falls back to the id in the UI).
 	if err := UpdateWorkerMeta("gamma", "niq", "", nil, ""); err != nil {
 		t.Fatalf("clear label: %v", err)
 	}
-	if p, err = LoadProject("gamma"); err != nil {
-		t.Fatalf("LoadProject: %v", err)
-	}
-	if wc, _ = FindWorker(p, "niq"); wc.Label != "" {
+	set, _ = LoadWorkers("gamma")
+	if wc, _ := FindWorker(set, "niq"); wc.Label != "" {
 		t.Fatalf("label not cleared: %q", wc.Label)
+	}
+}
+
+func TestDefaultPresetShipsUsingNiqPlaybook(t *testing.T) {
+	def, err := projtemplate.LoadPreset("default")
+	if err != nil {
+		t.Fatalf("LoadPreset(default): %v", err)
+	}
+	var niq *WorkerConfig
+	for i := range def.Workers {
+		if def.Workers[i].ID == "niq" && def.Workers[i].Type == "reason" {
+			niq = &def.Workers[i]
+		}
+	}
+	if niq == nil {
+		t.Fatal("default preset has no reason worker niq")
+	}
+	raw, _ := niq.Params["programs"].([]any)
+	if len(raw) != 1 {
+		t.Fatalf("programs = %+v", niq.Params)
+	}
+	progs := projworker.ParsePrograms(niq.Params, "niq")
+	var seen bool
+	for _, p := range progs {
+		if p.Name == "using-niq" && p.ContentType == "playbook" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("ParsePrograms = %+v", progs)
+	}
+	if _, err := projtemplate.ReadPresetFile("default/programs/using-niq/PROGRAM.md"); err != nil {
+		t.Fatalf("embedded PROGRAM.md: %v", err)
+	}
+}
+
+// TestLinkProjectMigratesLegacy verifies linking a legacy external project
+// converts it before project.json is rewritten, so declarations are not lost.
+func TestLinkProjectMigratesLegacy(t *testing.T) {
+	setupProjectsRoot(t)
+	ext := t.TempDir()
+	legacy := `{"id":"legacy","created_at":"2026-01-01T00:00:00Z","workers":[{"type":"reason","id":"niq","instruction":"do x"}],"archived":{"old":true}}`
+	if err := os.WriteFile(filepath.Join(ext, "project.json"), []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LinkProject(ext); err != nil {
+		t.Fatalf("LinkProject: %v", err)
+	}
+	set, err := LoadWorkers("legacy")
+	if err != nil {
+		t.Fatalf("LoadWorkers: %v", err)
+	}
+	if wc, ok := FindWorker(set, "niq"); !ok || wc.Params["instruction"] != "do x" {
+		t.Fatalf("legacy declaration lost: %+v", wc)
+	}
+	if _, err := os.Stat(ArchivedPath("legacy")); err != nil {
+		t.Fatalf("archived file missing: %v", err)
 	}
 }

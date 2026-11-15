@@ -49,6 +49,10 @@ export interface WorkerInfo {
   state?: string
   unmanaged?: boolean
   unmanaged_state?: string // "running" | "stopped" (unmanaged only)
+  // placement: where the worker runs — in-process (built by the host),
+  // managed-process (the host launches and supervises its OS process), or
+  // unmanaged-process (the third party dials in; nothing is launched here).
+  placement?: string
   // remote = a third-party worker that connected on its own: the project
   // issued its credential but does not launch any process, so there is no
   // unmanaged start/stop. Shown for the connect configuration to copy.
@@ -109,6 +113,7 @@ export interface CreateWorkerResult {
   type: string
   managed: boolean
   remote?: boolean
+  placement?: string
   credential?: string
 }
 

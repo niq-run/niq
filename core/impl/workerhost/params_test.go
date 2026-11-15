@@ -22,7 +22,7 @@ func TestCreateWorkerRejectsUnknownParams(t *testing.T) {
 		return nil
 	})
 
-	err := svc.CreateWorker(context.Background(), worker.WorkerConfig{
+	_, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{
 		ID: "rejected", Type: "fake", Params: map[string]any{"bogus": 1},
 	})
 	if err == nil || !strings.Contains(err.Error(), "bogus") {
@@ -43,7 +43,7 @@ func TestCreateWorkerAcceptsCheckedParams(t *testing.T) {
 	built := registerFakeBuilder(svc)
 	svc.RegisterParamCheck("fake", func(map[string]any) error { return nil })
 
-	if err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "ok", Type: "fake"}); err != nil {
+	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "ok", Type: "fake"}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
 	if len(*built) != 1 {

@@ -3,13 +3,18 @@ package webui
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/niq-run/niq/core/impl/workerhost"
+	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/impl/eventbus"
+	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
+	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
+	"github.com/niq-run/niq/core/impl/workers/hiw"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/worker"
 )
 
 // paramsRecorder captures UpdateWorkerParams calls.
@@ -82,48 +87,135 @@ func TestHandleUpdateWorkerParams(t *testing.T) {
 }
 
 // restartRecorder captures RestartManaged calls.
-type restartRecorder struct{ id string }
+// lifecycleRig stands up the real thing the lifecycle endpoints talk to: a
+// webui-hiw worker holding a bus channel, a host worker that answers restart,
+// and an event log so the server's ask/reply correlation works.
+type lifecycleRig struct {
+	server   *Server
+	addr     string
+	hostReqs chan map[string]any
+}
 
-func (r *restartRecorder) RestartManaged(id string) error { r.id = id; return nil }
+// fakeHost is a minimal host worker: it receives lifecycle events and answers
+// them, recording the payloads it saw.
+type fakeHost struct {
+	baseworker.BaseWorker
+	reqs chan map[string]any
+}
 
-// TestHandleManagedRestart verifies the restart endpoint routes a managed
-// worker to the restarter (not the external supervisor), and 404s when no
-// restarter is wired.
-func TestHandleManagedRestart(t *testing.T) {
-	svc := workerhost.New()
-	svc.RegisterBuilder("fake", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
-		return worker.SpawnSpec{
-			Config:  cfg,
-			Connect: func() (corebus.WorkerSideChannel, error) { return nopChannel{}, nil },
-			Build:   func(corebus.WorkerSideChannel) worker.ManagedWorker { return &nopWorker{id: cfg.ID} },
-		}, nil
-	})
-	if err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "m", Type: "fake"}); err != nil {
-		t.Fatalf("CreateWorker: %v", err)
+func newLifecycleRig(t *testing.T) *lifecycleRig {
+	t.Helper()
+	dir := t.TempDir()
+	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(dir, "identities.json"))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	for _, id := range []corebus.Identity{
+		{WorkerID: "webui-hiw", Type: "hiw", PublishAllow: []event.PublishPattern{event.NewPublishPattern("*")}},
+		{WorkerID: "host", Type: "host", PublishAllow: []event.PublishPattern{event.NewPublishPattern("request.*")}},
+	} {
+		if err := registry.Register(id); err != nil {
+			t.Fatalf("register %s: %v", id.WorkerID, err)
+		}
 	}
 
-	rec := &restartRecorder{}
-	s := New(nil, nil, nil, svc, nil, ":0", false)
-	s.SetManagedRestarter(rec)
+	store := eventbus.NewMemoryEventStore()
+	engine := eventbus.NewEngine(registry, store)
+	log := eventbusapi.NewEventLog(engine, store)
+	engine.OnEvent(log.Hook())
+
+	listener := inprocess.NewInProcListener()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		for {
+			ch, err := listener.Accept(ctx)
+			if err != nil {
+				return
+			}
+			eventbus.Attach(ctx, engine, ch.WorkerID(), ch)
+		}
+	}()
+
+	hiwCh := inprocess.NewWorkerSide("webui-hiw", listener)
+	if err := hiwCh.Connect(ctx, "inproc://test"); err != nil {
+		t.Fatalf("connect hiw: %v", err)
+	}
+	h := hiw.New(hiw.Config{ID: "webui-hiw", Bus: hiwCh})
+	if err := h.Start(ctx); err != nil {
+		t.Fatalf("start hiw: %v", err)
+	}
+
+	hostCh := inprocess.NewWorkerSide("host", listener)
+	if err := hostCh.Connect(ctx, "inproc://test"); err != nil {
+		t.Fatalf("connect host: %v", err)
+	}
+	host := &fakeHost{BaseWorker: baseworker.NewBaseWorker("host", hostCh), reqs: make(chan map[string]any, 8)}
+	for _, typ := range []event.EventType{"resume", "suspend", "restart", "destroy"} {
+		typ := typ
+		host.Register(baseworker.Extension{Event: typ}, func(evt event.Event) {
+			host.reqs <- evt.Payload
+			host.ReplyCompleted(evt.WorkerId, evt.RequestId, map[string]any{"worker_id": evt.Payload["worker_id"], "status": "ok"}, evt.TraceID)
+		})
+	}
+	busCh, err := hostCh.Receive(ctx)
+	if err != nil {
+		t.Fatalf("host receive: %v", err)
+	}
+	go func() {
+		for {
+			select {
+			case evt := <-busCh:
+				host.DispatchExtension(evt)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	s := New(h, log, engine, &stubCatalog{}, registry, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
+	return &lifecycleRig{server: s, addr: addr, hostReqs: host.reqs}
+}
 
-	resp, err := http.DefaultClient.Post("http://"+addr+"/api/workers/m/restart", "application/json", nil)
-	if err != nil {
-		t.Fatalf("POST restart: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", resp.StatusCode)
-	}
-	if rec.id != "m" {
-		t.Fatalf("restarted %q, want m", rec.id)
+// TestLifecycleEndpointsGoThroughHost verifies the WebUI has no privileged
+// lifecycle path: restart, stop, start and delete are bus requests to the host
+// worker, carrying the worker id.
+func TestLifecycleEndpointsGoThroughHost(t *testing.T) {
+	rig := newLifecycleRig(t)
+
+	for _, tc := range []struct{ method, path, want string }{
+		{"POST", "/api/workers/w1/restart", "restart"},
+		{"POST", "/api/workers/w1/stop", "suspend"},
+		{"POST", "/api/workers/w1/start", "resume"},
+		{"DELETE", "/api/workers/w1", "destroy"},
+	} {
+		req, err := http.NewRequest(tc.method, "http://"+rig.addr+tc.path, nil)
+		if err != nil {
+			t.Fatalf("%s: new request: %v", tc.path, err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("%s status = %d, want 202/204", tc.path, resp.StatusCode)
+		}
+		select {
+		case payload := <-rig.hostReqs:
+			if payload["worker_id"] != "w1" {
+				t.Fatalf("%s reached the host with %v", tc.want, payload)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s never reached the host worker", tc.want)
+		}
 	}
 }
 

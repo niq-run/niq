@@ -1,4 +1,13 @@
-package project
+// The builders: one constructor per worker type, plus the registry and the
+// shared inputs every constructor needs.
+//
+// A builder turns a declaration's flat params into the SpawnSpec the worker
+// service starts: it wires the worker's own dependencies (bus channel, mounts,
+// programs root, lifecycle backend, remote handshake), its bus grants, and the
+// in-process worker instance. The reason family shares one construction path
+// (provider resolution, program/event seeding, budgets); every other type is
+// built by its own function below.
+package worker
 
 import (
 	"context"
@@ -6,10 +15,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/niq-run/niq/app/niqhome"
 	providerpkg "github.com/niq-run/niq/app/project/provider"
+	projprocess "github.com/niq-run/niq/app/project/worker/process"
 	wsbackend "github.com/niq-run/niq/core/impl/embedws"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
@@ -33,7 +42,17 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
 	programpkg "github.com/niq-run/niq/core/itfs/program"
-	"github.com/niq-run/niq/core/itfs/worker"
+	coreworker "github.com/niq-run/niq/core/itfs/worker"
+)
+
+// The control-plane workers every project ensures. They are named here because
+// the builders default to them, and the assembly references them by these
+// constants instead of repeating literals.
+const (
+	// DefaultWebUIHIWID is the project-owned hiw worker that drives the WebUI.
+	DefaultWebUIHIWID = "webui-hiw"
+	// DefaultHostWorkerID is the lifecycle control plane.
+	DefaultHostWorkerID = "host"
 )
 
 // BuildContext holds shared dependencies that worker builders need.
@@ -48,6 +67,9 @@ type BuildContext struct {
 	// StateDir is the per-project workers state directory (`<proj>/workers`);
 	// built-in workers persist their own state here (one dir per id).
 	StateDir string
+	// WorkerBackend is the lifecycle backend the host worker drives: the same
+	// instance the assembly uses for recovery and shutdown.
+	WorkerBackend coreworker.Lifecycle
 }
 
 // RegisterBuilders registers a Builder for every known worker type onto service.
@@ -55,49 +77,73 @@ func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
 	// Each type's spawn-parameter check is registered with its builder: the
 	// builder is where the valid parameter set lives, so drift between the two
 	// is a visible edit rather than a silent gap.
-	for typ, params := range spawnParamsByType {
-		svc.RegisterParamCheck(typ, checkSpawnParams(typ, params))
+	for typ, params := range SpawnParamsByType {
+		svc.RegisterParamCheck(typ, CheckSpawnParams(typ, params))
 	}
-	svc.RegisterBuilder("reason", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("reason", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildReasonSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("coding", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("coding", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildCodingSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("workspace", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("workspace", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildWorkspaceSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("host", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("host", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildHostSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("timer", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("timer", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildTimerSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("hiw", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("hiw", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildHIWSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("niw", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("niw", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildNIWSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("program", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("program", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildProgramSpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("history", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("history", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildHistorySpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("directory", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("directory", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildDirectorySpec(ctx, cfg)
 	})
-	svc.RegisterBuilder("mcp", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	svc.RegisterBuilder("mcp", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildMCPSpec(ctx, cfg)
 	})
 }
 
+// hasPublish reports whether publish contains a grant for the given type.
+func hasPublish(grants []event.PublishPattern, typ event.EventType) bool {
+	for _, g := range grants {
+		if g.Type == typ {
+			return true
+		}
+	}
+	return false
+}
+
+// aclFor resolves a worker's bus ACL: the declaration's explicit grant when it
+// has one, otherwise the type's defaults.
+func aclFor(cfg coreworker.WorkerConfig, defPub []event.PublishPattern, defSub []event.EventPattern) ([]event.PublishPattern, []event.EventPattern) {
+	if len(cfg.PublishAllow) > 0 {
+		defPub = cfg.PublishAllow
+	}
+	if len(cfg.SubscribeAllow) > 0 {
+		defSub = cfg.SubscribeAllow
+	}
+	return defPub, defSub
+}
+
 // specConnect builds a Connect closure: registers the identity idempotently and
-// creates a fresh, connected in-process worker-side channel.
-func specConnect(ctx BuildContext, id, typ string, pubAllow []event.PublishPattern, subAllow []event.EventPattern) func() (corebus.WorkerSideChannel, error) {
+// creates a fresh, connected in-process worker-side channel. The identity's ACL
+// comes from the declaration (cfg), falling back to the type's defaults.
+func specConnect(ctx BuildContext, id, typ string, cfg coreworker.WorkerConfig, defPub []event.PublishPattern, defSub []event.EventPattern) func() (corebus.WorkerSideChannel, error) {
+	pubAllow, subAllow := aclFor(cfg, defPub, defSub)
 	return func() (corebus.WorkerSideChannel, error) {
-		if err := registerIdentity(ctx.Registry, corebus.Identity{
+		if err := projprocess.RegisterIdentity(ctx.Registry, corebus.Identity{
 			WorkerID:       id,
 			Type:           typ,
 			PublishAllow:   pubAllow,
@@ -113,7 +159,7 @@ func specConnect(ctx BuildContext, id, typ string, pubAllow []event.PublishPatte
 	}
 }
 
-// ── reason ──
+// ── reason family: resolved inputs ──
 
 // reasonFamilyIn is the computed construction input shared by every
 // reason-family worker (the generic reason worker and the coding worker). It
@@ -140,7 +186,7 @@ type reasonFamilyIn struct {
 
 // resolveReasonFamily computes the shared inputs from a worker config. typ is
 // the worker type label used for validation messages and the bus identity.
-func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, error) {
+func resolveReasonFamily(cfg coreworker.WorkerConfig, typ string) (*reasonFamilyIn, error) {
 	id := cfg.ID
 	if id == "" {
 		return nil, fmt.Errorf("%s: id is required", typ)
@@ -161,20 +207,22 @@ func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, 
 	// (tool calls, their request.* replies, timer.timeout, management
 	// requests) reach the worker regardless; broadcast traffic to a reason
 	// worker is just the worker presence lifecycle and worker.input (hiw
-	// broadcasts when untargeted). Template subscriptions override this
-	// default; a configured subscriptions list REPLACES it entirely.
-	subAllow := subAllowFromParams(p, []string{
-		"worker.ready", "worker.gone", "worker.discover", "worker.abort",
-		"worker.input",
-	})
+	// broadcasts when untargeted). The declaration's explicit ACL wins; this
+	// is only the type default.
+	//
 	// PublishAllow default stays "*": a reason-family worker forwards tool
 	// invocations to whichever peers it discovers, under the peers' own event
 	// types — an inherently dynamic set that cannot be enumerated statically.
-	pubAllow := publishPatterns(p["publish"])
-	if len(pubAllow) == 0 {
-		pubAllow = []event.PublishPattern{event.NewPublishPattern("*")}
-	}
-	programs := parsePrograms(p, id)
+	pubAllow, subAllow := aclFor(cfg,
+		[]event.PublishPattern{event.NewPublishPattern("*")},
+		[]event.EventPattern{
+			event.NewPattern("worker.ready"),
+			event.NewPattern("worker.gone"),
+			event.NewPattern("worker.discover"),
+			event.NewPattern("worker.abort"),
+			event.NewPattern("worker.input"),
+		})
+	programs := ParsePrograms(p, id)
 	events := parseEvents(p)
 
 	// Spawn seeding (context-builder.md §6): goal lands in the system prompt
@@ -229,15 +277,15 @@ func resolveReasonFamily(cfg worker.WorkerConfig, typ string) (*reasonFamilyIn, 
 	}, nil
 }
 
-// ── reason ──
+// ── reason worker ──
 
-func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildReasonSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	in, err := resolveReasonFamily(cfg, "reason")
 	if err != nil {
-		return worker.SpawnSpec{}, err
+		return coreworker.SpawnSpec{}, err
 	}
-	connect := specConnect(ctx, in.id, "reason", in.pubAllow, in.subAllow)
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+	connect := specConnect(ctx, in.id, "reason", cfg, in.pubAllow, in.subAllow)
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		return reason.NewWorker(reason.Config{
 			ID:               in.id,
 			Provider:         in.providerSources.Default(),
@@ -266,23 +314,23 @@ func buildReasonSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 		})
 	}
 	cfg.Type = "reason"
-	return worker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
+	return coreworker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
 }
 
 // ── coding reason worker ──
 
-func buildCodingSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildCodingSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	in, err := resolveReasonFamily(cfg, "coding")
 	if err != nil {
-		return worker.SpawnSpec{}, err
+		return coreworker.SpawnSpec{}, err
 	}
 	p := cfg.Params
 	// tool_mode is the only coding-specific knob. PTC's program/directory peers
 	// are part of the PTC contract, not configuration.
 	toolMode, _ := p["tool_mode"].(string)
 
-	connect := specConnect(ctx, in.id, "coding", in.pubAllow, in.subAllow)
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+	connect := specConnect(ctx, in.id, "coding", cfg, in.pubAllow, in.subAllow)
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		return coding.NewWorker(coding.Config{
 			ID:               in.id,
 			Provider:         in.providerSources.Default(),
@@ -309,29 +357,45 @@ func buildCodingSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpe
 		})
 	}
 	cfg.Type = "coding"
-	return worker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
+	return coreworker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
 }
+
+// ── program / event seeding ──
+
+func programSeed(goal string) []programpkg.Program {
+	return []programpkg.Program{{
+		Meta: programpkg.Meta{
+			Name:        "goal",
+			ContentType: programpkg.ContentTypeInstruction,
+		},
+		EntryContent: programpkg.ProgramContent{Content: "# Goal\n\n" + goal},
+	}}
+}
+
+// ParsePrograms extracts a simplified program list from spawn params. It is the
+// inverse of the typed Programs field (see Params), exported because the
+// template/preset tooling checks the same projection the builders consume.
 
 // ── workspace ──
 
-func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildWorkspaceSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	mounts, err := parseMountsParam(p)
 	if err != nil {
-		return worker.SpawnSpec{}, err
+		return coreworker.SpawnSpec{}, err
 	}
 	if len(mounts) == 0 {
-		return worker.SpawnSpec{}, fmt.Errorf("workspace: at least one mount is required")
+		return coreworker.SpawnSpec{}, fmt.Errorf("workspace: at least one mount is required")
 	}
 	// Use the id passed in from the project/config definition. Only fall back to
 	// a path-derived id when none was given (bare workspace).
 	id := cfg.ID
 	if id == "" {
-		id = "ws-" + sanitizeWorkerID(mounts[0])
+		id = "ws-" + SanitizeID(mounts[0])
 	}
 	approver, _ := p["approver"].(string)
 	if approver == "" {
-		approver = "webui-hiw" // default approver: the human UI worker
+		approver = DefaultWebUIHIWID // default approver: the human UI worker
 	}
 	params := p
 	params["mounts"] = mounts
@@ -344,14 +408,14 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	// presence. SubscribeAllow: worker.discover, so the workspace re-announces
 	// its tools to joiners. Tool calls arrive directed; the workspace consumes
 	// no other broadcasts.
-	connect := specConnect(ctx, id, "workspace",
+	connect := specConnect(ctx, id, "workspace", cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
 			event.NewPublishPattern("approval.request"),
 		},
-		subAllowFromParams(p, []string{"worker.discover"}))
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		[]event.EventPattern{event.NewPattern("worker.discover")})
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		// The default mount ({project}/workspace) is seeded from a template
 		// but never created on disk, so ensure each mount exists before the
 		// backend uses it as the bash cwd — otherwise commands fail with a
@@ -378,89 +442,52 @@ func buildWorkspaceSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 		})
 	}
 	cfg.Type = "workspace"
-	return worker.SpawnSpec{
+	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,
 		Build:   build,
 	}, nil
 }
 
-// parseMountsParam extracts the mount list from worker params: "mounts" as a
-// []string (config) or []any of strings (bus payloads), or the single-mount
-// "path" sugar used by the host spawn tool. Each path is ~-expanded and made
-// absolute. Template placeholders ({project}) were already resolved when the
-// config was seeded from its template; this function only handles runtime
-// concerns. An absent parameter yields a nil slice.
-func parseMountsParam(p map[string]any) ([]string, error) {
-	var raws []string
-	switch v := p["mounts"].(type) {
-	case []string:
-		raws = v
-	case []any:
-		for _, item := range v {
-			s, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("workspace: mounts must be directory paths")
-			}
-			raws = append(raws, s)
-		}
-	}
-	if len(raws) == 0 {
-		if path, _ := p["path"].(string); path != "" {
-			raws = []string{path}
-		}
-	}
-	out := make([]string, 0, len(raws))
-	for _, raw := range raws {
-		expanded := raw
-		if expanded == "~" || strings.HasPrefix(expanded, "~/") {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return nil, fmt.Errorf("workspace: resolve home: %w", err)
-			}
-			if expanded == "~" {
-				expanded = home
-			} else {
-				expanded = filepath.Join(home, expanded[2:])
-			}
-		}
-		abs, err := filepath.Abs(expanded)
-		if err != nil {
-			return nil, fmt.Errorf("workspace: bad mount %q: %w", raw, err)
-		}
-		out = append(out, abs)
-	}
-	return out, nil
-}
-
 // ── host ──
 
-func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildHostSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
-		id = "host"
+		id = DefaultHostWorkerID
 	}
-	// PublishAllow: lifecycle replies (request.*) and presence. Its tool
-	// events (spawn/suspend/resume) are directed calls — no subscription
-	// needed; request.cancel is directed too (sent to the target worker).
-	// SubscribeAllow: worker.discover, so the host re-announces its tools to
-	// any worker that asks (late joiners, search refresh). The fleet
-	// roster lives on the directory worker, not here — host manages lifecycles
-	// and must not be misread as listing or suspending arbitrary workers.
-	connect := specConnect(ctx, id, "host",
+	// PublishAllow: lifecycle replies (request.*), presence, and the
+	// approval.request it raises itself when a destroy must be approved (an
+	// approval request is directed at the approver; the grant names the type,
+	// not the target). Its tool events (spawn/suspend/resume/restart/destroy)
+	// are directed calls — no subscription needed; request.cancel is directed
+	// too. SubscribeAllow: worker.discover, so the host re-announces its tools
+	// to any worker that asks (late joiners, search refresh); approval.decision
+	// arrives directed, so it needs no grant. The fleet roster lives on the
+	// directory worker, not here — host manages lifecycles and must not be
+	// misread as listing or suspending arbitrary workers.
+	//
+	// approval.request is required for host to function when destroy approval
+	// is enabled. A declaration's explicit ACL wins over defaults, so make sure
+	// that required grant is present even then.
+	if len(cfg.PublishAllow) > 0 && !hasPublish(cfg.PublishAllow, "approval.request") {
+		cfg.PublishAllow = append(cfg.PublishAllow, event.NewPublishPattern("approval.request"))
+	}
+	connect := specConnect(ctx, id, "host", cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
+			event.NewPublishPattern("approval.request"),
 			event.NewPublishPattern("worker.ready"),
 			event.NewPublishPattern("worker.discover"),
 		},
-		subAllowFromParams(p, []string{"worker.discover"}))
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
-		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerSvc, Params: p})
+		[]event.EventPattern{event.NewPattern("worker.discover")})
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
+		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerBackend, Params: p})
 	}
 	cfg.ID = id
 	cfg.Type = "host"
-	return worker.SpawnSpec{
+	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,
 		Build:   build,
@@ -469,7 +496,7 @@ func buildHostSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec,
 
 // ── timer ──
 
-func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildTimerSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
@@ -478,15 +505,15 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 	// PublishAllow: replies, the directed fires back to the caller, presence.
 	// SubscribeAllow: worker.discover, so the timer re-announces its tools to
 	// joiners. Everything else it receives is directed.
-	connect := specConnect(ctx, id, "timer",
+	connect := specConnect(ctx, id, "timer", cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("timer.timeout"),
 			event.NewPublishPattern("worker.input"),
 			event.NewPublishPattern("worker.ready"),
 		},
-		subAllowFromParams(p, []string{"worker.discover"}))
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		[]event.EventPattern{event.NewPattern("worker.discover")})
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		return timer.New(timer.Config{ID: id, Bus: ch, Params: p,
 			// A scheduled/cancelled timer must survive a restart, so the worker
 			// signals it and the assembly layer checkpoints it — the same
@@ -500,7 +527,7 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 	}
 	cfg.ID = id
 	cfg.Type = "timer"
-	return worker.SpawnSpec{
+	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,
 		Build:   build,
@@ -509,22 +536,26 @@ func buildTimerSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec
 
 // ── mcp ──
 
-func buildMCPSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildMCPSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	id := cfg.ID
 	if id == "" {
 		id = "mcp"
 	}
 	mcf, err := mcp.ParseConfig(cfg.Params)
 	if err != nil {
-		return worker.SpawnSpec{}, err
+		return coreworker.SpawnSpec{}, err
 	}
-	connect := specConnect(ctx, id, "mcp",
+	connect := specConnect(ctx, id, "mcp", cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
 		},
-		subAllowFromParams(cfg.Params, []string{"worker.discover", "worker.ready", "worker.gone"}))
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		[]event.EventPattern{
+			event.NewPattern("worker.discover"),
+			event.NewPattern("worker.ready"),
+			event.NewPattern("worker.gone"),
+		})
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		return mcp.New(mcp.WorkerConfig{
 			ID:           id,
 			Bus:          ch,
@@ -545,7 +576,7 @@ func buildMCPSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	}
 	cfg.ID = id
 	cfg.Type = "mcp"
-	return worker.SpawnSpec{
+	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,
 		Build:   build,
@@ -554,10 +585,10 @@ func buildMCPSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 
 // ── hiw ──
 
-func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildHIWSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	id := cfg.ID
 	if id == "" {
-		id = "webui-hiw"
+		id = DefaultWebUIHIWID
 	}
 	// PublishAllow: a `*` grant so the human UI (acting as HIW) can send a
 	// worker any event in its "watch" contract, driving its behaviour/state on
@@ -570,14 +601,14 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	// sends. Everything else still arrives directed (approval.request does) —
 	// the bus delivers a directed send regardless of the receiver's subscribe
 	// list; SubscribeAllow only gates broadcast delivery.
-	connect := specConnect(ctx, id, "hiw",
+	connect := specConnect(ctx, id, "hiw", cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("*"),
 		},
 		[]event.EventPattern{
 			event.NewPattern(event.TypeWorkerDiscover),
 		})
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		return hiw.New(hiw.Config{ID: id, Bus: ch,
 			// The HIW owns the approval entries the UI displays; a decision or
 			// a newly observed request must survive a restart.
@@ -590,7 +621,7 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	}
 	cfg.ID = id
 	cfg.Type = "hiw"
-	return worker.SpawnSpec{
+	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,
 		Build:   build,
@@ -604,7 +635,7 @@ func buildHIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 // Its local identity is registered like any managed worker; the remote
 // connection (remote URL / remote worker id / remote credential) comes from
 // Params.
-func buildNIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildNIWSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
@@ -613,14 +644,14 @@ func buildNIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	remoteURL, _ := p["remote_url"].(string)
 	remoteWorkerID, _ := p["remote_worker_id"].(string)
 	remoteCredRaw, _ := p["remote_credential"].(string)
-	remoteCred := resolveSecret(remoteCredRaw)
+	remoteCred := projprocess.ResolveSecret(remoteCredRaw)
 	// recipient seeds the LOCAL binding, remote_recipient the REMOTE one. Both
 	// are runtime properties (set via niw.recipient.*); the seeds just avoid a
 	// bootstrap control event. Empty seed is fine.
 	recipient, _ := p["recipient"].(string)
 	remoteRecipient, _ := p["remote_recipient"].(string)
 	if remoteURL == "" || remoteWorkerID == "" {
-		return worker.SpawnSpec{}, fmt.Errorf("niw %s: params remote_url and remote_worker_id are required", id)
+		return coreworker.SpawnSpec{}, fmt.Errorf("niw %s: params remote_url and remote_worker_id are required", id)
 	}
 
 	// Local identity, modelled on the lark worker. NIW listens for its peers'
@@ -638,17 +669,17 @@ func buildNIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	// announce presence (worker.ready). No `*` — NIW should not be free to
 	// broadcast arbitrary event types on its own bus. Targets stay runtime
 	// (the recipient binding), so grants are type-scoped, not target-scoped.
-	pubAllow := []event.PublishPattern{
-		event.NewPublishPattern("worker.input"),
-		event.NewPublishPattern("request.*"),
-		event.NewPublishPattern("worker.ready"),
-	}
-	if pAllow := publishPatterns(p["publish"]); len(pAllow) > 0 {
-		pubAllow = pAllow
-	}
-	connect := specConnect(ctx, id, "niw", pubAllow,
-		subAllowFromParams(p, []string{"worker.input", "worker.discover"}))
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+	connect := specConnect(ctx, id, "niw", cfg,
+		[]event.PublishPattern{
+			event.NewPublishPattern("worker.input"),
+			event.NewPublishPattern("request.*"),
+			event.NewPublishPattern("worker.ready"),
+		},
+		[]event.EventPattern{
+			event.NewPattern("worker.input"),
+			event.NewPattern("worker.discover"),
+		})
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		return niw.New(niw.Config{
 			ID:               id,
 			Bus:              ch,
@@ -668,34 +699,16 @@ func buildNIWSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, 
 	}
 	cfg.ID = id
 	cfg.Type = "niw"
-	return worker.SpawnSpec{
+	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,
 		Build:   build,
 	}, nil
 }
 
-// resolveSecret resolves a credential that may be a literal value or an
-// "env:VAR" / "file:PATH" reference. References keep remote credentials out of
-// project.json; a bare value passes through unchanged.
-func resolveSecret(s string) string {
-	if s == "" {
-		return s
-	}
-	if v, ok := strings.CutPrefix(s, "env:"); ok {
-		return os.Getenv(v)
-	}
-	if v, ok := strings.CutPrefix(s, "file:"); ok {
-		if b, err := os.ReadFile(v); err == nil {
-			return strings.TrimSpace(string(b))
-		}
-	}
-	return s
-}
-
 // ── program ──
 
-func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildProgramSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
@@ -704,7 +717,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	root := ctx.ProgramsRoot
 	mounts, err := parseMountsParam(p)
 	if err != nil {
-		return worker.SpawnSpec{}, err
+		return coreworker.SpawnSpec{}, err
 	}
 	if len(mounts) > 0 {
 		root = mounts[0]
@@ -714,7 +727,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return worker.SpawnSpec{}, fmt.Errorf("program: bad mount: %w", err)
+		return coreworker.SpawnSpec{}, fmt.Errorf("program: bad mount: %w", err)
 	}
 	os.MkdirAll(abs, 0755)
 
@@ -726,7 +739,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	// own event type (bash, ...) — inherently dynamic, so it cannot be
 	// enumerated. The executor is the single controlled exit; a target
 	// allow-list belongs there, not in the ACL.
-	connect := specConnect(ctx, id, "program",
+	connect := specConnect(ctx, id, "program", cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
@@ -734,8 +747,8 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 		},
 		// No roster is tracked here: target validation asks the directory worker
 		// (see program.checkTarget), so only discovery is consumed.
-		subAllowFromParams(p, []string{"worker.discover"}))
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		[]event.EventPattern{event.NewPattern("worker.discover")})
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		return programworker.New(programworker.Config{
 			ID:  id,
 			Bus: ch,
@@ -747,7 +760,7 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}
 	cfg.ID = id
 	cfg.Type = "program"
-	return worker.SpawnSpec{
+	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,
 		Build:   build,
@@ -757,184 +770,10 @@ func buildProgramSpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 // programSeed builds the goal instruction program for a spawned reason
 // worker. The goal lives in program space: rendered into the system prompt
 // every round, never compacted away.
-func programSeed(goal string) []programpkg.Program {
-	return []programpkg.Program{{
-		Meta: programpkg.Meta{
-			Name:        "goal",
-			ContentType: programpkg.ContentTypeInstruction,
-		},
-		EntryContent: programpkg.ProgramContent{Content: "# Goal\n\n" + goal},
-	}}
-}
-
-// parsePrograms extracts a simplified program list from spawn params.
-func parsePrograms(p map[string]any, workerID string) []programpkg.Program {
-	raw, ok := p["programs"].([]any)
-	if !ok || len(raw) == 0 {
-		// A default instruction program derived from the instruction text.
-		if instr, _ := p["instruction"].(string); instr != "" {
-			return []programpkg.Program{
-				{
-					Meta: programpkg.Meta{
-						Name:        workerID + "-instruction",
-						ContentType: programpkg.ContentTypeInstruction,
-					},
-					EntryContent: programpkg.ProgramContent{Content: instr},
-				},
-			}
-		}
-		return []programpkg.Program{
-			{
-				Meta: programpkg.Meta{
-					Name:        workerID + "-instruction",
-					ContentType: programpkg.ContentTypeInstruction,
-				},
-			},
-		}
-	}
-
-	progs := make([]programpkg.Program, 0, len(raw))
-	for _, r := range raw {
-		m, ok := r.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _ := m["name"].(string)
-		ctStr, _ := m["content_type"].(string)
-		if name == "" || ctStr == "" {
-			continue
-		}
-		var ct programpkg.ContentType
-		switch ctStr {
-		case "instruction":
-			ct = programpkg.ContentTypeInstruction
-		case "playbook":
-			ct = programpkg.ContentTypePlaybook
-		default:
-			continue
-		}
-		desc, _ := m["description"].(string)
-		content, _ := m["content"].(string)
-		progs = append(progs, programpkg.Program{
-			Meta: programpkg.Meta{
-				Name:        name,
-				ContentType: ct,
-				Description: desc,
-			},
-			EntryContent: programpkg.ProgramContent{Content: content},
-		})
-	}
-	if len(progs) == 0 {
-		progs = append(progs, programpkg.Program{
-			Meta: programpkg.Meta{
-				Name:        workerID + "-instruction",
-				ContentType: programpkg.ContentTypeInstruction,
-			},
-		})
-	}
-	return progs
-}
-
-// parseEvents extracts event type subscriptions from spawn params.
-func parseEvents(p map[string]any) []reason.EventConverter {
-	raw, ok := p["events"].([]any)
-	if !ok {
-		return nil
-	}
-	handlers := make([]reason.EventConverter, 0, len(raw))
-	for _, r := range raw {
-		evtType, ok := r.(string)
-		if !ok || evtType == "" {
-			continue
-		}
-		handlers = append(handlers, reason.EventConverter{
-			Pattern:   event.NewPattern(event.EventType(evtType)),
-			Converter: reason.DefaultConverter,
-		})
-	}
-	return handlers
-}
-
-func eventPatternsFromStrings(types []string) []event.EventPattern {
-	out := make([]event.EventPattern, 0, len(types))
-	for _, t := range types {
-		out = append(out, event.NewPattern(event.EventType(t)))
-	}
-	return out
-}
-
-// subscriptionPatterns parses config subscription entries into bus patterns.
-// Each entry is a bare event-type string or a {"type","source"} object (see
-// SubscriptionSpec); both spell the same EventPattern, with an omitted source
-// normalized to the canonical "any source" wildcard ("*").
-func subscriptionPatterns(v any) []event.EventPattern {
-	raw, _ := v.([]any)
-	if len(raw) == 0 {
-		return nil
-	}
-	out := make([]event.EventPattern, 0, len(raw))
-	for _, r := range raw {
-		switch e := r.(type) {
-		case string:
-			out = append(out, event.NewPattern(event.EventType(e)))
-		case map[string]any:
-			t, _ := e["type"].(string)
-			if t == "" {
-				continue
-			}
-			s, _ := e["source"].(string)
-			if s == "" {
-				s = "*"
-			}
-			out = append(out, event.EventPattern{Type: event.EventType(t), SourceID: s})
-		}
-	}
-	return out
-}
-
-// publishPatterns parses config publish entries into bus publish grants.
-// Each entry is a bare event-type string or a {"type","target"} object (see
-// PublishSpec); both spell the same PublishPattern.
-func publishPatterns(v any) []event.PublishPattern {
-	raw, _ := v.([]any)
-	if len(raw) == 0 {
-		return nil
-	}
-	out := make([]event.PublishPattern, 0, len(raw))
-	for _, r := range raw {
-		switch e := r.(type) {
-		case string:
-			out = append(out, event.NewPublishPattern(event.EventType(e)))
-		case map[string]any:
-			t, _ := e["type"].(string)
-			if t == "" {
-				continue
-			}
-			tgt, _ := e["target"].(string)
-			out = append(out, event.PublishPattern{Type: event.EventType(t), Target: tgt})
-		}
-	}
-	return out
-}
-
-// subAllowFromParams resolves a worker's SubscribeAllow (the broadcast
-// delivery whitelist) from the config's subscriptions, falling back to the
-// given hardcoded defaults when none are configured. The template value and
-// the defaults are both only the initial grant: the control plane can edit
-// SubscribeAllow at runtime via the registry API. Note SubscribeAllow only
-// gates Broadcast delivery — directed tool calls always reach their target
-// regardless of it, so tool capability events belong in the worker's own
-// declarations, not here.
-func subAllowFromParams(p map[string]any, defaults []string) []event.EventPattern {
-	if sub := subscriptionPatterns(p["subscriptions"]); len(sub) > 0 {
-		return sub
-	}
-	return eventPatternsFromStrings(defaults)
-}
 
 // ── history ──
 
-func buildHistorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildHistorySpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
@@ -945,13 +784,13 @@ func buildHistorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	// subscription is needed to serve them. SubscribeAllow: worker.discover,
 	// so the history worker re-announces its tools to joiners (late reason
 	// workers, search refresh).
-	connect := specConnect(ctx, id, "history",
+	connect := specConnect(ctx, id, "history", cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
 		},
-		subAllowFromParams(p, []string{"worker.discover"}))
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		[]event.EventPattern{event.NewPattern("worker.discover")})
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		return history.New(history.Config{
 			ID:               id,
 			Bus:              ch,
@@ -963,7 +802,7 @@ func buildHistorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 	}
 	cfg.ID = id
 	cfg.Type = "history"
-	return worker.SpawnSpec{
+	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,
 		Build:   build,
@@ -974,52 +813,9 @@ func buildHistorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSp
 // a comma-separated string. It returns nil when the key is absent ("not
 // configured") and a non-nil slice when present, so callers can tell an empty
 // whitelist from an unset one.
-func pStrings(p map[string]any, key string) []string {
-	raw, ok := p[key]
-	if !ok {
-		return nil
-	}
-	switch v := raw.(type) {
-	case []string:
-		return append([]string{}, v...)
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok && s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	case string:
-		if v == "" {
-			return []string{}
-		}
-		parts := strings.Split(v, ",")
-		out := make([]string, 0, len(parts))
-		for _, part := range parts {
-			if s := strings.TrimSpace(part); s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
-}
-
-// pInt reads an optional int worker param (JSON numbers arrive as float64).
-func pInt(p map[string]any, key string) int {
-	switch n := p[key].(type) {
-	case int:
-		return n
-	case float64:
-		return int(n)
-	}
-	return 0
-}
-
 // ── directory ──
 
-func buildDirectorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+func buildDirectorySpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
@@ -1031,28 +827,25 @@ func buildDirectorySpec(ctx BuildContext, cfg worker.WorkerConfig) (worker.Spawn
 	// PublishAllow: replies + presence. SubscribeAllow: worker.discover (so it
 	// re-announces and answers joiners) plus worker.ready/worker.gone to build
 	// the roster.
-	connect := specConnect(ctx, id, "directory",
+	connect := specConnect(ctx, id, "directory", cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
 			event.NewPublishPattern("worker.ready"),
 			event.NewPublishPattern("worker.discover"),
 		},
-		subAllowFromParams(p, []string{"worker.discover", "worker.ready", "worker.gone"}))
-	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		[]event.EventPattern{
+			event.NewPattern("worker.discover"),
+			event.NewPattern("worker.ready"),
+			event.NewPattern("worker.gone"),
+		})
+	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
 		return directory.New(directory.Config{ID: id, Bus: ch, Params: p})
 	}
 	cfg.ID = id
 	cfg.Type = "directory"
-	return worker.SpawnSpec{
+	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,
 		Build:   build,
 	}, nil
-}
-
-func sanitizeWorkerID(path string) string {
-	s := strings.TrimPrefix(path, "/")
-	s = strings.ReplaceAll(s, "/", "-")
-	s = strings.ReplaceAll(s, " ", "_")
-	return s
 }
