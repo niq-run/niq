@@ -147,11 +147,7 @@ func newTestRig(t *testing.T) *testRig {
 	}()
 
 	svc := workerhost.New()
-	store, err := NewStateStore(filepath.Join(dir, "workers"))
-	if err != nil {
-		t.Fatalf("state store: %v", err)
-	}
-	svc.SetStore(store)
+	svc.SetStore(newMemStore())
 
 	// A worker type whose builder derives the id from params.name, mirroring
 	// how workspace derives an id from its path.

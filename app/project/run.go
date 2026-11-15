@@ -260,7 +260,7 @@ func runAssembly(opts assemblyOptions) error {
 
 	// WorkerService: control-plane lifecycle manager + persistence store.
 	workerSvc := workerhost.New()
-	stateStore, err := projworker.NewStateStore(opts.StateDir)
+	stateStore, err := NewStateStore(opts.StateDir)
 	if err != nil {
 		return fmt.Errorf("project: create worker store: %w", err)
 	}

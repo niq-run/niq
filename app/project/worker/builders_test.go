@@ -269,7 +269,7 @@ func TestHIWIdentityRefreshesOnRestart(t *testing.T) {
 //
 // newTestEngine wires up a registry, engine and in-process listener exactly as
 // runAssembly does, returning the build context, worker service and the store dir.
-func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService, string) {
+func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService, *memStore) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -282,7 +282,7 @@ func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService, strin
 
 // newTestEngineWith is newTestEngine over a caller-supplied registry, so a test
 // can pre-seed persisted identities (an upgrade from an older contract).
-func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegistry) (BuildContext, *workerhost.WorkerService, string) {
+func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegistry) (BuildContext, *workerhost.WorkerService, *memStore) {
 	t.Helper()
 
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
@@ -300,8 +300,8 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 		}
 	}()
 
-	storeDir := filepath.Join(dir, "state", "workers")
-	svc := newServiceWithStore(t, storeDir)
+	store := newMemStore()
+	svc := newServiceWithStore(t, store)
 	bc := BuildContext{
 		Registry:  registry,
 		Listener:  listener,
@@ -309,16 +309,12 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 		WorkerSvc: svc,
 	}
 	RegisterBuilders(bc, svc)
-	return bc, svc, storeDir
+	return bc, svc, store
 }
 
-func newServiceWithStore(t *testing.T, storeDir string) *workerhost.WorkerService {
+func newServiceWithStore(t *testing.T, store workerhost.WorkerStore) *workerhost.WorkerService {
 	t.Helper()
 	svc := workerhost.New()
-	store, err := NewStateStore(storeDir)
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
 	svc.SetStore(store)
 	return svc
 }
@@ -366,7 +362,7 @@ func TestWorkspaceSuspendResume(t *testing.T) {
 // restart: the store keeps its (suspended) state, and recovery re-materializes
 // it from the declaration the calling layer hands back.
 func TestSpawnedWorkerSurvivesRestart(t *testing.T) {
-	bc, svc, storeDir := newTestEngine(t)
+	bc, svc, store := newTestEngine(t)
 	ctx := context.Background()
 
 	cfg := coreworker.WorkerConfig{Type: "workspace", Params: map[string]any{"mounts": []string{t.TempDir()}}}
@@ -382,7 +378,7 @@ func TestSpawnedWorkerSurvivesRestart(t *testing.T) {
 	}
 
 	// Simulate a fresh process: new WorkerService + builders over the same store.
-	svc2 := newServiceWithStore(t, storeDir)
+	svc2 := newServiceWithStore(t, store)
 	RegisterBuilders(bc, svc2)
 
 	recs, err := svc2.LoadAllWorkers()
