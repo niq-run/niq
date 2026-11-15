@@ -77,7 +77,7 @@ type Declaration struct {
 | `params.go` | The single params bag: `SpawnConfig` / `Spec` / `DeclFromSpec`, the per-type spawn contract (`SpawnParamsByType`, `CheckSpawnParams`), `ValidateProcessParams`, and param readers (`parseMountsParam`, `ParsePrograms`, `parseEvents`, `pStrings`, `pInt`). |
 | `builders.go` | The builder registry and every type constructor: `BuildContext`, `RegisterBuilders`, `specConnect` (identity registration with the declaration ACL or type defaults), the reason family, and one builder per remaining type. |
 | `process/` | Third-party process runtime: `Spec` / `IdentitySpec` inputs, `ProcessSupervisor`, platform shims, and identity/credential provisioning. It never imports the declaration model. |
-| `store.go` | The two storage boundaries: `DeclStore` (implemented by `app/project` over workers.json) and `StateStore` (in-process worker `state.json` / snapshots, injected through `BackendConfig`). The concrete project layout lives in `app/project/store.go`. |
+| `store.go` | The declaration storage boundary: `DeclStore`, implemented by `app/project` over workers.json. Runtime state uses `workerhost.WorkerStore` (defined once in the in-process engine) and is injected through `BackendConfig.StateStore`; the concrete project layout lives in `app/project/store.go`. |
 | `backend.go` | The lifecycle backend: placement routing, create / suspend / resume / restart / destroy, catalog, recovery, remote-identity seeding, protected ids, per-id serialization. |
 
 ## Flow

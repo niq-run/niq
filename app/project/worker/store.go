@@ -1,12 +1,11 @@
-// Storage boundaries for the worker lifecycle. Both interfaces live here, next
-// to the lifecycle that drives them; the concrete project layout lives in
-// app/project/store.go and is injected by the assembly layer.
+// Declaration storage boundary for the worker lifecycle. The project owns where
+// declarations live and how they are written; the lifecycle only sees this
+// interface. The concrete implementation is app/project/store.go.
+//
+// Runtime state (state.json / snapshots) is NOT declared here: its single
+// definition is workerhost.WorkerStore, the contract the in-process lifecycle
+// engine calls. The project supplies a concrete implementation.
 package worker
-
-import (
-	"github.com/niq-run/niq/core/impl/workerhost"
-	coreworker "github.com/niq-run/niq/core/itfs/worker"
-)
 
 // DeclStore is the declaration storage the lifecycle drives. It is the only
 // place that knows WHERE declarations are written; the lifecycle only asks
@@ -30,24 +29,3 @@ type DeclStore interface {
 	// stdout log, third-party state dir). A missing directory is a no-op.
 	RemoveState(id string) error
 }
-
-// StateRecord is the persisted runtime half of an in-process worker. It is the
-// core workerhost record; the interface below is the project's injection point.
-type StateRecord = workerhost.StateRecord
-
-// StateStore persists in-process workers' lifecycle state and snapshots. The
-// in-process lifecycle (core/impl/workerhost.WorkerService) calls SaveState on
-// transitions and LoadAll on recovery; app/project supplies the concrete
-// filesystem layout through BackendConfig.StateStore.
-type StateStore interface {
-	// SaveState writes the worker's lifecycle state and latest snapshot.
-	SaveState(id string, state coreworker.WorkerState, snapshot []byte) error
-	// LoadAll returns every persisted state record.
-	LoadAll() ([]StateRecord, error)
-	// Delete removes a worker's persisted state directory.
-	Delete(id string) error
-}
-
-// Structural compatibility: the state store interface is exactly what
-// WorkerService.SetStore expects.
-var _ workerhost.WorkerStore = StateStore(nil)

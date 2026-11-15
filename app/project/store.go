@@ -110,7 +110,7 @@ type StateStore struct {
 	root string
 }
 
-var _ projworker.StateStore = (*StateStore)(nil)
+var _ workerhost.WorkerStore = (*StateStore)(nil)
 
 // NewStateStore creates a store rooted at root (created if missing).
 func NewStateStore(root string) (*StateStore, error) {

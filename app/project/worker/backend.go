@@ -30,9 +30,10 @@ type BackendConfig struct {
 	ProjectID string
 	// Service builds in-process workers. Required.
 	Service *workerhost.WorkerService
-	// StateStore persists in-process workers' state/snapshots. Optional: a
+	// StateStore persists in-process workers' state/snapshots. It is defined
+	// once in workerhost (the lifecycle engine that calls it). Optional: a
 	// service configured with its own store (tests) may leave it nil.
-	StateStore StateStore
+	StateStore workerhost.WorkerStore
 	// Supervisor supervises managed-process workers. Optional: when nil,
 	// placement managed-process is rejected (a project without an HTTP bus has
 	// nothing for a child to connect to).
