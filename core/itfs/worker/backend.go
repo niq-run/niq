@@ -75,8 +75,8 @@ type Lifecycle interface {
 	Destroy(ctx context.Context, id string) error
 	// Protected reports whether id may never be suspended, restarted or
 	// destroyed (the host itself, the WebUI's HIW, whatever the assembly marks
-	// essential). It lets the host refuse such a request up front — notably
-	// before it raises an approval for something that could never be applied.
+	// essential). It lets the host refuse such a request up front instead of
+	// handing it to the backend.
 	Protected(id string) bool
 }
 

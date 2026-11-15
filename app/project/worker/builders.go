@@ -115,16 +115,6 @@ func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
 	})
 }
 
-// hasPublish reports whether publish contains a grant for the given type.
-func hasPublish(grants []event.PublishPattern, typ event.EventType) bool {
-	for _, g := range grants {
-		if g.Type == typ {
-			return true
-		}
-	}
-	return false
-}
-
 // aclFor resolves a worker's bus ACL: the declaration's explicit grant when it
 // has one, otherwise the type's defaults.
 func aclFor(cfg coreworker.WorkerConfig, defPub []event.PublishPattern, defSub []event.EventPattern) ([]event.PublishPattern, []event.EventPattern) {
@@ -457,27 +447,16 @@ func buildHostSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Sp
 	if id == "" {
 		id = DefaultHostWorkerID
 	}
-	// PublishAllow: lifecycle replies (request.*), presence, and the
-	// approval.request it raises itself when a destroy must be approved (an
-	// approval request is directed at the approver; the grant names the type,
-	// not the target). Its tool events (spawn/suspend/resume/restart/destroy)
-	// are directed calls — no subscription needed; request.cancel is directed
-	// too. SubscribeAllow: worker.discover, so the host re-announces its tools
-	// to any worker that asks (late joiners, search refresh); approval.decision
-	// arrives directed, so it needs no grant. The fleet roster lives on the
+	// PublishAllow: lifecycle replies (request.*) and presence. Its tool
+	// events (spawn/suspend/resume/restart/destroy) are directed calls — no
+	// subscription needed; request.cancel is directed too. SubscribeAllow:
+	// worker.discover, so the host re-announces its tools to any worker that
+	// asks (late joiners, search refresh). The fleet roster lives on the
 	// directory worker, not here — host manages lifecycles and must not be
 	// misread as listing or suspending arbitrary workers.
-	//
-	// approval.request is required for host to function when destroy approval
-	// is enabled. A declaration's explicit ACL wins over defaults, so make sure
-	// that required grant is present even then.
-	if len(cfg.PublishAllow) > 0 && !hasPublish(cfg.PublishAllow, "approval.request") {
-		cfg.PublishAllow = append(cfg.PublishAllow, event.NewPublishPattern("approval.request"))
-	}
 	connect := specConnect(ctx, id, "host", cfg,
 		[]event.PublishPattern{
 			event.NewPublishPattern("request.*"),
-			event.NewPublishPattern("approval.request"),
 			event.NewPublishPattern("worker.ready"),
 			event.NewPublishPattern("worker.discover"),
 		},

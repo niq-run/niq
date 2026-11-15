@@ -3,11 +3,10 @@
 // capabilities.
 //
 // HostWorker is deliberately thin: it handles the bus protocol (tool
-// invocation events, replies, destroy approvals) and forwards lifecycle
-// operations to a worker.Lifecycle backend. It holds no knowledge of how
-// specific worker types are built, where declarations live, or how a
-// third-party process is launched — that is the backend the assembly layer
-// supplies.
+// invocation events and replies) and forwards lifecycle operations to a
+// worker.Lifecycle backend. It holds no knowledge of how specific worker types
+// are built, where declarations live, or how a third-party process is launched
+// — that is the backend the assembly layer supplies.
 //
 // Lifecycle operations are host's ONLY job. The fleet roster (who exists, with
 // what tools) deliberately lives on the separate directory worker — a reason
@@ -17,7 +16,6 @@ package host
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -34,15 +32,14 @@ type Config struct {
 	Bus    corebus.WorkerSideChannel // data-plane client
 	Engine worker.Lifecycle          // lifecycle backend for every placement
 	// Params is the declaration's construction params, read only for the
-	// optional readme/readme_append guide customization and the destroy
-	// approval wiring (see RegisterReadme and destroyApprover).
+	// optional readme/readme_append guide customization.
 	Params map[string]any
 }
 
 // HostWorker is a bus-facing worker that manages other worker lifecycles.
-// It subscribes to its tool events, worker.discover and approval.decision, and
-// exposes spawn/suspend/resume/restart/destroy on the bus. Actual lifecycle
-// operations are delegated to the worker.Lifecycle backend.
+// It subscribes to its tool events and worker.discover, and exposes
+// spawn/suspend/resume/restart/destroy on the bus. Actual lifecycle operations
+// are delegated to the worker.Lifecycle backend.
 type HostWorker struct {
 	baseworker.BaseWorker
 	engine  worker.Lifecycle
@@ -50,11 +47,6 @@ type HostWorker struct {
 	started bool
 	cancel  context.CancelFunc
 	mu      sync.Mutex
-
-	// pendingDestroy holds destroy operations parked on an approval decision,
-	// keyed by the approval request id (which the decision echoes back).
-	pendingMu      sync.Mutex
-	pendingDestroy map[string]*pendingDestroy
 }
 
 // New creates a HostWorker that delegates lifecycle operations to engine.
@@ -64,10 +56,9 @@ func New(cfg Config) *HostWorker {
 		id = "host"
 	}
 	w := &HostWorker{
-		BaseWorker:     baseworker.NewBaseWorker(id, cfg.Bus),
-		engine:         cfg.Engine,
-		params:         cfg.Params,
-		pendingDestroy: map[string]*pendingDestroy{},
+		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
+		engine:     cfg.Engine,
+		params:     cfg.Params,
 	}
 	w.registerExtensions()
 	w.registerReadme()
@@ -114,44 +105,11 @@ func (w *HostWorker) Stop() error {
 	return nil
 }
 
-// Snapshot captures the destroy operations parked on an approval, so a restart
-// does not silently drop an approved-but-not-yet-applied removal.
-func (w *HostWorker) Snapshot() ([]byte, error) {
-	w.pendingMu.Lock()
-	defer w.pendingMu.Unlock()
-	if len(w.pendingDestroy) == 0 {
-		return nil, nil
-	}
-	state := hostState{PendingDestroy: make([]pendingDestroy, 0, len(w.pendingDestroy))}
-	for _, p := range w.pendingDestroy {
-		state.PendingDestroy = append(state.PendingDestroy, *p)
-	}
-	return json.Marshal(state)
-}
+// Snapshot has no host state to persist: lifecycle state lives in the backend.
+func (w *HostWorker) Snapshot() ([]byte, error) { return nil, nil }
 
-// Restore rehydrates the parked destroy set from a Snapshot, before Start.
-func (w *HostWorker) Restore(state []byte) error {
-	if len(state) == 0 {
-		return nil
-	}
-	var s hostState
-	if err := json.Unmarshal(state, &s); err != nil {
-		return fmt.Errorf("host restore: %w", err)
-	}
-	w.pendingMu.Lock()
-	defer w.pendingMu.Unlock()
-	w.pendingDestroy = make(map[string]*pendingDestroy, len(s.PendingDestroy))
-	for i := range s.PendingDestroy {
-		p := s.PendingDestroy[i]
-		w.pendingDestroy[p.ApprovalID] = &p
-	}
-	return nil
-}
-
-// hostState is host's durable state: the destroys waiting on an approval.
-type hostState struct {
-	PendingDestroy []pendingDestroy `json:"pending_destroy,omitempty"`
-}
+// Restore is a no-op for the host; the backend owns recovered lifecycle state.
+func (w *HostWorker) Restore([]byte) error { return nil }
 
 // ── Event loop ──
 

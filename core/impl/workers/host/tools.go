@@ -142,12 +142,10 @@ func (w *HostWorker) registerExtensions() {
 		w.reply(evt, result, err)
 	})
 
-	w.registerDestroyApproval()
-
 	w.Register(baseworker.Extension{
 		Event:       TypeDestroy,
-		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"destroyed", "pending_approval"}}, "approval_id": map[string]any{"type": "string"}}),
-		Description: "Destroy a worker: stop it, delete its declaration, its persisted state, its bus connection and its identity. This is irreversible. When the project configures a destroy approver, the call returns status=pending_approval and the removal happens only after the human approves.",
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"destroyed"}}}),
+		Description: "Destroy a worker: stop it, delete its declaration, its persisted state, its bus connection and its identity. This is irreversible. The removal happens immediately.",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{
 				"type":        "string",
@@ -287,6 +285,20 @@ func (w *HostWorker) handleResume(tc baseworker.ToolCall) (any, error) {
 		return "", err
 	}
 	return map[string]any{"worker_id": id, "status": "running"}, nil
+}
+
+func (w *HostWorker) handleDestroy(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	if w.engine.Protected(id) {
+		return "", fmt.Errorf("worker %s is protected and cannot be destroyed", id)
+	}
+	if err := w.engine.Destroy(context.Background(), id); err != nil {
+		return "", err
+	}
+	return map[string]any{"worker_id": id, "status": "destroyed"}, nil
 }
 
 func (w *HostWorker) handleRestart(tc baseworker.ToolCall) (any, error) {

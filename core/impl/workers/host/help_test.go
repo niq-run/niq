@@ -90,7 +90,7 @@ func TestWorkerHelpIndexAndGenericTools(t *testing.T) {
 
 	for _, evt := range []string{"suspend", "resume", "restart", "destroy"} {
 		guide := ask(t, w, ch, map[string]any{"event_name": evt})
-		for _, want := range []string{"# suspend / resume / restart / destroy", `"worker_id"`, "pending_approval"} {
+		for _, want := range []string{"# suspend / resume / restart / destroy", `"worker_id"`, "immediately"} {
 			if !strings.Contains(guide, want) {
 				t.Fatalf("%s guide missing %q:\n%s", evt, want, guide)
 			}

@@ -10,7 +10,7 @@ import (
 // registerHelp declares worker.help on the host: asking for "spawn" returns
 // either the general spawn reference or, when params.worker names a worker
 // type, a guide specialized for that type. The lifecycle verbs share one
-// reference, since the placement/approval rules that matter are common to them.
+// reference, since the placement rules that matter are common to them.
 func (w *HostWorker) registerHelp() {
 	w.RegisterHelp(map[event.EventType]baseworker.HelpFunc{
 		TypeSpawn:   spawnHelp,
@@ -61,10 +61,7 @@ All four lifecycle tools take one argument:
 - ` + "`restart`" + ` — rebuild from the declaration. Construction params follow the
   declaration edit; what the worker itself persisted survives.
 - ` + "`destroy`" + ` — stop it and remove its declaration, persisted state, bus
-  connection and identity. Irreversible. When the project configures a destroy
-  approver, the reply is ` + "`{status: \"pending_approval\", approval_id}`" + ` and the
-  removal happens only after the human approves; the decision replies to that
-  same ` + "`approval_id`" + `.
+  connection and identity. Irreversible; the removal happens immediately.
 
 ## Notes
 

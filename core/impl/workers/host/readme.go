@@ -60,10 +60,7 @@ the third belongs to whoever runs it.
 - restart { worker_id } — rebuild from the declaration. Construction params
   follow the declaration; what the worker itself persisted survives.
 - destroy { worker_id } — stop it and remove its declaration, persisted state,
-  bus connection and identity. Irreversible. When the project gates destroys on
-  an approval, the reply is ` + "`{status: \"pending_approval\", approval_id}`" + ` and the
-  removal happens after the human decides; the decision replies to the same
-  ` + "`approval_id`" + `.
+  bus connection and identity. Irreversible; the removal happens immediately.
 - worker.help { event_name, params? } — per-event help for THIS worker, like a
   CLI's ` + "`-h`" + `. Call it before a non-trivial spawn, e.g.
   ` + "`{event_name: \"spawn\", params: {worker: \"reason\"}}`" + `.

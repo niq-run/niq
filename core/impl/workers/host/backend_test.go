@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
@@ -74,8 +73,7 @@ func call(t *testing.T, w *HostWorker, ch *recordingChannel, typ event.EventType
 	if !w.DispatchExtension(evt) {
 		t.Fatalf("%s is not served by host", typ)
 	}
-	// A tool may emit more than its reply (a destroy parked on an approval
-	// sends the approval.request first); the reply is always last.
+	// The reply is the last event a tool emits.
 	if len(ch.sent) <= before {
 		t.Fatalf("%s produced no events", typ)
 	}
@@ -195,138 +193,15 @@ func TestLifecycleToolsForwardIDs(t *testing.T) {
 	}
 }
 
-// TestDestroyParksOnApproval verifies the EXECUTOR raises the approval: the
-// caller gets pending_approval immediately, the approver receives an
-// approval.request naming worker.destroy, and nothing is destroyed yet.
-func TestDestroyParksOnApproval(t *testing.T) {
-	ch := &recordingChannel{}
-	be := &fakeBackend{}
-	w := New(Config{
-		ID: "host", Bus: ch, Engine: be,
-		Params: map[string]any{"destroy_approver": "webui-hiw"},
-	})
-
-	reply, ok := call(t, w, ch, TypeDestroy, map[string]any{"worker_id": "w1"})
-	if !ok {
-		t.Fatalf("destroy failed: %+v", reply.Payload)
-	}
-	if reply.Payload["status"] != "pending_approval" {
-		t.Fatalf("status = %v, want pending_approval", reply.Payload["status"])
-	}
-	approvalID, _ := reply.Payload["approval_id"].(string)
-	if approvalID == "" {
-		t.Fatal("no approval id returned")
-	}
-	if len(be.destroyed) != 0 {
-		t.Fatal("destroyed before the approval decision")
-	}
-
-	// The approval request went to the configured approver, with the action the
-	// UI labels the queue entry with.
-	var req event.Event
-	for i := len(ch.sent) - 1; i >= 0; i-- {
-		if ch.sent[i].Type == event.TypeApprovalRequest {
-			req = ch.sent[i]
-			break
-		}
-	}
-	if req.Type != event.TypeApprovalRequest {
-		t.Fatalf("no approval.request was sent: %+v", ch.sent)
-	}
-	if req.Payload["action"] != "worker.destroy" || req.Payload["worker_id"] != "w1" {
-		t.Fatalf("approval payload = %+v", req.Payload)
-	}
-	if req.RequestId != approvalID {
-		t.Fatalf("approval request id %q != returned %q", req.RequestId, approvalID)
-	}
-
-	// Denying leaves the worker alone.
-	decision := event.New(event.TypeApprovalDecision, "webui-hiw", map[string]any{"approved": false, "note": "not now"})
-	decision.RequestId = approvalID
-	w.DispatchExtension(decision)
-	if len(be.destroyed) != 0 {
-		t.Fatal("a denied destroy was applied")
-	}
-}
-
-// TestDestroyApprovalApplies verifies an approved decision destroys the worker
-// and answers the original caller on the same approval id.
-func TestDestroyApprovalApplies(t *testing.T) {
-	ch := &recordingChannel{}
-	be := &fakeBackend{}
-	w := New(Config{
-		ID: "host", Bus: ch, Engine: be,
-		Params: map[string]any{"destroy_approval": true},
-	})
-
-	reply, _ := call(t, w, ch, TypeDestroy, map[string]any{"worker_id": "w1"})
-	approvalID, _ := reply.Payload["approval_id"].(string)
-
-	decision := event.New(event.TypeApprovalDecision, "webui-hiw", map[string]any{"approved": true})
-	decision.RequestId = approvalID
-	w.DispatchExtension(decision)
-
-	// Destroy runs on its own goroutine; wait for the call to land.
-	for i := 0; i < 100 && len(be.destroyed) == 0; i++ {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(be.destroyed) != 1 || be.destroyed[0] != "w1" {
-		t.Fatalf("destroyed = %+v", be.destroyed)
-	}
-}
-
-// TestPendingDestroySurvivesSnapshot verifies a parked destroy is durable: a
-// restart that replays the snapshot can still apply the human's decision.
-func TestPendingDestroySurvivesSnapshot(t *testing.T) {
-	ch := &recordingChannel{}
-	be := &fakeBackend{}
-	w := New(Config{ID: "host", Bus: ch, Engine: be, Params: map[string]any{"destroy_approver": "webui-hiw"}})
-	reply, _ := call(t, w, ch, TypeDestroy, map[string]any{"worker_id": "w1"})
-	approvalID, _ := reply.Payload["approval_id"].(string)
-
-	state, err := w.Snapshot()
-	if err != nil || len(state) == 0 {
-		t.Fatalf("Snapshot = %q, %v", state, err)
-	}
-
-	// A fresh host restoring that state must act on the decision.
-	ch2 := &recordingChannel{}
-	be2 := &fakeBackend{}
-	w2 := New(Config{ID: "host", Bus: ch2, Engine: be2})
-	if err := w2.Restore(state); err != nil {
-		t.Fatalf("Restore: %v", err)
-	}
-	decision := event.New(event.TypeApprovalDecision, "webui-hiw", map[string]any{"approved": true})
-	decision.RequestId = approvalID
-	w2.DispatchExtension(decision)
-
-	for i := 0; i < 100 && len(be2.destroyed) == 0; i++ {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(be2.destroyed) != 1 || be2.destroyed[0] != "w1" {
-		t.Fatalf("restored host did not apply the approved destroy: %+v", be2.destroyed)
-	}
-}
-
-// TestDestroyRefusesProtectedBeforeApproval pins the ordering: a protected id
-// is refused outright, before any approval is raised. Parking an approval for
-// the host would ask a human to approve something that can never be applied.
-func TestDestroyRefusesProtectedBeforeApproval(t *testing.T) {
+// TestDestroyRefusesProtected verifies a protected id is refused outright.
+func TestDestroyRefusesProtected(t *testing.T) {
 	ch := &recordingChannel{}
 	be := &fakeBackend{protected: map[string]bool{"host": true}}
-	w := New(Config{
-		ID: "host", Bus: ch, Engine: be,
-		Params: map[string]any{"destroy_approver": "webui-hiw"},
-	})
+	w := New(Config{ID: "host", Bus: ch, Engine: be})
 
 	reply, ok := call(t, w, ch, TypeDestroy, map[string]any{"worker_id": "host"})
 	if ok {
 		t.Fatalf("destroy of a protected worker reported success: %+v", reply.Payload)
-	}
-	for _, evt := range ch.sent {
-		if evt.Type == event.TypeApprovalRequest {
-			t.Fatalf("an approval was raised for a protected worker: %+v", evt.Payload)
-		}
 	}
 	if len(be.destroyed) != 0 {
 		t.Fatal("backend was asked to destroy a protected worker")

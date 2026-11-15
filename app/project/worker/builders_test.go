@@ -439,30 +439,6 @@ func workerStatus(svc *workerhost.WorkerService, id string) workerhost.WorkerInf
 	return workerhost.WorkerInfo{}
 }
 
-// TestHostCanPublishApprovalRequest pins the ACL grant behind the destroy
-// approval flow: the host raises the approval itself, so its identity must be
-// allowed to publish approval.request. Without the grant the request is denied
-// at the bus and the approval silently never reaches the human.
-func TestHostCanPublishApprovalRequest(t *testing.T) {
-	bc, svc, _ := newTestEngine(t)
-	ctx := context.Background()
-	if err := svc.RecoverAll(ctx, workerhost.RecoverOptions{
-		Essential: []coreworker.WorkerConfig{{ID: "host", Type: "host"}},
-	}); err != nil {
-		t.Fatalf("recover host: %v", err)
-	}
-	id, ok := bc.Registry.Lookup("host")
-	if !ok {
-		t.Fatal("host identity not registered")
-	}
-	for _, p := range id.PublishAllow {
-		if p.Type == event.TypeApprovalRequest {
-			return
-		}
-	}
-	t.Fatalf("host may not publish approval.request: %+v", id.PublishAllow)
-}
-
 // TestReasonFamilyRejectsUnknownProvider verifies a reason worker must name a
 // provider that exists in provider.json: there is no ad-hoc endpoint/credential
 // fallback any more, so a typo fails the spawn with a clear message instead of

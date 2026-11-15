@@ -1592,13 +1592,11 @@ const hostWorkerID = "host"
 
 // lifecycleTimeout bounds a lifecycle request. Destroy of a managed-process
 // worker waits for the child to be reaped, so it needs more than a metadata
-// round trip but far less than the approval flow (which replies immediately
-// with pending_approval).
+// round trip.
 const lifecycleTimeout = 30 * time.Second
 
 // callHost sends a lifecycle event to the host worker and waits for its
-// terminal reply. It returns the reply payload (which carries status fields)
-// so callers can map pending states (an approval-gated destroy) to HTTP.
+// terminal reply. It returns the reply payload for callers that need it.
 func (s *Server) callHost(ctx context.Context, evtType event.EventType, payload map[string]any) (map[string]any, error) {
 	if s.hiw == nil || s.hiw.Channel == nil {
 		return nil, fmt.Errorf("the human interface worker is offline")
@@ -1771,17 +1769,9 @@ func (s *Server) handleDeleteWorker(w http.ResponseWriter, r *http.Request) {
 
 	// Deleting is a lifecycle operation like any other: the host stops the
 	// worker, drops its declaration and persisted state, disconnects it and
-	// revokes its identity. When the project gates destroys on an approval, the
-	// reply says so and the removal happens after the human decides.
-	payload, err := s.callHost(r.Context(), "destroy", map[string]any{"worker_id": id})
-	if err != nil {
+	// revokes its identity.
+	if _, err := s.callHost(r.Context(), "destroy", map[string]any{"worker_id": id}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	if status, _ := payload["status"].(string); status == "pending_approval" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(payload)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

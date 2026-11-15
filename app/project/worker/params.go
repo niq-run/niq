@@ -211,10 +211,7 @@ var SpawnParamsByType = map[string][]string{
 	},
 	"workspace": {"mounts", "path", "approver"},
 	"program":   {"mounts", "path"},
-	"host": {
-		"readme", "readme_append",
-		"destroy_approver", "destroy_approval",
-	},
+	"host":      {"readme", "readme_append"},
 	"timer":     {"readme", "readme_append"},
 	"directory": {"readme", "readme_append"},
 	"hiw":       {},

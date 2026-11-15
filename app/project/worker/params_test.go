@@ -31,7 +31,7 @@ func TestCheckSpawnParamsAcceptsDocumentedPayloads(t *testing.T) {
 		},
 		"program":   {"mounts": []any{"/tmp/programs"}},
 		"timer":     {"readme": "custom", "readme_append": "more"},
-		"host":      {"destroy_approval": true},
+		"host":      {},
 		"directory": {},
 		"hiw":       {},
 		"history":   {"max_list_events": 10, "max_list_item_bytes": 1024},
