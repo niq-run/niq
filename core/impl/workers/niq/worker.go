@@ -591,19 +591,7 @@ func (b *Backend) RegisterTools(host ToolHost) {
 		Event:       TypeStatus,
 		Response:    baseworker.ObjectSchema(map[string]any{"connected": map[string]any{"type": "boolean"}, "remote_url": map[string]any{"type": "string"}, "remote_worker_id": map[string]any{"type": "string"}, "remote_cred_set": map[string]any{"type": "boolean"}, "local_recipient": map[string]any{"type": "string"}, "remote_recipient": map[string]any{"type": "string"}}),
 		Description: "Return the current link status: connected, far-side target, and recipient bindings.",
-	}, func(evt event.Event) {
-		tc := baseworker.ParseToolCall(evt)
-		tgt := b.currentTarget()
-		l, r := b.bindings()
-		host.ReplyCompleted(tc.CallerID, tc.CallID, statusState{
-			Connected:       b.remoteNow() != nil,
-			RemoteURL:       tgt.url,
-			RemoteWorkerID:  tgt.workerID,
-			RemoteCredSet:   tgt.cred != "",
-			LocalRecipient:  l,
-			RemoteRecipient: r,
-		}, tc.TraceID)
-	})
+	}, func(evt event.Event) { b.handleStatus(evt, host) })
 
 	host.RegisterReadme(readmeDescription, b.readmeText, nil)
 }
@@ -616,6 +604,23 @@ type statusState struct {
 	RemoteCredSet   bool   `json:"remote_credential_set"`
 	LocalRecipient  string `json:"local_recipient,omitempty"`
 	RemoteRecipient string `json:"remote_recipient,omitempty"`
+}
+
+// handleStatus reports the live link state: connectivity, the far-side target and
+// the two recipient bindings. The credential is reported as configured, never
+// rendered.
+func (b *Backend) handleStatus(evt event.Event, host ToolHost) {
+	tc := baseworker.ParseToolCall(evt)
+	tgt := b.currentTarget()
+	l, r := b.bindings()
+	host.ReplyCompleted(tc.CallerID, tc.CallID, statusState{
+		Connected:       b.remoteNow() != nil,
+		RemoteURL:       tgt.url,
+		RemoteWorkerID:  tgt.workerID,
+		RemoteCredSet:   tgt.cred != "",
+		LocalRecipient:  l,
+		RemoteRecipient: r,
+	}, tc.TraceID)
 }
 
 // handleDial actively (re)establishes the far-side link.

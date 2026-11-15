@@ -148,3 +148,41 @@ func TestApprovalsDoNotLeakIntoBackendTraffic(t *testing.T) {
 		t.Fatal("worker.input never reached the backend")
 	}
 }
+
+// TestApprovalsSeedReplaysUnanswered verifies the recovery path: replaying the
+// event log rebuilds the pending inbox from requests that have no decision, keeps
+// the order, and does not duplicate what is already parked.
+func TestApprovalsSeedReplaysUnanswered(t *testing.T) {
+	w := New(Config{ID: "w1", Bus: newPipe(), Approvals: true})
+	in, ok := w.handle.(Inbox)
+	if !ok {
+		t.Fatal("handle does not expose the inbox")
+	}
+
+	req := func(id string, ts int64) event.Event {
+		e := event.New(event.TypeApprovalRequest, "workspace", map[string]any{"action": "mount.add", "path": "/p/" + id})
+		e.RequestId = id
+		e.Timestamp = ts
+		return e
+	}
+	in.Seed([]event.Event{req("a", 1), req("b", 2), req("c", 3)}, nil)
+
+	pending := in.Pending()
+	if len(pending) != 3 || pending[0].RequestID != "a" || pending[2].RequestID != "c" {
+		t.Fatalf("pending = %+v, want a,b,c in order", pending)
+	}
+
+	// Replaying the same log again must not duplicate; a decided request must not
+	// come back.
+	decided := event.New(event.TypeApprovalDecision, "w1", map[string]any{"approved": true})
+	decided.RequestId = "b"
+	in.Seed([]event.Event{req("a", 1), req("b", 2), req("c", 3), req("d", 4)}, []event.Event{decided})
+
+	pending = in.Pending()
+	if len(pending) != 3 {
+		t.Fatalf("pending after replay = %d entries, want a,c,d", len(pending))
+	}
+	if pending[0].RequestID != "a" || pending[1].RequestID != "c" || pending[2].RequestID != "d" {
+		t.Fatalf("pending after replay = %+v", pending)
+	}
+}

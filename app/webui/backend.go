@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/iface"
 	"github.com/niq-run/niq/core/itfs/event"
 )
@@ -130,6 +131,39 @@ type ApprovalEntry = iface.ApprovalEntry
 
 // ApprovalDecision mirrors the interface worker's verdict.
 type ApprovalDecision = iface.ApprovalDecision
+
+// restoreApprovals rebuilds the pending inbox from the event log.
+//
+// The inbox itself is memory-only (an app-hosted worker is not snapshotted), but
+// every approval.request and approval.decision is a durable event. Replaying the
+// unanswered requests is therefore the recovery path — and the only one that also
+// heals a request parked by a worker whose inbox is gone (e.g. before a restart).
+func (s *Server) restoreApprovals(ctx context.Context) {
+	in, err := s.inbox()
+	if err != nil || s.eventLog == nil {
+		return
+	}
+	requests, err := s.eventLog.LoadBefore(ctx, eventbusapi.Filter{
+		Types: []string{string(event.TypeApprovalRequest)},
+	}, "", approvalsReplayLimit)
+	if err != nil {
+		log.Printf("[webui] replay approval requests: %v", err)
+		return
+	}
+	decisions, err := s.eventLog.LoadBefore(ctx, eventbusapi.Filter{
+		Types: []string{string(event.TypeApprovalDecision)},
+	}, "", approvalsReplayLimit)
+	if err != nil {
+		log.Printf("[webui] replay approval decisions: %v", err)
+		return
+	}
+	in.Seed(requests, decisions)
+}
+
+// approvalsReplayLimit bounds how far back the inbox replay looks. A pending
+// approval older than this is stale by definition: the requester parked the call
+// in its own snapshot, and a human answering weeks later is not the same decision.
+const approvalsReplayLimit = 200
 
 // sendApprovalDecision answers a parked request.
 func (s *Server) sendApprovalDecision(ctx context.Context, requestID string, approved bool, note string) error {

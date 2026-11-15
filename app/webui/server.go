@@ -300,6 +300,10 @@ func (s *Server) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	// Heal the approval inbox from the event log before serving: a request parked
+	// before a restart has no live inbox entry, and its requester is still waiting.
+	s.restoreApprovals(ctx)
+
 	log.Printf("[webui] listening on %s", s.addr)
 
 	go func() {
