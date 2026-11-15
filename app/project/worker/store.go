@@ -3,7 +3,7 @@
 // interface. The concrete implementation is app/project/store.go.
 //
 // Runtime state (state.json / snapshots) is NOT declared here: its single
-// definition is workerhost.WorkerStore, the contract the in-process lifecycle
+// definition is workersvc.WorkerStore, the contract the in-process lifecycle
 // engine calls. The project supplies a concrete implementation.
 package worker
 
@@ -25,7 +25,4 @@ type DeclStore interface {
 	// SetCredential persists a generated bus credential onto a declaration, so
 	// an unmanaged-process worker reuses it across restarts.
 	SetCredential(id, credential string) error
-	// RemoveState deletes a worker's persisted state directory (snapshot,
-	// stdout log, third-party state dir). A missing directory is a no-op.
-	RemoveState(id string) error
 }

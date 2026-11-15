@@ -1,4 +1,4 @@
-package workerhost
+package workersvc
 
 import (
 	"context"
@@ -542,4 +542,48 @@ func fakeBuilderFor(built *[]*fakeWorker) Builder {
 			Build:   func(corebus.WorkerSideChannel) worker.ManagedWorker { return w },
 		}, nil
 	}
+}
+
+// TestCreateWorkerRollsBackWhenSpawnHookFails verifies a failed declaration
+// does not leave a live, undeclared worker behind, and that the resolved
+// config is still returned so the caller can diagnose it.
+func TestCreateWorkerRollsBackWhenSpawnHookFails(t *testing.T) {
+	svc := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(svc)
+	svc.SetSpawnHook(func(worker.WorkerConfig) error { return fmt.Errorf("disk full") })
+
+	resolved, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "rollback", Type: "fake"})
+	if err == nil {
+		t.Fatal("CreateWorker succeeded despite spawn-hook failure")
+	}
+	if resolved.ID != "rollback" {
+		t.Fatalf("resolved id = %q, want rollback", resolved.ID)
+	}
+	if svc.HasWorker("rollback") {
+		t.Fatal("worker is still registered after rollback")
+	}
+	if _, ok := svc.store.(*memoryStore).recs["rollback"]; ok {
+		t.Fatal("state was persisted for a rolled-back worker")
+	}
+	if len(*built) != 1 {
+		t.Fatalf("built = %d, want 1", len(*built))
+	}
+}
+
+// TestCreateWorkerDuplicateDoesNotBuildOrStartAVisibleWorker verifies the
+// duplicate check happens before a second instance is exposed.
+func TestCreateWorkerDuplicateDoesNotBuildOrStartAVisibleWorker(t *testing.T) {
+	svc := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(svc)
+
+	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "dup", Type: "fake"}); err != nil {
+		t.Fatalf("first CreateWorker: %v", err)
+	}
+	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "dup", Type: "fake"}); err == nil {
+		t.Fatal("second CreateWorker succeeded for a duplicate id")
+	}
+	if got := len(svc.ListWorkers("")); got != 1 {
+		t.Fatalf("workers = %d, want 1", got)
+	}
+	_ = built
 }

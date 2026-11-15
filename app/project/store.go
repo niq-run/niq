@@ -1,6 +1,6 @@
 // Project storage for the worker lifecycle: declarations (workers.json) and
 // in-process runtime state (workers/<id>/state.json). The lifecycle package sees
-// only the DeclStore and workerhost.WorkerStore interfaces; this file owns the
+// only the DeclStore and workersvc.WorkerStore interfaces; this file owns the
 // concrete project layout.
 package project
 
@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 
 	projworker "github.com/niq-run/niq/app/project/worker"
-	"github.com/niq-run/niq/core/impl/workerhost"
+	"github.com/niq-run/niq/core/impl/workersvc"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
@@ -94,10 +94,6 @@ func (s projectDeclStore) SetCredential(id, cred string) error {
 	return fmt.Errorf("worker %s is not declared", id)
 }
 
-func (s projectDeclStore) RemoveState(id string) error {
-	return removeWorkerStateDir(s.projectID, id)
-}
-
 // StateStore persists in-process workers' runtime state under a root
 // directory, one subdirectory per worker:
 //
@@ -110,12 +106,12 @@ type StateStore struct {
 	root string
 }
 
-var _ workerhost.WorkerStore = (*StateStore)(nil)
+var _ workersvc.WorkerStore = (*StateStore)(nil)
 
 // NewStateStore creates a store rooted at root (created if missing).
 func NewStateStore(root string) (*StateStore, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
-		return nil, fmt.Errorf("workerhost: create store root: %w", err)
+		return nil, fmt.Errorf("project: create store root: %w", err)
 	}
 	return &StateStore{root: root}, nil
 }
@@ -124,36 +120,36 @@ func (s *StateStore) dir(id string) string {
 	return filepath.Join(s.root, sanitizeID(id))
 }
 
-// SaveState implements workerhost.WorkerStore.
+// SaveState implements workersvc.WorkerStore.
 func (s *StateStore) SaveState(id string, state coreworker.WorkerState, snapshot []byte) error {
 	dir := s.dir(id)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("workerhost: mkdir %s: %w", dir, err)
+		return fmt.Errorf("project: mkdir %s: %w", dir, err)
 	}
 	// Snapshots are stored as raw JSON: a string field would re-escape every
 	// quote of the inner JSON (~25% overhead on transcript-heavy snapshots) and
 	// make state.json unreadable. Nil/empty is legitimate ("no state").
 	if len(snapshot) > 0 && !json.Valid(snapshot) {
-		return fmt.Errorf("workerhost: snapshot %s is not valid JSON", id)
+		return fmt.Errorf("project: snapshot %s is not valid JSON", id)
 	}
 	rec := stateFile{State: state, Snapshot: json.RawMessage(snapshot)}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
-		return fmt.Errorf("workerhost: marshal state %s: %w", id, err)
+		return fmt.Errorf("project: marshal state %s: %w", id, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), data, 0644); err != nil {
-		return fmt.Errorf("workerhost: write state %s: %w", id, err)
+		return fmt.Errorf("project: write state %s: %w", id, err)
 	}
 	return nil
 }
 
-// LoadAll implements workerhost.WorkerStore.
-func (s *StateStore) LoadAll() ([]workerhost.StateRecord, error) {
+// LoadAll implements workersvc.WorkerStore.
+func (s *StateStore) LoadAll() ([]workersvc.StateRecord, error) {
 	entries, err := os.ReadDir(s.root)
 	if err != nil {
-		return nil, fmt.Errorf("workerhost: read store root: %w", err)
+		return nil, fmt.Errorf("project: read store root: %w", err)
 	}
-	var recs []workerhost.StateRecord
+	var recs []workersvc.StateRecord
 	for _, de := range entries {
 		if !de.IsDir() {
 			continue
@@ -163,7 +159,7 @@ func (s *StateStore) LoadAll() ([]workerhost.StateRecord, error) {
 		if err != nil {
 			continue
 		}
-		recs = append(recs, workerhost.StateRecord{
+		recs = append(recs, workersvc.StateRecord{
 			ID:       id,
 			State:    state,
 			Snapshot: snapshot,
@@ -172,7 +168,7 @@ func (s *StateStore) LoadAll() ([]workerhost.StateRecord, error) {
 	return recs, nil
 }
 
-// Delete implements workerhost.WorkerStore.
+// Delete implements workersvc.WorkerStore.
 func (s *StateStore) Delete(id string) error {
 	return os.RemoveAll(s.dir(id))
 }

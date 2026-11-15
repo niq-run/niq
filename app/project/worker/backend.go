@@ -15,7 +15,7 @@ import (
 
 	projprocess "github.com/niq-run/niq/app/project/worker/process"
 	"github.com/niq-run/niq/core/impl/eventbus"
-	"github.com/niq-run/niq/core/impl/workerhost"
+	"github.com/niq-run/niq/core/impl/workersvc"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
@@ -29,11 +29,11 @@ type BackendConfig struct {
 	// process log. Declarations arrive through Decls; nothing else uses it.
 	ProjectID string
 	// Service builds in-process workers. Required.
-	Service *workerhost.WorkerService
+	Service *workersvc.WorkerService
 	// StateStore persists in-process workers' state/snapshots. It is defined
-	// once in workerhost (the lifecycle engine that calls it). Optional: a
+	// once in workersvc (the lifecycle engine that calls it). Optional: a
 	// service configured with its own store (tests) may leave it nil.
-	StateStore workerhost.WorkerStore
+	StateStore workersvc.WorkerStore
 	// Supervisor supervises managed-process workers. Optional: when nil,
 	// placement managed-process is rejected (a project without an HTTP bus has
 	// nothing for a child to connect to).
@@ -55,7 +55,7 @@ type BackendConfig struct {
 // service, a process supervisor and a declaration store.
 type workerHostBackend struct {
 	projectID  string
-	service    *workerhost.WorkerService
+	service    *workersvc.WorkerService
 	supervisor *projprocess.ProcessSupervisor
 	registry   corebus.IdentityRegistry
 	signer     *eventbus.TokenSigner
@@ -411,24 +411,25 @@ func (b *workerHostBackend) Destroy(ctx context.Context, id string) error {
 		return fmt.Errorf("worker %s is protected and cannot be destroyed", id)
 	}
 
-	// Stop the live side first, so nothing is writing into the state directory
-	// we are about to remove.
+	// Stop the live side first and let it delete the worker's runtime state, so
+	// nothing is still writing into a directory being removed. The live side
+	// owns that state (the service owns state.json, the supervisor owns the
+	// process log and the child's state dir); the declaration store does not.
 	if b.service != nil && b.service.HasWorker(id) {
 		if err := b.service.DestroyWorker(id); err != nil {
 			return err
 		}
 	} else if b.supervisor != nil {
-		if err := b.supervisor.Remove(id); err != nil {
+		// Also covers an in-process worker that is not live in this run: its
+		// state directory is under the same <workers>/<id> layout.
+		if err := b.supervisor.Destroy(id); err != nil {
 			return err
 		}
 	}
 
-	// Drop the declaration, then the persisted state, then the bus side.
+	// Drop the declaration, then the bus side.
 	if err := b.decls.Delete(id); err != nil {
 		return err
-	}
-	if err := b.decls.RemoveState(id); err != nil {
-		b.logf("[worker %s] %s: remove state: %v", b.projectID, id, err)
 	}
 	if b.engine != nil && b.engine.Channel(id) != nil {
 		b.engine.Disconnect(id) // also broadcasts worker.gone
@@ -576,7 +577,7 @@ func (b *workerHostBackend) Recover(ctx context.Context, opts coreworker.Recover
 	// handed in are the ones the caller built from it. Process workers are
 	// started after the in-process set, so the bus-facing control plane exists
 	// first.
-	if err := b.service.RecoverAll(ctx, workerhost.RecoverOptions{
+	if err := b.service.RecoverAll(ctx, workersvc.RecoverOptions{
 		Workers:   inProc(opts.Declared),
 		Essential: inProc(opts.Essential),
 		Suspend:   opts.Suspend,

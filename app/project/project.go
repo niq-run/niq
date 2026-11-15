@@ -306,15 +306,6 @@ func saveSet(projectID string, set *WorkerSet, archived bool) error {
 	return writeJSONAtomic(path, set)
 }
 
-// removeWorkerStateDir deletes a worker's persisted per-worker directory
-// (<project>/workers/<id>).
-func removeWorkerStateDir(projectID, id string) error {
-	return os.RemoveAll(filepath.Join(workersRoot(projectID), sanitizeID(id)))
-}
-
-// workersRoot returns the project's per-worker state directory root.
-func workersRoot(projectID string) string { return filepath.Join(ProjectDir(projectID), "workers") }
-
 // LoadProject loads a project's metadata from project.json.
 func LoadProject(id string) (*Project, error) {
 	// One-time conversion of legacy projects. Idempotent and cheap once the

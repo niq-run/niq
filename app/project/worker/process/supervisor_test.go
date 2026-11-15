@@ -232,3 +232,32 @@ func findStatus(sts []ProcessStatus, id string) *ProcessStatus {
 	}
 	return nil
 }
+
+// TestProcessSupervisorDestroyRemovesStateDir verifies explicit destroy deletes
+// the worker directory after stopping the process, while Remove (used by
+// restart) leaves it in place.
+func TestProcessSupervisorDestroyRemovesStateDir(t *testing.T) {
+	root := t.TempDir()
+	sv := NewProcessSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
+	sv.initialDelay = 10 * time.Millisecond
+	sv.maxDelay = 30 * time.Millisecond
+	sv.stableAfter = time.Hour
+	if err := sv.Start(Spec{ID: "gone", Type: "x", Command: []string{"/bin/sh", "-c", "sleep 60"}}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	dir := filepath.Join(root, "gone")
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(dir); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := sv.Destroy("gone"); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("worker dir still exists after Destroy: %v", err)
+	}
+}

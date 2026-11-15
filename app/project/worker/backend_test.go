@@ -13,7 +13,7 @@ import (
 	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workerhost"
+	"github.com/niq-run/niq/core/impl/workersvc"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
@@ -98,8 +98,6 @@ func (m *memDecls) SetCredential(id, cred string) error {
 	return fmt.Errorf("worker %s is not declared", id)
 }
 
-func (m *memDecls) RemoveState(string) error { return nil }
-
 // fakeWorker is the minimal managed worker a test builder produces.
 type fakeWorker struct {
 	baseworker.BaseWorker
@@ -113,7 +111,7 @@ func (w *fakeWorker) Restore([]byte) error        { return nil }
 
 type testRig struct {
 	backend    *workerHostBackend
-	service    *workerhost.WorkerService
+	service    *workersvc.WorkerService
 	supervisor *projprocess.ProcessSupervisor
 	decls      *memDecls
 	registry   corebus.IdentityRegistry
@@ -146,7 +144,7 @@ func newTestRig(t *testing.T) *testRig {
 		}
 	}()
 
-	svc := workerhost.New()
+	svc := workersvc.New()
 
 	// A worker type whose builder derives the id from params.name, mirroring
 	// how workspace derives an id from its path.

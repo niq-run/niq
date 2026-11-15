@@ -25,8 +25,8 @@ import (
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/httptrans"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workerhost"
 	"github.com/niq-run/niq/core/impl/workers/hiw"
+	"github.com/niq-run/niq/core/impl/workersvc"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
@@ -260,7 +260,7 @@ func runAssembly(opts assemblyOptions) error {
 
 	// In-process lifecycle engine + the project's state layout. The store is
 	// injected into the backend, which owns both storage boundaries.
-	workerSvc := workerhost.New()
+	workerSvc := workersvc.New()
 	stateStore, err := NewStateStore(opts.StateDir)
 	if err != nil {
 		return fmt.Errorf("project: create worker store: %w", err)

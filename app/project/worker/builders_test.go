@@ -12,9 +12,9 @@ import (
 	providerpkg "github.com/niq-run/niq/app/project/provider"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workerhost"
 	"github.com/niq-run/niq/core/impl/workers/hiw"
 	"github.com/niq-run/niq/core/impl/workers/niw"
+	"github.com/niq-run/niq/core/impl/workersvc"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
@@ -130,7 +130,7 @@ func TestBuildNIWSpecReadsParams(t *testing.T) {
 // a type the service can build must also declare what its spawn accepts,
 // otherwise a new builder would quietly ship without a check.
 func TestSpawnParamsCoverEveryBuilder(t *testing.T) {
-	svc := workerhost.New()
+	svc := workersvc.New()
 	RegisterBuilders(BuildContext{}, svc)
 
 	for _, typ := range svc.RegisteredTypes() {
@@ -148,7 +148,7 @@ func TestSpawnParamsCoverEveryBuilder(t *testing.T) {
 // TestSpawnRejectsUnknownParamsEndToEnd drives the real registration path: the
 // host's CreateWorker call must fail on the check and never reach the builder.
 func TestSpawnRejectsUnknownParamsEndToEnd(t *testing.T) {
-	svc := workerhost.New()
+	svc := workersvc.New()
 	RegisterBuilders(BuildContext{}, svc)
 
 	_, err := svc.CreateWorker(context.Background(), coreworker.WorkerConfig{
@@ -180,7 +180,7 @@ func TestHIWAnnouncesApprovalCapability(t *testing.T) {
 	bc, svc := newTestEngine(t)
 	ctx := context.Background()
 
-	err := svc.RecoverAll(ctx, workerhost.RecoverOptions{
+	err := svc.RecoverAll(ctx, workersvc.RecoverOptions{
 		Essential: []coreworker.WorkerConfig{{ID: DefaultWebUIHIWID, Type: "hiw"}},
 	})
 	if err != nil {
@@ -243,7 +243,7 @@ func TestHIWIdentityRefreshesOnRestart(t *testing.T) {
 	}
 
 	bc, svc := newTestEngineWith(t, dir, reg)
-	err = svc.RecoverAll(context.Background(), workerhost.RecoverOptions{
+	err = svc.RecoverAll(context.Background(), workersvc.RecoverOptions{
 		Essential: []coreworker.WorkerConfig{{ID: DefaultWebUIHIWID, Type: "hiw"}},
 	})
 	if err != nil {
@@ -269,7 +269,7 @@ func TestHIWIdentityRefreshesOnRestart(t *testing.T) {
 //
 // newTestEngine wires up a registry, engine and in-process listener exactly as
 // runAssembly does, returning the build context, worker service and the store dir.
-func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService) {
+func newTestEngine(t *testing.T) (BuildContext, *workersvc.WorkerService) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -282,7 +282,7 @@ func newTestEngine(t *testing.T) (BuildContext, *workerhost.WorkerService) {
 
 // newTestEngineWith is newTestEngine over a caller-supplied registry, so a test
 // can pre-seed persisted identities (an upgrade from an older contract).
-func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegistry) (BuildContext, *workerhost.WorkerService) {
+func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegistry) (BuildContext, *workersvc.WorkerService) {
 	t.Helper()
 
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
@@ -300,7 +300,7 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 		}
 	}()
 
-	svc := workerhost.New()
+	svc := workersvc.New()
 	bc := BuildContext{
 		Registry:  registry,
 		Listener:  listener,
@@ -350,7 +350,7 @@ func TestWorkspaceSuspendResume(t *testing.T) {
 	}
 }
 
-func firstWorkerOfType(svc *workerhost.WorkerService, typ string) string {
+func firstWorkerOfType(svc *workersvc.WorkerService, typ string) string {
 	for _, wi := range svc.ListWorkers("") {
 		if wi.Type == typ {
 			return wi.ID
@@ -359,13 +359,13 @@ func firstWorkerOfType(svc *workerhost.WorkerService, typ string) string {
 	return ""
 }
 
-func workerStatus(svc *workerhost.WorkerService, id string) workerhost.WorkerInfo {
+func workerStatus(svc *workersvc.WorkerService, id string) workersvc.WorkerInfo {
 	for _, wi := range svc.ListWorkers("") {
 		if wi.ID == id {
 			return wi
 		}
 	}
-	return workerhost.WorkerInfo{}
+	return workersvc.WorkerInfo{}
 }
 
 // TestReasonFamilyRejectsUnknownProvider verifies a reason worker must name a

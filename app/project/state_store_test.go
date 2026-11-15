@@ -8,7 +8,7 @@ import (
 	projworker "github.com/niq-run/niq/app/project/worker"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workerhost"
+	"github.com/niq-run/niq/core/impl/workersvc"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
 
@@ -39,7 +39,7 @@ func TestStateStorePersistsAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStateStore: %v", err)
 	}
-	svc := workerhost.New()
+	svc := workersvc.New()
 	svc.SetStore(store)
 	bc := projworker.BuildContext{Registry: registry, Listener: listener, Engine: engine, WorkerSvc: svc}
 	projworker.RegisterBuilders(bc, svc)
@@ -64,11 +64,11 @@ func TestStateStorePersistsAndRecovers(t *testing.T) {
 	}
 
 	// A fresh service over the same store recovers the declared worker.
-	svc2 := workerhost.New()
+	svc2 := workersvc.New()
 	svc2.SetStore(store)
 	bc2 := projworker.BuildContext{Registry: registry, Listener: listener, Engine: engine, WorkerSvc: svc2}
 	projworker.RegisterBuilders(bc2, svc2)
-	if err := svc2.RecoverAll(ctx, workerhost.RecoverOptions{
+	if err := svc2.RecoverAll(ctx, workersvc.RecoverOptions{
 		Workers: []worker.WorkerConfig{{ID: id, Type: "workspace", Params: map[string]any{"mounts": []string{mount}}}},
 	}); err != nil {
 		t.Fatalf("RecoverAll: %v", err)

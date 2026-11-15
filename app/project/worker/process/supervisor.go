@@ -183,6 +183,19 @@ func (s *ProcessSupervisor) Remove(id string) error {
 	return nil
 }
 
+// Destroy stops a supervised worker and removes its per-worker directory
+// (stdout log and any third-party state). Restart uses Remove, so logs survive
+// a restart; only an explicit destroy deletes them.
+func (s *ProcessSupervisor) Destroy(id string) error {
+	if err := s.Remove(id); err != nil {
+		return err
+	}
+	if s.workersRoot == "" {
+		return nil
+	}
+	return os.RemoveAll(filepath.Join(s.workersRoot, sanitizeID(id)))
+}
+
 // Restart stops a supervised worker (if running) and starts it again. The
 // stored declaration is reused — credential/registration are untouched.
 func (s *ProcessSupervisor) Restart(id string) error {

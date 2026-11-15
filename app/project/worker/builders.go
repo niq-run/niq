@@ -24,7 +24,6 @@ import (
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	reasonbase "github.com/niq-run/niq/core/impl/reason"
-	"github.com/niq-run/niq/core/impl/workerhost"
 	"github.com/niq-run/niq/core/impl/workers/coding"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/impl/workers/history"
@@ -38,6 +37,7 @@ import (
 	"github.com/niq-run/niq/core/impl/workers/reason"
 	"github.com/niq-run/niq/core/impl/workers/timer"
 	"github.com/niq-run/niq/core/impl/workers/workspace"
+	"github.com/niq-run/niq/core/impl/workersvc"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
@@ -60,7 +60,7 @@ type BuildContext struct {
 	Registry     corebus.IdentityRegistry
 	Listener     *inprocess.InProcListener
 	Engine       *eventbus.Engine
-	WorkerSvc    *workerhost.WorkerService
+	WorkerSvc    *workersvc.WorkerService
 	EventLog     *eventbusapi.EventLog
 	EventStore   event.EventStore
 	ProgramsRoot string
@@ -73,7 +73,7 @@ type BuildContext struct {
 }
 
 // RegisterBuilders registers a Builder for every known worker type onto service.
-func RegisterBuilders(ctx BuildContext, svc *workerhost.WorkerService) {
+func RegisterBuilders(ctx BuildContext, svc *workersvc.WorkerService) {
 	// Each type's spawn-parameter check is registered with its builder: the
 	// builder is where the valid parameter set lives, so drift between the two
 	// is a visible edit rather than a silent gap.
