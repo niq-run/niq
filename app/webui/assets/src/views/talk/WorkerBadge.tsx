@@ -12,7 +12,7 @@ export default function WorkerBadge({ id, show, humanId, isReason, isPartner, on
   show: boolean
   humanId: string
   isReason: (id: string) => boolean
-  // isPartner (talk partner: reason / niw / remote-niw) gates single-click
+  // isPartner (talk partner: reason / coding / niq) gates single-click
   // mention. Falls back to isReason when absent (older callers).
   isPartner?: (id: string) => boolean
   onMention?: (id: string) => void

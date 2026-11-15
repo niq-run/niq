@@ -29,8 +29,8 @@ interface CreateWorkerDialogProps {
 // Managed worker types offered by the form. host/hiw are infrastructure the
 // assembly owns — creating them from the UI is not a thing. timer, directory
 // and history are built-in singletons (one per project), so a second one is
-// never wanted. niw is a bridge worker that dials another niq's bus.
-const MANAGED_TYPES = ['reason', 'coding', 'workspace', 'program', 'niw', 'mcp'] as const
+// never wanted. niq is a worker whose backend is another niq instance.
+const MANAGED_TYPES = ['reason', 'coding', 'workspace', 'program', 'niq', 'mcp'] as const
 
 // The form opens on a managed reason worker; its permission drafts start from
 // that type's backend defaults (see allowDefaults.ts).
@@ -38,9 +38,9 @@ const INITIAL_MODE: WorkerCreateMode = 'managed'
 const INITIAL_TYPE = 'reason'
 const INITIAL_ALLOW = defaultAllow(INITIAL_MODE, INITIAL_TYPE)
 
-// parseNiwConfig turns the far-side bus's copyable worker config (KEY=value
+// parseNiqConfig turns the far-side bus's copyable worker config (KEY=value
 // lines, as rendered by that bus for a created remote worker) into a map.
-const parseNiwConfig = (s: string): Record<string, string> => {
+const parseNiqConfig = (s: string): Record<string, string> => {
   const out: Record<string, string> = {}
   for (const line of s.split('\n')) {
     const i = line.indexOf('=')
@@ -93,8 +93,8 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [mcpServersText, setMcpServersText] = useState('')
   const [mcpAllowedTools, setMcpAllowedTools] = useState('')
   const [tokenTtl, setTokenTtl] = useState('')
-  const [niwConfig, setNiwConfig] = useState('')
-  const [niwRecipient, setNiwRecipient] = useState('')
+  const [niqConfig, setNiqConfig] = useState('')
+  const [niqRecipient, setNiqRecipient] = useState('')
   const [workerLabel, setWorkerLabel] = useState('')
   const [tags, setTags] = useState('')
   const [description, setDescription] = useState('')
@@ -212,14 +212,14 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
       // A managed-process worker's params ARE its child environment.
       Object.assign(params, env)
     }
-    if (isManaged && effType === 'niw') {
-      const c = parseNiwConfig(niwConfig)
+    if (isManaged && effType === 'niq') {
+      const c = parseNiqConfig(niqConfig)
       if (c.NIQ_BUS_URL) params.remote_url = c.NIQ_BUS_URL
       if (c.NIQ_WORKER_ID) params.remote_worker_id = c.NIQ_WORKER_ID
       if (c.NIQ_WORKER_CREDENTIAL) params.remote_credential = c.NIQ_WORKER_CREDENTIAL
-      if (niwRecipient.trim()) params.recipient = niwRecipient.trim()
+      if (niqRecipient.trim()) params.recipient = niqRecipient.trim()
       if (!params.remote_url || !params.remote_worker_id) {
-        setNote(t('workers.create.niwErr'))
+        setNote(t('workers.create.niqErr'))
         return null
       }
     }
@@ -374,19 +374,8 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
             </select>
           )}
           {isRemote && (
-            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-              <span
-                onClick={() => { setExtType('remote-niw'); setNote('') }}
-                className="btn-hover"
-                style={{ cursor: 'pointer', border: '1px solid ' + (extType === 'remote-niw' ? colors.accent : colors.border), borderRadius: 3, padding: '2px 10px', fontSize: fontSizes.xs, color: (extType === 'remote-niw' ? colors.accent : colors.textDim), userSelect: 'none' }}
-              >
-                remote-niw
-              </span>
-            </div>
-          )}
-          {isRemote && (
             <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>
-              {t('workers.create.remoteNiwHint')}
+              {t('workers.create.remoteNiqHint')}
             </div>
           )}
         </div>
@@ -477,23 +466,23 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           </div>
         )}
 
-        {isManaged && effType === 'niw' && (
+        {isManaged && effType === 'niq' && (
           <>
             <div style={field}>
-              <label style={label}>{t('workers.create.niwConfig')}</label>
+              <label style={label}>{t('workers.create.niqConfig')}</label>
               <textarea
                 style={{ ...input, resize: 'vertical', minHeight: 72 }}
-                value={niwConfig}
-                onChange={e => setNiwConfig(e.target.value)}
-                placeholder={t('workers.create.niwConfigPlaceholder')}
+                value={niqConfig}
+                onChange={e => setNiqConfig(e.target.value)}
+                placeholder={t('workers.create.niqConfigPlaceholder')}
               />
               <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
-                {t('workers.create.niwHint')}
+                {t('workers.create.niqHint')}
               </div>
             </div>
             <div style={field}>
-              <label style={label}>{t('workers.create.niwRecipient')}</label>
-              <input style={input} value={niwRecipient} onChange={e => setNiwRecipient(e.target.value)} placeholder="reason.local" />
+              <label style={label}>{t('workers.create.niqRecipient')}</label>
+              <input style={input} value={niqRecipient} onChange={e => setNiqRecipient(e.target.value)} placeholder="reason.local" />
             </div>
           </>
         )}

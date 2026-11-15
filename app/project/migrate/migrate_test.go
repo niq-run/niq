@@ -165,3 +165,81 @@ func TestEnsureTemplates(t *testing.T) {
 		t.Fatalf("process worker = %+v", p)
 	}
 }
+
+// TestNormalizeNamesRewritesRetiredVocabulary verifies the in-place name
+// normalization: retired types and ids are rewritten in the declaration files,
+// ACL references follow their worker, and a second pass is a no-op.
+func TestNormalizeNamesRewritesRetiredVocabulary(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("project.json", `{"schema_version":2,"id":"p"}`)
+	write("workers.json", `{"schema_version":2,"workers":[
+		{"id":"webui-hiw","type":"hiw","placement":"in-process"},
+		{"id":"niw-niqa","type":"niw","params":{"remote_url":"http://b","remote_worker_id":"far"}},
+		{"id":"far","type":"remote-niw","placement":"unmanaged-process"},
+		{"id":"ws","type":"workspace","params":{"approver":"webui-hiw"},
+		 "publish":[{"type":"request.*","target":"webui-hiw"}],
+		 "subscriptions":[{"type":"worker.input","source":"webui-hiw"}]}
+	]}`)
+
+	if err := EnsureProject(dir); err != nil {
+		t.Fatalf("EnsureProject: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "workers.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var set struct {
+		Workers []struct {
+			ID     string `json:"id"`
+			Type   string `json:"type"`
+			Params struct {
+				Approver string `json:"approver"`
+			} `json:"params"`
+			Publish       []struct{ Target string } `json:"publish"`
+			Subscriptions []struct{ Source string } `json:"subscriptions"`
+		} `json:"workers"`
+	}
+	if err := json.Unmarshal(raw, &set); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := map[string]string{}
+	for _, w := range set.Workers {
+		got[w.ID] = w.Type
+	}
+	want := map[string]string{"webui": "interface", "niw-niqa": "niq", "far": "niq", "ws": "workspace"}
+	for id, typ := range want {
+		if got[id] != typ {
+			t.Errorf("worker %s: type = %q, want %q (all: %v)", id, got[id], typ, got)
+		}
+	}
+	for _, w := range set.Workers {
+		if w.ID != "ws" {
+			continue
+		}
+		if w.Params.Approver != "webui" {
+			t.Errorf("approver = %q, want webui", w.Params.Approver)
+		}
+		if len(w.Publish) != 1 || w.Publish[0].Target != "webui" {
+			t.Errorf("publish target = %+v, want webui", w.Publish)
+		}
+		if len(w.Subscriptions) != 1 || w.Subscriptions[0].Source != "webui" {
+			t.Errorf("subscription source = %+v, want webui", w.Subscriptions)
+		}
+	}
+
+	// Idempotent: a second pass leaves the bytes untouched.
+	first, _ := os.ReadFile(filepath.Join(dir, "workers.json"))
+	if err := EnsureProject(dir); err != nil {
+		t.Fatalf("second EnsureProject: %v", err)
+	}
+	second, _ := os.ReadFile(filepath.Join(dir, "workers.json"))
+	if string(first) != string(second) {
+		t.Fatal("normalization is not idempotent")
+	}
+}

@@ -27,13 +27,12 @@ func TestCheckSpawnParamsAcceptsDocumentedPayloads(t *testing.T) {
 			"instruction": "Write code.", "tool_mode": "ptc", "provider": "openai",
 		},
 		"workspace": {
-			"mounts": []any{"/tmp/a", "/tmp/b"}, "approver": "webui-hiw",
+			"mounts": []any{"/tmp/a", "/tmp/b"}, "approver": "webui",
 		},
 		"program":   {"mounts": []any{"/tmp/programs"}},
 		"timer":     {"readme": "custom", "readme_append": "more"},
 		"host":      {},
 		"directory": {},
-		"hiw":       {},
 		"history":   {"max_list_events": 10, "max_list_item_bytes": 1024},
 		"mcp": {
 			"expose": "agentic", "fixed": true,

@@ -13,7 +13,7 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workers/hiw"
+	"github.com/niq-run/niq/core/impl/iface"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 )
@@ -42,7 +42,7 @@ func newLifecycleRig(t *testing.T) *lifecycleRig {
 		t.Fatalf("registry: %v", err)
 	}
 	for _, id := range []corebus.Identity{
-		{WorkerID: "webui-hiw", Type: "hiw", PublishAllow: []event.PublishPattern{event.NewPublishPattern("*")}},
+		{WorkerID: "webui", Type: "interface", PublishAllow: []event.PublishPattern{event.NewPublishPattern("*")}},
 		{WorkerID: "host", Type: "host", PublishAllow: []event.PublishPattern{event.NewPublishPattern("request.*")}},
 	} {
 		if err := registry.Register(id); err != nil {
@@ -68,14 +68,18 @@ func newLifecycleRig(t *testing.T) *lifecycleRig {
 		}
 	}()
 
-	hiwCh := inprocess.NewWorkerSide("webui-hiw", listener)
-	if err := hiwCh.Connect(ctx, "inproc://test"); err != nil {
-		t.Fatalf("connect hiw: %v", err)
+	// The app-hosted interface worker: the app IS its backend, and receives the
+	// bus handler through SetHandler just as in production.
+	uiApp := New(log, engine, &stubCatalog{}, registry, ":0", false)
+	uiCh := inprocess.NewWorkerSide("webui", listener)
+	if err := uiCh.Connect(ctx, "inproc://test"); err != nil {
+		t.Fatalf("connect webui: %v", err)
 	}
-	h := hiw.New(hiw.Config{ID: "webui-hiw", Bus: hiwCh})
-	if err := h.Start(ctx); err != nil {
-		t.Fatalf("start hiw: %v", err)
+	uiWorker := iface.New(iface.Config{ID: "webui", Type: "interface", Bus: uiCh, Backends: []iface.Backend{uiApp}})
+	if err := uiWorker.Start(ctx); err != nil {
+		t.Fatalf("start webui worker: %v", err)
 	}
+	t.Cleanup(func() { _ = uiWorker.Stop() })
 
 	hostCh := inprocess.NewWorkerSide("host", listener)
 	if err := hostCh.Connect(ctx, "inproc://test"); err != nil {
@@ -115,7 +119,9 @@ func newLifecycleRig(t *testing.T) *lifecycleRig {
 		}
 	}()
 
-	s := New(h, log, engine, &stubCatalog{}, registry, ":0", false)
+	// The app was constructed (production order) before its worker, and the bus
+	// handle already arrived through SetHandler.
+	s := uiApp
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -364,7 +370,7 @@ func TestCreateDuplicateIsConflict(t *testing.T) {
 	// status is a gateway error, not a conflict — i.e. only the real host's error
 	// text selects 409.
 	_ = rig
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)

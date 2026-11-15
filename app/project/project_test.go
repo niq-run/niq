@@ -43,7 +43,7 @@ func TestProjectsRootHonorsNIQHome(t *testing.T) {
 
 func fakeTemplate() *TemplateConfig {
 	return &TemplateConfig{SchemaVersion: SchemaVersion, Workers: []WorkerConfig{
-		{Config: projworker.Config{Type: "hiw", ID: "default-hiw"}},
+		{Config: projworker.Config{Type: "interface", ID: "default-ui"}},
 		{Config: projworker.Config{Type: "reason", ID: "niq", Params: map[string]any{
 			"provider": "volcan-ark", "model": "deepseek-v4-flash",
 		}}, Placement: projworker.PlacementInProcess},
@@ -70,7 +70,7 @@ func TestCreateLoadListProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWorkers: %v", err)
 	}
-	for _, id := range []string{"default-hiw", "niq"} {
+	for _, id := range []string{"default-ui", "niq"} {
 		if _, ok := FindWorker(set, id); !ok {
 			t.Fatalf("worker %s not declared", id)
 		}
@@ -232,7 +232,7 @@ func TestLinkProjectExisting(t *testing.T) {
 	if err := writeProjectJSON(filepath.Join(ext, "project.json"), &Project{ID: "alpha", CreatedAt: "2026-01-01T00:00:00Z"}); err != nil {
 		t.Fatalf("seed project.json: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(ext, "workers.json"), []byte(`{"schema_version":2,"workers":[{"id":"default-hiw","type":"hiw"}]}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(ext, "workers.json"), []byte(`{"schema_version":2,"workers":[{"id":"default-ui","type":"interface"}]}`), 0644); err != nil {
 		t.Fatalf("seed workers: %v", err)
 	}
 	p, err := LinkProject(ext)

@@ -195,8 +195,7 @@ export default function TalkInput({ talkPartner, input, inputMode, onInputChange
     stagedCountRef.current = attachments.length
   }
 
-  // Talk partners: workers that consume worker.input — reason, and niw /
-  // remote-niw bridges. These are the mentionable / targetable workers in the
+  // Talk partners: workers that consume worker.input — reason, and niq bridges. These are the mentionable / targetable workers in the
   // input.
   const partners = useMemo(() => workers.filter(w => isTalkPartnerType(w.type)), [workers])
 

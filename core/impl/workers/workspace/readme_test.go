@@ -14,7 +14,7 @@ func TestReadmeTextDescribesWorkspace(t *testing.T) {
 	primary := t.TempDir()
 	b := backend.NewEmbeddedBackend([]string{primary})
 	ch := &stubChannel{}
-	w := New(Config{ID: "ws-readme", Bus: ch, Backend: b, Approver: "webui-hiw"})
+	w := New(Config{ID: "ws-readme", Bus: ch, Backend: b, Approver: "webui"})
 	w.buildHandlers()
 
 	text := w.readmeText()
@@ -26,7 +26,7 @@ func TestReadmeTextDescribesWorkspace(t *testing.T) {
 		"mode.set",
 		"- mode: readwrite",
 		primary,
-		"webui-hiw",
+		"webui",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("readme missing %q:\n%s", want, text)

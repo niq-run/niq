@@ -414,8 +414,8 @@ const BUILTIN_TYPES = new Set([
   'directory',
   'history',
   'program',
-  'niw',
-  'remote-niw',
+  'niq',
+  'niq',
   'hiw',
 ])
 

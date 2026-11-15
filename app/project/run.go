@@ -25,8 +25,9 @@ import (
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/httptrans"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workers/hiw"
+	"github.com/niq-run/niq/core/impl/iface"
 	"github.com/niq-run/niq/core/impl/workersvc"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
@@ -97,21 +98,6 @@ func RunProject(opts ProjectRunOptions) error {
 		}
 	}
 
-	// webui-hiw is the human presence the WebUI binds to. Give it a declaration
-	// when the WebUI runs, so its ACL has a durable home in workers.json; it is
-	// still essential/protected and suspended when the WebUI is off.
-	if webUIAddr != "" {
-		if _, ok := FindWorker(workerSet, webuiHIWID); !ok {
-			workerSet.Workers = append(workerSet.Workers, projworker.Declaration{
-				Config:    projworker.Config{ID: webuiHIWID, Type: "hiw"},
-				Placement: projworker.PlacementInProcess,
-			})
-			if err := SaveWorkers(opts.ProjectID, workerSet); err != nil {
-				return err
-			}
-		}
-	}
-
 	onResolved := func(bus, webui string) {
 		newBus := PortOf(bus)
 		if newBus == 0 {
@@ -174,11 +160,6 @@ type assemblyOptions struct {
 	ContextInfo  webui.ContextInfo
 	EventsDB     string // SQLite event store path (empty = in-memory)
 }
-
-// webuiHIWID is the project-owned hiw worker that drives the WebUI. It is
-// ensured (created + run + protected) only when the WebUI is started; when the
-// WebUI is off, an existing webui-hiw is suspended.
-const webuiHIWID = projworker.DefaultWebUIHIWID
 
 // hostWorkerID is the lifecycle control plane. It is protected: nothing may
 // suspend, restart or destroy it.
@@ -353,72 +334,63 @@ func runAssembly(opts assemblyOptions) error {
 		return err
 	}
 
-	// Recover the whole worker set. webui-hiw is only ensured when the WebUI
-	// runs; when it does not, an existing webui-hiw is suspended. The host is
-	// protected: it is the lifecycle control plane, so nothing may suspend or
-	// destroy it.
-	webUIOn := opts.WebUIAddr != ""
-	var essential []worker.WorkerConfig
-	var suspend []string
-	if webUIOn {
-		essential = []worker.WorkerConfig{{ID: webuiHIWID, Type: "hiw"}}
-	} else {
-		suspend = []string{webuiHIWID}
-	}
+	// Recover the whole declared worker set. The host is protected: it is the
+	// lifecycle control plane, so nothing may suspend or destroy it. The WebUI is
+	// NOT part of this set — it is an app-hosted worker (below), joined directly
+	// by the assembly and therefore also protected.
 	recoverSpecs := make([]worker.WorkerSpec, 0, len(declared))
 	for _, d := range declared {
 		recoverSpecs = append(recoverSpecs, projworker.Spec(d))
 	}
-	essentialSpecs := make([]worker.WorkerSpec, 0, len(essential))
-	for _, cfg := range essential {
-		essentialSpecs = append(essentialSpecs, worker.WorkerSpec{WorkerConfig: cfg})
+	protected := []string{hostWorkerID}
+	if opts.WebUIAddr != "" {
+		protected = append(protected, projworker.DefaultWebUIID)
 	}
 	if err := backend.Recover(ctx, worker.RecoverOptions{
-		Declared:  recoverSpecs,
-		Essential: essentialSpecs,
-		Suspend:   suspend,
-		Protect:   []string{hostWorkerID},
+		Declared: recoverSpecs,
+		Protect:  protected,
 	}); err != nil {
 		return fmt.Errorf("project: recover workers: %w", err)
 	}
 
-	// Optional WebUI, served on the project/control address.
+	// Optional WebUI: the app IS the backend of its interface worker. It is built
+	// first (it holds no bus handle yet), injected into the worker the assembly
+	// joins here, and only then binds HTTP — the handle it sends with arrives
+	// through SetHandler before the worker starts.
 	var webUIAddr string
 	if opts.WebUIAddr != "" {
-		if h, ok := workerSvc.Worker(webuiHIWID); ok {
-			if hiwWorker, ok := h.(*hiw.Worker); ok {
-				startWebUI := func(addr string) (string, error) {
-					s := webui.New(hiwWorker, eventLog, engine, backend, registry, addr, false)
-					s.SetContext(opts.ContextInfo)
-					s.SetProjectDir(opts.ProjDir)
-					if webUIAuthEnabled {
-						s.SetBasicAuth(webUIAuthUser, webUIAuthPass)
-						log.Printf("[project] WebUI remote access protected with basic auth (localhost stays open)")
-					}
-					if opts.UploadDir != "" {
-						s.SetUploadDir(opts.UploadDir)
-					}
-					// Nothing worker-related to inject: reads come from the
-					// catalog/registry the server was constructed with, and every
-					// write — including ACL edits — is a bus request to the host.
-					b, err := s.Bind()
-					if err != nil {
-						return "", err
-					}
-					url := LocalhostURL(b)
-					log.Printf("[%s] WebUI: %s", opts.Banner, url)
-					fmt.Printf("%s WebUI listening at %s\n", opts.Banner, url)
-					go func() {
-						if err := s.Start(ctx); err != nil {
-							log.Printf("[%s] webui error: %v", opts.Banner, err)
-						}
-					}()
-					return b, nil
-				}
-				if webUIAddr, err = bindServer(opts.WebUIAddr, startWebUI); err != nil {
-					return fmt.Errorf("project: bind webui: %w", err)
-				}
+		app := webui.New(eventLog, engine, backend, registry, opts.WebUIAddr, false)
+		app.SetContext(opts.ContextInfo)
+		app.SetProjectDir(opts.ProjDir)
+		if webUIAuthEnabled {
+			app.SetBasicAuth(webUIAuthUser, webUIAuthPass)
+			log.Printf("[project] WebUI remote access protected with basic auth (localhost stays open)")
+		}
+		if opts.UploadDir != "" {
+			app.SetUploadDir(opts.UploadDir)
+		}
+		uiWorker, err := joinWebUIWorker(ctx, app, registry, listener)
+		if err != nil {
+			return fmt.Errorf("project: join webui worker: %w", err)
+		}
+		defer func() { _ = uiWorker.Stop() }()
+
+		if webUIAddr, err = bindServer(opts.WebUIAddr, func(addr string) (string, error) {
+			b, err := app.Bind()
+			if err != nil {
+				return "", err
 			}
+			url := LocalhostURL(b)
+			log.Printf("[%s] WebUI: %s", opts.Banner, url)
+			fmt.Printf("%s WebUI listening at %s\n", opts.Banner, url)
+			go func() {
+				if err := app.Start(ctx); err != nil {
+					log.Printf("[%s] webui error: %v", opts.Banner, err)
+				}
+			}()
+			return b, nil
+		}); err != nil {
+			return fmt.Errorf("project: bind webui: %w", err)
 		}
 	}
 	if opts.OnResolved != nil {
@@ -605,4 +577,55 @@ func loadOrCreateRootSecret(dir string) ([]byte, error) {
 		return nil, err
 	}
 	return b, nil
+}
+
+// joinWebUIWorker brings the app-hosted interface worker onto the bus.
+//
+// It is the one worker the assembly joins itself instead of materializing from a
+// declaration: its backend is a process-local object (the WebUI app), which no
+// declaration can describe, so it has no builder and is never spawnable. Its
+// identity and grants are declared here, in code — that is also why it needs no
+// ACL editing: there is no user-editable declaration to persist into.
+func joinWebUIWorker(
+	ctx context.Context,
+	app *webui.Server,
+	registry corebus.IdentityRegistry,
+	listener *inprocess.InProcListener,
+) (*iface.Worker, error) {
+	id := projworker.DefaultWebUIID
+	if err := registry.Register(corebus.Identity{
+		WorkerID: id,
+		Type:     projworker.TypeInterface,
+		// The human's voice: input, arbitrary worker events, approval decisions,
+		// and the replies to its own asks. `*` is required for the "drive a worker
+		// with one of its declared events" endpoint, whose type is by definition
+		// not enumerable here.
+		PublishAllow: []event.PublishPattern{event.NewPublishPattern("*")},
+		SubscribeAllow: []event.EventPattern{
+			event.NewPattern(event.TypeWorkerInput),
+			event.NewPattern(event.TypeApprovalRequest),
+			event.NewPattern(event.TypeApprovalDecision),
+			event.NewPattern("worker.discover"),
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("register identity: %w", err)
+	}
+
+	// The in-process listener accepts the bus side and attaches it, for this
+	// worker exactly as for every other in-process worker.
+	ch := inprocess.NewWorkerSide(id, listener)
+	if err := ch.Connect(ctx, "inproc://webui"); err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+
+	w := iface.New(iface.Config{
+		ID:       id,
+		Type:     projworker.TypeInterface,
+		Bus:      ch,
+		Backends: []iface.Backend{app},
+	})
+	if err := w.Start(ctx); err != nil {
+		return nil, err
+	}
+	return w, nil
 }

@@ -67,7 +67,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
   // stream and left-side bubbles. Comparing to 'reason' exactly would drop the
   // others' avatars, so their replies would inherit the previous speaker's.
   const isReason = useCallback((wid: string) => isReasonFamilyType(workerTypes[wid]), [workerTypes])
-  // A talk-partner check (reason / niw / remote-niw) gates single-click avatar
+  // A talk-partner check (reason / niq) gates single-click avatar
   // mention: any partner's badge can be clicked to @mention it into the input.
   const isPartner = useCallback((wid: string) => isTalkPartnerType(workerTypes[wid]), [workerTypes])
   // Convert the human worker's id into a friendlier "you" for display. The
@@ -115,7 +115,7 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     setOpenToolId(prev => (prev === key ? null : key))
   }, [])
 
-  // Talk is the selected partners' conversation: what a reason/niw worker sent,
+  // Talk is the selected partners' conversation: what a reason/niq worker sent,
   // and what was sent to it — from HIW or any worker alike. When nothing is
   // selected the scope is every talk-partner worker. Events whose envelope
   // involves no talk partner at all (the human UI driving a workspace directly,

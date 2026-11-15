@@ -46,7 +46,11 @@ func EnsureProject(dir string) error {
 	workersPath := filepath.Join(dir, "workers.json")
 	if version, ok := number(meta["schema_version"]); ok && int(version) >= schemaVersion {
 		if _, err := os.Stat(workersPath); err == nil {
-			return nil
+			// Already schema 2. Schema 2 is not released yet, so its worker-type
+			// vocabulary is still being settled: bring a project written against an
+			// older spelling up to date in place. This is a NAME normalization, not
+			// a format change, so the schema version stays 2.
+			return normalizeNames(dir)
 		}
 		// Metadata is already schema 2 but the active file is missing: create
 		// an empty one rather than re-running the legacy conversion.
@@ -445,4 +449,143 @@ func stringSlice(v any) []string {
 		return x
 	}
 	return nil
+}
+
+// ── Name normalization (schema 2 vocabulary) ──
+
+// renamedTypes maps a retired worker type to the one that replaced it.
+//
+//	niw   → niq        the worker whose backend is another niq instance
+//	hiw   → interface  retired: the WebUI is an app-hosted interface worker now,
+//	                   and its far-side identity is a plain niq worker
+//	remote-niw → niq   the pseudo-type for "the far side dials in" is gone: that
+//	                   is a niq declaration with unmanaged-process placement
+var renamedTypes = map[string]string{
+	"niw":        "niq",
+	"hiw":        "interface",
+	"remote-niw": "niq",
+}
+
+// renamedWorkerIDs maps a retired worker id to its replacement. The WebUI's
+// worker is `webui` now, and its old id baked in the retired `hiw` type.
+var renamedWorkerIDs = map[string]string{
+	"webui-hiw": "webui",
+}
+
+// normalizeNames rewrites the retired vocabulary in a project's declaration files.
+// It is idempotent and touches nothing unless it finds something to rename: an
+// already-current project is a single read per file.
+//
+// What it does NOT do: rewrite free text (a program body that calls niw.status, an
+// instruction naming webui-hiw). Those are user content; they are reported instead
+// so a human can fix them, because silently rewriting someone's prose is worse
+// than telling them.
+func normalizeNames(dir string) error {
+	changed := false
+	for _, name := range []string{"workers.json", "workers.archived.json"} {
+		path := filepath.Join(dir, name)
+		set, err := readWorkerSet(path)
+		if err != nil || set == nil {
+			continue
+		}
+		if rewriteWorkerSet(set) {
+			changed = true
+			if err := writeJSON(path, set); err != nil {
+				return err
+			}
+		}
+	}
+	if changed {
+		log.Printf("[migrate] %s: worker names normalized (niw→niq, hiw→interface, webui-hiw→webui)", dir)
+	}
+	return nil
+}
+
+// rewriteWorkerSet applies the renames to one declaration set, reporting whether
+// anything changed. ACL entries naming a renamed worker are rewritten too: a
+// grant to `webui-hiw` would otherwise address a worker that no longer exists.
+func rewriteWorkerSet(set map[string]any) bool {
+	workers, _ := set["workers"].([]any)
+	changed := false
+	for _, raw := range workers {
+		d, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, ok := d["id"].(string); ok {
+			if next, renamed := renamedWorkerIDs[id]; renamed {
+				d["id"] = next
+				changed = true
+			}
+		}
+		if typ, ok := d["type"].(string); ok {
+			if next, renamed := renamedTypes[typ]; renamed {
+				d["type"] = next
+				changed = true
+			}
+		}
+		for _, key := range []string{"publish", "subscriptions"} {
+			if rewriteACL(d[key]) {
+				changed = true
+			}
+		}
+		if params, ok := d["params"].(map[string]any); ok {
+			// The approval target is a worker id, not a type.
+			if approver, ok := params["approver"].(string); ok {
+				if next, renamed := renamedWorkerIDs[approver]; renamed {
+					params["approver"] = next
+					changed = true
+				}
+			}
+			// A niq link's far-side identity is no longer a pseudo-type.
+			if typ, ok := params["type"].(string); ok {
+				if next, renamed := renamedTypes[typ]; renamed {
+					params["type"] = next
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+// rewriteACL renames worker ids referenced by publish targets / subscription
+// sources.
+func rewriteACL(v any) bool {
+	list, ok := v.([]any)
+	if !ok {
+		return false
+	}
+	changed := false
+	for _, raw := range list {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"target", "source"} {
+			if id, ok := entry[key].(string); ok {
+				if next, renamed := renamedWorkerIDs[id]; renamed {
+					entry[key] = next
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+// readWorkerSet loads one declaration file, returning nil when it does not exist.
+func readWorkerSet(path string) (map[string]any, error) {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("migrate: read %s: %w", path, err)
+	}
+	var set map[string]any
+	if err := json.Unmarshal(raw, &set); err != nil {
+		return nil, fmt.Errorf("migrate: parse %s: %w", path, err)
+	}
+	return set, nil
 }

@@ -507,7 +507,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   }
 
   // The worker-selector rows shown inline and in the expanded picker: talk
-  // partners (reason / niw / remote-niw) when choosing whom to talk to, all
+  // partners (reason / niq) when choosing whom to talk to, all
   // workers when filtering events, archived ones always hidden.
   const selectorWorkers = workers.filter(w => (view !== 'talk' || isTalkPartnerType(w.type)) && !archived.has(w.id))
   const selectorSelected = view === 'talk' ? talkWorkers : filterWorkers

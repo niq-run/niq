@@ -12,6 +12,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -28,12 +29,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
+	"github.com/niq-run/niq/core/impl/iface"
 	reasonBase "github.com/niq-run/niq/core/impl/reason"
-	"github.com/niq-run/niq/core/impl/workers/hiw"
 	programBase "github.com/niq-run/niq/core/impl/workers/program"
 	workspaceBase "github.com/niq-run/niq/core/impl/workers/workspace"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -118,15 +117,23 @@ func AssetsFS() (fs.FS, error) {
 
 // Server is the WebUI HTTP server.
 type Server struct {
-	hiw      *hiw.Worker
-	server   *http.Server
-	listener net.Listener
-	addr     string // resolved listen address (host:port), empty until Bind
-	devMode  bool   // when true, static assets are proxied to Vite dev server
-	eventLog *eventbusapi.EventLog
-	engine   *eventbus.Engine
-	registry corebus.IdentityRegistry
-	catalog  worker.Catalog
+	// bus is the interface worker's handler, injected through iface.Backend's
+	// SetHandler before that worker starts. Every bus WRITE goes through it.
+	busMu sync.RWMutex
+	bus   iface.Handler
+
+	// approvalsMu guards the human's approval inbox (see backend.go).
+	approvalsMu      sync.Mutex
+	pendingApprovals []*ApprovalEntry
+	decidedApprovals []*ApprovalEntry
+	server           *http.Server
+	listener         net.Listener
+	addr             string // resolved listen address (host:port), empty until Bind
+	devMode          bool   // when true, static assets are proxied to Vite dev server
+	eventLog         *eventbusapi.EventLog
+	engine           *eventbus.Engine
+	registry         corebus.IdentityRegistry
+	catalog          worker.Catalog
 
 	ctxMu   sync.RWMutex
 	context ContextInfo
@@ -152,8 +159,8 @@ type Server struct {
 
 // New creates a WebUI Server.
 // devMode enables Vite-proxy mode (frontend runs on :5173, APIs stay on addr).
-func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, catalog worker.Catalog, registry corebus.IdentityRegistry, addr string, devMode bool) *Server {
-	s := &Server{hiw: h, eventLog: el, engine: engine, catalog: catalog, registry: registry, devMode: devMode}
+func New(el *eventbusapi.EventLog, engine *eventbus.Engine, catalog worker.Catalog, registry corebus.IdentityRegistry, addr string, devMode bool) *Server {
+	s := &Server{eventLog: el, engine: engine, catalog: catalog, registry: registry, devMode: devMode}
 	mux := http.NewServeMux()
 
 	// ── API routes ──
@@ -402,7 +409,7 @@ func (s *Server) programWorkerOnline() bool {
 // delete) and waits for the correlated request.completed / request.failed reply,
 // exactly as the workspace/reason endpoints do.
 func (s *Server) askProgram(ctx context.Context, opts *programTool, args map[string]any) (event.Event, error) {
-	req := event.New(opts.Type, "webui-hiw", args)
+	req := event.New(opts.Type, "", args)
 	if isProgramRead(opts.Type) {
 		req.Transient = true // read-only query: streamed live, not durable history
 	}
@@ -854,7 +861,7 @@ func (s *Server) handleInput(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "input requires at least one target", http.StatusBadRequest)
 		return
 	}
-	if err := s.hiw.SendInput(r.Context(), body.Content, targets, body.InputMode); err != nil {
+	if err := s.sendInput(r.Context(), body.Content, targets, body.InputMode); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1173,45 +1180,27 @@ func replyResultText(evt event.Event) string {
 }
 
 func (s *Server) ask(ctx context.Context, target string, evt event.Event, want ...event.EventType) (event.Event, error) {
-	traceID, _ := uuid.NewV7() // only fails if crypto/rand fails
-	tid := traceID.String()
-	reqID, _ := uuid.NewV7()
-	evt.TraceID = tid              // event.New leaves TraceID empty; we own correlation here
-	evt.RequestId = reqID.String() // make every webui ask a proper request (the worker echoes it; the engine can correlate a transient request to its reply)
-
-	subCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	ch, err := s.eventLog.Subscribe(subCtx, eventbusapi.Filter{TraceID: tid})
+	h, err := s.busHandler()
 	if err != nil {
-		return event.Event{}, fmt.Errorf("subscribe for reply: %w", err)
+		return event.Event{}, err
 	}
-
-	if err := s.hiw.Channel.Send(ctx, evt, target); err != nil {
-		return event.Event{}, fmt.Errorf("send %s to %s: %w", evt.Type, target, err)
+	if evt.WorkerId == "" {
+		evt.WorkerId = h.ID() // the caller IS this worker; the bus stamps the sender
 	}
-
-	timer := time.NewTimer(askTimeout)
-	defer timer.Stop()
-	for {
-		select {
-		case got, open := <-ch:
-			// Subscribe closes the channel when its context is done; without
-			// this check a closed channel would yield zero-valued events
-			// forever and spin until the timeout.
-			if !open {
-				return event.Event{}, fmt.Errorf("event stream closed waiting for %v from %s", want, target)
-			}
-			for _, w := range want {
-				if got.Type == w {
-					return got, nil
-				}
-			}
-		case <-timer.C:
-			return event.Event{}, fmt.Errorf("timed out after %s waiting for %v from %s", askTimeout, want, target)
-		case <-ctx.Done():
-			return event.Event{}, ctx.Err()
+	// Correlation (trace/request ids, the wait, the timeout) belongs to the
+	// interface worker: the reply is an ordinary event addressed to it, and only
+	// the side holding the channel can pair it.
+	reply, err := h.Request(ctx, target, evt)
+	if err != nil {
+		// A failed/rejected reply is still a REPLY: callers turn it into a message
+		// for the user, so hand it back instead of only the error.
+		var rerr *iface.ReplyError
+		if errors.As(err, &rerr) {
+			return reply, nil
 		}
+		return event.Event{}, err
 	}
+	return reply, nil
 }
 
 // workerOnline reports whether a worker currently holds a bus channel, and
@@ -1270,7 +1259,7 @@ func (s *Server) handleWorkerProviders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := event.New(reasonBase.TypeProviderList, "webui-hiw", nil)
+	req := event.New(reasonBase.TypeProviderList, "", nil)
 	req.Transient = true // read-only query
 	reply, err := s.ask(r.Context(), id, req,
 		event.TypeRequestCompleted, event.TypeRequestFailed)
@@ -1477,15 +1466,16 @@ const lifecycleTimeout = 30 * time.Second
 // callHost sends a lifecycle event to the host worker and waits for its
 // terminal reply. It returns the reply payload for callers that need it.
 func (s *Server) callHost(ctx context.Context, evtType event.EventType, payload map[string]any) (map[string]any, error) {
-	if s.hiw == nil || s.hiw.Channel == nil {
-		return nil, fmt.Errorf("the human interface worker is offline")
-	}
 	if s.engine == nil || s.engine.Channel(hostWorkerID) == nil {
 		return nil, fmt.Errorf("the host worker is offline; the declaration is persisted — retry once it is back")
 	}
 	ctx, cancel := context.WithTimeout(ctx, lifecycleTimeout)
 	defer cancel()
-	reply, err := s.ask(ctx, hostWorkerID, event.New(evtType, "webui-hiw", payload),
+	h, err := s.busHandler()
+	if err != nil {
+		return nil, err
+	}
+	reply, err := s.ask(ctx, hostWorkerID, event.New(evtType, h.ID(), payload),
 		event.TypeRequestCompleted, event.TypeRequestFailed)
 	if err != nil {
 		return nil, err
@@ -1663,13 +1653,18 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 
-	evt := event.New(event.TypeWorkerAbort, "webui-hiw", map[string]any{
-		"worker_id": "webui-hiw",
+	h, err := s.busHandler()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	evt := event.New(event.TypeWorkerAbort, h.ID(), map[string]any{
+		"worker_id": h.ID(),
 	})
 	if body.Target != "" {
-		_ = s.hiw.Channel.Send(r.Context(), evt, body.Target)
+		_ = h.Send(r.Context(), evt, body.Target)
 	} else {
-		_ = s.hiw.Channel.Broadcast(r.Context(), evt)
+		_ = h.Broadcast(r.Context(), evt)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -1697,7 +1692,7 @@ func (s *Server) handleWorkerEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
 		return
 	}
-	reqID, err := s.hiw.SendEvent(r.Context(), event.EventType(body.Type), id, body.Payload)
+	reqID, err := s.sendEvent(r.Context(), event.EventType(body.Type), id, body.Payload)
 	if err != nil {
 		http.Error(w, "send event: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1710,9 +1705,9 @@ func (s *Server) handleWorkerEvent(w http.ResponseWriter, r *http.Request) {
 // tracks (pending first, then the decided history). The server holds no state
 // of its own — the HIW is the owner.
 func (s *Server) handleApprovals(w http.ResponseWriter, r *http.Request) {
-	entries := s.hiw.Approvals()
+	entries := s.approvals()
 	if entries == nil {
-		entries = []hiw.ApprovalEntry{}
+		entries = []ApprovalEntry{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"approvals": entries})
@@ -1736,9 +1731,9 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var entry hiw.ApprovalEntry
+	var entry ApprovalEntry
 	found := false
-	for _, e := range s.hiw.Approvals() {
+	for _, e := range s.approvals() {
 		if e.EventID == id {
 			entry = e
 			found = true
@@ -1753,7 +1748,7 @@ func (s *Server) handleApprovalDecision(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "worker "+entry.WorkerID+" is offline", http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.hiw.SendApprovalDecision(r.Context(), entry.RequestID, *body.Approved, body.Note); err != nil {
+	if err := s.sendApprovalDecision(r.Context(), entry.RequestID, *body.Approved, body.Note); err != nil {
 		http.Error(w, "send decision: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

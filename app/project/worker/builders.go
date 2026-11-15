@@ -28,7 +28,6 @@ import (
 	"github.com/niq-run/niq/core/impl/workers/coding"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/impl/workers/history"
-	"github.com/niq-run/niq/core/impl/workers/hiw"
 	"github.com/niq-run/niq/core/impl/workers/host"
 	"github.com/niq-run/niq/core/impl/workers/mcp"
 	"github.com/niq-run/niq/core/impl/workers/niq"
@@ -50,8 +49,13 @@ import (
 // the builders default to them, and the assembly references them by these
 // constants instead of repeating literals.
 const (
-	// DefaultWebUIHIWID is the project-owned hiw worker that drives the WebUI.
-	DefaultWebUIHIWID = "webui-hiw"
+	// DefaultWebUIID is the app-hosted interface worker the WebUI drives. It has
+	// no declaration and no builder: the assembly joins it directly.
+	DefaultWebUIID = "webui"
+	// TypeInterface is the type label of an interface worker: a worker whose
+	// backend is an external interface, injected by the assembly. It is not
+	// spawnable — no backend means nothing to bridge to — so it has no builder.
+	TypeInterface = "interface"
 	// DefaultHostWorkerID is the lifecycle control plane.
 	DefaultHostWorkerID = "host"
 )
@@ -100,9 +104,6 @@ func RegisterBuilders(ctx BuildContext, svc *workersvc.WorkerService) {
 	})
 	svc.RegisterBuilder("timer", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildTimerSpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("hiw", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
-		return buildHIWSpec(ctx, cfg)
 	})
 	svc.RegisterBuilder("niq", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildNIQSpec(ctx, cfg)
@@ -391,7 +392,7 @@ func buildWorkspaceSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (corework
 	}
 	approver, _ := p["approver"].(string)
 	if approver == "" {
-		approver = DefaultWebUIHIWID // default approver: the human UI worker
+		approver = DefaultWebUIID // default approver: the human UI worker
 	}
 	params := p
 	params["mounts"] = mounts
@@ -561,51 +562,6 @@ func buildMCPSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Spa
 	}
 	cfg.ID = id
 	cfg.Type = "mcp"
-	return coreworker.SpawnSpec{
-		Config:  cfg,
-		Connect: connect,
-		Build:   build,
-	}, nil
-}
-
-// ── hiw ──
-
-func buildHIWSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
-	id := cfg.ID
-	if id == "" {
-		id = DefaultWebUIHIWID
-	}
-	// PublishAllow: a `*` grant so the human UI (acting as HIW) can send a
-	// worker any event in its "watch" contract, driving its behaviour/state on
-	// the bus through the normal ACL path.
-	//
-	// SubscribeAllow: worker.discover — so a broadcast "who is online?" reaches
-	// HIW and it can answer with its own contract. Without this grant HIW is
-	// invisible to the fleet roster: it is the first worker up, so the ready it
-	// broadcasts reaches nobody, and it never hears the discover the directory
-	// sends. Everything else still arrives directed (approval.request does) —
-	// the bus delivers a directed send regardless of the receiver's subscribe
-	// list; SubscribeAllow only gates broadcast delivery.
-	connect := specConnect(ctx, id, "hiw", cfg,
-		[]event.PublishPattern{
-			event.NewPublishPattern("*"),
-		},
-		[]event.EventPattern{
-			event.NewPattern(event.TypeWorkerDiscover),
-		})
-	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
-		return hiw.New(hiw.Config{ID: id, Bus: ch,
-			// The HIW owns the approval entries the UI displays; a decision or
-			// a newly observed request must survive a restart.
-			OnDurableChange: func() {
-				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
-					log.Printf("[project] checkpoint %s: %v", id, err)
-				}
-			},
-		})
-	}
-	cfg.ID = id
-	cfg.Type = "hiw"
 	return coreworker.SpawnSpec{
 		Config:  cfg,
 		Connect: connect,

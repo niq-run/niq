@@ -25,7 +25,7 @@ import (
 // server with nil deps is enough to exercise bind/serve. Established here so
 // we test dynamic-port allocation without standing up a full HIW/engine.
 func TestBindDynamicWebUIPort(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -57,7 +57,7 @@ func TestBindDynamicWebUIPort(t *testing.T) {
 // omitted subscription source becomes the any-source wildcard).
 func TestHandleUpdateAllowGoesThroughHost(t *testing.T) {
 	rig := newLifecycleRig(t)
-	// The rig's registry holds webui-hiw and host; add the worker being edited so
+	// The rig's registry holds webui and host; add the worker being edited so
 	// the "keep the other list" path has a current value to keep.
 	t.Cleanup(func() {})
 
@@ -69,7 +69,7 @@ func TestHandleUpdateAllowGoesThroughHost(t *testing.T) {
 		return http.DefaultClient.Do(req)
 	}
 
-	resp, err := put("webui-hiw", `{"subscribe_allow":[{"type":"request.completed","source_id":"timer"},{"type":"worker.ready"}]}`)
+	resp, err := put("webui", `{"subscribe_allow":[{"type":"request.completed","source_id":"timer"},{"type":"worker.ready"}]}`)
 	if err != nil {
 		t.Fatalf("PUT allow: %v", err)
 	}
@@ -77,8 +77,8 @@ func TestHandleUpdateAllowGoesThroughHost(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PUT allow status = %d, want 200", resp.StatusCode)
 	}
-	payload := expectHostCall(t, rig, "webui-hiw")
-	if payload["worker_id"] != "webui-hiw" {
+	payload := expectHostCall(t, rig, "webui")
+	if payload["worker_id"] != "webui" {
 		t.Fatalf("payload = %v", payload)
 	}
 	// publish_allow was omitted, so the current grants travel unchanged.
@@ -118,7 +118,7 @@ func TestHandleUpdateAllowGoesThroughHost(t *testing.T) {
 // project (not control) via /api via /api/context.
 func TestWebUIContextProjectMode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	s.SetContext(ContextInfo{Mode: "project", Project: "mydemo"})
 	addr, err := s.Bind()
 	if err != nil {
@@ -150,7 +150,7 @@ func TestWebUIContextProjectMode(t *testing.T) {
 // endpoint is data-plane driven, so there is nothing to list offline.
 func TestHandleListPrograms(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -196,7 +196,7 @@ func TestParseProgramSearch(t *testing.T) {
 // bus, mirroring the other program endpoints.
 func TestHandleGetProgramContentOffline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -216,7 +216,7 @@ func TestHandleGetProgramContentOffline(t *testing.T) {
 }
 
 func TestBasicAuthNonLoopback(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	s.SetBasicAuth("alice", "s3cret")
 
 	hit := false
@@ -275,7 +275,7 @@ func TestBasicAuthNonLoopback(t *testing.T) {
 // server is the operator's call (the bind address is their choice), not the
 // server's.
 func TestBasicAuthUnconfiguredPassesThrough(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, ":0", false) // no credentials configured
+	s := New(nil, nil, nil, nil, ":0", false) // no credentials configured
 	hit := false
 	h := s.basicAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
 
@@ -297,7 +297,7 @@ func TestBasicAuthUnconfiguredPassesThrough(t *testing.T) {
 // a handler that captured the credentials at construction time would silently
 // serve remote peers without auth on a non-loopback bind.
 func TestBasicAuthAppliesAfterNew(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	s.SetContext(ContextInfo{Mode: "project", Project: "mydemo"})
 	s.SetBasicAuth("alice", "s3cret")
 
@@ -352,7 +352,7 @@ func TestParseAuthSpec(t *testing.T) {
 
 func TestWebUIServeOnBoundListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -421,7 +421,7 @@ func TestHandleWorkersDeclaredMerge(t *testing.T) {
 	}
 
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
-	s := New(nil, nil, engine, &stubCatalog{infos: []worker.WorkerInfo{
+	s := New(nil, engine, &stubCatalog{infos: []worker.WorkerInfo{
 		{ID: "live-ext", Type: "mcp", Placement: worker.PlacementManagedProcess, State: "running"},
 		{ID: "idle-ext", Type: "mcp", Placement: worker.PlacementManagedProcess, State: "stopped"},
 		{ID: "susp-managed", Type: "reason", Placement: worker.PlacementInProcess, State: "suspended"},
@@ -481,7 +481,7 @@ func TestHandleUnmanagedStartRequiresHost(t *testing.T) {
 		t.Fatalf("registry: %v", err)
 	}
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
-	s := New(nil, nil, engine, &stubCatalog{}, registry, ":0", false)
+	s := New(nil, engine, &stubCatalog{}, registry, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -520,7 +520,7 @@ func TestHandleUnmanagedStartRequiresHost(t *testing.T) {
 func TestHandleUploadPersistsFile(t *testing.T) {
 	// SetProjectDir pins the default upload dir to <projectDir>/uploads.
 	projDir := filepath.Join(t.TempDir(), "projects", "alpha")
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	s.SetProjectDir(projDir)
 	addr, err := s.Bind()
 	if err != nil {

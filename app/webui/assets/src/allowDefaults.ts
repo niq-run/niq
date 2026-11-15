@@ -18,7 +18,7 @@ export type WorkerCreateMode = 'managed' | 'external' | 'remote'
 //   reason / coding  resolveReasonFamily       publish *  / allow.ready-gone-discover-abort-input
 //   workspace        buildWorkspaceSpec        request.*, worker.ready, approval.request / worker.discover
 //   program          buildProgramSpec          request.*, worker.ready, *  / worker.discover
-//   niw              buildNIWSpec              worker.input, request.*, worker.ready / worker.input, worker.discover
+//   niq              buildNIQSpec              worker.input, request.*, worker.ready / worker.input, worker.discover
 //   mcp              buildMCPSpec              request.*, worker.ready / worker.discover, worker.ready, worker.gone
 const MANAGED_DEFAULTS: Record<string, { publish: string[]; subscribe: string[] }> = {
   reason: {
@@ -37,7 +37,7 @@ const MANAGED_DEFAULTS: Record<string, { publish: string[]; subscribe: string[] 
     publish: ['request.*', 'worker.ready', '*'],
     subscribe: ['worker.discover'],
   },
-  niw: {
+  niq: {
     publish: ['worker.input', 'request.*', 'worker.ready'],
     subscribe: ['worker.input', 'worker.discover'],
   },
@@ -47,16 +47,16 @@ const MANAGED_DEFAULTS: Record<string, { publish: string[]; subscribe: string[] 
   },
 }
 
-// NIW_FARSIDE_DEFAULTS is what a remote-niw identity gets on the bus it dials
+// NIQ_FARSIDE_DEFAULTS is what a niq identity gets on the bus it dials
 // into (see buildRemoteIdentity in niq/app/project/external.go): the bridge's
 // narrow grant rather than the "*" every other third-party worker gets.
-const NIW_FARSIDE_DEFAULTS = {
+const NIQ_FARSIDE_DEFAULTS = {
   publish: ['worker.input', 'request.*', 'worker.ready'],
   subscribe: ['worker.input', 'worker.discover'],
 }
 
 // THIRD_PARTY_DEFAULTS is the fallback for a launched or self-connecting
-// third-party worker of any other type (buildRemoteIdentity's non-niw branch).
+// third-party worker of any other type (buildRemoteIdentity's non-niq branch).
 const THIRD_PARTY_DEFAULTS = { publish: ['*'], subscribe: ['*'] }
 
 function rows(d: { publish: string[]; subscribe: string[] }): AllowDefaults {
@@ -79,7 +79,7 @@ export function defaultAllow(mode: WorkerCreateMode, type: string): AllowDefault
   }
   // Both external (host-launched) and remote (self-connecting) third-party
   // workers share one identity builder, so their defaults are the same.
-  return rows(type.trim() === 'remote-niw' ? NIW_FARSIDE_DEFAULTS : THIRD_PARTY_DEFAULTS)
+  return rows(type.trim() === 'niq' ? NIQ_FARSIDE_DEFAULTS : THIRD_PARTY_DEFAULTS)
 }
 
 // samePublish / sameSubscribe compare two row lists. The create form uses them

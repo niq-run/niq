@@ -215,7 +215,6 @@ var SpawnParamsByType = map[string][]string{
 	"host":      {"readme", "readme_append"},
 	"timer":     {"readme", "readme_append"},
 	"directory": {"readme", "readme_append"},
-	"hiw":       {},
 	"history":   {"max_list_events", "max_list_item_bytes", "readme", "readme_append"},
 	"mcp":       {"expose", "fixed", "servers", "allowed_tools", "mcp", "readme", "readme_append"},
 	"niq":       {"remote_url", "remote_worker_id", "remote_credential", "recipient", "remote_recipient"},

@@ -362,7 +362,7 @@ func TestUpdateACLGoesToItsOwnPort(t *testing.T) {
 
 	if _, ok := call(t, w, ch, TypeUpdateACL, map[string]any{
 		"worker_id":       "r1",
-		"publish_allow":   []any{map[string]any{"type": "worker.ready"}, map[string]any{"type": "request.*", "target": "webui-hiw"}},
+		"publish_allow":   []any{map[string]any{"type": "worker.ready"}, map[string]any{"type": "request.*", "target": "webui"}},
 		"subscribe_allow": []any{map[string]any{"type": "worker.discover", "source": "*"}},
 	}); !ok {
 		t.Fatal("acl.update failed")
@@ -370,7 +370,7 @@ func TestUpdateACLGoesToItsOwnPort(t *testing.T) {
 	if acl.id != "r1" {
 		t.Fatalf("id = %q", acl.id)
 	}
-	if len(acl.publish) != 2 || acl.publish[1].Type != "request.*" || acl.publish[1].Target != "webui-hiw" {
+	if len(acl.publish) != 2 || acl.publish[1].Type != "request.*" || acl.publish[1].Target != "webui" {
 		t.Fatalf("publish = %+v", acl.publish)
 	}
 	if len(acl.subscribe) != 1 || acl.subscribe[0].SourceID != "*" {
