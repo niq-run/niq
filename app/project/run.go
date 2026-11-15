@@ -205,14 +205,14 @@ func runAssembly(opts assemblyOptions) error {
 		}
 	}
 
-	// Identity registry: a durable (file-backed) registry with an in-memory tier
-	// layered over it. The durable tier holds managed workers and provisioned
-	// remote peers; the in-memory tier holds the temporary identities of the
-	// third-party workers the host itself launches (they live only as long as
-	// this process). Both tiers speak the same IdentityRegistry interface, so
-	// engine, transport and builders share one registry.
-	// The runtime identity table is an in-memory projection of the declarations:
-	// workers.json is the only durable source. Remote credentials are seeded
+	// Identity registry: two tiers behind one IdentityRegistry. The lower tier
+	// is memory-resident but declarative — it holds managed workers and
+	// provisioned remote peers, seeded from workers.json at startup. The upper
+	// tier holds the temporary identities of the third-party processes the host
+	// itself launches; they live only as long as this process.
+	//
+	// There is no identity file: workers.json is the only durable source, and
+	// this registry is its runtime projection. Remote credentials are seeded
 	// from it; local-process credentials are minted in memory per launch.
 	registry := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
 
