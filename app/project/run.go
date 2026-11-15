@@ -258,13 +258,13 @@ func runAssembly(opts assemblyOptions) error {
 		}
 	}()
 
-	// WorkerService: control-plane lifecycle manager + persistence store.
+	// In-process lifecycle engine + the project's state layout. The store is
+	// injected into the backend, which owns both storage boundaries.
 	workerSvc := workerhost.New()
 	stateStore, err := NewStateStore(opts.StateDir)
 	if err != nil {
 		return fmt.Errorf("project: create worker store: %w", err)
 	}
-	workerSvc.SetStore(stateStore)
 
 	// Optional HTTP transport bus (for external/three-party workers).
 	var busAddr string
@@ -301,6 +301,7 @@ func runAssembly(opts assemblyOptions) error {
 	backend := projworker.NewBackend(projworker.BackendConfig{
 		ProjectID:  opts.ContextInfo.Project,
 		Service:    workerSvc,
+		StateStore: stateStore,
 		Supervisor: supervisor,
 		Registry:   registry,
 		Signer:     signer,

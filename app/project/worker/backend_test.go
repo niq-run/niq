@@ -147,7 +147,7 @@ func newTestRig(t *testing.T) *testRig {
 	}()
 
 	svc := workerhost.New()
-	svc.SetStore(newMemStore())
+	stateStore := newMemStore()
 
 	// A worker type whose builder derives the id from params.name, mirroring
 	// how workspace derives an id from its path.
@@ -181,6 +181,7 @@ func newTestRig(t *testing.T) *testRig {
 	backend := NewBackend(BackendConfig{
 		ProjectID:  "test",
 		Service:    svc,
+		StateStore: stateStore,
 		Supervisor: sup,
 		Registry:   layered,
 		Signer:     eventbus.NewTokenSigner([]byte("test-secret")),

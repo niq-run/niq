@@ -30,6 +30,9 @@ type BackendConfig struct {
 	ProjectID string
 	// Service builds in-process workers. Required.
 	Service *workerhost.WorkerService
+	// StateStore persists in-process workers' state/snapshots. Optional: a
+	// service configured with its own store (tests) may leave it nil.
+	StateStore StateStore
 	// Supervisor supervises managed-process workers. Optional: when nil,
 	// placement managed-process is rejected (a project without an HTTP bus has
 	// nothing for a child to connect to).
@@ -74,6 +77,9 @@ func NewBackend(cfg BackendConfig) *workerHostBackend {
 	logf := cfg.Logf
 	if logf == nil {
 		logf = log.Printf
+	}
+	if cfg.Service != nil && cfg.StateStore != nil {
+		cfg.Service.SetStore(cfg.StateStore)
 	}
 	b := &workerHostBackend{
 		projectID:  cfg.ProjectID,

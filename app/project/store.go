@@ -110,6 +110,8 @@ type StateStore struct {
 	root string
 }
 
+var _ projworker.StateStore = (*StateStore)(nil)
+
 // NewStateStore creates a store rooted at root (created if missing).
 func NewStateStore(root string) (*StateStore, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
