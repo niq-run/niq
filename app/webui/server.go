@@ -122,18 +122,14 @@ type Server struct {
 	busMu sync.RWMutex
 	bus   iface.Handler
 
-	// approvalsMu guards the human's approval inbox (see backend.go).
-	approvalsMu      sync.Mutex
-	pendingApprovals []*ApprovalEntry
-	decidedApprovals []*ApprovalEntry
-	server           *http.Server
-	listener         net.Listener
-	addr             string // resolved listen address (host:port), empty until Bind
-	devMode          bool   // when true, static assets are proxied to Vite dev server
-	eventLog         *eventbusapi.EventLog
-	engine           *eventbus.Engine
-	registry         corebus.IdentityRegistry
-	catalog          worker.Catalog
+	server   *http.Server
+	listener net.Listener
+	addr     string // resolved listen address (host:port), empty until Bind
+	devMode  bool   // when true, static assets are proxied to Vite dev server
+	eventLog *eventbusapi.EventLog
+	engine   *eventbus.Engine
+	registry corebus.IdentityRegistry
+	catalog  worker.Catalog
 
 	ctxMu   sync.RWMutex
 	context ContextInfo

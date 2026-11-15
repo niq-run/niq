@@ -623,6 +623,9 @@ func joinWebUIWorker(
 		Type:     projworker.TypeInterface,
 		Bus:      ch,
 		Backends: []iface.Backend{app},
+		// The human answers approvals here: the worker declares the capability in
+		// its watch contract and parks requests for the app to render.
+		Approvals: true,
 	})
 	if err := w.Start(ctx); err != nil {
 		return nil, err

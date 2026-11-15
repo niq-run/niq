@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/niq-run/niq/core/impl/iface"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -27,9 +26,6 @@ func (s *Server) SetHandler(h iface.Handler) {
 	s.bus = h
 	s.busMu.Unlock()
 
-	// Approval requests are addressed to this worker; they land here as an inbox
-	// the human answers.
-	h.OnEvent(s.recordApprovalRequest, event.TypeApprovalRequest)
 	log.Printf("[webui] joined the bus as %s", h.ID())
 }
 
@@ -95,108 +91,51 @@ func (s *Server) sendEvent(ctx context.Context, evtType event.EventType, target 
 
 // ── Approvals ──
 
-// ApprovalDecision is the human's verdict on one approval request.
-type ApprovalDecision struct {
-	Approved  bool   `json:"approved"`
-	Note      string `json:"note,omitempty"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// ApprovalEntry is one approval request this worker tracks for the UI.
-type ApprovalEntry struct {
-	EventID   string `json:"id"`             // approval.request event id
-	RequestID string `json:"request_id"`     // correlation key (= its RequestId)
-	WorkerID  string `json:"worker_id"`      // requester (e.g. workspace worker)
-	Action    string `json:"action"`         // e.g. "mount.add"
-	Tool      string `json:"tool,omitempty"` // tool that raised the request
-	Path      string `json:"path,omitempty"` // boundary-expansion target
-	TraceID   string `json:"trace_id,omitempty"`
-	Timestamp int64  `json:"timestamp"`
-	// Payload is the approval request's full payload, carried through for the UI
-	// to render generically — approval kinds carry different data and the UI
-	// should not need a schema per kind.
-	Payload  map[string]any    `json:"payload,omitempty"`
-	Decision *ApprovalDecision `json:"decision,omitempty"`
-}
-
-// maxDecidedApprovals bounds the decided history the UI keeps.
-const maxDecidedApprovals = 100
-
-// recordApprovalRequest parks one approval request in the human's inbox.
-func (s *Server) recordApprovalRequest(evt event.Event) {
-	entry := &ApprovalEntry{
-		EventID:   evt.ID,
-		RequestID: evt.RequestId,
-		WorkerID:  evt.WorkerId,
-		TraceID:   evt.TraceID,
-		Timestamp: evt.Timestamp,
-		Payload:   evt.Payload,
+// inbox returns the interface worker's approval inbox, if it serves approvals.
+// The mechanism (parking, listing, publishing the decision, declaring the
+// capability in the worker's watch contract) lives in iface, because every
+// outward surface needs it; the app only renders and answers it.
+func (s *Server) inbox() (iface.Inbox, error) {
+	h, err := s.busHandler()
+	if err != nil {
+		return nil, err
 	}
-	if evt.Payload != nil {
-		entry.Action, _ = evt.Payload["action"].(string)
-		entry.Tool, _ = evt.Payload["tool"].(string)
-		entry.Path, _ = evt.Payload["path"].(string)
+	in, ok := h.(iface.Inbox)
+	if !ok {
+		return nil, fmt.Errorf("this worker does not serve approvals")
 	}
-	s.approvalsMu.Lock()
-	s.pendingApprovals = append(s.pendingApprovals, entry)
-	s.approvalsMu.Unlock()
-	log.Printf("[webui] approval requested by %s: %s %s", entry.WorkerID, entry.Tool, entry.Path)
+	return in, nil
 }
 
-// approvals returns the tracked entries: pending (oldest first) then the decided
-// history (newest first).
+// approvals returns the inbox contents for the UI: pending (oldest first) then
+// the decided history (newest first), reshaped for the endpoint.
 func (s *Server) approvals() []ApprovalEntry {
-	s.approvalsMu.Lock()
-	defer s.approvalsMu.Unlock()
-	out := make([]ApprovalEntry, 0, len(s.pendingApprovals)+len(s.decidedApprovals))
-	for _, e := range s.pendingApprovals {
-		out = append(out, *e)
+	in, err := s.inbox()
+	if err != nil {
+		return nil
 	}
-	for _, e := range s.decidedApprovals {
-		out = append(out, *e)
+	out := make([]ApprovalEntry, 0, 8)
+	for _, e := range in.Pending() {
+		out = append(out, ApprovalEntry(e))
+	}
+	for _, e := range in.Decided() {
+		out = append(out, ApprovalEntry(e))
 	}
 	return out
 }
 
-// sendApprovalDecision records the human's verdict and publishes approval.decision
-// to the requester. The entry moves from pending to the decided history; an
-// unknown request id is an error, because the UI polls a snapshot that may have
-// moved on.
-func (s *Server) sendApprovalDecision(ctx context.Context, requestID string, approved bool, note string) error {
-	s.approvalsMu.Lock()
-	idx := -1
-	for i, e := range s.pendingApprovals {
-		if e.RequestID == requestID {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		s.approvalsMu.Unlock()
-		return fmt.Errorf("no pending approval with request id %s", requestID)
-	}
-	entry := s.pendingApprovals[idx]
-	s.pendingApprovals = append(s.pendingApprovals[:idx], s.pendingApprovals[idx+1:]...)
-	entry.Decision = &ApprovalDecision{Approved: approved, Note: note, Timestamp: time.Now().Unix()}
-	s.decidedApprovals = append([]*ApprovalEntry{entry}, s.decidedApprovals...)
-	if len(s.decidedApprovals) > maxDecidedApprovals {
-		s.decidedApprovals = s.decidedApprovals[:maxDecidedApprovals]
-	}
-	s.approvalsMu.Unlock()
+// ApprovalEntry is the interface worker's inbox entry, re-exported so the HTTP
+// layer keeps talking in webui types.
+type ApprovalEntry = iface.ApprovalEntry
 
-	h, err := s.busHandler()
+// ApprovalDecision mirrors the interface worker's verdict.
+type ApprovalDecision = iface.ApprovalDecision
+
+// sendApprovalDecision answers a parked request.
+func (s *Server) sendApprovalDecision(ctx context.Context, requestID string, approved bool, note string) error {
+	in, err := s.inbox()
 	if err != nil {
 		return err
 	}
-	evt := event.New(event.TypeApprovalDecision, h.ID(), map[string]any{
-		"approved": approved,
-		"note":     note,
-	})
-	evt.RequestId = entry.RequestID
-	evt.TraceID = entry.TraceID
-	if err := h.Send(ctx, evt, entry.WorkerID); err != nil {
-		return fmt.Errorf("send decision to %s: %w", entry.WorkerID, err)
-	}
-	log.Printf("[webui] decision %v sent to %s (request %s)", approved, entry.WorkerID, entry.RequestID)
-	return nil
+	return in.Decide(ctx, requestID, approved, note)
 }

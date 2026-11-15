@@ -29,6 +29,11 @@ type Config struct {
 	// Publishes is the presence contract announced via worker.ready: the event
 	// types this worker emits, described for peers and the directory roster.
 	Publishes []map[string]any
+	// Approvals serves the human approval inbox (approval.request in, a decision
+	// out). It is opt-in because serving approvals is a DECLARATION: the worker
+	// advertises approval.request in its watch contract and must be granted it.
+	// Backends reach the inbox by asserting their Handler to Inbox.
+	Approvals bool
 	// RequestTimeout overrides DefaultRequestTimeout.
 	RequestTimeout time.Duration
 }
@@ -46,7 +51,11 @@ type Worker struct {
 	state    Stateful // first backend that is Stateful, resolved at construction
 	timeout  time.Duration
 
-	h *handler
+	// h is the worker's own handler (used internally); handle is what backends
+	// receive — the same thing, or a wrapper that also exposes the inbox.
+	h      *handler
+	handle Handler
+	inbox  *approvals
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
@@ -74,11 +83,35 @@ func New(cfg Config) *Worker {
 		timeout:    timeout,
 	}
 	w.h = newHandler(cfg.ID, cfg.Bus, timeout)
+	w.handle = w.h
+	if cfg.Approvals {
+		// The inbox is a capability of the HANDLE, not a second injection point:
+		// a backend gets one object and asserts the optional interfaces it needs.
+		w.inbox = newApprovals(w.h)
+		w.handle = &inboxHandle{Handler: w.h, approvals: w.inbox}
+		w.inbox.registerOn(w)
+	}
 	return w
 }
 
 // Type is the identity's type label.
 func (w *Worker) Type() string { return w.typ }
+
+// Inbox returns the approval inbox, or nil when Config.Approvals is off.
+func (w *Worker) Inbox() Inbox {
+	if w.inbox == nil {
+		return nil
+	}
+	return w.inbox
+}
+
+// inboxHandle is what a backend receives when the worker serves approvals: the
+// handler plus the inbox, so "does this worker take approvals?" is one type
+// assertion on the handle rather than a second look-up.
+type inboxHandle struct {
+	Handler
+	*approvals
+}
 
 // Start hands every backend its handler, then joins the bus: announce presence
 // and serve inbound events until Stop or the context is cancelled.
@@ -95,7 +128,7 @@ func (w *Worker) Start(ctx context.Context) error {
 		if b == nil {
 			continue
 		}
-		b.SetHandler(w.h)
+		b.SetHandler(w.handle)
 	}
 	// Then give each backend its own lifetime. A backend whose Start fails would
 	// leave the worker deaf, so it is a start error.
