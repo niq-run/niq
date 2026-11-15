@@ -17,76 +17,6 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
-// paramsRecorder captures UpdateWorkerParams calls.
-type paramsRecorder struct {
-	id     string
-	params map[string]any
-}
-
-func (r *paramsRecorder) UpdateWorkerParams(id string, params map[string]any) error {
-	r.id, r.params = id, params
-	return nil
-}
-
-// TestHandleUpdateWorkerParams verifies PUT /api/workers/{id}/params persists
-// the posted object (an absent body field clears params) and that the endpoint
-// is disabled without an updater.
-func TestHandleUpdateWorkerParams(t *testing.T) {
-	rec := &paramsRecorder{}
-	s := New(nil, nil, nil, nil, nil, ":0", false)
-	s.SetWorkerParamsUpdater(rec)
-	addr, err := s.Bind()
-	if err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Start(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
-
-	resp, err := http.DefaultClient.Do(mustPut(t, "http://"+addr+"/api/workers/m/params", `{"params":{"fixed":true}}`))
-	if err != nil {
-		t.Fatalf("PUT params: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	if rec.id != "m" || rec.params["fixed"] != true {
-		t.Fatalf("recorded = %q %+v, want m with fixed=true", rec.id, rec.params)
-	}
-
-	// A missing params field clears the declaration's params.
-	resp, err = http.DefaultClient.Do(mustPut(t, "http://"+addr+"/api/workers/m/params", `{}`))
-	if err != nil {
-		t.Fatalf("PUT clear: %v", err)
-	}
-	resp.Body.Close()
-	if rec.params == nil || len(rec.params) != 0 {
-		t.Fatalf("params = %+v, want an empty map", rec.params)
-	}
-
-	// No updater → 404 (a control-plane WebUI has no declarations).
-	bare := New(nil, nil, nil, nil, nil, ":0", false)
-	bareAddr, err := bare.Bind()
-	if err != nil {
-		t.Fatalf("Bind bare: %v", err)
-	}
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	done2 := make(chan error, 1)
-	go func() { done2 <- bare.Start(ctx2) }()
-	t.Cleanup(func() { cancel2(); <-done2 })
-	resp, err = http.DefaultClient.Do(mustPut(t, "http://"+bareAddr+"/api/workers/m/params", `{"params":{}}`))
-	if err != nil {
-		t.Fatalf("PUT without updater: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status without updater = %d, want 404", resp.StatusCode)
-	}
-}
-
-// restartRecorder captures RestartManaged calls.
 // lifecycleRig stands up the real thing the lifecycle endpoints talk to: a
 // webui-hiw worker holding a bus channel, a host worker that answers restart,
 // and an event log so the server's ask/reply correlation works.
@@ -151,11 +81,16 @@ func newLifecycleRig(t *testing.T) *lifecycleRig {
 		t.Fatalf("connect host: %v", err)
 	}
 	host := &fakeHost{BaseWorker: baseworker.NewBaseWorker("host", hostCh), reqs: make(chan map[string]any, 8)}
-	for _, typ := range []event.EventType{"resume", "suspend", "restart", "destroy"} {
+	for _, typ := range []event.EventType{"resume", "suspend", "restart", "destroy", "update", "archive", "spawn"} {
 		typ := typ
 		host.Register(baseworker.Extension{Event: typ}, func(evt event.Event) {
 			host.reqs <- evt.Payload
-			host.ReplyCompleted(evt.WorkerId, evt.RequestId, map[string]any{"worker_id": evt.Payload["worker_id"], "status": "ok"}, evt.TraceID)
+			host.ReplyCompleted(evt.WorkerId, evt.RequestId, map[string]any{
+				"worker_id": evt.Payload["worker_id"],
+				"status":    "ok",
+				"placement": "in-process",
+				"type":      "mcp",
+			}, evt.TraceID)
 		})
 	}
 	busCh, err := hostCh.Receive(ctx)
@@ -240,6 +175,135 @@ func (nopChannel) Close() error                                        { return 
 func mustPut(t *testing.T, url, body string) *http.Request {
 	t.Helper()
 	req, err := http.NewRequest("PUT", url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// expectHostCall drains one recorded host payload and checks the event type it
+// arrived under. Each helper below is one endpoint, so the payload shape is the
+// contract the host tool sees.
+func expectHostCall(t *testing.T, rig *lifecycleRig, wantID string) map[string]any {
+	t.Helper()
+	select {
+	case payload := <-rig.hostReqs:
+		if payload["worker_id"] != wantID {
+			t.Fatalf("host payload = %v, want worker_id %s", payload, wantID)
+		}
+		return payload
+	case <-time.After(3 * time.Second):
+		t.Fatalf("no call reached the host worker")
+		return nil
+	}
+}
+
+// TestUpdateWorkerParamsGoesThroughHost verifies the params editor is a bus call
+// to the host's `update` tool, carrying the params object as posted.
+func TestUpdateWorkerParamsGoesThroughHost(t *testing.T) {
+	rig := newLifecycleRig(t)
+	resp, err := http.DefaultClient.Do(mustPut(t, "http://"+rig.addr+"/api/workers/w1/params", `{"params":{"fixed":true}}`))
+	if err != nil {
+		t.Fatalf("PUT params: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	payload := expectHostCall(t, rig, "w1")
+	params, ok := payload["params"].(map[string]any)
+	if !ok || params["fixed"] != true {
+		t.Fatalf("params payload = %v", payload["params"])
+	}
+	// A missing params field clears them: the host must see an empty object,
+	// not an absent key.
+	resp, err = http.DefaultClient.Do(mustPut(t, "http://"+rig.addr+"/api/workers/w1/params", `{}`))
+	if err != nil {
+		t.Fatalf("PUT clear: %v", err)
+	}
+	resp.Body.Close()
+	payload = expectHostCall(t, rig, "w1")
+	if m, ok := payload["params"].(map[string]any); !ok || len(m) != 0 {
+		t.Fatalf("cleared params payload = %v, want an empty object", payload["params"])
+	}
+}
+
+// TestUpdateWorkerMetaGoesThroughHost verifies the metadata editor is the same
+// `update` tool call, and that an empty tag list is sent as a clear ([] not nil).
+func TestUpdateWorkerMetaGoesThroughHost(t *testing.T) {
+	rig := newLifecycleRig(t)
+	resp, err := http.DefaultClient.Do(mustPut(t, "http://"+rig.addr+"/api/workers/w1/meta",
+		`{"label":"值班","tags":["ops"],"description":"nightly"}`))
+	if err != nil {
+		t.Fatalf("PUT meta: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	payload := expectHostCall(t, rig, "w1")
+	if payload["label"] != "值班" || payload["description"] != "nightly" {
+		t.Fatalf("meta payload = %v", payload)
+	}
+	if tags := argStrings(payload["tags"]); len(tags) != 1 || tags[0] != "ops" {
+		t.Fatalf("tags payload = %v", payload["tags"])
+	}
+
+	resp, err = http.DefaultClient.Do(mustPut(t, "http://"+rig.addr+"/api/workers/w1/meta", `{"label":"","tags":[]}`))
+	if err != nil {
+		t.Fatalf("PUT meta clear: %v", err)
+	}
+	resp.Body.Close()
+	payload = expectHostCall(t, rig, "w1")
+	if tags := argStrings(payload["tags"]); tags == nil || len(tags) != 0 {
+		t.Fatalf("cleared tags payload = %v, want an empty list", payload["tags"])
+	}
+}
+
+// TestArchiveGoesThroughHost verifies archive/unarchive is ONE host call: the
+// WebUI no longer suspends, moves files and revokes identities itself.
+func TestArchiveGoesThroughHost(t *testing.T) {
+	rig := newLifecycleRig(t)
+	for _, archived := range []bool{true, false} {
+		body := `{"archived":false}`
+		if archived {
+			body = `{"archived":true}`
+		}
+		resp, err := http.DefaultClient.Do(mustPost(t, "http://"+rig.addr+"/api/workers/w1/archived", body))
+		if err != nil {
+			t.Fatalf("PUT archive: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		payload := expectHostCall(t, rig, "w1")
+		if got, _ := payload["archived"].(bool); got != archived {
+			t.Fatalf("archived payload = %v, want %v", payload["archived"], archived)
+		}
+	}
+}
+
+// argStrings reads a string list that may have been re-encoded by the bus.
+func argStrings(v any) []string {
+	switch x := v.(type) {
+	case []string:
+		return x
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, item := range x {
+			s, _ := item.(string)
+			out = append(out, s)
+		}
+		return out
+	}
+	return nil
+}
+
+func mustPost(t *testing.T, url, body string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest("POST", url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

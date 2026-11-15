@@ -67,9 +67,10 @@ type BuildContext struct {
 	// StateDir is the per-project workers state directory (`<proj>/workers`);
 	// built-in workers persist their own state here (one dir per id).
 	StateDir string
-	// WorkerBackend is the lifecycle backend the host worker drives: the same
-	// instance the assembly uses for recovery and shutdown.
-	WorkerBackend coreworker.Lifecycle
+	// WorkerBackend is the backend the host worker drives: the same instance the
+	// assembly uses for recovery and shutdown. It is the full lifecycle +
+	// declaration-editing surface, because the host's tools expose both.
+	WorkerBackend coreworker.Backend
 }
 
 // RegisterBuilders registers a Builder for every known worker type onto service.

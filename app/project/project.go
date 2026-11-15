@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/niq-run/niq/app/niqhome"
@@ -128,53 +129,78 @@ func FindWorker(set *WorkerSet, id string) (projworker.Declaration, bool) {
 	return projworker.Declaration{}, false
 }
 
-// AppendWorkerDecl adds a declaration to the active file. An id that is already
-// active is left untouched; an id that is archived is an error (restore it
-// instead of silently creating a duplicate).
-func AppendWorkerDecl(projectID string, d projworker.Declaration) error {
-	set, err := LoadWorkers(projectID)
-	if err != nil {
-		return err
-	}
-	if _, ok := FindWorker(set, d.ID); ok {
-		return nil
-	}
-	arch, err := LoadArchived(projectID)
-	if err != nil {
-		return err
-	}
-	if _, ok := FindWorker(arch, d.ID); ok {
-		return fmt.Errorf("worker %s is archived; restore it instead", d.ID)
-	}
-	set.Workers = append(set.Workers, d)
-	return SaveWorkers(projectID, set)
+// declWrites serializes read-modify-write cycles on a project's declaration
+// files. Every writer goes through it — the lifecycle's declaration store, the
+// WebUI's edits (which arrive as host tool calls), an archive move, the archive
+// cleanup — so two concurrent writers cannot silently revert each other. Reads
+// take no lock: they need a consistent file, which the atomic rename gives them.
+var declWrites sync.Mutex
+
+// withDeclWrite runs fn under the declaration write lock.
+func withDeclWrite(fn func() error) error {
+	declWrites.Lock()
+	defer declWrites.Unlock()
+	return fn()
 }
 
-// UpdateWorkerMeta updates a declared worker's display metadata, searching both
-// the active and archived files.
-func UpdateWorkerMeta(projectID, id, label string, tags []string, desc string) error {
-	probe := projworker.Declaration{Label: label, Tags: tags, Description: desc}
-	if err := projworker.ValidateMeta(probe); err != nil {
-		return err
-	}
-	return updateDecl(projectID, id, func(d *projworker.Declaration) {
-		d.Label = label
-		d.Tags = append([]string(nil), tags...)
-		d.Description = desc
-	})
-}
-
-// UpdateWorkerParams replaces a declared worker's construction params, searching
-// both the active and archived files. Params are build-time input: a running
-// instance keeps its current definition until restarted.
-func UpdateWorkerParams(projectID, id string, params map[string]any) error {
-	return updateDecl(projectID, id, func(d *projworker.Declaration) {
-		if len(params) == 0 {
-			d.Params = nil
-			return
+// SetWorkerArchived moves a declaration between the active and archived files.
+//
+// The destination is written first and the source second: a crash in between
+// leaves the declaration in BOTH files (visible, and fixed by the next archive
+// or unarchive) rather than in neither. Archiving is not a delete — the
+// declaration is preserved verbatim so unarchiving restores the worker as it
+// was.
+func SetWorkerArchived(projectID, id string, archived bool) error {
+	return withDeclWrite(func() error {
+		// Archiving moves active → archived; unarchiving moves archived → active.
+		srcArchived, dstArchived := !archived, archived
+		src, err := loadSetFor(projectID, srcArchived)
+		if err != nil {
+			return err
 		}
-		d.Params = params
+		var moved *projworker.Declaration
+		kept := src.Workers[:0]
+		for i := range src.Workers {
+			if src.Workers[i].ID == id {
+				d := src.Workers[i]
+				moved = &d
+				continue
+			}
+			kept = append(kept, src.Workers[i])
+		}
+		if moved == nil {
+			// Already on the requested side, or unknown: either way there is
+			// nothing to move.
+			return nil
+		}
+
+		dst, err := loadSetFor(projectID, dstArchived)
+		if err != nil {
+			return err
+		}
+		if _, ok := FindWorker(dst, id); !ok {
+			dst.Workers = append(dst.Workers, *moved)
+			if err := saveSet(projectID, dst, dstArchived); err != nil {
+				return err
+			}
+		}
+		src.Workers = kept
+		return saveSet(projectID, src, srcArchived)
 	})
+}
+
+// ArchivedWorkerIDs returns the ids held in the archived file.
+func ArchivedWorkerIDs(projectID string) ([]string, error) {
+	set, err := LoadArchived(projectID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(set.Workers))
+	for i := range set.Workers {
+		out = append(out, set.Workers[i].ID)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // UpdateWorkerACL persists a worker's bus ACL into its declaration (active or
@@ -196,53 +222,77 @@ func UpdateWorkerACL(projectID, id string, publish []event.PublishPattern, subsc
 
 // updateDecl applies fn to a declaration in whichever worker file holds it.
 func updateDecl(projectID, id string, fn func(*projworker.Declaration)) error {
-	type loc struct {
-		load     func(string) (*WorkerSet, error)
-		archived bool
-	}
-	for _, l := range []loc{{LoadWorkers, false}, {LoadArchived, true}} {
-		set, err := l.load(projectID)
-		if err != nil {
-			return err
-		}
-		for i := range set.Workers {
-			if set.Workers[i].ID == id {
-				fn(&set.Workers[i])
-				return saveSet(projectID, set, l.archived)
+	return withDeclWrite(func() error {
+		for _, archived := range []bool{false, true} {
+			set, err := loadSetFor(projectID, archived)
+			if err != nil {
+				return err
+			}
+			for i := range set.Workers {
+				if set.Workers[i].ID == id {
+					fn(&set.Workers[i])
+					return saveSet(projectID, set, archived)
+				}
 			}
 		}
+		return fmt.Errorf("worker %s not found", id)
+	})
+}
+
+// LoadAllWorkerDecls returns the active and archived declarations keyed by id.
+// It is the read side of the declaration store, for read-only projections such
+// as the WebUI's worker forms.
+func LoadAllWorkerDecls(projectID string) (map[string]projworker.Declaration, error) {
+	out := map[string]projworker.Declaration{}
+	for _, archived := range []bool{true, false} {
+		set, err := loadSetFor(projectID, archived)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range set.Workers {
+			out[d.ID] = d
+		}
 	}
-	return fmt.Errorf("worker %s not found", id)
+	return out, nil
+}
+
+func loadSetFor(projectID string, archived bool) (*WorkerSet, error) {
+	path := WorkersPath(projectID)
+	if archived {
+		path = ArchivedPath(projectID)
+	}
+	if err := migrate.EnsureProject(ProjectDir(projectID)); err != nil {
+		return nil, err
+	}
+	return loadSet(path)
 }
 
 // RemoveWorkerDecl removes a declaration from both worker files.
 func RemoveWorkerDecl(projectID, id string) error {
-	type loc struct {
-		load     func(string) (*WorkerSet, error)
-		archived bool
-	}
-	for _, l := range []loc{{LoadWorkers, false}, {LoadArchived, true}} {
-		set, err := l.load(projectID)
-		if err != nil {
-			return err
-		}
-		out := set.Workers[:0]
-		changed := false
-		for _, d := range set.Workers {
-			if d.ID == id {
-				changed = true
-				continue
-			}
-			out = append(out, d)
-		}
-		if changed {
-			set.Workers = out
-			if err := saveSet(projectID, set, l.archived); err != nil {
+	return withDeclWrite(func() error {
+		for _, archived := range []bool{false, true} {
+			set, err := loadSetFor(projectID, archived)
+			if err != nil {
 				return err
 			}
+			out := set.Workers[:0]
+			changed := false
+			for _, d := range set.Workers {
+				if d.ID == id {
+					changed = true
+					continue
+				}
+				out = append(out, d)
+			}
+			if changed {
+				set.Workers = out
+				if err := saveSet(projectID, set, archived); err != nil {
+					return err
+				}
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // LoadWorkers loads a project's active worker declarations. A missing file is
@@ -469,80 +519,6 @@ func ensureProjectJSON(dir, id string) error {
 		p.SchemaVersion = SchemaVersion
 	}
 	return writeProjectJSON(path, &p)
-}
-
-// projectArchiver implements the webui.ArchivedStore by moving declarations
-// between workers.json and workers.archived.json.
-type projectArchiver struct{ id string }
-
-func (a projectArchiver) Archived() []string {
-	set, err := LoadArchived(a.id)
-	if err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(set.Workers))
-	for _, d := range set.Workers {
-		out = append(out, d.ID)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func (a projectArchiver) SetArchived(id string, archived bool) error {
-	active, err := LoadWorkers(a.id)
-	if err != nil {
-		return err
-	}
-	arch, err := LoadArchived(a.id)
-	if err != nil {
-		return err
-	}
-	if archived {
-		var moved *projworker.Declaration
-		out := active.Workers[:0]
-		for i := range active.Workers {
-			if active.Workers[i].ID == id {
-				d := active.Workers[i]
-				moved = &d
-				continue
-			}
-			out = append(out, active.Workers[i])
-		}
-		active.Workers = out
-		if moved == nil {
-			if _, ok := FindWorker(arch, id); ok {
-				return nil
-			}
-			return fmt.Errorf("worker %s not found", id)
-		}
-		arch.Workers = append(arch.Workers, *moved)
-		if err := SaveWorkers(a.id, active); err != nil {
-			return err
-		}
-		return SaveArchived(a.id, arch)
-	}
-	var moved *projworker.Declaration
-	out := arch.Workers[:0]
-	for i := range arch.Workers {
-		if arch.Workers[i].ID == id {
-			d := arch.Workers[i]
-			moved = &d
-			continue
-		}
-		out = append(out, arch.Workers[i])
-	}
-	arch.Workers = out
-	if moved == nil {
-		if _, ok := FindWorker(active, id); ok {
-			return nil
-		}
-		return fmt.Errorf("worker %s not found", id)
-	}
-	active.Workers = append(active.Workers, *moved)
-	if err := SaveArchived(a.id, arch); err != nil {
-		return err
-	}
-	return SaveWorkers(a.id, active)
 }
 
 func sanitizeID(id string) string {

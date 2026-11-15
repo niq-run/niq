@@ -166,16 +166,18 @@ func (b *workerHostBackend) validateCreate(spec coreworker.WorkerSpec, placement
 	if spec.Type == "" {
 		return fmt.Errorf("type is required")
 	}
-	if placement != coreworker.PlacementInProcess {
-		if spec.ID == "" {
+	// An explicit id must be safe to use as an identity and a directory name. An
+	// empty one is only legal where a builder can derive it (a workspace from its
+	// path), so the non-in-process placements — which have no builder — require it.
+	if spec.ID == "" {
+		if placement != coreworker.PlacementInProcess {
 			return fmt.Errorf("id is required for placement %s", placement)
 		}
-		if SanitizeID(spec.ID) != spec.ID {
-			return fmt.Errorf("id may only contain letters, digits, '-', '_', '.'")
-		}
-		if err := ValidateMeta(Declaration{Label: spec.Label, Tags: spec.Tags, Description: spec.Description}); err != nil {
-			return err
-		}
+	} else if SanitizeID(spec.ID) != spec.ID {
+		return fmt.Errorf("id may only contain letters, digits, '-', '_', '.'")
+	}
+	if err := ValidateMeta(Declaration{Label: spec.Label, Tags: spec.Tags, Description: spec.Description}); err != nil {
+		return err
 	}
 	if spec.ID != "" {
 		if _, ok, err := b.decls.Get(spec.ID); err != nil {
@@ -297,6 +299,197 @@ func (b *workerHostBackend) createUnmanagedProcess(spec coreworker.WorkerSpec) (
 }
 
 // ── Suspend / Resume / Restart / Destroy ──
+
+// ── Edit ──
+
+// Update applies a partial edit to a worker's declaration. Nothing is
+// (re)started: params are construction input, so a running instance follows the
+// edit on its next start, and display metadata is cosmetic.
+func (b *workerHostBackend) Update(_ context.Context, id string, patch coreworker.WorkerPatch) (coreworker.WorkerInfo, error) {
+	l := b.idLock(id)
+	l.Lock()
+	defer l.Unlock()
+
+	d, err := b.declaration(id)
+	if err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	next := *d
+	if patch.Label != nil {
+		next.Label = *patch.Label
+	}
+	if patch.Tags != nil {
+		next.Tags = patch.Tags
+	}
+	if patch.Description != nil {
+		next.Description = *patch.Description
+	}
+	if patch.Params != nil {
+		if len(patch.Params) == 0 {
+			next.Params = nil
+		} else {
+			next.Params = patch.Params
+		}
+	}
+	// Validate the RESULT, not the patch: metadata limits apply to the whole
+	// declaration, and params are checked by the placement that consumes them.
+	if err := ValidateMeta(next); err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	if err := b.validateParams(next); err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	if err := b.decls.Update(&next); err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	b.logf("[worker %s] updated %s", b.projectID, id)
+	return b.infoFor(&next), nil
+}
+
+// validateParams checks a declaration's params against whatever consumes them:
+// a type's builder for in-process workers, the child environment for
+// managed-process, and nothing at all for a self-started worker.
+func (b *workerHostBackend) validateParams(d Declaration) error {
+	switch PlacementOf(d) {
+	case coreworker.PlacementUnmanagedProcess:
+		if len(d.Params) > 0 {
+			return fmt.Errorf("placement unmanaged-process cannot carry params: the host has no channel to pass them to a self-started worker")
+		}
+		return nil
+	case coreworker.PlacementManagedProcess:
+		return ValidateProcessParams(d.Params)
+	default:
+		if b.service == nil {
+			return fmt.Errorf("worker %s: no in-process service to validate params", d.ID)
+		}
+		return b.service.ValidateSpawn(SpawnConfig(d))
+	}
+}
+
+// Archive moves a worker in or out of the archived set. Archiving suspends a
+// live worker first (so nothing runs behind a hidden declaration) and then
+// drops its bus identity; unarchiving restores the declaration and resumes it.
+// A dial-in worker has no local process to stop, so archiving only hides it.
+func (b *workerHostBackend) Archive(ctx context.Context, id string, archived bool) error {
+	l := b.idLock(id)
+	l.Lock()
+	defer l.Unlock()
+	if b.isProtected(id) {
+		return fmt.Errorf("worker %s is protected and cannot be archived", id)
+	}
+
+	if archived {
+		if b.isArchived(id) {
+			return nil // already archived: an idempotent no-op
+		}
+		d, err := b.declaration(id)
+		if err != nil {
+			return err
+		}
+		if PlacementOf(*d) != coreworker.PlacementUnmanagedProcess {
+			if err := b.suspend(id); err != nil {
+				return fmt.Errorf("suspend before archive: %w", err)
+			}
+		}
+		if err := b.decls.Archive(id, true); err != nil {
+			return err
+		}
+		b.dropIdentity(id)
+		b.logf("[worker %s] archived %s", b.projectID, id)
+		return nil
+	}
+
+	if !b.isArchived(id) {
+		// Already active (or unknown). Distinguish the two: restoring an active
+		// worker is a no-op, restoring an unknown one is a mistake.
+		if _, err := b.declaration(id); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := b.decls.Archive(id, false); err != nil {
+		return err
+	}
+	// Resume covers every placement: an in-process worker is rebuilt, a
+	// managed-process worker is relaunched, a dial-in worker gets its identity
+	// and credential re-ensured.
+	if err := b.resume(ctx, id); err != nil {
+		return fmt.Errorf("restored declaration for %s but resume failed: %w", id, err)
+	}
+	b.logf("[worker %s] unarchived %s", b.projectID, id)
+	return nil
+}
+
+// suspend / resume are the placement switchboards shared by the exported
+// lifecycle methods and by Archive, which must not re-take the id lock.
+func (b *workerHostBackend) suspend(id string) error {
+	d, err := b.declaration(id)
+	if err != nil {
+		if b.service != nil && b.service.HasWorker(id) {
+			return b.service.SuspendWorker(id)
+		}
+		return err
+	}
+	switch PlacementOf(*d) {
+	case coreworker.PlacementManagedProcess:
+		if b.supervisor == nil {
+			return fmt.Errorf("worker %s: no process supervisor", id)
+		}
+		return b.supervisor.Stop(id)
+	case coreworker.PlacementUnmanagedProcess:
+		return nil // nothing local to stop
+	default:
+		if b.service == nil || !b.service.HasWorker(id) {
+			return nil // declared but not instantiated
+		}
+		return b.service.SuspendWorker(id)
+	}
+}
+
+func (b *workerHostBackend) resume(ctx context.Context, id string) error {
+	d, err := b.declaration(id)
+	if err != nil {
+		return err
+	}
+	switch PlacementOf(*d) {
+	case coreworker.PlacementManagedProcess:
+		if b.supervisor == nil {
+			return fmt.Errorf("worker %s: no process supervisor", id)
+		}
+		ident := identitySpec(*d)
+		if err := projprocess.ProvisionManagedProcess(b.registry, b.signer, &ident); err != nil {
+			return err
+		}
+		return b.supervisor.Start(launchSpec(*d, ident.Credential))
+	case coreworker.PlacementUnmanagedProcess:
+		ident := identitySpec(*d)
+		return projprocess.ProvisionUnmanagedProcess(b.registry, b.signer, b.decls, &ident)
+	default:
+		if b.service == nil {
+			return fmt.Errorf("worker %s: no in-process service", id)
+		}
+		if b.service.HasWorker(id) {
+			return b.service.ResumeWorker(ctx, id)
+		}
+		_, err := b.service.CreateWorker(ctx, SpawnConfig(*d))
+		return err
+	}
+}
+
+// dropIdentity removes a worker's bus identity, if it has one.
+func (b *workerHostBackend) dropIdentity(id string) {
+	if b.engine != nil && b.engine.Channel(id) != nil {
+		b.engine.Disconnect(id) // also broadcasts worker.gone
+	}
+	if b.registry == nil {
+		return
+	}
+	if _, ok := b.registry.Lookup(id); ok {
+		if err := b.registry.Revoke(id); err != nil {
+			b.logf("[worker %s] revoke %s: %v", b.projectID, id, err)
+		}
+	}
+}
 
 func (b *workerHostBackend) declaration(id string) (*Declaration, error) {
 	d, ok, err := b.decls.Get(id)
@@ -480,6 +673,12 @@ func (b *workerHostBackend) Get(id string) (coreworker.WorkerInfo, bool, error) 
 	if ok {
 		return b.infoFor(d), true, nil
 	}
+	// Not declared means not part of the ACTIVE set. An archived worker may still
+	// have a suspended entry here (archiving keeps its snapshot so a restore can
+	// resume where it stopped); it must not resurface in the active catalog.
+	if b.isArchived(id) {
+		return coreworker.WorkerInfo{}, false, nil
+	}
 	// A live worker that has no declaration yet (a spawn in flight).
 	if b.service != nil {
 		for _, wi := range b.service.ListWorkers("") {
@@ -525,6 +724,34 @@ func (b *workerHostBackend) List() []coreworker.WorkerInfo {
 		}
 	}
 	return out
+}
+
+// isArchived reports whether id is in the archived file. It costs one file read,
+// so it is only called on a miss: the case where the answer would otherwise be
+// wrong.
+func (b *workerHostBackend) isArchived(id string) bool {
+	ids, err := b.decls.Archived()
+	if err != nil {
+		b.logf("[worker %s] list archived: %v", b.projectID, err)
+		return false
+	}
+	for _, a := range ids {
+		if a == id {
+			return true
+		}
+	}
+	return false
+}
+
+// Archived returns the ids held in the archived file. It is what the WebUI's
+// archive panel lists: declared and restorable, but not part of the active set.
+func (b *workerHostBackend) Archived() []string {
+	ids, err := b.decls.Archived()
+	if err != nil {
+		b.logf("[worker %s] list archived: %v", b.projectID, err)
+		return nil
+	}
+	return ids
 }
 
 // SeedRemoteIdentities registers the active unmanaged-process workers in the

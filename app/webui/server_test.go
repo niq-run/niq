@@ -395,7 +395,8 @@ func fakeBuilderSpec(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 // stubCatalog is an in-memory worker.Catalog: the read model the workers view
 // is rendered from.
 type stubCatalog struct {
-	infos []worker.WorkerInfo
+	infos    []worker.WorkerInfo
+	archived []string
 }
 
 func (c *stubCatalog) Get(id string) (worker.WorkerInfo, bool, error) {
@@ -408,6 +409,11 @@ func (c *stubCatalog) Get(id string) (worker.WorkerInfo, bool, error) {
 }
 
 func (c *stubCatalog) List() []worker.WorkerInfo { return c.infos }
+
+func (c *stubCatalog) Archived() []string { return c.archived }
+
+// archived is the archived-id set the archive panel renders.
+type stubCatalogArchived = []string
 
 // TestHandleWorkersDeclaredMerge verifies how declarations merge into
 // GET /api/workers: a never-started managed-process worker carries the

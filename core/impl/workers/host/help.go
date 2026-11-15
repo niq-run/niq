@@ -18,6 +18,8 @@ func (w *HostWorker) registerHelp() {
 		TypeResume:  staticHelp(lifecycleHelp),
 		TypeRestart: staticHelp(lifecycleHelp),
 		TypeDestroy: staticHelp(lifecycleHelp),
+		TypeUpdate:  staticHelp(updateHelp),
+		TypeArchive: staticHelp(archiveHelp),
 	})
 }
 
@@ -69,6 +71,43 @@ All four lifecycle tools take one argument:
   refused, because the host does not run them.
 - A protected worker (the host itself, the WebUI's HIW) cannot be suspended,
   restarted or destroyed.
+`
+
+// updateHelp is the guide for the declaration-editing tool.
+const updateHelp = `# update
+
+Edit a worker's declaration without touching its runtime state.
+
+` + "```json" + `
+{"worker_id": "<id>", "label": "值班", "tags": ["ops"], "params": {"model": "m"}}
+` + "```" + `
+
+- Omitted fields stay as they are; an empty string, list or object clears that
+  field. Every field is optional except ` + "`worker_id`" + `.
+- ` + "`label`" + ` / ` + "`tags`" + ` / ` + "`description`" + ` are display metadata: visible immediately.
+- ` + "`params`" + ` replaces the construction params WHOLESALE. Params are build input,
+  so the change applies on the next start — use ` + "`restart`" + ` to apply it now.
+- Bus ACL is not editable here. Publish/subscribe grants are bus identity data,
+  owned by the bus control plane, not by a worker's lifecycle backend.
+`
+
+// archiveHelp is the guide for the archive tool.
+const archiveHelp = `# archive
+
+Move a worker in or out of the archived set.
+
+` + "```json" + `
+{"worker_id": "<id>", "archived": true}
+` + "```" + `
+
+- Archiving stops a live worker (an in-process one is snapshotted first), moves
+  its declaration to workers.archived.json and drops its bus identity. The
+  declaration is kept verbatim, so restoring it brings the worker back exactly
+  as it was.
+- A ` + "`unmanaged-process`" + ` worker has nothing local to stop; archiving only hides it.
+- Unarchiving moves the declaration back and starts the worker again (in-process
+  builds, managed-process launches, unmanaged re-provisions its identity).
+- archive is not destroy: the declaration and its state survive.
 `
 
 const spawnGeneralHelp = `# spawn

@@ -26,11 +26,21 @@ import (
 	"github.com/niq-run/niq/core/itfs/worker"
 )
 
+// Control is the backend surface the host needs: worker lifecycles, plus the
+// declaration edits that are not lifecycle steps. It is a named composite so the
+// host states exactly which capabilities it drives instead of taking the whole
+// backend.
+type Control interface {
+	worker.Lifecycle
+	worker.Editor
+	worker.Archiver
+}
+
 // Config holds the configuration for a HostWorker.
 type Config struct {
 	ID     string
 	Bus    corebus.WorkerSideChannel // data-plane client
-	Engine worker.Lifecycle          // lifecycle backend for every placement
+	Engine Control                   // lifecycle + declaration backend
 	// Params is the declaration's construction params, read only for the
 	// optional readme/readme_append guide customization.
 	Params map[string]any
@@ -38,11 +48,12 @@ type Config struct {
 
 // HostWorker is a bus-facing worker that manages other worker lifecycles.
 // It subscribes to its tool events and worker.discover, and exposes
-// spawn/suspend/resume/restart/destroy on the bus. Actual lifecycle operations
-// are delegated to the worker.Lifecycle backend.
+// spawn/suspend/resume/restart/destroy/update/archive on the bus. Actual
+// operations are delegated to the backend; the host adds only the bus protocol
+// (validation, protected ids, reply shaping).
 type HostWorker struct {
 	baseworker.BaseWorker
-	engine  worker.Lifecycle
+	engine  Control
 	params  map[string]any
 	started bool
 	cancel  context.CancelFunc

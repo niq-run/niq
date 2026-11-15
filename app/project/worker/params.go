@@ -66,14 +66,15 @@ func DeclFromSpec(spec coreworker.WorkerSpec) Declaration {
 			Type:   spec.Type,
 			Params: spec.Params,
 		},
-		Placement:     placement,
-		Label:         spec.Label,
-		Tags:          append([]string(nil), spec.Tags...),
-		Description:   spec.Description,
-		Publish:       publishSpecs(spec.PublishAllow),
-		Subscriptions: subscriptionSpecs(spec.SubscribeAllow),
-		Command:       spec.Command,
-		Cwd:           spec.Cwd,
+		Placement:       placement,
+		Label:           spec.Label,
+		Tags:            append([]string(nil), spec.Tags...),
+		Description:     spec.Description,
+		Publish:         publishSpecs(spec.PublishAllow),
+		Subscriptions:   subscriptionSpecs(spec.SubscribeAllow),
+		Command:         spec.Command,
+		Cwd:             spec.Cwd,
+		TokenTTLSeconds: spec.TokenTTLSeconds,
 	}
 }
 

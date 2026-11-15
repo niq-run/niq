@@ -39,6 +39,27 @@ type WorkerSpec struct {
 	Command []string `json:"command,omitempty"`
 	// Cwd is the child's working directory for a managed-process worker.
 	Cwd string `json:"cwd,omitempty"`
+	// TokenTTLSeconds overrides the lifetime of a provisioned remote
+	// (unmanaged-process) credential. Only that placement persists a credential
+	// across restarts; a managed-process credential's lifetime is its child
+	// process, and an in-process worker never authenticates over the wire.
+	TokenTTLSeconds *int64 `json:"token_ttl_seconds,omitempty"`
+}
+
+// WorkerPatch is a partial edit of the DECLARED half of a worker: what it is
+// called, how it is built. Every field is optional; a nil pointer, nil slice or
+// nil map means "leave unchanged", while an empty slice or empty map means
+// "clear".
+//
+// ACL is deliberately absent. Publish/subscribe grants are bus identity data —
+// core/itfs/bus calls its registry the control plane and already offers
+// IdentityRegistry.Update — so editing them belongs to the bus, not to a
+// worker's lifecycle backend.
+type WorkerPatch struct {
+	Label       *string        `json:"label,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Description *string        `json:"description,omitempty"`
+	Params      map[string]any `json:"params,omitempty"`
 }
 
 // WorkerInfo is a read-only view of one worker's lifecycle: what it is, where
@@ -80,13 +101,34 @@ type Lifecycle interface {
 	Protected(id string) bool
 }
 
+// Editor edits the declaration of an existing worker. It changes nothing about
+// a running instance: construction params are read at build time, so a params
+// edit applies on the next start, while display metadata is cosmetic.
+type Editor interface {
+	// Update applies a partial edit and returns the worker's view after it.
+	Update(ctx context.Context, id string, patch WorkerPatch) (WorkerInfo, error)
+}
+
+// Archiver moves a worker in and out of the archived set. An archived worker
+// keeps its declaration (so it can be restored unchanged) but takes no part in
+// the running swarm: it is suspended if it was live, and its bus identity is
+// dropped.
+type Archiver interface {
+	Archive(ctx context.Context, id string, archived bool) error
+}
+
 // Catalog is the read-only half: what the backend knows, regardless of whether
 // the worker is live. It answers lifecycle questions only — which workers
 // exist and what state they are in. Capability discovery (who serves which
 // tools) belongs to the directory worker.
 type Catalog interface {
 	Get(id string) (WorkerInfo, bool, error)
+	// List returns the active (non-archived) declared workers.
 	List() []WorkerInfo
+	// Archived returns the ids that are archived: declared and restorable, but
+	// not part of the active set. It is separate from List so ordinary roster
+	// and discovery views never have to filter them out.
+	Archived() []string
 }
 
 // RecoverOptions parameterizes Backend.Recover: the declared worker set to
@@ -107,11 +149,14 @@ type RecoverOptions struct {
 }
 
 // Backend owns worker lifecycles for one host: it creates, stops, resumes,
-// restarts and destroys workers in every placement, and it recovers the
-// declared set at startup. Implementations live in the assembly layer, which
-// knows where declarations, identities and processes live.
+// restarts, archives and destroys workers in every placement, edits their
+// declarations, and recovers the declared set at startup. Implementations live
+// in the assembly layer, which knows where declarations, identities and
+// processes live.
 type Backend interface {
 	Lifecycle
+	Editor
+	Archiver
 	Catalog
 	// Recover materializes the declared set and applies the essential /
 	// suspend / protect overrides.

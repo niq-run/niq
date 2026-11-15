@@ -124,12 +124,11 @@ func TestArchiveMovesDeclaration(t *testing.T) {
 	if _, err := CreateProject("beta", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
-	arc := projectArchiver{id: "beta"}
-	if err := arc.SetArchived("niq", true); err != nil {
+	if err := SetWorkerArchived("beta", "niq", true); err != nil {
 		t.Fatal(err)
 	}
-	if got := arc.Archived(); len(got) != 1 || got[0] != "niq" {
-		t.Fatalf("Archived() = %+v", got)
+	if got, err := ArchivedWorkerIDs("beta"); err != nil || len(got) != 1 || got[0] != "niq" {
+		t.Fatalf("ArchivedWorkerIDs() = %+v, %v", got, err)
 	}
 	active, _ := LoadWorkers("beta")
 	if _, ok := FindWorker(active, "niq"); ok {
@@ -139,11 +138,15 @@ func TestArchiveMovesDeclaration(t *testing.T) {
 	if wc, ok := FindWorker(arch, "niq"); !ok || wc.Params["provider"] != "volcan-ark" {
 		t.Fatalf("archived declaration = %+v", wc)
 	}
-	if err := arc.SetArchived("niq", false); err != nil {
+	if err := SetWorkerArchived("beta", "niq", false); err != nil {
 		t.Fatal(err)
 	}
-	if got := arc.Archived(); len(got) != 0 {
-		t.Fatalf("Archived() = %+v, want empty", got)
+	if got, err := ArchivedWorkerIDs("beta"); err != nil || len(got) != 0 {
+		t.Fatalf("ArchivedWorkerIDs() = %+v, %v, want empty", got, err)
+	}
+	restored, _ := LoadWorkers("beta")
+	if _, ok := FindWorker(restored, "niq"); !ok {
+		t.Fatal("unarchived worker is not active again")
 	}
 }
 
@@ -325,67 +328,6 @@ func TestBuiltinPlaybookIsLoadable(t *testing.T) {
 	}
 	if guide != "using-niq" || cheat == "" {
 		t.Fatalf("programs = %+v", progs)
-	}
-}
-
-func TestUpdateWorkerParams(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if _, err := CreateProject("proj", "", nil); err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-	if err := AppendWorkerDecl("proj", WorkerConfig{Config: projworker.Config{
-		Type: "mcp", ID: "m", Params: map[string]any{"expose": "agentic"},
-	}}); err != nil {
-		t.Fatalf("AppendWorkerDecl: %v", err)
-	}
-	if err := UpdateWorkerParams("proj", "m", map[string]any{"fixed": true, "expose": "ready"}); err != nil {
-		t.Fatalf("UpdateWorkerParams: %v", err)
-	}
-	set, _ := LoadWorkers("proj")
-	wc, ok := FindWorker(set, "m")
-	if !ok || wc.Params["fixed"] != true || wc.Params["expose"] != "ready" {
-		t.Fatalf("params = %+v", wc.Params)
-	}
-	if err := UpdateWorkerParams("proj", "m", map[string]any{}); err != nil {
-		t.Fatalf("clear: %v", err)
-	}
-	set, _ = LoadWorkers("proj")
-	if wc, _ := FindWorker(set, "m"); wc.Params != nil {
-		t.Fatalf("params = %+v, want nil", wc.Params)
-	}
-	if err := UpdateWorkerParams("proj", "missing", map[string]any{"a": 1}); err == nil {
-		t.Fatal("unknown worker should fail")
-	}
-}
-
-func TestUpdateWorkerMetaLabel(t *testing.T) {
-	setupProjectsRoot(t)
-	if _, err := CreateProject("gamma", "", fakeTemplate()); err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-	if err := UpdateWorkerMeta("gamma", "niq", "值班机器人", []string{"ops"}, "nightly"); err != nil {
-		t.Fatalf("UpdateWorkerMeta: %v", err)
-	}
-	set, _ := LoadWorkers("gamma")
-	wc, ok := FindWorker(set, "niq")
-	if !ok || wc.Label != "值班机器人" || wc.Description != "nightly" || len(wc.Tags) != 1 {
-		t.Fatalf("declaration = %+v", wc)
-	}
-	for _, bad := range []string{" padded", "two\nlines", strings.Repeat("x", 65)} {
-		if err := UpdateWorkerMeta("gamma", "niq", bad, nil, ""); err == nil {
-			t.Fatalf("label %q was accepted", bad)
-		}
-	}
-	set, _ = LoadWorkers("gamma")
-	if wc, _ := FindWorker(set, "niq"); wc.Label != "值班机器人" {
-		t.Fatalf("rejected edit changed label: %q", wc.Label)
-	}
-	if err := UpdateWorkerMeta("gamma", "niq", "", nil, ""); err != nil {
-		t.Fatalf("clear label: %v", err)
-	}
-	set, _ = LoadWorkers("gamma")
-	if wc, _ := FindWorker(set, "niq"); wc.Label != "" {
-		t.Fatalf("label not cleared: %q", wc.Label)
 	}
 }
 

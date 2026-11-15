@@ -94,6 +94,14 @@ func (s projectDeclStore) SetCredential(id, cred string) error {
 	return fmt.Errorf("worker %s is not declared", id)
 }
 
+func (s projectDeclStore) Archive(id string, archived bool) error {
+	return SetWorkerArchived(s.projectID, id, archived)
+}
+
+func (s projectDeclStore) Archived() ([]string, error) {
+	return ArchivedWorkerIDs(s.projectID)
+}
+
 // StateStore persists in-process workers' runtime state under a root
 // directory, one subdirectory per worker:
 //

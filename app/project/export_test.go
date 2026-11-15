@@ -48,8 +48,7 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 	if _, err := CreateProject("alpha", "", src); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	arch := projectArchiver{id: "alpha"}
-	if err := arch.SetArchived("retired", true); err != nil {
+	if err := SetWorkerArchived("alpha", "retired", true); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 
@@ -106,12 +105,13 @@ func TestExportProjectTemplateParams(t *testing.T) {
 	if _, err := CreateProject("alpha", "", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if err := AppendWorkerDecl("alpha", WorkerConfig{Config: projworker.Config{Type: "reason", ID: "niq", Params: map[string]any{
+	d := projworker.Declaration{Config: projworker.Config{Type: "reason", ID: "niq", Params: map[string]any{
 		"programs": []any{map[string]any{
 			"name": "review", "content_type": "playbook", "content": "# Review\n...",
 		}},
-	}}}); err != nil {
-		t.Fatalf("AppendWorkerDecl: %v", err)
+	}}}
+	if err := (projectDeclStore{projectID: "alpha"}).Add(&d); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
 	out, err := ExportProjectTemplate("alpha", false)
 	if err != nil {

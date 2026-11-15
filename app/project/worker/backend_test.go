@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,8 +22,9 @@ import (
 // memDecls is an in-memory DeclStore: the lifecycle is tested without a project
 // file, which is the point of the interface.
 type memDecls struct {
-	mu   sync.Mutex
-	list []*Declaration
+	mu       sync.Mutex
+	list     []*Declaration
+	archived []Declaration
 }
 
 func (m *memDecls) Get(id string) (*Declaration, bool, error) {
@@ -72,6 +74,40 @@ func (m *memDecls) Update(d *Declaration) error {
 		}
 	}
 	return fmt.Errorf("worker %s is not declared", d.ID)
+}
+
+func (m *memDecls) Archive(id string, archived bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if archived {
+		for i := range m.list {
+			if m.list[i].ID == id {
+				m.archived = append(m.archived, *m.list[i])
+				m.list = append(m.list[:i], m.list[i+1:]...)
+				return nil
+			}
+		}
+		return nil
+	}
+	for i := range m.archived {
+		if m.archived[i].ID == id {
+			d := m.archived[i]
+			m.list = append(m.list, &d)
+			m.archived = append(m.archived[:i], m.archived[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+func (m *memDecls) Archived() ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, 0, len(m.archived))
+	for _, d := range m.archived {
+		out = append(out, d.ID)
+	}
+	return out, nil
 }
 
 func (m *memDecls) Delete(id string) error {
@@ -463,5 +499,204 @@ func TestManagedProcessParamsBecomeEnv(t *testing.T) {
 	env := launchSpec(d, "cred").Env
 	if env["TOKEN"] != "resolved" || env["ROOT"] != "/data" {
 		t.Fatalf("env = %+v", env)
+	}
+}
+
+// TestCreateValidatesIdentityAndMeta verifies the checks that used to live in the
+// WebUI's declaration creator: an explicit id must be path/identity safe for
+// every placement, and display metadata is validated for every placement too.
+func TestCreateValidatesIdentityAndMeta(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	long := strings.Repeat("x", 65)
+	for _, tt := range []struct {
+		name string
+		spec coreworker.WorkerSpec
+		want string
+	}{
+		{"missing type", coreworker.WorkerSpec{}, "type is required"},
+		{"unsafe in-process id", coreworker.WorkerSpec{
+			WorkerConfig: coreworker.WorkerConfig{ID: "a b", Type: "fake"},
+		}, "may only contain"},
+		{"unsafe process id", coreworker.WorkerSpec{
+			WorkerConfig: coreworker.WorkerConfig{ID: "a/b", Type: "mcp"},
+			Placement:    coreworker.PlacementUnmanagedProcess,
+		}, "may only contain"},
+		{"missing process id", coreworker.WorkerSpec{
+			WorkerConfig: coreworker.WorkerConfig{Type: "mcp"},
+			Placement:    coreworker.PlacementUnmanagedProcess,
+		}, "id is required"},
+		{"bad label", coreworker.WorkerSpec{
+			WorkerConfig: coreworker.WorkerConfig{ID: "r1", Type: "fake", Label: long},
+		}, "label"},
+	} {
+		if _, err := rig.backend.Create(ctx, tt.spec); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: err = %v, want %q", tt.name, err, tt.want)
+		}
+	}
+}
+
+// TestUpdateEditsDeclarationOnly verifies Update rewrites the declaration (meta +
+// params), validates the RESULT, and leaves the live worker untouched.
+func TestUpdateEditsDeclarationOnly(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	if _, err := rig.backend.Create(ctx, coreworker.WorkerSpec{
+		WorkerConfig: coreworker.WorkerConfig{ID: "w1", Type: "fake", Params: map[string]any{"name": "a"}},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	before, _, _ := rig.backend.Get("w1")
+
+	label := "值班"
+	info, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{
+		Label:  &label,
+		Tags:   []string{"ops"},
+		Params: map[string]any{"name": "b"},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if info.State != before.State {
+		t.Fatalf("state changed by an edit: %s → %s", before.State, info.State)
+	}
+	d, ok, _ := rig.decls.Get("w1")
+	if !ok || d.Label != "值班" || len(d.Tags) != 1 || d.Params["name"] != "b" {
+		t.Fatalf("declaration = %+v", d)
+	}
+
+	// An omitted field is unchanged; an empty params object clears it.
+	desc := "note"
+	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Description: &desc}); err != nil {
+		t.Fatalf("Update description: %v", err)
+	}
+	d, _, _ = rig.decls.Get("w1")
+	if d.Label != "值班" || d.Description != "note" || d.Params["name"] != "b" {
+		t.Fatalf("partial edit lost a field: %+v", d)
+	}
+	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Params: map[string]any{}}); err != nil {
+		t.Fatalf("Update clear params: %v", err)
+	}
+	if d, _, _ = rig.decls.Get("w1"); d.Params != nil {
+		t.Fatalf("params = %+v, want nil", d.Params)
+	}
+
+	// Validation runs on the result: an invalid label is refused and nothing is
+	// written.
+	bad := " padded"
+	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Label: &bad}); err == nil {
+		t.Fatal("invalid label accepted")
+	}
+	if d, _, _ = rig.decls.Get("w1"); d.Label != "值班" {
+		t.Fatalf("rejected edit changed the declaration: %+v", d)
+	}
+
+	// An unknown id is an error, not a silent create.
+	if _, err := rig.backend.Update(ctx, "nope", coreworker.WorkerPatch{}); err == nil {
+		t.Fatal("updating an undeclared worker succeeded")
+	}
+}
+
+// TestUpdateRejectsUnreadParams verifies the type's param contract still applies
+// to an edit: a key the type does not read cannot be written into its declaration.
+func TestUpdateRejectsUnreadParams(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	if _, err := rig.backend.Create(ctx, coreworker.WorkerSpec{
+		WorkerConfig: coreworker.WorkerConfig{ID: "w1", Type: "fake"},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	_, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Params: map[string]any{"typo": 1}})
+	if err == nil || !strings.Contains(err.Error(), "typo") {
+		t.Fatalf("err = %v, want the param contract to reject %q", err, "typo")
+	}
+}
+
+// TestArchiveRoundTrip verifies archive stops a live worker, moves the
+// declaration, drops the identity, and that unarchive restores and starts it.
+func TestArchiveRoundTrip(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	if _, err := rig.backend.Create(ctx, coreworker.WorkerSpec{
+		WorkerConfig: coreworker.WorkerConfig{ID: "w1", Type: "fake"},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, ok := rig.registry.Lookup("w1"); !ok {
+		t.Fatal("a live worker should hold a bus identity")
+	}
+
+	if err := rig.backend.Archive(ctx, "w1", true); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	if _, ok, _ := rig.decls.Get("w1"); ok {
+		t.Fatal("declaration still active after archive")
+	}
+	if got, _ := rig.decls.Archived(); len(got) != 1 || got[0] != "w1" {
+		t.Fatalf("archived = %v", got)
+	}
+	if got := rig.backend.Archived(); len(got) != 1 || got[0] != "w1" {
+		t.Fatalf("catalog archived = %v", got)
+	}
+	if _, ok := rig.registry.Lookup("w1"); ok {
+		t.Fatal("identity survived archive")
+	}
+	if info, ok, _ := rig.backend.Get("w1"); ok {
+		t.Fatalf("archived worker still in the active catalog: %+v", info)
+	}
+
+	if err := rig.backend.Archive(ctx, "w1", false); err != nil {
+		t.Fatalf("Unarchive: %v", err)
+	}
+	if _, ok, _ := rig.decls.Get("w1"); !ok {
+		t.Fatal("declaration not restored")
+	}
+	if info, ok, _ := rig.backend.Get("w1"); !ok || info.State != "running" {
+		t.Fatalf("restored worker = %+v, ok=%v; want running", info, ok)
+	}
+}
+
+// TestArchiveRefusesProtected verifies the protection that stops the host or the
+// WebUI's HIW from being hidden.
+func TestArchiveRefusesProtected(t *testing.T) {
+	rig := newTestRig(t)
+	if err := rig.backend.Recover(context.Background(), coreworker.RecoverOptions{
+		Protect: []string{"w1"},
+	}); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if err := rig.backend.Archive(context.Background(), "w1", true); err == nil {
+		t.Fatal("archiving a protected worker succeeded")
+	}
+}
+
+// TestArchiveIsIdempotent verifies a repeated archive/restore is a no-op instead
+// of an error (or, worse, a relaunch of a worker that is already running).
+func TestArchiveIsIdempotent(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	if _, err := rig.backend.Create(ctx, coreworker.WorkerSpec{
+		WorkerConfig: coreworker.WorkerConfig{ID: "w1", Type: "fake"},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := rig.backend.Archive(ctx, "w1", false); err != nil {
+		t.Fatalf("archive=false on an active worker: %v", err)
+	}
+	if err := rig.backend.Archive(ctx, "w1", true); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	if err := rig.backend.Archive(ctx, "w1", true); err != nil {
+		t.Fatalf("repeat Archive: %v", err)
+	}
+	if err := rig.backend.Archive(ctx, "w1", false); err != nil {
+		t.Fatalf("Unarchive: %v", err)
+	}
+	if err := rig.backend.Archive(ctx, "w1", false); err != nil {
+		t.Fatalf("repeat Unarchive: %v", err)
+	}
+	if err := rig.backend.Archive(ctx, "ghost", false); err == nil {
+		t.Fatal("restoring an unknown worker succeeded")
 	}
 }

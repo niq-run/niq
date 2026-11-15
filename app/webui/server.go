@@ -56,14 +56,6 @@ type ContextInfo struct {
 	BusPort int    `json:"bus_port,omitempty"` // project event-bus port
 }
 
-// ArchivedStore reads/writes a project's archived-worker set (persisted in the
-// project.json worker definitions). nil disables the feature (endpoints reply
-// with an empty archived set).
-type ArchivedStore interface {
-	Archived() []string
-	SetArchived(id string, v bool) error
-}
-
 // programWorkerID is the bus address of the program worker — the data-plane
 // authority for every program (search/describe/read/touch/update/write/delete). The
 // WebUI talks to it over the event bus exactly like the worker detail panel
@@ -97,12 +89,10 @@ type ProgramDetail struct {
 }
 
 // UnmanagedStatus is a read-only view of a worker declared in project.json.
-// WorkerCreated is the effective result of creating a worker declaration:
-// the persisted identity plus the placement it was declared with. The worker
-// itself is started afterwards by the host worker (a bus `resume`), so a
-// failure leaves a declared-but-stopped worker the start button can retry.
-// Credential is populated for an unmanaged (dial-in) worker, read from the
-// declaration so the UI can hand the connect configuration to the third party.
+// WorkerCreated is the effective result of creating a worker: the identity the
+// host resolved plus the placement it was declared with. Credential is
+// populated for an unmanaged (dial-in) worker, read from the bus identity so
+// the UI can hand the connect configuration to the third party.
 type WorkerCreated struct {
 	ID         string `json:"id"`
 	Type       string `json:"type"`
@@ -112,12 +102,13 @@ type WorkerCreated struct {
 	Credential string `json:"credential,omitempty"`
 }
 
-// WorkerDeclCreator creates and persists a worker declaration from a
-// project.WorkerConfig-shaped JSON body. It does not start anything: the server
-// sends the host worker a `resume` for the returned id. Implemented by the
-// assembly layer; nil disables POST /api/workers/create.
-type WorkerDeclCreator interface {
-	Create(body json.RawMessage) (WorkerCreated, error)
+// WorkerSpawnArgs translates the create form body into the host worker's
+// `spawn` arguments (type-specific params flattened to the top level). It
+// performs no I/O: creating a worker is a bus call, and the host validates,
+// declares and starts in one step. Implemented by the assembly layer; nil
+// disables POST /api/workers/create.
+type WorkerSpawnArgs interface {
+	SpawnArgs(body json.RawMessage) (map[string]any, error)
 }
 
 // AssetsFS exposes the embedded SPA static assets for reuse by the control server.
@@ -137,17 +128,15 @@ type Server struct {
 	registry corebus.IdentityRegistry
 	catalog  worker.Catalog
 
-	ctxMu          sync.RWMutex
-	context        ContextInfo
-	archived       ArchivedStore
-	declCreator    WorkerDeclCreator
-	metaUpdater    WorkerMetaUpdater
-	paramsUpdater  WorkerParamsUpdater
-	aclUpdater     WorkerACLUpdater
-	workerMeta     map[string]WorkerMeta
-	paramsProvider WorkerParamsProvider
+	ctxMu   sync.RWMutex
+	context ContextInfo
 
-	metaMu sync.RWMutex
+	// Declaration projections are READ-only and read live (per request), so an
+	// edit made through the host shows up immediately. Every WRITE goes to the
+	// host worker over the bus; nothing here persists anything.
+	decls       WorkerDeclProvider
+	spawnArgs   WorkerSpawnArgs
+	identityACL IdentityACLAdmin
 
 	// Uploads: projectDir is the on-disk project directory
 	// (~/.niq/projects/<id>), uploadDir an optional config override
@@ -195,12 +184,10 @@ func New(h *hiw.Worker, el *eventbusapi.EventLog, engine *eventbus.Engine, catal
 	mux.HandleFunc("POST /api/workers/{id}/suspend", s.handleSuspend)
 	mux.HandleFunc("POST /api/workers/{id}/resume", s.handleResume)
 
-	// Update a worker's display metadata (tags / description): a pure
-	// declaration edit persisted to project.json + the in-memory workerMeta.
+	// Declaration edits (display metadata / construction params): a bus call to
+	// the host worker's `update` tool. Display metadata is cosmetic; params are
+	// build-time input, so the change applies on the next start.
 	mux.HandleFunc("PUT /api/workers/{id}/meta", s.handleUpdateWorkerMeta)
-
-	// Worker params: persist an edit to the declaration. Params are build-time
-	// input, so the change applies on restart.
 	mux.HandleFunc("PUT /api/workers/{id}/params", s.handleUpdateWorkerParams)
 
 	// Model provider: read and switch a reason worker's active LLM provider.
@@ -328,10 +315,10 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-// SetArchivedStore attaches the project's archived-worker store (nil to disable).
-func (s *Server) SetArchivedStore(as ArchivedStore) {
-	s.archived = as
-}
+// SetACLAdmin attaches the bus identity administrator: the bus's control plane
+// is the authority on publish/subscribe grants, so an ACL edit is not a worker
+// lifecycle operation. nil falls back to a registry-only edit.
+func (s *Server) SetACLAdmin(a IdentityACLAdmin) { s.identityACL = a }
 
 // SetWorkerCatalog attaches the lifecycle read model: which workers are
 // declared, where each one runs, and what state its owner reports. Every write
@@ -339,12 +326,6 @@ func (s *Server) SetArchivedStore(as ArchivedStore) {
 // only.
 func (s *Server) SetWorkerCatalog(c worker.Catalog) {
 	s.catalog = c
-}
-
-// SetWorkerDeclCreator attaches the declaration creator (nil disables
-// POST /api/workers/create and the managed branch of the start endpoint).
-func (s *Server) SetWorkerDeclCreator(c WorkerDeclCreator) {
-	s.declCreator = c
 }
 
 // SetContext records the mode context the single SPA should render in. Safe to
@@ -697,20 +678,18 @@ func (s *Server) handleDeleteProgram(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetArchived(w http.ResponseWriter, r *http.Request) {
-	if s.archived == nil {
+	if s.catalog == nil {
 		json.NewEncoder(w).Encode([]string{})
 		return
 	}
-	json.NewEncoder(w).Encode(s.archived.Archived())
+	json.NewEncoder(w).Encode(s.catalog.Archived())
 }
 
-// handleSetArchived toggles whether a worker is archived. Archiving suspends the
-// worker first (archive == suspend + mark); restoring resumes it and unmarks it.
+// handleSetArchived toggles whether a worker is archived. The whole move is one
+// host operation: the host suspends a live worker, moves the declaration to (or
+// back from) the archived file, and drops (or re-ensures) the bus identity under
+// its per-worker lock. The UI only names the intent.
 func (s *Server) handleSetArchived(w http.ResponseWriter, r *http.Request) {
-	if s.archived == nil {
-		http.Error(w, "archive store unavailable", 404)
-		return
-	}
 	id := r.PathValue("id")
 	var body struct {
 		Archived bool `json:"archived"`
@@ -719,41 +698,18 @@ func (s *Server) handleSetArchived(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", 400)
 		return
 	}
-
-	// Is this worker host-managed? in-process and managed-process workers are
-	// the ones archive may suspend/resume; a dial-in worker is hidden only.
-	managed := false
+	if _, err := s.callHost(r.Context(), "archive", map[string]any{
+		"worker_id": id,
+		"archived":  body.Archived,
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	out := []string{}
 	if s.catalog != nil {
-		if info, ok, _ := s.catalog.Get(id); ok && info.Placement != worker.PlacementUnmanagedProcess {
-			managed = true
-		}
+		out = s.catalog.Archived()
 	}
-	if body.Archived {
-		if managed {
-			// Archive == suspend first, then move the declaration.
-			if _, err := s.callHost(r.Context(), "suspend", map[string]any{"worker_id": id}); err != nil {
-				http.Error(w, "suspend before archive: "+err.Error(), 500)
-				return
-			}
-		}
-		if err := s.archived.SetArchived(id, true); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		// An archived worker is not a live bus participant: drop its runtime
-		// identity. Unarchiving re-provisions it from the declaration.
-		_ = s.registry.Revoke(id)
-	} else {
-		// Move the declaration back first: resume/start reads the active file.
-		if err := s.archived.SetArchived(id, false); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		// resume covers every placement: in-process builds, managed-process
-		// launches, unmanaged-process only re-provisions its identity.
-		_, _ = s.callHost(r.Context(), "resume", map[string]any{"worker_id": id})
-	}
-	json.NewEncoder(w).Encode(map[string]any{"archived": s.archived.Archived()})
+	json.NewEncoder(w).Encode(map[string]any{"archived": out})
 }
 
 // handleContext reports the SPA mode context.
@@ -994,79 +950,38 @@ func sanitizeFileName(name string) string {
 	return out
 }
 
-// WorkerMeta is the display metadata (label, tags, description) of a worker
-// declaration. It is injected by the assembly layer from project.json and
-// merged into WorkerView for the UI.
-type WorkerMeta struct {
-	Label       string   `json:"label,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Description string   `json:"description,omitempty"`
+// WorkerDecl is the read-only declaration view the UI renders: how a worker is
+// labelled and how it is built. It carries no credential (that is the bus
+// identity's business) and no placement/state (that is the lifecycle catalog's).
+type WorkerDecl struct {
+	Label       string         `json:"label,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Params      map[string]any `json:"params,omitempty"`
 }
 
-// WorkerMetaUpdater persists a worker's display metadata (tags / description)
-// to the declaration storage (project.json). Implemented by the assembly
-// layer; nil disables PUT /api/workers/{id}/meta.
-type WorkerMetaUpdater interface {
-	UpdateWorkerMeta(id string, meta WorkerMeta) error
+// WorkerDeclProvider returns every declared worker's read-only view, keyed by
+// id. It is read per request, so an edit made through the host — or a worker
+// created/destroyed at runtime — shows up immediately. Implemented by the
+// assembly layer; nil means the UI shows no labels or params.
+type WorkerDeclProvider interface {
+	WorkerDecls() map[string]WorkerDecl
 }
 
-// SetWorkerMetaUpdater attaches the metadata persistence (nil disables the
-// endpoint).
-func (s *Server) SetWorkerMetaUpdater(u WorkerMetaUpdater) {
-	s.metaUpdater = u
-}
+// SetWorkerDeclProvider attaches the declaration read projection.
+func (s *Server) SetWorkerDeclProvider(p WorkerDeclProvider) { s.decls = p }
 
-// SetWorkerMeta stores the declared workers' display metadata (id ⇒ tags /
-// description). It is read-only for the server; call it once with the project's
-// declaration map at setup. nil clears it.
-func (s *Server) SetWorkerMeta(m map[string]WorkerMeta) {
-	s.metaMu.Lock()
-	defer s.metaMu.Unlock()
-	s.workerMeta = m
-}
+// SetWorkerSpawnArgs attaches the create-form translator. Without it
+// POST /api/workers/create is disabled.
+func (s *Server) SetWorkerSpawnArgs(a WorkerSpawnArgs) { s.spawnArgs = a }
 
-// WorkerParamsProvider returns the declared construction params (project.json
-// `params`) of every worker, keyed by worker id. It is read per request, so the
-// worker view reflects runtime create/delete; implemented by the assembly layer
-// (which owns project.json). nil disables params display.
-type WorkerParamsProvider interface {
-	WorkerParamsMap() map[string]map[string]any
-}
-
-// SetWorkerParamsProvider attaches the params provider (nil disables it).
-func (s *Server) SetWorkerParamsProvider(p WorkerParamsProvider) {
-	s.paramsProvider = p
-}
-
-// WorkerParamsUpdater persists a worker's declared construction params
-// (project.json `params`). Implemented by the assembly layer; nil disables
-// PUT /api/workers/{id}/params.
-type WorkerParamsUpdater interface {
-	UpdateWorkerParams(id string, params map[string]any) error
-}
-
-// SetWorkerParamsUpdater attaches the params persistence (nil disables the
-// endpoint).
-func (s *Server) SetWorkerParamsUpdater(u WorkerParamsUpdater) {
-	s.paramsUpdater = u
-}
-
-// WorkerACLUpdater persists a worker's bus ACL into its declaration (workers.json
-// or workers.archived.json). The runtime registry is a projection.
-type WorkerACLUpdater interface {
-	UpdateWorkerACL(id string, publish []event.PublishPattern, subscribe []event.EventPattern) error
-}
-
-// SetWorkerACLUpdater attaches the ACL persistence (nil keeps registry-only edits).
-func (s *Server) SetWorkerACLUpdater(u WorkerACLUpdater) {
-	s.aclUpdater = u
-}
-
-// workerMetaFor returns the display metadata for a worker id, or zero values.
-func (s *Server) workerMetaFor(id string) WorkerMeta {
-	s.metaMu.RLock()
-	defer s.metaMu.RUnlock()
-	return s.workerMeta[id]
+// IdentityACLAdmin edits a worker's publish/subscribe grants. The bus calls its
+// identity registry the control plane and already offers an Update for exactly
+// this, so an ACL edit belongs to the bus, not to a worker's lifecycle backend.
+// The implementation persists the grant into the declaration (the durable
+// source) and then applies it to the runtime registry.
+type IdentityACLAdmin interface {
+	UpdateACL(id string, publish []event.PublishPattern, subscribe []event.EventPattern) error
 }
 
 // WorkerView is the unified view of a worker: its registered identity (from
@@ -1105,11 +1020,11 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		online[id] = true
 	}
 
-	// Declared construction params (project.json `params`), read live so the view
-	// reflects workers created/deleted at runtime.
-	var params map[string]map[string]any
-	if s.paramsProvider != nil {
-		params = s.paramsProvider.WorkerParamsMap()
+	// Declarations (labels, tags, params), read live so the view reflects edits,
+	// creates and destroys immediately.
+	var decls map[string]WorkerDecl
+	if s.decls != nil {
+		decls = s.decls.WorkerDecls()
 	}
 
 	// The lifecycle catalog is the authority on who is declared, where each
@@ -1130,10 +1045,11 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		meta := s.workerMetaFor(v.ID)
-		v.Label, v.Tags, v.Description = meta.Label, meta.Tags, meta.Description
-		if v.Params == nil {
-			v.Params = params[v.ID]
+		if d, ok := decls[v.ID]; ok {
+			v.Label, v.Tags, v.Description = d.Label, d.Tags, d.Description
+			if v.Params == nil {
+				v.Params = d.Params
+			}
 		}
 		v.Placement = string(info.Placement)
 		switch info.Placement {
@@ -1191,7 +1107,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateAllow(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	idt, online := s.registry.Lookup(id)
-	if !online && s.aclUpdater == nil {
+	if !online && s.identityACL == nil {
 		http.Error(w, "worker not found", http.StatusNotFound)
 		return
 	}
@@ -1229,15 +1145,15 @@ func (s *Server) handleUpdateAllow(w http.ResponseWriter, r *http.Request) {
 		subAllow = out
 	}
 
-	// workers.json is the durable source: persist first, then update the
-	// runtime projection.
-	if s.aclUpdater != nil {
-		if err := s.aclUpdater.UpdateWorkerACL(id, pubAllow, subAllow); err != nil {
-			http.Error(w, "persist allow: "+err.Error(), http.StatusInternalServerError)
+	// One call, one owner: the bus control plane persists the grant into the
+	// declaration (the durable source) and then applies it to the runtime
+	// registry, in that order, under its own lock.
+	if s.identityACL != nil {
+		if err := s.identityACL.UpdateACL(id, pubAllow, subAllow); err != nil {
+			http.Error(w, "update allow: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-	}
-	if online {
+	} else if online {
 		if err := s.registry.Update(id, pubAllow, subAllow); err != nil {
 			http.Error(w, "update allow: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -1656,12 +1572,11 @@ func (s *Server) handleUnmanagedRestart(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// handleWorkerCreate persists a worker declaration from the UI's form body and
-// then asks the host to start it. The declaration is written first, so a start
-// failure leaves a declared-but-stopped worker the start button can retry
-// (it is the same `resume`).
+// handleWorkerCreate creates a worker through the host worker's `spawn` tool —
+// the same single step an agent uses: validate, declare and start. The form
+// body is only translated into spawn arguments; nothing is persisted here.
 func (s *Server) handleWorkerCreate(w http.ResponseWriter, r *http.Request) {
-	if s.declCreator == nil {
+	if s.spawnArgs == nil {
 		http.Error(w, "worker creation unavailable", 404)
 		return
 	}
@@ -1670,7 +1585,12 @@ func (s *Server) handleWorkerCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	created, err := s.declCreator.Create(body)
+	args, err := s.spawnArgs.SpawnArgs(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	reply, err := s.callHost(r.Context(), "spawn", args)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -1680,15 +1600,19 @@ func (s *Server) handleWorkerCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.callHost(r.Context(), "resume", map[string]any{"worker_id": created.ID}); err != nil {
-		// The declaration is persisted; report the launch failure without
-		// discarding it, and point at the retry path.
-		http.Error(w, "worker "+created.ID+" declared but not started: "+err.Error(), http.StatusBadGateway)
-		return
+	created := WorkerCreated{}
+	created.ID, _ = reply["worker_id"].(string)
+	created.Type, _ = reply["type"].(string)
+	created.Placement, _ = reply["placement"].(string)
+	switch worker.Placement(created.Placement) {
+	case worker.PlacementInProcess:
+		created.Managed = true
+	case worker.PlacementUnmanagedProcess:
+		created.Remote = true
 	}
-	// An unmanaged-process worker's credential is minted by the resume; read it
-	// from the bus identity (never from the host's reply, which deliberately
-	// carries no secrets) so the UI can hand out the connect configuration.
+	// A dial-in worker's credential is minted by the spawn; read it from the bus
+	// identity (never from the host's reply, which deliberately carries no
+	// secrets) so the UI can hand out the connect configuration.
 	if created.Remote && s.registry != nil {
 		if idt, ok := s.registry.Lookup(created.ID); ok {
 			created.Credential = idt.Credential
@@ -1698,17 +1622,11 @@ func (s *Server) handleWorkerCreate(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(created)
 }
 
-// handleUpdateWorkerMeta updates a worker's display metadata (tags /
-// description): the updater persists it to the declaration in project.json,
-// then the in-memory workerMeta map is refreshed so the sidebar/picker reflect
-// the change immediately (no restart). The body carries tags and description;
-// a missing list clears tags, a missing description clears it.
+// handleUpdateWorkerMeta edits a worker's display metadata (label / tags /
+// description) through the host's `update` tool. The body carries every field,
+// so an empty value clears it.
 func (s *Server) handleUpdateWorkerMeta(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if s.metaUpdater == nil {
-		http.Error(w, "worker metadata updates unavailable", 404)
-		return
-	}
 	var in struct {
 		Label       string   `json:"label"`
 		Tags        []string `json:"tags"`
@@ -1718,30 +1636,28 @@ func (s *Server) handleUpdateWorkerMeta(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	meta := WorkerMeta{Label: in.Label, Tags: in.Tags, Description: in.Description}
-	if err := s.metaUpdater.UpdateWorkerMeta(id, meta); err != nil {
+	tags := in.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	if _, err := s.callHost(r.Context(), "update", map[string]any{
+		"worker_id":   id,
+		"label":       in.Label,
+		"tags":        tags,
+		"description": in.Description,
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.metaMu.Lock()
-	if s.workerMeta == nil {
-		s.workerMeta = map[string]WorkerMeta{}
-	}
-	s.workerMeta[id] = meta
-	s.metaMu.Unlock()
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
-// handleUpdateWorkerParams persists a worker's construction params to its
-// declaration. Params are build-time input: nothing live is touched, so the
-// edit takes effect on the next restart. Keeping it out of the running worker
+// handleUpdateWorkerParams edits a worker's construction params through the
+// host's `update` tool. Params are build-time input: nothing live is touched, so
+// the edit takes effect on the next start. Keeping it out of the running worker
 // also means a malformed edit cannot take the worker down before it is reverted.
 func (s *Server) handleUpdateWorkerParams(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if s.paramsUpdater == nil {
-		http.Error(w, "worker params updates unavailable", http.StatusNotFound)
-		return
-	}
 	var in struct {
 		Params map[string]any `json:"params"`
 	}
@@ -1752,7 +1668,10 @@ func (s *Server) handleUpdateWorkerParams(w http.ResponseWriter, r *http.Request
 	if in.Params == nil {
 		in.Params = map[string]any{}
 	}
-	if err := s.paramsUpdater.UpdateWorkerParams(id, in.Params); err != nil {
+	if _, err := s.callHost(r.Context(), "update", map[string]any{
+		"worker_id": id,
+		"params":    in.Params,
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

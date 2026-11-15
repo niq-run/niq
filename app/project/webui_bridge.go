@@ -1,10 +1,12 @@
-// WebUI ↔ project bridge: the adapters the project WebUI server is wired with,
-// mapping webui interface methods onto worker declarations.
+// WebUI ↔ project bridge: the read-only projections and input translators the
+// project WebUI server is wired with.
 //
-// The WebUI never drives a lifecycle directly. Creating a worker persists its
-// declaration here; STARTING it (create/start/restart/stop/delete) is a bus
-// request to the host worker, so the UI, an agent and the boot-time recovery
-// all walk the same lifecycle path.
+// The WebUI never writes anything itself. Every worker WRITE is a bus call to
+// the host worker (spawn / suspend / resume / restart / destroy / update /
+// archive), and every bus ACL write goes to the identity administrator, which is
+// the bus control plane. What remains here is (a) live READ projections of the
+// declarations (labels, tags, params) and (b) a pure translation of the create
+// form into the host's spawn arguments.
 package project
 
 import (
@@ -13,175 +15,94 @@ import (
 
 	projworker "github.com/niq-run/niq/app/project/worker"
 	"github.com/niq-run/niq/app/webui"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
-// webuiDeclCreator implements webui.WorkerDeclCreator: it validates a worker
-// declaration from the WebUI's create form and persists it into workers.json.
-// It launches nothing — the caller sends the host worker a `resume` for the new
-// id, which is what materializes it (in whatever placement the declaration
-// names). A launch that fails therefore leaves a declared-but-stopped worker
-// the start button (the same `resume`) can retry.
-type webuiDeclCreator struct {
-	store     projworker.DeclStore
-	projectID string
-}
+// webuiDecls reads the project's declarations live, for WorkerDeclProvider. It
+// re-reads on every call, so an edit made through the host (or a worker created
+// or destroyed at runtime) is visible on the next render.
+type webuiDecls struct{ projectID string }
 
-func (c *webuiDeclCreator) Create(body json.RawMessage) (webui.WorkerCreated, error) {
-	if c.projectID == "" {
-		return webui.WorkerCreated{}, fmt.Errorf("worker creation requires a project")
-	}
-	var wc WorkerConfig
-	if err := json.Unmarshal(body, &wc); err != nil {
-		return webui.WorkerCreated{}, fmt.Errorf("bad worker definition: %w", err)
-	}
-	wc = projworker.Instantiate(wc, c.projectID)
-	if err := validateDeclaration(wc); err != nil {
-		return webui.WorkerCreated{}, err
-	}
-	if _, ok, err := c.store.Get(wc.ID); err != nil {
-		return webui.WorkerCreated{}, err
-	} else if ok {
-		return webui.WorkerCreated{}, fmt.Errorf("worker %s already exists", wc.ID)
-	}
-	if err := c.store.Add(&wc); err != nil {
-		return webui.WorkerCreated{}, err
-	}
-
-	placement := projworker.PlacementOf(wc)
-	created := webui.WorkerCreated{
-		ID:        wc.ID,
-		Type:      wc.Type,
-		Managed:   placement == coreworker.PlacementInProcess,
-		Remote:    placement == coreworker.PlacementUnmanagedProcess,
-		Placement: string(placement),
-	}
-	// A dial-in worker's credential is issued when it is resumed. The UI shows
-	// it so the third party can connect; it is read from the declaration, never
-	// returned by the host's bus reply.
-	if placement == coreworker.PlacementUnmanagedProcess && wc.Credential != "" {
-		created.Credential = wc.Credential
-	}
-	return created, nil
-}
-
-// validateDeclaration checks everything that can be checked before a worker
-// exists: identity, display metadata, placement consistency, and the launch
-// spec a process worker needs.
-func validateDeclaration(wc WorkerConfig) error {
-	if wc.Type == "" {
-		return fmt.Errorf("type is required")
-	}
-	if wc.ID == "" {
-		return fmt.Errorf("id is required")
-	}
-	if projworker.SanitizeID(wc.ID) != wc.ID {
-		return fmt.Errorf("id may only contain letters, digits, '-', '_', '.'")
-	}
-	if err := projworker.ValidateMeta(wc); err != nil {
-		return err
-	}
-	switch projworker.PlacementOf(wc) {
-	case coreworker.PlacementInProcess:
-		if len(wc.Command) > 0 || wc.Cwd != "" {
-			return fmt.Errorf("an in-process worker does not take command/cwd")
-		}
-	case coreworker.PlacementManagedProcess:
-		if len(wc.Command) == 0 {
-			return fmt.Errorf("command is required for a managed-process worker")
-		}
-		if err := projworker.ValidateProcessParams(wc.Params); err != nil {
-			return err
-		}
-	case coreworker.PlacementUnmanagedProcess:
-		if len(wc.Command) > 0 {
-			return fmt.Errorf("an unmanaged-process worker starts itself; it must not carry a command")
-		}
-		if len(wc.Params) > 0 {
-			return fmt.Errorf("an unmanaged-process worker cannot carry params: the host has no channel to pass them")
-		}
-	default:
-		return fmt.Errorf("unknown placement %q", wc.Placement)
-	}
-	return nil
-}
-
-// workerMetaFromDecl builds the WebUI's worker display-metadata map (id ⇒
-// label / tags / description) from the declared worker set, for the workers
-// view and the talk target picker. Only declared hosts carry metadata.
-func workerMetaFromDecl(workers []WorkerConfig) map[string]webui.WorkerMeta {
-	if len(workers) == 0 {
-		return nil
-	}
-	m := make(map[string]webui.WorkerMeta, len(workers))
-	for _, wc := range workers {
-		if wc.Label == "" && wc.Tags == nil && wc.Description == "" {
-			continue
-		}
-		m[wc.ID] = webui.WorkerMeta{Label: wc.Label, Tags: wc.Tags, Description: wc.Description}
-	}
-	return m
-}
-
-// webuiParamsProvider implements webui.WorkerParamsProvider: it returns the
-// declared construction params (`params`) of every active worker, read
-// fresh each call so the worker view reflects runtime create/delete.
-type webuiParamsProvider struct {
-	projectID string
-}
-
-func (p webuiParamsProvider) WorkerParamsMap() map[string]map[string]any {
-	set, err := LoadWorkers(p.projectID)
+func (d webuiDecls) WorkerDecls() map[string]webui.WorkerDecl {
+	decls, err := LoadAllWorkerDecls(d.projectID)
 	if err != nil {
 		return nil
 	}
-	m := make(map[string]map[string]any)
-	for _, wc := range set.Workers {
-		if len(wc.Params) > 0 {
-			m[wc.ID] = wc.Params
+	out := make(map[string]webui.WorkerDecl, len(decls))
+	for id, decl := range decls {
+		out[id] = webui.WorkerDecl{
+			Label:       decl.Label,
+			Tags:        decl.Tags,
+			Description: decl.Description,
+			Params:      decl.Params,
 		}
 	}
-	return m
+	return out
 }
 
-// webuiMetaUpdater implements webui.WorkerMetaUpdater: it persists a worker's
-// display metadata (label / tags / description) to its workers.json
-// declaration. Tags are pure WebUI management metadata — the running worker
-// ignores them, so this is a declaration edit only, with no live worker
-// operation.
-type webuiMetaUpdater struct {
+// identityAdmin is the project's bus control plane: the durable half of a bus
+// identity (ACL + credential) lives in the worker's declaration, and the runtime
+// registry is its projection. An ACL edit therefore spans two layers, and this
+// is the ONE place that owns that span — persist first (workers.json is the
+// source), then apply to the registry.
+//
+// It is deliberately not part of worker.Backend: publish/subscribe grants are bus
+// identity data (core/itfs/bus calls its registry the control plane), not part of
+// a worker's lifecycle.
+type identityAdmin struct {
 	projectID string
+	registry  corebus.IdentityRegistry
 }
 
-func (u webuiMetaUpdater) UpdateWorkerMeta(id string, meta webui.WorkerMeta) error {
-	if u.projectID == "" {
-		return fmt.Errorf("worker metadata update requires a project")
+// UpdateACL persists a worker's allow lists and applies them to the live
+// registry, in that order: a crash between the two leaves an on-disk grant the
+// next start re-applies, never a live grant that would vanish.
+func (a identityAdmin) UpdateACL(id string, publish []event.PublishPattern, subscribe []event.EventPattern) error {
+	if a.projectID == "" {
+		return fmt.Errorf("ACL update requires a project")
 	}
-	return UpdateWorkerMeta(u.projectID, id, meta.Label, meta.Tags, meta.Description)
-}
-
-// webuiACLUpdater implements webui.WorkerACLUpdater: bus ACL edits are
-// persisted into workers.json/workers.archived.json.
-type webuiACLUpdater struct{ projectID string }
-
-func (u webuiACLUpdater) UpdateWorkerACL(id string, publish []event.PublishPattern, subscribe []event.EventPattern) error {
-	if u.projectID == "" {
-		return fmt.Errorf("worker ACL update requires a project")
+	if err := UpdateWorkerACL(a.projectID, id, publish, subscribe); err != nil {
+		return err
 	}
-	return UpdateWorkerACL(u.projectID, id, publish, subscribe)
-}
-
-// webuiParamsUpdater implements webui.WorkerParamsUpdater: a params edit lands
-// in the workers.json declaration only, so the running worker keeps its current
-// definition until it is restarted.
-type webuiParamsUpdater struct {
-	projectID string
-}
-
-func (u webuiParamsUpdater) UpdateWorkerParams(id string, params map[string]any) error {
-	if u.projectID == "" {
-		return fmt.Errorf("worker params update requires a project")
+	if a.registry == nil {
+		return nil
 	}
-	return UpdateWorkerParams(u.projectID, id, params)
+	if _, ok := a.registry.Lookup(id); !ok {
+		return nil // declared but no identity yet: registration picks the grant up
+	}
+	return a.registry.Update(id, publish, subscribe)
+}
+
+// webuiSpawnArgs turns the create-form body into the host worker's `spawn`
+// arguments. The form nests type-specific params under "params" while spawn takes
+// them as top-level properties, so this flattens them; everything else (type,
+// id, placement, command, cwd, display metadata, ACL) is already spawn-shaped.
+// Nothing is validated or persisted here — the host does both.
+type webuiSpawnArgs struct{ projectID string }
+
+func (a webuiSpawnArgs) SpawnArgs(body json.RawMessage) (map[string]any, error) {
+	var form map[string]any
+	if err := json.Unmarshal(body, &form); err != nil {
+		return nil, fmt.Errorf("bad worker definition: %w", err)
+	}
+	if a.projectID != "" {
+		form = projworker.InstantiateForm(form, a.projectID)
+	}
+	args := make(map[string]any, len(form)+4)
+	for k, v := range form {
+		args[k] = v
+	}
+	params, ok := args["params"].(map[string]any)
+	if !ok {
+		return args, nil
+	}
+	delete(args, "params")
+	for k, v := range params {
+		if _, taken := args[k]; taken {
+			return nil, fmt.Errorf("param %q collides with the \"%s\" launch field", k, k)
+		}
+		args[k] = v
+	}
+	return args, nil
 }

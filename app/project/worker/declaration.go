@@ -223,6 +223,17 @@ func Instantiate(d Declaration, projectID string) Declaration {
 	return d
 }
 
+// InstantiateForm resolves the same "{project}" placeholders in a raw create-form
+// body (the WebUI's JSON) — params AND launch fields alike — so a form and a
+// template-declared worker are instantiated the same way.
+func InstantiateForm(form map[string]any, projectID string) map[string]any {
+	out, ok := instantiateValue(form, projectID).(map[string]any)
+	if !ok {
+		return form
+	}
+	return out
+}
+
 // instantiateValue walks a params value recursively, replacing {project} in
 // strings and rebuilding slices/maps. It returns nil for nil input.
 func instantiateValue(v any, projectID string) any {

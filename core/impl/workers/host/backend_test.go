@@ -20,6 +20,8 @@ type fakeBackend struct {
 	resumed   []string
 	restarted []string
 	destroyed []string
+	patches   map[string]worker.WorkerPatch
+	archived  map[string]bool
 	createErr error
 	protected map[string]bool
 }
@@ -58,10 +60,27 @@ func (b *fakeBackend) Destroy(_ context.Context, id string) error {
 	return nil
 }
 
+func (b *fakeBackend) Update(_ context.Context, id string, patch worker.WorkerPatch) (worker.WorkerInfo, error) {
+	if b.patches == nil {
+		b.patches = map[string]worker.WorkerPatch{}
+	}
+	b.patches[id] = patch
+	return worker.WorkerInfo{ID: id, State: "running"}, nil
+}
+
+func (b *fakeBackend) Archive(_ context.Context, id string, archived bool) error {
+	if b.archived == nil {
+		b.archived = map[string]bool{}
+	}
+	b.archived[id] = archived
+	return nil
+}
+
 func (b *fakeBackend) Get(string) (worker.WorkerInfo, bool, error) {
 	return worker.WorkerInfo{}, false, nil
 }
 func (b *fakeBackend) List() []worker.WorkerInfo { return nil }
+func (b *fakeBackend) Archived() []string        { return nil }
 
 // call dispatches one host tool and returns its completed payload, or the
 // failure message.
@@ -205,5 +224,81 @@ func TestDestroyRefusesProtected(t *testing.T) {
 	}
 	if len(be.destroyed) != 0 {
 		t.Fatal("backend was asked to destroy a protected worker")
+	}
+}
+
+// TestUpdateSendsOnlyGivenFields verifies the host distinguishes "omitted" from
+// "cleared": a missing key must leave that part of the declaration alone, while
+// an empty list / object clears it.
+func TestUpdateSendsOnlyGivenFields(t *testing.T) {
+	ch := &recordingChannel{}
+	be := &fakeBackend{}
+	w := New(Config{ID: "host", Bus: ch, Engine: be})
+
+	if _, ok := call(t, w, ch, TypeUpdate, map[string]any{
+		"worker_id": "r1",
+		"label":     "值班",
+		"tags":      []any{"ops"},
+	}); !ok {
+		t.Fatal("update failed")
+	}
+	patch := be.patches["r1"]
+	if patch.Label == nil || *patch.Label != "值班" {
+		t.Fatalf("label = %v", patch.Label)
+	}
+	if len(patch.Tags) != 1 || patch.Tags[0] != "ops" {
+		t.Fatalf("tags = %+v", patch.Tags)
+	}
+	if patch.Description != nil || patch.Params != nil {
+		t.Fatalf("omitted fields were sent: %+v", patch)
+	}
+
+	// Present-but-empty clears.
+	if _, ok := call(t, w, ch, TypeUpdate, map[string]any{
+		"worker_id": "r1",
+		"tags":      []any{},
+		"params":    map[string]any{},
+	}); !ok {
+		t.Fatal("update (clear) failed")
+	}
+	patch = be.patches["r1"]
+	if patch.Tags == nil || len(patch.Tags) != 0 {
+		t.Fatalf("tags = %+v, want an empty (non-nil) list", patch.Tags)
+	}
+	if patch.Params == nil || len(patch.Params) != 0 {
+		t.Fatalf("params = %+v, want an empty (non-nil) map", patch.Params)
+	}
+
+	// update takes a worker id.
+	if _, ok := call(t, w, ch, TypeUpdate, map[string]any{"label": "x"}); ok {
+		t.Fatal("update without worker_id succeeded")
+	}
+}
+
+// TestArchiveForwardsIntent verifies archive is one backend call carrying the
+// direction, and that a protected worker is refused before the backend sees it.
+func TestArchiveForwardsIntent(t *testing.T) {
+	ch := &recordingChannel{}
+	be := &fakeBackend{protected: map[string]bool{"host": true}}
+	w := New(Config{ID: "host", Bus: ch, Engine: be})
+
+	if _, ok := call(t, w, ch, TypeArchive, map[string]any{"worker_id": "r1", "archived": true}); !ok {
+		t.Fatal("archive failed")
+	}
+	if !be.archived["r1"] {
+		t.Fatalf("archived = %v, want true", be.archived)
+	}
+	if _, ok := call(t, w, ch, TypeArchive, map[string]any{"worker_id": "r1", "archived": false}); !ok {
+		t.Fatal("unarchive failed")
+	}
+	if be.archived["r1"] {
+		t.Fatal("unarchive did not forward archived=false")
+	}
+
+	if _, ok := call(t, w, ch, TypeArchive, map[string]any{"worker_id": "host", "archived": true}); ok {
+		t.Fatal("archiving a protected worker succeeded")
+	}
+	if _, ok := be.archived["host"]; ok {
+		t.Fatal("protected worker reached the backend")
 	}
 }

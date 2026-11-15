@@ -390,15 +390,14 @@ func runAssembly(opts assemblyOptions) error {
 						s.SetUploadDir(opts.UploadDir)
 					}
 					if opts.ContextInfo.Project != "" {
-						s.SetArchivedStore(projectArchiver{id: opts.ContextInfo.Project})
-						s.SetWorkerMeta(workerMetaFromDecl(opts.Workers))
-						s.SetWorkerMetaUpdater(webuiMetaUpdater{projectID: opts.ContextInfo.Project})
-						s.SetWorkerParamsProvider(webuiParamsProvider{projectID: opts.ContextInfo.Project})
-						s.SetWorkerParamsUpdater(webuiParamsUpdater{projectID: opts.ContextInfo.Project})
-						s.SetWorkerACLUpdater(webuiACLUpdater{projectID: opts.ContextInfo.Project})
-						s.SetWorkerDeclCreator(&webuiDeclCreator{
-							store:     declStore,
+						// Read-only declaration projection + input translation.
+						// Every write is a bus call: worker operations to the host,
+						// bus ACL to the identity administrator (the control plane).
+						s.SetWorkerDeclProvider(webuiDecls{projectID: opts.ContextInfo.Project})
+						s.SetWorkerSpawnArgs(webuiSpawnArgs{projectID: opts.ContextInfo.Project})
+						s.SetACLAdmin(identityAdmin{
 							projectID: opts.ContextInfo.Project,
+							registry:  registry,
 						})
 					}
 					b, err := s.Bind()

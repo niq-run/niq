@@ -25,4 +25,10 @@ type DeclStore interface {
 	// SetCredential persists a generated bus credential onto a declaration, so
 	// an unmanaged-process worker reuses it across restarts.
 	SetCredential(id, credential string) error
+	// Archive moves a declaration between the active and archived files. An
+	// archived declaration is kept verbatim (it can be restored unchanged); a
+	// missing id in the source file is a no-op.
+	Archive(id string, archived bool) error
+	// Archived returns the ids held in the archived file.
+	Archived() ([]string, error)
 }

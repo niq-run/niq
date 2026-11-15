@@ -6,7 +6,8 @@ package host
 func (w *HostWorker) registerReadme() {
 	w.RegisterReadme(
 		"Read this worker's usage guide: lifecycle tools (spawn/suspend/resume/restart/destroy), "+
-			"the placements a worker can run in, worker.help, and what host deliberately does not own.",
+			"declaration edits (update/archive), the placements a worker can run in, worker.help, "+
+			"and what host deliberately does not own.",
 		w.readmeText, w.params)
 }
 
@@ -61,6 +62,13 @@ the third belongs to whoever runs it.
   follow the declaration; what the worker itself persisted survives.
 - destroy { worker_id } — stop it and remove its declaration, persisted state,
   bus connection and identity. Irreversible; the removal happens immediately.
+- update { worker_id, label?, tags?, description?, params? } — edit the
+  DECLARATION only; nothing is started or stopped. Display metadata is visible
+  immediately; ` + "`params`" + ` are build input, so they take effect on the next start
+  (restart to apply now). Omitted fields stay as they are, empty ones clear.
+- archive { worker_id, archived } — move a worker into or out of the archived
+  set. Archiving stops it and drops its bus identity but keeps its declaration,
+  so it can be restored unchanged. Not a delete.
 - worker.help { event_name, params? } — per-event help for THIS worker, like a
   CLI's ` + "`-h`" + `. Call it before a non-trivial spawn, e.g.
   ` + "`{event_name: \"spawn\", params: {worker: \"reason\"}}`" + `.
@@ -80,8 +88,13 @@ the third belongs to whoever runs it.
 
 ## Notes
 
-- Host manages lifecycles only: it does not list capabilities or search. That is
-  the directory worker's job; the two are complements, not duplicates.
+- Host manages lifecycles and declarations only: it does not list capabilities or
+  search. That is the directory worker's job; the two are complements, not
+  duplicates.
+- Bus ACL is not a host tool: publish/subscribe grants belong to the bus's
+  identity control plane, not to a worker's lifecycle. An ACL edit is made
+  through the bus identity layer, and it lands in the declaration it derives
+  from.
 - Spawn is a normal tool, not a privileged API; a reason worker may spawn peers.
 - Spawn parameters are checked per type: a key the type does not read fails the
   call and the error lists what it accepts. ` + "`prompt`" + ` is not a reason
