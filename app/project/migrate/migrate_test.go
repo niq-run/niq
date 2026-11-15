@@ -212,11 +212,20 @@ func TestNormalizeNamesRewritesRetiredVocabulary(t *testing.T) {
 	for _, w := range set.Workers {
 		got[w.ID] = w.Type
 	}
-	want := map[string]string{"webui": "interface", "niw-niqa": "niq", "far": "niq", "ws": "workspace"}
+	// The WebUI's declaration is DROPPED, not renamed: it is app-hosted now, and a
+	// leftover declaration would show a phantom stopped worker that can never start
+	// (type interface has no builder).
+	want := map[string]string{"niw-niqa": "niq", "far": "niq", "ws": "workspace"}
 	for id, typ := range want {
 		if got[id] != typ {
 			t.Errorf("worker %s: type = %q, want %q (all: %v)", id, got[id], typ, got)
 		}
+	}
+	if _, ok := got["webui"]; ok {
+		t.Errorf("the webui declaration survived: %v", got)
+	}
+	if _, ok := got["webui-hiw"]; ok {
+		t.Errorf("the webui-hiw declaration survived: %v", got)
 	}
 	for _, w := range set.Workers {
 		if w.ID != "ws" {

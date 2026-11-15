@@ -507,9 +507,11 @@ func normalizeNames(dir string) error {
 func rewriteWorkerSet(set map[string]any) bool {
 	workers, _ := set["workers"].([]any)
 	changed := false
+	kept := make([]any, 0, len(workers))
 	for _, raw := range workers {
 		d, ok := raw.(map[string]any)
 		if !ok {
+			kept = append(kept, raw)
 			continue
 		}
 		if id, ok := d["id"].(string); ok {
@@ -545,6 +547,18 @@ func rewriteWorkerSet(set map[string]any) bool {
 				}
 			}
 		}
+		// The WebUI's own declaration is a leftover: its worker is app-hosted now
+		// (the assembly joins it and declares its grants in code), so keeping the
+		// declaration would only make the roster show a phantom "stopped" worker
+		// whose start can never succeed — the type has no builder.
+		if id, _ := d["id"].(string); id == "webui" {
+			changed = true
+			continue
+		}
+		kept = append(kept, d)
+	}
+	if changed {
+		set["workers"] = kept
 	}
 	return changed
 }
