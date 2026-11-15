@@ -148,5 +148,15 @@ lock as the lifecycle verbs, so an edit cannot interleave with a stop.
 
 Bus ACL is deliberately NOT here. `core/itfs/bus` calls its identity registry
 the control plane and already offers `Update(workerID, pubAllow, subAllow)`, so
-an ACL edit belongs to the bus side (`app/project`'s `identityAdmin`, which
+an ACL edit belongs to the bus side (`ACLAdmin` in `acl.go`, which
 persists the grant into the declaration and then applies it to the registry).
+
+## Bus identity (`acl.go`)
+
+`ACLAdmin` edits publish/subscribe grants. It is a separate capability from the
+backend because grants are identity data, not lifecycle state: `core/itfs/bus`
+calls its registry the control plane and offers `Update` for exactly this. What it
+owns is the span across two layers — the durable grant lives in the declaration
+(workers.json), the live one in the runtime registry — so it writes the
+declaration first and applies the registry second. A crash in between leaves an
+on-disk grant the next start re-applies, never a live grant that vanishes.

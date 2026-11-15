@@ -71,6 +71,10 @@ type BuildContext struct {
 	// assembly uses for recovery and shutdown. It is the full lifecycle +
 	// declaration-editing surface, because the host's tools expose both.
 	WorkerBackend coreworker.Backend
+	// ACLAdmin is the bus identity administrator the host exposes as acl.update.
+	// It is a separate capability from WorkerBackend: grants are identity data,
+	// not lifecycle state.
+	ACLAdmin coreworker.ACLAdmin
 }
 
 // RegisterBuilders registers a Builder for every known worker type onto service.
@@ -463,7 +467,7 @@ func buildHostSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Sp
 		},
 		[]event.EventPattern{event.NewPattern("worker.discover")})
 	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
-		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerBackend, Params: p})
+		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerBackend, ACL: ctx.ACLAdmin, Params: p})
 	}
 	cfg.ID = id
 	cfg.Type = "host"

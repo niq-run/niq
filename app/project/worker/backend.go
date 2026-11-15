@@ -96,7 +96,7 @@ func NewBackend(cfg BackendConfig) *workerHostBackend {
 	}
 	if b.service != nil && b.decls != nil {
 		b.service.SetSpawnHook(func(cfg coreworker.WorkerConfig) error {
-			d := DeclFromSpec(coreworker.WorkerSpec{WorkerConfig: cfg})
+			d := b.declFromSpec(coreworker.WorkerSpec{WorkerConfig: cfg})
 			if _, ok, err := b.decls.Get(d.ID); err != nil || ok {
 				return err
 			}
@@ -259,7 +259,7 @@ func (b *workerHostBackend) createInProcess(ctx context.Context, spec coreworker
 
 // createManagedProcess declares + provisions + launches an OS process.
 func (b *workerHostBackend) createManagedProcess(spec coreworker.WorkerSpec) (coreworker.WorkerInfo, error) {
-	d := DeclFromSpec(spec)
+	d := b.declFromSpec(spec)
 	d.Placement = coreworker.PlacementManagedProcess
 	if err := b.decls.Add(&d); err != nil {
 		return coreworker.WorkerInfo{}, err
@@ -283,7 +283,7 @@ func (b *workerHostBackend) createManagedProcess(spec coreworker.WorkerSpec) (co
 // which is deliberately NOT part of the reply (it is read from the
 // declaration by the UI).
 func (b *workerHostBackend) createUnmanagedProcess(spec coreworker.WorkerSpec) (coreworker.WorkerInfo, error) {
-	d := DeclFromSpec(spec)
+	d := b.declFromSpec(spec)
 	d.Placement = coreworker.PlacementUnmanagedProcess
 	if err := b.decls.Add(&d); err != nil {
 		return coreworker.WorkerInfo{}, err
@@ -344,6 +344,14 @@ func (b *workerHostBackend) Update(_ context.Context, id string, patch coreworke
 	}
 	b.logf("[worker %s] updated %s", b.projectID, id)
 	return b.infoFor(&next), nil
+}
+
+// declFromSpec lowers a spec into a declaration for THIS project, resolving the
+// template-layer "{project}" placeholder. Every declaration the backend writes
+// goes through it, so a worker created from a form and a worker seeded from a
+// template end up with identical, fully-resolved params.
+func (b *workerHostBackend) declFromSpec(spec coreworker.WorkerSpec) Declaration {
+	return Instantiate(DeclFromSpec(spec), b.projectID)
 }
 
 // validateParams checks a declaration's params against whatever consumes them:
@@ -750,6 +758,27 @@ func (b *workerHostBackend) isArchived(id string) bool {
 		}
 	}
 	return false
+}
+
+// Declarations returns the active declarations as core-neutral views, for a
+// display layer that renders labels and construction params. Archived workers are
+// absent by construction (they are not part of the active set).
+func (b *workerHostBackend) Declarations() map[string]coreworker.Decl {
+	decls, err := b.decls.List()
+	if err != nil {
+		b.logf("[worker %s] list declarations: %v", b.projectID, err)
+		return nil
+	}
+	out := make(map[string]coreworker.Decl, len(decls))
+	for _, d := range decls {
+		out[d.ID] = coreworker.Decl{
+			Label:       d.Label,
+			Tags:        d.Tags,
+			Description: d.Description,
+			Params:      d.Params,
+		}
+	}
+	return out
 }
 
 // Archived returns the ids held in the archived file. It is what the WebUI's

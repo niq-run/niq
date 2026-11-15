@@ -131,12 +131,9 @@ type Server struct {
 	ctxMu   sync.RWMutex
 	context ContextInfo
 
-	// Declaration projections are READ-only and read live (per request), so an
-	// edit made through the host shows up immediately. Every WRITE goes to the
-	// host worker over the bus; nothing here persists anything.
-	decls       WorkerDeclProvider
-	spawnArgs   WorkerSpawnArgs
-	identityACL IdentityACLAdmin
+	// Every worker WRITE is a bus request to the host worker; every worker READ is
+	// the injected catalog or registry. Nothing here persists anything, so there
+	// is no declaration store or ACL writer to inject.
 
 	// Uploads: projectDir is the on-disk project directory
 	// (~/.niq/projects/<id>), uploadDir an optional config override
@@ -314,11 +311,6 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	return nil
 }
-
-// SetACLAdmin attaches the bus identity administrator: the bus's control plane
-// is the authority on publish/subscribe grants, so an ACL edit is not a worker
-// lifecycle operation. nil falls back to a registry-only edit.
-func (s *Server) SetACLAdmin(a IdentityACLAdmin) { s.identityACL = a }
 
 // SetWorkerCatalog attaches the lifecycle read model: which workers are
 // declared, where each one runs, and what state its owner reports. Every write
@@ -950,40 +942,6 @@ func sanitizeFileName(name string) string {
 	return out
 }
 
-// WorkerDecl is the read-only declaration view the UI renders: how a worker is
-// labelled and how it is built. It carries no credential (that is the bus
-// identity's business) and no placement/state (that is the lifecycle catalog's).
-type WorkerDecl struct {
-	Label       string         `json:"label,omitempty"`
-	Tags        []string       `json:"tags,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Params      map[string]any `json:"params,omitempty"`
-}
-
-// WorkerDeclProvider returns every declared worker's read-only view, keyed by
-// id. It is read per request, so an edit made through the host — or a worker
-// created/destroyed at runtime — shows up immediately. Implemented by the
-// assembly layer; nil means the UI shows no labels or params.
-type WorkerDeclProvider interface {
-	WorkerDecls() map[string]WorkerDecl
-}
-
-// SetWorkerDeclProvider attaches the declaration read projection.
-func (s *Server) SetWorkerDeclProvider(p WorkerDeclProvider) { s.decls = p }
-
-// SetWorkerSpawnArgs attaches the create-form translator. Without it
-// POST /api/workers/create is disabled.
-func (s *Server) SetWorkerSpawnArgs(a WorkerSpawnArgs) { s.spawnArgs = a }
-
-// IdentityACLAdmin edits a worker's publish/subscribe grants. The bus calls its
-// identity registry the control plane and already offers an Update for exactly
-// this, so an ACL edit belongs to the bus, not to a worker's lifecycle backend.
-// The implementation persists the grant into the declaration (the durable
-// source) and then applies it to the runtime registry.
-type IdentityACLAdmin interface {
-	UpdateACL(id string, publish []event.PublishPattern, subscribe []event.EventPattern) error
-}
-
 // WorkerView is the unified view of a worker: its registered identity (from
 // the bus registry), its connection status, and — if host-managed — its
 // lifecycle state, or if external — its supervision state. Tags and a
@@ -1020,11 +978,11 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		online[id] = true
 	}
 
-	// Declarations (labels, tags, params), read live so the view reflects edits,
-	// creates and destroys immediately.
-	var decls map[string]WorkerDecl
-	if s.decls != nil {
-		decls = s.decls.WorkerDecls()
+	// Declarations (labels, tags, params) come from the same catalog, read live
+	// so the view reflects edits, creates and destroys immediately.
+	var decls map[string]worker.Decl
+	if s.catalog != nil {
+		decls = s.catalog.Declarations()
 	}
 
 	// The lifecycle catalog is the authority on who is declared, where each
@@ -1099,6 +1057,14 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(views)
 }
 
+// declaredIn reports whether the catalog knows the worker, so an offline but
+// declared worker can still have its grants edited (the next start registers the
+// identity and picks the persisted grant up).
+func declaredIn(c worker.Catalog, id string) bool {
+	_, ok, err := c.Get(id)
+	return err == nil && ok
+}
+
 // handleUpdateAllow edits a worker's allow lists on the bus registry. The
 // request may carry either or both lists; a missing one keeps the current
 // value, so callers can edit just subscribe_allow (or just publish_allow)
@@ -1107,7 +1073,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateAllow(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	idt, online := s.registry.Lookup(id)
-	if !online && s.identityACL == nil {
+	if !online && (s.catalog == nil || !declaredIn(s.catalog, id)) {
 		http.Error(w, "worker not found", http.StatusNotFound)
 		return
 	}
@@ -1145,19 +1111,16 @@ func (s *Server) handleUpdateAllow(w http.ResponseWriter, r *http.Request) {
 		subAllow = out
 	}
 
-	// One call, one owner: the bus control plane persists the grant into the
-	// declaration (the durable source) and then applies it to the runtime
-	// registry, in that order, under its own lock.
-	if s.identityACL != nil {
-		if err := s.identityACL.UpdateACL(id, pubAllow, subAllow); err != nil {
-			http.Error(w, "update allow: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	} else if online {
-		if err := s.registry.Update(id, pubAllow, subAllow); err != nil {
-			http.Error(w, "update allow: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+	// One bus call, one owner: the host routes it to the identity administrator,
+	// which persists the grant into the declaration (the durable source) and then
+	// applies it to the runtime registry.
+	if _, err := s.callHost(r.Context(), "acl.update", map[string]any{
+		"worker_id":       id,
+		"publish_allow":   pubAllow,
+		"subscribe_allow": subAllow,
+	}); err != nil {
+		http.Error(w, "update allow: "+err.Error(), http.StatusBadGateway)
+		return
 	}
 	log.Printf("[webui] updated allow lists for %s", id)
 	w.Header().Set("Content-Type", "application/json")
@@ -1573,23 +1536,21 @@ func (s *Server) handleUnmanagedRestart(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleWorkerCreate creates a worker through the host worker's `spawn` tool —
-// the same single step an agent uses: validate, declare and start. The form
-// body is only translated into spawn arguments; nothing is persisted here.
+// the same single step an agent uses: validate, declare and start. The form body
+// IS the spawn argument object (a nested `params` object is accepted and
+// flattened by the host), so nothing is translated or persisted here.
 func (s *Server) handleWorkerCreate(w http.ResponseWriter, r *http.Request) {
-	if s.spawnArgs == nil {
-		http.Error(w, "worker creation unavailable", 404)
-		return
-	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	args, err := s.spawnArgs.SpawnArgs(body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	args := map[string]any{}
+	if err := json.Unmarshal(body, &args); err != nil {
+		http.Error(w, "bad worker definition: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
 	reply, err := s.callHost(r.Context(), "spawn", args)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {

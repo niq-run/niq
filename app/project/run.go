@@ -312,6 +312,14 @@ func runAssembly(opts assemblyOptions) error {
 		return fmt.Errorf("project: seed remote identities: %w", err)
 	}
 
+	// Bus identity editing is its own capability: grants live in the declaration
+	// (durable) and in the registry (live projection), so one owner spans both.
+	aclAdmin := &projworker.ACLAdmin{
+		ProjectID: opts.ContextInfo.Project,
+		Decls:     declStore,
+		Registry:  registry,
+	}
+
 	// Build context and register builders.
 	buildCtx := projworker.BuildContext{
 		Registry:      registry,
@@ -319,6 +327,7 @@ func runAssembly(opts assemblyOptions) error {
 		Engine:        engine,
 		WorkerSvc:     workerSvc,
 		WorkerBackend: backend,
+		ACLAdmin:      aclAdmin,
 		EventLog:      eventLog,
 		EventStore:    evtStore,
 		ProgramsRoot:  opts.ProgramsRoot,
@@ -389,17 +398,9 @@ func runAssembly(opts assemblyOptions) error {
 					if opts.UploadDir != "" {
 						s.SetUploadDir(opts.UploadDir)
 					}
-					if opts.ContextInfo.Project != "" {
-						// Read-only declaration projection + input translation.
-						// Every write is a bus call: worker operations to the host,
-						// bus ACL to the identity administrator (the control plane).
-						s.SetWorkerDeclProvider(webuiDecls{projectID: opts.ContextInfo.Project})
-						s.SetWorkerSpawnArgs(webuiSpawnArgs{projectID: opts.ContextInfo.Project})
-						s.SetACLAdmin(identityAdmin{
-							projectID: opts.ContextInfo.Project,
-							registry:  registry,
-						})
-					}
+					// Nothing worker-related to inject: reads come from the
+					// catalog/registry the server was constructed with, and every
+					// write — including ACL edits — is a bus request to the host.
 					b, err := s.Bind()
 					if err != nil {
 						return "", err

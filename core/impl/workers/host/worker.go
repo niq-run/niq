@@ -41,6 +41,10 @@ type Config struct {
 	ID     string
 	Bus    corebus.WorkerSideChannel // data-plane client
 	Engine Control                   // lifecycle + declaration backend
+	// ACL is the bus identity administrator. Grants are bus state, not
+	// lifecycle state, so they arrive through their own port; nil disables the
+	// acl.update tool.
+	ACL worker.ACLAdmin
 	// Params is the declaration's construction params, read only for the
 	// optional readme/readme_append guide customization.
 	Params map[string]any
@@ -48,12 +52,14 @@ type Config struct {
 
 // HostWorker is a bus-facing worker that manages other worker lifecycles.
 // It subscribes to its tool events and worker.discover, and exposes
-// spawn/suspend/resume/restart/destroy/update/archive on the bus. Actual
-// operations are delegated to the backend; the host adds only the bus protocol
+// spawn/suspend/resume/restart/destroy/update/archive/acl.update on the bus.
+// Actual operations are delegated to the backend (lifecycle + declarations) and
+// the ACL administrator (bus identity); the host adds only the bus protocol
 // (validation, protected ids, reply shaping).
 type HostWorker struct {
 	baseworker.BaseWorker
 	engine  Control
+	acl     worker.ACLAdmin
 	params  map[string]any
 	started bool
 	cancel  context.CancelFunc
@@ -69,6 +75,7 @@ func New(cfg Config) *HostWorker {
 	w := &HostWorker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		engine:     cfg.Engine,
+		acl:        cfg.ACL,
 		params:     cfg.Params,
 	}
 	w.registerExtensions()

@@ -1,6 +1,10 @@
 package worker
 
-import "context"
+import (
+	"context"
+
+	"github.com/niq-run/niq/core/itfs/event"
+)
 
 // Placement is where a worker runs and who owns its lifecycle. It replaces the
 // old managed / external / remote spelling, which conflated two questions:
@@ -117,10 +121,21 @@ type Archiver interface {
 	Archive(ctx context.Context, id string, archived bool) error
 }
 
+// Decl is the read-only, core-neutral view of a worker's declaration: what it
+// is called and how it is built. It exists so a display layer (the WebUI) can
+// render labels and params without knowing where declarations are stored or what
+// the project's declaration model looks like.
+type Decl struct {
+	Label       string         `json:"label,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Params      map[string]any `json:"params,omitempty"`
+}
+
 // Catalog is the read-only half: what the backend knows, regardless of whether
 // the worker is live. It answers lifecycle questions only — which workers
-// exist and what state they are in. Capability discovery (who serves which
-// tools) belongs to the directory worker.
+// exist, what state they are in, and what they are declared to be. Capability
+// discovery (who serves which tools) belongs to the directory worker.
 type Catalog interface {
 	Get(id string) (WorkerInfo, bool, error)
 	// List returns the active (non-archived) declared workers.
@@ -129,6 +144,22 @@ type Catalog interface {
 	// not part of the active set. It is separate from List so ordinary roster
 	// and discovery views never have to filter them out.
 	Archived() []string
+	// Declarations returns the ACTIVE declarations keyed by worker id, for views
+	// that render labels and construction params. Archived workers are absent
+	// (they are not part of the active set); read their ids from Archived.
+	Declarations() map[string]Decl
+}
+
+// ACLAdmin edits a worker's bus identity: the publish/subscribe grants that say
+// what it may send and hear.
+//
+// It is deliberately NOT part of Backend. Grants are identity data, not
+// lifecycle state — core/itfs/bus already calls its identity registry the
+// control plane and offers Update for exactly this — and the durable half lives
+// in the declaration. An implementation therefore spans two layers (persist the
+// declaration, then apply to the runtime registry) and owns that ordering.
+type ACLAdmin interface {
+	UpdateACL(id string, publish []event.PublishPattern, subscribe []event.EventPattern) error
 }
 
 // RecoverOptions parameterizes Backend.Recover: the declared worker set to

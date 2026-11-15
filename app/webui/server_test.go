@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/niq-run/niq/core/impl/eventbus"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -50,40 +51,25 @@ func TestBindDynamicWebUIPort(t *testing.T) {
 // TestHandleUpdateAllow verifies PUT /api/workers/{id}/allow edits the bus
 // registry: subscribe_allow is replaced wholesale (source restriction kept),
 // a missing publish_allow keeps the current value, and unknown workers 404.
-func TestHandleUpdateAllow(t *testing.T) {
-	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(t.TempDir(), "identities.json"))
-	if err != nil {
-		t.Fatalf("registry: %v", err)
-	}
-	if err := registry.Register(corebus.Identity{
-		WorkerID:       "w1",
-		Type:           "timer",
-		PublishAllow:   []event.PublishPattern{event.NewPublishPattern("*")},
-		SubscribeAllow: []event.EventPattern{{Type: "worker.discover"}},
-	}); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-
-	s := New(nil, nil, nil, nil, registry, ":0", false)
-	addr, err := s.Bind()
-	if err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Start(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+// TestHandleUpdateAllowGoesThroughHost verifies an ACL edit is one bus call to the
+// host's acl.update tool. The WebUI no longer touches the registry or any file:
+// it only normalizes the request (an absent list keeps the current value, an
+// omitted subscription source becomes the any-source wildcard).
+func TestHandleUpdateAllowGoesThroughHost(t *testing.T) {
+	rig := newLifecycleRig(t)
+	// The rig's registry holds webui-hiw and host; add the worker being edited so
+	// the "keep the other list" path has a current value to keep.
+	t.Cleanup(func() {})
 
 	put := func(id, body string) (*http.Response, error) {
-		req, err := http.NewRequest("PUT", "http://"+addr+"/api/workers/"+id+"/allow", strings.NewReader(body))
+		req, err := http.NewRequest("PUT", "http://"+rig.addr+"/api/workers/"+id+"/allow", strings.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		return http.DefaultClient.Do(req)
 	}
 
-	// Source-restricted subscription replaces the list; publish_allow untouched.
-	resp, err := put("w1", `{"subscribe_allow":[{"type":"request.completed","source_id":"timer"},{"type":"worker.ready"}]}`)
+	resp, err := put("webui-hiw", `{"subscribe_allow":[{"type":"request.completed","source_id":"timer"},{"type":"worker.ready"}]}`)
 	if err != nil {
 		t.Fatalf("PUT allow: %v", err)
 	}
@@ -91,33 +77,28 @@ func TestHandleUpdateAllow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PUT allow status = %d, want 200", resp.StatusCode)
 	}
-
-	idt, ok := registry.Lookup("w1")
-	if !ok {
-		t.Fatal("identity gone after update")
+	payload := expectHostCall(t, rig, "webui-hiw")
+	if payload["worker_id"] != "webui-hiw" {
+		t.Fatalf("payload = %v", payload)
 	}
-	if len(idt.SubscribeAllow) != 2 ||
-		idt.SubscribeAllow[0].Type != "request.completed" || idt.SubscribeAllow[0].SourceID != "timer" ||
-		// An omitted source is stored as the canonical any-source wildcard.
-		idt.SubscribeAllow[1].Type != "worker.ready" || idt.SubscribeAllow[1].SourceID != "*" {
-		t.Fatalf("subscribe_allow = %+v, want [request.completed@timer, worker.ready@*]", idt.SubscribeAllow)
+	// publish_allow was omitted, so the current grants travel unchanged.
+	if pubs, ok := payload["publish_allow"].([]any); !ok || len(pubs) == 0 {
+		t.Fatalf("publish_allow = %v, want the current list", payload["publish_allow"])
 	}
-	if len(idt.PublishAllow) != 1 || idt.PublishAllow[0].Type != "*" {
-		t.Fatalf("publish_allow clobbered = %+v, want [*]", idt.PublishAllow)
+	subs, ok := payload["subscribe_allow"].([]any)
+	if !ok || len(subs) != 2 {
+		t.Fatalf("subscribe_allow = %v", payload["subscribe_allow"])
 	}
-
-	// Empty subscribe_allow clears the list (worker receives no broadcasts).
-	resp, err = put("w1", `{"subscribe_allow":[]}`)
-	if err != nil {
-		t.Fatalf("PUT clear: %v", err)
+	first, _ := subs[0].(map[string]any)
+	if first["type"] != "request.completed" || first["source"] != "timer" {
+		t.Fatalf("first grant = %v", first)
 	}
-	resp.Body.Close()
-	idt, _ = registry.Lookup("w1")
-	if len(idt.SubscribeAllow) != 0 {
-		t.Fatalf("clear failed: subscribe_allow = %+v", idt.SubscribeAllow)
+	second, _ := subs[1].(map[string]any)
+	if second["type"] != "worker.ready" || second["source"] != "*" {
+		t.Fatalf("an omitted source must be stored as the any-source wildcard: %v", second)
 	}
 
-	// Unknown worker → 404.
+	// Unknown worker: refused before any bus call.
 	resp, err = put("nope", `{"subscribe_allow":[]}`)
 	if err != nil {
 		t.Fatalf("PUT unknown: %v", err)
@@ -125,6 +106,11 @@ func TestHandleUpdateAllow(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown worker status = %d, want 404", resp.StatusCode)
+	}
+	select {
+	case p := <-rig.hostReqs:
+		t.Fatalf("unknown worker reached the host: %v", p)
+	case <-time.After(150 * time.Millisecond):
 	}
 }
 
@@ -397,6 +383,7 @@ func fakeBuilderSpec(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 type stubCatalog struct {
 	infos    []worker.WorkerInfo
 	archived []string
+	decls    map[string]worker.Decl
 }
 
 func (c *stubCatalog) Get(id string) (worker.WorkerInfo, bool, error) {
@@ -411,6 +398,8 @@ func (c *stubCatalog) Get(id string) (worker.WorkerInfo, bool, error) {
 func (c *stubCatalog) List() []worker.WorkerInfo { return c.infos }
 
 func (c *stubCatalog) Archived() []string { return c.archived }
+
+func (c *stubCatalog) Declarations() map[string]worker.Decl { return c.decls }
 
 // archived is the archived-id set the archive panel renders.
 type stubCatalogArchived = []string
@@ -511,13 +500,15 @@ func TestHandleUnmanagedStartRequiresHost(t *testing.T) {
 		t.Fatalf("start status = %d, want 502 (host offline)", resp.StatusCode)
 	}
 
-	resp, err = http.Post("http://"+addr+"/api/workers/create", "application/json", strings.NewReader(`{}`))
+	// Create is a bus call too: with the host offline it reports the same
+	// actionable failure as start, not "endpoint unavailable".
+	resp, err = http.Post("http://"+addr+"/api/workers/create", "application/json", strings.NewReader(`{"type":"reason","id":"r1"}`))
 	if err != nil {
 		t.Fatalf("POST create: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("create status = %d, want 404 without a creator", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create status = %d, want 400 (host offline)", resp.StatusCode)
 	}
 }
 

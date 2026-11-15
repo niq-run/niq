@@ -707,3 +707,19 @@ func TestArchiveIsIdempotent(t *testing.T) {
 		t.Fatal("restoring an unknown worker succeeded")
 	}
 }
+
+// TestCreateResolvesProjectPlaceholder verifies the declaration layer resolves
+// "{project}" for every create path, so a worker made from a UI form ends up with
+// the same fully-resolved params a template-seeded worker has.
+func TestCreateResolvesProjectPlaceholder(t *testing.T) {
+	rig := newTestRig(t)
+	if _, err := rig.backend.Create(context.Background(), coreworker.WorkerSpec{
+		WorkerConfig: coreworker.WorkerConfig{ID: "w1", Type: "fake", Params: map[string]any{"name": "{project}-ws"}},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	d, _, _ := rig.decls.Get("w1")
+	if d.Params["name"] != "test-ws" {
+		t.Fatalf("params = %+v, want the project id substituted", d.Params)
+	}
+}

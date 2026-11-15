@@ -25,6 +25,10 @@ const (
 	// TypeArchive moves a worker in or out of the archived set: one operation,
 	// because "stop it, hide its declaration, drop its identity" is one intent.
 	TypeArchive event.EventType = "archive"
+	// TypeUpdateACL edits a worker's bus identity: its publish/subscribe grants.
+	// It is a separate tool from `update` because it is a different domain —
+	// identity data owned by the bus control plane, not a worker's declaration.
+	TypeUpdateACL event.EventType = "acl.update"
 )
 
 // registerExtensions declares the host tools: each is an extension served by
@@ -221,6 +225,48 @@ func (w *HostWorker) registerExtensions() {
 		result, err := w.handleArchive(tc)
 		w.reply(evt, result, err)
 	})
+
+	if w.acl != nil {
+		w.Register(baseworker.Extension{
+			Event:       TypeUpdateACL,
+			Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"updated"}}}),
+			Description: "Edit a worker's bus identity: what it may publish and what it subscribes to. Both lists are replaced wholesale. This is identity data, not lifecycle: it takes effect immediately for routing, it is persisted into the worker's declaration (the durable source), and it does not restart anything. A worker that is not declared or registered is an error.",
+			Parameters: obj(map[string]any{
+				"worker_id": map[string]any{
+					"type":        "string",
+					"description": "ID of the worker whose grants change.",
+				},
+				"publish_allow": map[string]any{
+					"type":        "array",
+					"description": "Grants to publish. Each entry is {type, target?}: the event type (supports \"*\" and \"Prefix.*\") and, optionally, the only target a directed send may reach. Replaces the whole list.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":   map[string]any{"type": "string"},
+							"target": map[string]any{"type": "string"},
+						},
+						"required": []string{"type"},
+					},
+				},
+				"subscribe_allow": map[string]any{
+					"type":        "array",
+					"description": "Grants to subscribe. Each entry is {type, source?}: the event pattern and, optionally, the only worker whose broadcasts it accepts (omitted means any). Replaces the whole list.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":   map[string]any{"type": "string"},
+							"source": map[string]any{"type": "string"},
+						},
+						"required": []string{"type"},
+					},
+				},
+			}),
+		}, func(evt event.Event) {
+			tc := baseworker.ParseToolCall(evt)
+			result, err := w.handleUpdateACL(tc)
+			w.reply(evt, result, err)
+		})
+	}
 }
 
 // reply answers a tool invocation with request.completed / request.failed.
@@ -298,6 +344,15 @@ func liftPlacement(args map[string]any) (placement worker.Placement, command []s
 }
 
 func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
+	// Construction params may arrive flat (an agent passes them next to `type`)
+	// or nested under `params` (a UI form groups the type-specific part). Both
+	// mean the same thing, so the flattening lives here, at the tool's own input
+	// boundary, and no caller has to know the shape spawn expects. Flattening
+	// comes FIRST so a nested param cannot shadow a control field.
+	if err := flattenParams(tc.Args); err != nil {
+		return "", err
+	}
+
 	typ := baseworker.ArgString(tc.Args, "type")
 	if typ == "" {
 		return "", fmt.Errorf("type is required")
@@ -337,6 +392,29 @@ func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 		"type":      info.Type,
 		"placement": string(info.Placement),
 	}, nil
+}
+
+// flattenParams merges a nested `params` object into the argument map. A key that
+// already exists at the top level is a collision, not a silent override: the
+// top level also carries the control fields (type/id/placement/command/cwd/...),
+// and letting a param shadow one of those would change how the worker runs.
+func flattenParams(args map[string]any) error {
+	raw, ok := args["params"]
+	if !ok {
+		return nil
+	}
+	delete(args, "params")
+	params, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("params must be an object, got %T", raw)
+	}
+	for k, v := range params {
+		if _, taken := args[k]; taken {
+			return fmt.Errorf("param %q collides with the \"%s\" field", k, k)
+		}
+		args[k] = v
+	}
+	return nil
 }
 
 // workerIDArg pulls the target id out of a lifecycle call.
@@ -444,4 +522,46 @@ func (w *HostWorker) handleArchive(tc baseworker.ToolCall) (any, error) {
 		return "", err
 	}
 	return map[string]any{"worker_id": id, "archived": archived}, nil
+}
+
+func (w *HostWorker) handleUpdateACL(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	publish, subscribe, err := liftACLLists(tc.Args)
+	if err != nil {
+		return "", err
+	}
+	if err := w.acl.UpdateACL(id, publish, subscribe); err != nil {
+		return "", err
+	}
+	return map[string]any{"worker_id": id, "status": "updated"}, nil
+}
+
+// liftACLLists decodes the two grant lists from a tool call. A missing list is an
+// empty grant set, not "keep the old one": this tool replaces both wholesale, so
+// the caller always says what the worker may do.
+func liftACLLists(args map[string]any) ([]event.PublishPattern, []event.EventPattern, error) {
+	var publish []event.PublishPattern
+	if raw, ok := args["publish_allow"]; ok {
+		b, err := json.Marshal(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("publish_allow: %w", err)
+		}
+		if err := json.Unmarshal(b, &publish); err != nil {
+			return nil, nil, fmt.Errorf("publish_allow: %w", err)
+		}
+	}
+	var subscribe []event.EventPattern
+	if raw, ok := args["subscribe_allow"]; ok {
+		b, err := json.Marshal(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("subscribe_allow: %w", err)
+		}
+		if err := json.Unmarshal(b, &subscribe); err != nil {
+			return nil, nil, fmt.Errorf("subscribe_allow: %w", err)
+		}
+	}
+	return publish, subscribe, nil
 }

@@ -66,6 +66,9 @@ the third belongs to whoever runs it.
   DECLARATION only; nothing is started or stopped. Display metadata is visible
   immediately; ` + "`params`" + ` are build input, so they take effect on the next start
   (restart to apply now). Omitted fields stay as they are, empty ones clear.
+- acl.update { worker_id, publish_allow, subscribe_allow } — replace a worker's
+  bus grants. This is identity data, not lifecycle: it applies immediately and
+  is persisted into the declaration. Both lists are replaced wholesale.
 - archive { worker_id, archived } — move a worker into or out of the archived
   set. Archiving stops it and drops its bus identity but keeps its declaration,
   so it can be restored unchanged. Not a delete.
@@ -91,10 +94,9 @@ the third belongs to whoever runs it.
 - Host manages lifecycles and declarations only: it does not list capabilities or
   search. That is the directory worker's job; the two are complements, not
   duplicates.
-- Bus ACL is not a host tool: publish/subscribe grants belong to the bus's
-  identity control plane, not to a worker's lifecycle. An ACL edit is made
-  through the bus identity layer, and it lands in the declaration it derives
-  from.
+- Bus ACL has its own tool (acl.update) and its own port, separate from
+  update: publish/subscribe grants are identity data owned by the bus control
+  plane, so they never travel through the lifecycle backend.
 - Spawn is a normal tool, not a privileged API; a reason worker may spawn peers.
 - Spawn parameters are checked per type: a key the type does not read fails the
   call and the error lists what it accepts. ` + "`prompt`" + ` is not a reason

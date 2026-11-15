@@ -302,3 +302,121 @@ func TestArchiveForwardsIntent(t *testing.T) {
 		t.Fatal("protected worker reached the backend")
 	}
 }
+
+// TestSpawnAcceptsNestedParams verifies the tool takes construction params either
+// flat (an agent) or under a `params` object (a UI form) — the flattening is the
+// tool's own input boundary, so no caller has to know spawn's shape.
+func TestSpawnAcceptsNestedParams(t *testing.T) {
+	ch := &recordingChannel{}
+	be := &fakeBackend{}
+	w := New(Config{ID: "host", Bus: ch, Engine: be})
+
+	if _, ok := call(t, w, ch, TypeSpawn, map[string]any{
+		"type":   "reason",
+		"id":     "r1",
+		"params": map[string]any{"goal": "watch the queue", "model": "m"},
+	}); !ok {
+		t.Fatal("spawn with nested params failed")
+	}
+	spec := be.created[0]
+	if spec.Params["goal"] != "watch the queue" || spec.Params["model"] != "m" {
+		t.Fatalf("params = %+v, want the nested object flattened", spec.Params)
+	}
+	// Control fields must not survive inside params.
+	if _, ok := spec.Params["params"]; ok {
+		t.Fatalf("params kept the wrapper: %+v", spec.Params)
+	}
+}
+
+// TestSpawnRejectsParamCollidingWithLaunchField verifies a param cannot shadow a
+// control field: `id`/`placement`/`command` decide how the worker runs.
+func TestSpawnRejectsParamCollidingWithLaunchField(t *testing.T) {
+	ch := &recordingChannel{}
+	be := &fakeBackend{}
+	w := New(Config{ID: "host", Bus: ch, Engine: be})
+
+	for _, tc := range []map[string]any{
+		{"type": "reason", "id": "r1", "params": map[string]any{"id": "other"}},
+		{"type": "mcp", "id": "e1", "placement": "managed-process", "params": map[string]any{"placement": "in-process"}},
+		{"type": "reason", "params": map[string]any{"type": "workspace"}},
+	} {
+		if _, ok := call(t, w, ch, TypeSpawn, tc); ok {
+			t.Fatalf("collision accepted: %v", tc)
+		}
+	}
+	if len(be.created) != 0 {
+		t.Fatalf("a rejected spawn reached the backend: %+v", be.created)
+	}
+	if _, ok := call(t, w, ch, TypeSpawn, map[string]any{"type": "reason", "params": "nope"}); ok {
+		t.Fatal("a non-object params value was accepted")
+	}
+}
+
+// TestUpdateACLGoesToItsOwnPort verifies acl.update is routed to the identity
+// administrator, not the lifecycle backend: grants are bus identity data.
+func TestUpdateACLGoesToItsOwnPort(t *testing.T) {
+	ch := &recordingChannel{}
+	be := &fakeBackend{}
+	acl := &fakeACL{}
+	w := New(Config{ID: "host", Bus: ch, Engine: be, ACL: acl})
+
+	if _, ok := call(t, w, ch, TypeUpdateACL, map[string]any{
+		"worker_id":       "r1",
+		"publish_allow":   []any{map[string]any{"type": "worker.ready"}, map[string]any{"type": "request.*", "target": "webui-hiw"}},
+		"subscribe_allow": []any{map[string]any{"type": "worker.discover", "source": "*"}},
+	}); !ok {
+		t.Fatal("acl.update failed")
+	}
+	if acl.id != "r1" {
+		t.Fatalf("id = %q", acl.id)
+	}
+	if len(acl.publish) != 2 || acl.publish[1].Type != "request.*" || acl.publish[1].Target != "webui-hiw" {
+		t.Fatalf("publish = %+v", acl.publish)
+	}
+	if len(acl.subscribe) != 1 || acl.subscribe[0].SourceID != "*" {
+		t.Fatalf("subscribe = %+v", acl.subscribe)
+	}
+	if len(be.created)+len(be.suspended)+len(be.restarted)+len(be.destroyed) != 0 || len(be.patches) != 0 {
+		t.Fatal("acl.update reached the lifecycle backend")
+	}
+
+	// Both lists are replaced wholesale, so an omitted list means "no grants".
+	if _, ok := call(t, w, ch, TypeUpdateACL, map[string]any{"worker_id": "r1"}); !ok {
+		t.Fatal("acl.update with no lists failed")
+	}
+	if acl.publish == nil || len(acl.publish) != 0 || acl.subscribe == nil || len(acl.subscribe) != 0 {
+		t.Fatalf("omitted lists = %+v / %+v, want empty (not nil)", acl.publish, acl.subscribe)
+	}
+
+	if _, ok := call(t, w, ch, TypeUpdateACL, map[string]any{"publish_allow": []any{}}); ok {
+		t.Fatal("acl.update without worker_id succeeded")
+	}
+}
+
+// TestUpdateACLDisabledWithoutPort verifies the tool is absent when no identity
+// administrator is configured (e.g. a bus-less test host).
+func TestUpdateACLDisabledWithoutPort(t *testing.T) {
+	ch := &recordingChannel{}
+	w := New(Config{ID: "host", Bus: ch, Engine: &fakeBackend{}})
+	if w.DispatchExtension(event.New(TypeUpdateACL, "reason", map[string]any{"worker_id": "r1"})) {
+		t.Fatal("acl.update served without an ACL administrator")
+	}
+}
+
+// fakeACL records the grants the host forwards.
+type fakeACL struct {
+	id        string
+	publish   []event.PublishPattern
+	subscribe []event.EventPattern
+}
+
+func (f *fakeACL) UpdateACL(id string, publish []event.PublishPattern, subscribe []event.EventPattern) error {
+	f.id, f.publish, f.subscribe = id, publish, subscribe
+	if f.publish == nil {
+		f.publish = []event.PublishPattern{}
+	}
+	if f.subscribe == nil {
+		f.subscribe = []event.EventPattern{}
+	}
+	return nil
+}

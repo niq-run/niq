@@ -111,3 +111,25 @@ func (c *recordingChannel) Send(_ context.Context, evt event.Event, _ ...string)
 func (c *recordingChannel) Broadcast(context.Context, event.Event) error        { return nil }
 func (c *recordingChannel) Receive(context.Context) (<-chan event.Event, error) { return nil, nil }
 func (c *recordingChannel) Close() error                                        { return nil }
+
+// TestHelpCoversUpdateArchiveACL verifies the newer tools are documented through
+// worker.help too, so an agent can read the contract before calling them.
+func TestHelpCoversUpdateArchiveACL(t *testing.T) {
+	ch := &recordingChannel{}
+	w := New(Config{ID: "host", Bus: ch, Engine: &fakeBackend{}, ACL: &fakeACL{}})
+	for typ, want := range map[event.EventType]string{
+		TypeUpdate:    "params",
+		TypeArchive:   "archived",
+		TypeUpdateACL: "publish",
+	} {
+		evt := event.New(event.TypeWorkerHelp, "peer", map[string]any{"event_name": string(typ)})
+		evt.RequestId = "req-help"
+		if !w.DispatchExtension(evt) {
+			t.Fatalf("%s: worker.help not served", typ)
+		}
+		text, _ := ch.sent[len(ch.sent)-1].Payload["result"].(string)
+		if !strings.Contains(text, want) {
+			t.Fatalf("%s help = %q, want it to mention %q", typ, text, want)
+		}
+	}
+}

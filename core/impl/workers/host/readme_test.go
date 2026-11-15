@@ -37,6 +37,9 @@ func TestReadmeDescribesHost(t *testing.T) {
 		"resume",
 		"worker.help",
 		"directory worker",
+		"update",
+		"archive",
+		"acl.update",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("readme missing %q:\n%s", want, text)
