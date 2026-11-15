@@ -77,8 +77,8 @@ type Declaration struct {
 | `params.go` | The single params bag: `SpawnConfig` / `Spec` / `DeclFromSpec`, the per-type spawn contract (`SpawnParamsByType`, `CheckSpawnParams`), `ValidateProcessParams`, and param readers (`parseMountsParam`, `ParsePrograms`, `parseEvents`, `pStrings`, `pInt`). |
 | `builders.go` | The builder registry and every type constructor: `BuildContext`, `RegisterBuilders`, `specConnect` (identity registration with the declaration ACL or type defaults), the reason family, and one builder per remaining type. |
 | `process/` | Third-party process runtime: `Spec` / `IdentitySpec` inputs, `ProcessSupervisor`, platform shims, and identity/credential provisioning. It never imports the declaration model. |
-| `store.go` | The declaration storage boundary: `DeclStore`, implemented by `app/project` over workers.json. Runtime state uses `workersvc.WorkerStore` (defined once in the in-process engine) and is injected through `BackendConfig.StateStore`; the concrete project layout lives in `app/project/store.go`. |
-| `backend.go` | The lifecycle backend: placement routing, create / suspend / resume / restart / destroy, catalog, recovery, remote-identity seeding, protected ids, per-id serialization. |
+| `store.go` | The declaration storage boundary: `DeclStore` (`Get/List/Add/Update/Delete/SetCredential/Archive/Archived`), implemented by `app/project` over workers.json + workers.archived.json. Runtime state uses `workersvc.WorkerStore` (defined once in the in-process engine) and is injected through `BackendConfig.StateStore`; the concrete project layout lives in `app/project/store.go`. |
+| `backend.go` | The lifecycle backend: placement routing, create / suspend / resume / restart / destroy, declaration edits (`Update`), archive, catalog, recovery, remote-identity seeding, protected ids, per-id serialization. |
 
 ## Flow
 
@@ -133,3 +133,20 @@ the WebUI, or startup recovery.
 
 No project storage (`app/project`), no templates (`app/project/template`), no
 capability roster (directory worker), no WebUI form logic.
+
+## Editing vs. lifecycle
+
+`Update` and `Archive` are the two non-lifecycle verbs. Both take the same per-id
+lock as the lifecycle verbs, so an edit cannot interleave with a stop.
+
+- `Update` rewrites the declaration only, and validates the RESULT (display
+  metadata limits plus the placement's param contract). Nothing is restarted:
+  params are build input, so they apply on the next start.
+- `Archive` is one move: stop a live worker, move the declaration to the
+  archived file, drop the bus identity. Restoring moves it back and starts it
+  again. It is idempotent in both directions.
+
+Bus ACL is deliberately NOT here. `core/itfs/bus` calls its identity registry
+the control plane and already offers `Update(workerID, pubAllow, subAllow)`, so
+an ACL edit belongs to the bus side (`app/project`'s `identityAdmin`, which
+persists the grant into the declaration and then applies it to the registry).
