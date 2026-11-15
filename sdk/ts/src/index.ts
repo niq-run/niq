@@ -2,6 +2,20 @@ export { HTTPWorkerClient } from "./client.js";
 export type { HTTPWorkerClientOptions } from "./client.js";
 
 export { BaseWorker, parseToolCall, argString, argInt } from "./baseworker.js";
+
+export {
+  InterfaceWorker,
+  ReplyError,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  replyEvent,
+} from "./iface.js";
+export type {
+  Backend as IfaceBackend,
+  Handler as IfaceHandler,
+  EventFilter,
+  InterfaceWorkerOptions,
+  RequestOptions,
+} from "./iface.js";
 export type { HelpFunc } from "./help.js";
 
 export { replyValue, replyText } from "./reply.js";
