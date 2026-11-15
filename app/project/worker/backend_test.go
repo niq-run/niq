@@ -645,6 +645,13 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if info, ok, _ := rig.backend.Get("w1"); ok {
 		t.Fatalf("archived worker still in the active catalog: %+v", info)
 	}
+	// Catalog.List must not leak it either: archiving keeps a suspended entry (so a
+	// restore can resume its snapshot), and that entry must stay invisible.
+	for _, info := range rig.backend.List() {
+		if info.ID == "w1" {
+			t.Fatalf("archived worker still listed: %+v", info)
+		}
+	}
 
 	if err := rig.backend.Archive(ctx, "w1", false); err != nil {
 		t.Fatalf("Unarchive: %v", err)

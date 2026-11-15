@@ -239,19 +239,22 @@ func updateDecl(projectID, id string, fn func(*projworker.Declaration)) error {
 	})
 }
 
-// LoadAllWorkerDecls returns the active and archived declarations keyed by id.
-// It is the read side of the declaration store, for read-only projections such
-// as the WebUI's worker forms.
-func LoadAllWorkerDecls(projectID string) (map[string]projworker.Declaration, error) {
-	out := map[string]projworker.Declaration{}
-	for _, archived := range []bool{true, false} {
-		set, err := loadSetFor(projectID, archived)
-		if err != nil {
-			return nil, err
-		}
-		for _, d := range set.Workers {
-			out[d.ID] = d
-		}
+// LoadWorkerDecls returns the ACTIVE declarations keyed by id. It is the read
+// side of the declaration store, for read-only projections such as the WebUI's
+// worker forms. Archived declarations are deliberately excluded: they are not
+// part of the running roster. Use ArchivedWorkerIDs for those ids.
+func LoadWorkerDecls(projectID string) (map[string]projworker.Declaration, error) {
+	return loadDecls(projectID, false)
+}
+
+func loadDecls(projectID string, archived bool) (map[string]projworker.Declaration, error) {
+	set, err := loadSetFor(projectID, archived)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]projworker.Declaration, len(set.Workers))
+	for _, d := range set.Workers {
+		out[d.ID] = d
 	}
 	return out, nil
 }

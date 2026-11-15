@@ -143,6 +143,15 @@ func TestWorkerDeclsIsLive(t *testing.T) {
 	if got["r1"].Label != "值班" || got["r1"].Params["model"] != "m" {
 		t.Fatalf("decls = %+v", got["r1"])
 	}
+
+	// An archived worker leaves the active projection: showing its label and
+	// params next to live workers would be misleading.
+	if err := SetWorkerArchived("proj", "r1", true); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	if got := decls.WorkerDecls(); len(got) != 0 {
+		t.Fatalf("decls after archive = %+v, want empty", got)
+	}
 }
 
 func TestDeclStoreRoundTrip(t *testing.T) {

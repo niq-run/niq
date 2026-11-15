@@ -24,8 +24,11 @@ import (
 // or destroyed at runtime) is visible on the next render.
 type webuiDecls struct{ projectID string }
 
+// It projects the ACTIVE file only: an archived worker is not part of the
+// running roster (the archive panel lists its id separately), and showing its
+// label and params next to live workers would be misleading.
 func (d webuiDecls) WorkerDecls() map[string]webui.WorkerDecl {
-	decls, err := LoadAllWorkerDecls(d.projectID)
+	decls, err := LoadWorkerDecls(d.projectID)
 	if err != nil {
 		return nil
 	}

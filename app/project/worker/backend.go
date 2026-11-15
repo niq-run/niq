@@ -701,6 +701,15 @@ func (b *workerHostBackend) List() []coreworker.WorkerInfo {
 	if err != nil {
 		b.logf("[worker %s] list declarations: %v", b.projectID, err)
 	}
+	// Archived ids are declared, but they are not part of the ACTIVE set. They
+	// are still materialized here (suspended, with their snapshot) so a restore
+	// can resume where it stopped, so they must be filtered out explicitly.
+	archived := map[string]bool{}
+	if ids, err := b.decls.Archived(); err == nil {
+		for _, id := range ids {
+			archived[id] = true
+		}
+	}
 	seen := make(map[string]bool, len(decls))
 	out := make([]coreworker.WorkerInfo, 0, len(decls))
 	for _, d := range decls {
@@ -709,7 +718,7 @@ func (b *workerHostBackend) List() []coreworker.WorkerInfo {
 	}
 	if b.service != nil {
 		for _, wi := range b.service.ListWorkers("") {
-			if seen[wi.ID] {
+			if seen[wi.ID] || archived[wi.ID] {
 				continue
 			}
 			out = append(out, coreworker.WorkerInfo{ID: wi.ID, Type: wi.Type, Placement: coreworker.PlacementInProcess, State: string(wi.State)})
@@ -717,7 +726,7 @@ func (b *workerHostBackend) List() []coreworker.WorkerInfo {
 	}
 	if b.supervisor != nil {
 		for _, st := range b.supervisor.List() {
-			if seen[st.ID] {
+			if seen[st.ID] || archived[st.ID] {
 				continue
 			}
 			out = append(out, coreworker.WorkerInfo{ID: st.ID, Type: st.Type, Placement: coreworker.PlacementManagedProcess, State: st.State})
