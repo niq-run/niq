@@ -407,41 +407,6 @@ func TestSwitchRecomputesContextWindow(t *testing.T) {
 	}
 }
 
-// TestExplicitContextWindowSurvivesSwitch verifies params.context_window (the
-// manual override) still wins over the selected model's reported window, even
-// across a provider switch.
-func TestExplicitContextWindowSurvivesSwitch(t *testing.T) {
-	pa, pb := &staticProvider{}, &staticProvider{}
-	fake := &fakeSources{
-		infos: []ProviderInfo{
-			{Name: "a", Default: "big", ModelDetails: []llm.ModelInfo{{ID: "big", ContextWindow: 1024000}}},
-			{Name: "b", Default: "small", ModelDetails: []llm.ModelInfo{{ID: "small", ContextWindow: 262000}}},
-		},
-		provs: map[string]llm.LLMProvider{"a": pa, "b": pb},
-	}
-	w := NewBaseReasonWorker(Config{
-		ID:              "r1",
-		ProviderSources: fake,
-		ProviderName:    "a",
-		ProviderModel:   "big",
-		ContextWindow:   500000, // explicit override
-		Bus:             newTestChannel(),
-	})
-	if w.contextWindow != 500000 {
-		t.Fatalf("initial context window = %d, want the explicit 500000", w.contextWindow)
-	}
-
-	w.mu.Lock()
-	err := w.setActiveProvider("b", "small")
-	w.mu.Unlock()
-	if err != nil {
-		t.Fatalf("setActiveProvider: %v", err)
-	}
-	if w.contextWindow != 500000 {
-		t.Fatalf("explicit override lost on switch: %d", w.contextWindow)
-	}
-}
-
 // maxOutputSources returns canned sources whose two models declare different
 // output caps (a: 64k, b: 8k).
 func maxOutputSources() *fakeSources {

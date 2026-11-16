@@ -10,7 +10,6 @@ import (
 
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 )
 
 // Engine is the core event routing engine — the "ball".
@@ -29,7 +28,7 @@ type Engine struct {
 	mu       sync.RWMutex
 	channels map[string]corebus.BusSideChannel
 	registry corebus.IdentityRegistry
-	store    store.AppendStore   // optional, nil to disable persistence
+	store    event.AppendStore   // optional, nil to disable persistence
 	onEvent  []func(event.Event) // optional hooks, called for every routed event
 
 	// persistStats tracks persistence outcomes for live observability.
@@ -55,7 +54,7 @@ func (e *Engine) PersistStats() (total, dropped uint64) {
 
 // NewEngine creates a new Engine.
 // store may be nil; if nil, events are not persisted.
-func NewEngine(registry corebus.IdentityRegistry, store store.AppendStore) *Engine {
+func NewEngine(registry corebus.IdentityRegistry, store event.AppendStore) *Engine {
 	return &Engine{
 		channels:      make(map[string]corebus.BusSideChannel),
 		registry:      registry,

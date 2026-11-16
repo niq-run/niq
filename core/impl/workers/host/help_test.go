@@ -75,7 +75,8 @@ func TestWorkerHelpSpawnGeneral(t *testing.T) {
 }
 
 // TestWorkerHelpIndexAndGenericTools verifies the no-argument index and that
-// an event without a custom guide (suspend) renders its declared contract.
+// the lifecycle verbs share one guide (they differ only in what they do to the
+// target, so repeating four near-identical pages would be noise).
 func TestWorkerHelpIndexAndGenericTools(t *testing.T) {
 	ch := &recordingChannel{}
 	w := New(Config{ID: "host", Bus: ch})
@@ -87,10 +88,12 @@ func TestWorkerHelpIndexAndGenericTools(t *testing.T) {
 		}
 	}
 
-	guide := ask(t, w, ch, map[string]any{"event_name": "suspend"})
-	for _, want := range []string{"# suspend", "Suspend a running worker", `"worker_id"`} {
-		if !strings.Contains(guide, want) {
-			t.Fatalf("generic suspend guide missing %q:\n%s", want, guide)
+	for _, evt := range []string{"suspend", "resume", "restart", "destroy"} {
+		guide := ask(t, w, ch, map[string]any{"event_name": evt})
+		for _, want := range []string{"# suspend / resume / restart / destroy", `"worker_id"`, "immediately"} {
+			if !strings.Contains(guide, want) {
+				t.Fatalf("%s guide missing %q:\n%s", evt, want, guide)
+			}
 		}
 	}
 }
@@ -108,3 +111,25 @@ func (c *recordingChannel) Send(_ context.Context, evt event.Event, _ ...string)
 func (c *recordingChannel) Broadcast(context.Context, event.Event) error        { return nil }
 func (c *recordingChannel) Receive(context.Context) (<-chan event.Event, error) { return nil, nil }
 func (c *recordingChannel) Close() error                                        { return nil }
+
+// TestHelpCoversUpdateArchiveACL verifies the newer tools are documented through
+// worker.help too, so an agent can read the contract before calling them.
+func TestHelpCoversUpdateArchiveACL(t *testing.T) {
+	ch := &recordingChannel{}
+	w := New(Config{ID: "host", Bus: ch, Engine: &fakeBackend{}, ACL: &fakeACL{}})
+	for typ, want := range map[event.EventType]string{
+		TypeUpdate:    "params",
+		TypeArchive:   "archived",
+		TypeUpdateACL: "publish",
+	} {
+		evt := event.New(event.TypeWorkerHelp, "peer", map[string]any{"event_name": string(typ)})
+		evt.RequestId = "req-help"
+		if !w.DispatchExtension(evt) {
+			t.Fatalf("%s: worker.help not served", typ)
+		}
+		text, _ := ch.sent[len(ch.sent)-1].Payload["result"].(string)
+		if !strings.Contains(text, want) {
+			t.Fatalf("%s help = %q, want it to mention %q", typ, text, want)
+		}
+	}
+}

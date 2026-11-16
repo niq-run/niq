@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 	_ "modernc.org/sqlite"
 )
 
@@ -38,7 +37,7 @@ func TestListTypeBlacklist(t *testing.T) {
 
 	// worker.* is hidden except input/abort; the delta partial is hidden for
 	// good measure.
-	got, err := s.List(ctx, "*", store.QueryOpts{
+	got, err := s.List(ctx, "*", event.QueryOpts{
 		ExcludeTypes:        []string{"reason.thinking_delta"},
 		ExcludeTypePrefixes: []string{"worker."},
 		KeepTypes:           []string{"worker.input", "worker.abort"},
@@ -77,7 +76,7 @@ func TestRequestIDRoundtrip(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	list, err := s.List(context.Background(), "*", store.QueryOpts{Limit: 10})
+	list, err := s.List(context.Background(), "*", event.QueryOpts{Limit: 10})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -122,7 +121,7 @@ func TestListRequestIDFilter(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	got, err := s.List(context.Background(), "*", store.QueryOpts{RequestID: "req-1"})
+	got, err := s.List(context.Background(), "*", event.QueryOpts{RequestID: "req-1"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -175,7 +174,7 @@ func TestMigrateAddsRequestIDColumn(t *testing.T) {
 	if err := s.Append(context.Background(), evt); err != nil {
 		t.Fatalf("Append after migrate: %v", err)
 	}
-	list, err := s.List(context.Background(), "*", store.QueryOpts{Limit: 10})
+	list, err := s.List(context.Background(), "*", event.QueryOpts{Limit: 10})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

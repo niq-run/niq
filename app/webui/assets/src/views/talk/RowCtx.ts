@@ -22,8 +22,7 @@ export interface RowCtx {
   humanId: string
   displayName: (id?: string) => string
   isReason: (id: string) => boolean
-  // isPartner reports whether a worker is a talk partner (reason / niw /
-  // remote-niw) — the gate for single-click avatar mention.
+  // isPartner reports whether a worker is a talk partner (reason / coding / niq) — the gate for single-click avatar mention.
   isPartner: (id: string) => boolean
   directionOf: (evt: EventPayload, alignRight?: boolean) => string
   expandedContent: Set<string>

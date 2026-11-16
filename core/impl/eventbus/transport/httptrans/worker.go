@@ -27,6 +27,8 @@ type WorkerSide struct {
 	workerID   string
 	credential string
 	client     *stdhttp.Client
+	// streaming is the client used for the SSE GET (fresh connection per stream).
+	streaming *stdhttp.Client
 
 	mu        sync.Mutex
 	connCh    chan event.Event
@@ -38,11 +40,22 @@ type WorkerSide struct {
 // NewWorkerSide creates a new HTTP transport WorkerSideChannel.
 // Call Connect to establish the connection to the bus.
 func NewWorkerSide(baseURL, workerID, credential string) *WorkerSide {
+	// The SSE stream owns its connection: a pooled one that the server (or a hop)
+	// already closed makes net/http transparently retry the GET, and the retried
+	// request becomes a SECOND attach on the bus. The bus replaces the older
+	// connection for the id, which kills the stream this client is actually
+	// reading — so the worker "reconnects" forever. Keep-alives must be off for
+	// the streaming side; /publish requests still pool normally.
+	streaming := &stdhttp.Transport{
+		Proxy:             stdhttp.ProxyFromEnvironment,
+		DisableKeepAlives: true,
+	}
 	return &WorkerSide{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		workerID:   workerID,
 		credential: credential,
 		client:     &stdhttp.Client{},
+		streaming:  &stdhttp.Client{Transport: streaming},
 	}
 }
 
@@ -80,7 +93,12 @@ func (w *WorkerSide) openSSE(ctx context.Context) (chan event.Event, error) {
 		return nil, err
 	}
 
-	resp, err := w.client.Do(req)
+	client := w.streaming
+	if client == nil {
+		client = w.client
+	}
+	log.Printf("[httptrans] %s dialing SSE", w.workerID)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

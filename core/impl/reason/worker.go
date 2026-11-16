@@ -50,10 +50,9 @@ type EventConverter struct {
 }
 
 const (
-	DefaultBudgetSoft   = 0.85
-	DefaultBudgetHard   = 0.97
-	DefaultTailTokens   = 10000
-	DefaultRotateRounds = 2
+	DefaultBudgetSoft = 0.85
+	DefaultBudgetHard = 0.97
+	DefaultTailTokens = 10000
 )
 
 // Config holds the inputs to BaseReasonWorker — the pieces a reasoning node
@@ -82,11 +81,9 @@ type Config struct {
 	// callback is free to Snapshot() (see baseworker's durable.go).
 	OnDurableChange func()
 
-	ContextWindow int
-	BudgetSoft    float64
-	BudgetHard    float64
-	TailTokens    int
-	RotateRounds  int
+	BudgetSoft float64
+	BudgetHard float64
+	TailTokens int
 
 	// MaxPayloadBytes caps a single text payload (tool result, external input
 	// message) folded into the transcript; oversized payloads are truncated to
@@ -139,9 +136,6 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	if cfg.TailTokens <= 0 {
 		cfg.TailTokens = DefaultTailTokens
 	}
-	if cfg.RotateRounds <= 0 {
-		cfg.RotateRounds = DefaultRotateRounds
-	}
 	if cfg.ReasoningEffort == nil {
 		d := "medium"
 		cfg.ReasoningEffort = &d
@@ -171,27 +165,24 @@ func NewBaseReasonWorker(cfg Config) *BaseReasonWorker {
 	}
 
 	w := &BaseReasonWorker{
-		BaseWorker:            baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
-		llmProvider:           initialProvider,
-		providerSources:       cfg.ProviderSources,
-		providerName:          cfg.ProviderName,
-		providerModel:         cfg.ProviderModel,
-		transcript:            cfg.Transcript,
-		eventConverters:       cfg.EventConverters,
-		programs:              cfg.Programs,
-		requestTracker:        requesttracker.NewRequestTracker(),
-		toolListBuilder:       toolListBuilder,
-		contextWindow:         cfg.ContextWindow,
-		contextWindowExplicit: cfg.ContextWindow,
-		budgetSoft:            cfg.BudgetSoft,
-		budgetHard:            cfg.BudgetHard,
-		tailTokens:            cfg.TailTokens,
-		rotateRounds:          cfg.RotateRounds,
-		reasoningEffort:       cfg.ReasoningEffort,
-		readme:                cfg.Readme,
-		workerType:            workerTypeOrDefault(cfg.WorkerType),
-		collaborators:         collaborators,
-		excludedPeers:         make(map[string]bool),
+		BaseWorker:      baseworker.NewBaseWorker(cfg.ID, cfg.Bus),
+		llmProvider:     initialProvider,
+		providerSources: cfg.ProviderSources,
+		providerName:    cfg.ProviderName,
+		providerModel:   cfg.ProviderModel,
+		transcript:      cfg.Transcript,
+		eventConverters: cfg.EventConverters,
+		programs:        programState{Applied: cfg.Programs},
+		requestTracker:  requesttracker.NewRequestTracker(),
+		toolListBuilder: toolListBuilder,
+		budgetSoft:      cfg.BudgetSoft,
+		budgetHard:      cfg.BudgetHard,
+		tailTokens:      cfg.TailTokens,
+		reasoningEffort: cfg.ReasoningEffort,
+		readme:          cfg.Readme,
+		workerType:      workerTypeOrDefault(cfg.WorkerType),
+		collaborators:   collaborators,
+		excludedPeers:   make(map[string]bool),
 	}
 	// Durable-change signalling is the base's machinery (baseworker); the
 	// mechanism only decides when to raise it (see handleSetLLMProvider).
@@ -238,16 +229,32 @@ func (w *BaseReasonWorker) CurrentTraceID() string { return w.currentTraceID }
 // BeginEdit..Commit window.
 func (w *BaseReasonWorker) Transcript() transcript.Transcript { return w.transcript }
 
+// CommitTranscript ends a transcript edit (BeginEdit..Commit) and, when the edit
+// installed a new head, records the prompt-cache reset it pays for: the front of
+// the transcript is gone, so the round that follows is also where the program
+// ledger reaches the system prompt. The commit and the arming share one critical
+// section, so no request can be built between the new transcript and the prompt
+// that must accompany it.
+//
+// The boundary is read from the edit, not declared by the caller: a head IS the
+// new front (the digest that replaced older history), while a commit carrying no
+// head only ends the edit — it merges inputs buffered during it and leaves the
+// transcript an extension of the previous one, whose prefix cache is still warm.
+// A no-op compression must therefore still commit, just with no head. A strategy
+// that rewrites the front some other way owes the arming itself, via
+// ApplyProgramsAtNextRound.
+func (w *BaseReasonWorker) CommitTranscript(head, tail []llm.Message) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.transcript.Commit(head, tail) && len(head) > 0 {
+		w.programs.ApplyPending = true
+	}
+}
+
 // TailTokens returns the token budget the default context strategy retains from
 // the tail of the transcript when compressing (the worker's own policy; the
 // mechanism does not use it).
 func (w *BaseReasonWorker) TailTokens() int { return w.tailTokens }
-
-// RotateRounds returns how many recent user/assistant rounds the default
-// context strategy retains when rotating (the worker's own policy; the
-// mechanism does not use it). Tool messages are discarded from the rotated
-// tail, so this is a round count, not a token budget.
-func (w *BaseReasonWorker) RotateRounds() int { return w.rotateRounds }
 
 // TryReason asks the mechanism to schedule the next reasoning round after the
 // worker has finished a context edit. The worker drives this (it knows when
@@ -351,11 +358,14 @@ func (w *BaseReasonWorker) Stop() error {
 type reasonState struct {
 	Transcript json.RawMessage    `json:"transcript"`
 	Provider   *providerSelection `json:"provider,omitempty"`
-	// Programs is the worker's instruction/playbook list. It is a single
-	// attribute: config seeds it at construction, runtime edits mutate the same
-	// slice. Snapshot always persists the current value, so restore
-	// unconditionally overrides config — there is no "edited" flag.
-	Programs []program.Program `json:"programs"`
+	// ProgramState is the worker's program attribute: the applied set (what the
+	// system prompt renders) plus the ledger of operations not applied yet. Both
+	// halves travel together so a restart owes exactly the same apply.
+	ProgramState *programState `json:"program_state,omitempty"`
+	// Programs is the pre-ledger form of the same attribute: a bare list that was
+	// the applied set outright. Read-only compatibility — snapshots taken before
+	// the ledger existed carry it instead of ProgramState.
+	Programs []program.Program `json:"programs,omitempty"`
 	// Readme is the worker's self-description. A pointer distinguishes "never
 	// set at runtime" (old snapshots, keep the config seed) from "cleared by the
 	// worker" (empty string, override the seed).
@@ -405,10 +415,9 @@ func (w *BaseReasonWorker) Snapshot() ([]byte, error) {
 	}
 	// Programs: a single attribute (config seeds it; runtime edits mutate it).
 	// Always persist the current value so restore unconditionally overrides
-	// config — no "edited" flag, unlike Provider.
-	cp := make([]program.Program, len(w.programs))
-	copy(cp, w.programs)
-	state.Programs = cp
+	// config — no "edited" flag, unlike Provider. The applied set and its pending
+	// ledger travel together, so a restart owes exactly the same apply.
+	state.ProgramState = w.programs.copy()
 	// Readme: always persist the current value, including empty (the worker may
 	// have deliberately cleared its description).
 	readme := w.readme
@@ -452,12 +461,21 @@ func (w *BaseReasonWorker) Restore(state []byte) error {
 	// parkPending): nothing has been sent on this instance's channel yet.
 	w.parkRequests(requesttracker.PreemptCauseRestart)
 	// Programs override config whenever the snapshot actually carries them.
-	// Field-absent snapshots (taken before Programs existed) leave s.Programs
-	// nil, in which case config stands — a backward-compat guard, not a
+	// ProgramState is the current form (applied set + pending ledger); a
+	// ProgramState-less snapshot with Programs present predates the ledger, and
+	// its bare list is the applied set. Field-absent snapshots (taken before
+	// Programs existed) leave config standing — a backward-compat guard, not a
 	// "managed" flag.
-	if s.Programs != nil {
-		w.programs = s.Programs
+	switch {
+	case s.ProgramState != nil:
+		w.programs = *s.ProgramState
+	case s.Programs != nil:
+		w.programs = programState{Applied: s.Programs}
 	}
+	// A restored transcript means a prompt may already be cached at the provider,
+	// so a program change recorded here must wait for a reset boundary rather than
+	// be rendered on the first round after the restart.
+	w.promptSent = len(w.transcript.Render()) > 0
 	// A readme updated by the worker itself wins over the config seed. Absent
 	// (older snapshots) keeps the seed.
 	if s.Readme != nil {
@@ -506,11 +524,19 @@ type BaseReasonWorker struct {
 	// accumulates reason peers that announced outside it, so a later directed
 	// send can be refused. scopeMu guards both and is separate from mu because
 	// MayAddress is called from paths that do not hold the event-loop lock.
-	scopeMu        sync.RWMutex
-	collaborators  map[string]bool
-	excludedPeers  map[string]bool
-	workerType     string // announced presence type (default "reason")
-	programs       []program.Program
+	scopeMu       sync.RWMutex
+	collaborators map[string]bool
+	excludedPeers map[string]bool
+	workerType    string // announced presence type (default "reason")
+	// programs is the worker's program attribute: the applied set (what the
+	// system prompt renders) plus the ledger of operations not applied yet.
+	// See programs.go for why the two are kept apart.
+	programs programState
+	// promptSent records that a request carrying this worker's system prompt has
+	// already gone out, so a program change must wait for a cache reset boundary
+	// instead of being rendered immediately. Runtime only: a restored transcript
+	// implies a sent prompt (see Restore).
+	promptSent     bool
 	readme         string // the worker's own description (worker.readme)
 	requestTracker *requesttracker.RequestTracker
 	// toolCallSeq mints globally-unique tool-call ids for calls whose model
@@ -539,22 +565,20 @@ type BaseReasonWorker struct {
 	cancelRun    context.CancelFunc
 
 	// Context budget state; guarded by w.mu
+	// contextWindow is the effective window of the currently selected model, always
+	// derived (constructor and every provider switch call resolveContextWindow).
+	// 0 means the model reports no window: budget handling stays disabled rather
+	// than guessing a size — declaring one is provider.json's job, not the worker's.
 	contextWindow int
 	// maxOutput is the selected model's declared cap on generated tokens
 	// (0 = unknown). Applied as Context.MaxTokens, so a model that reports a
 	// large cap is no longer silently held to an adapter default.
-	maxOutput int
-	// contextWindowExplicit is the params.context_window override (0 = none).
-	// Kept apart from the effective window so a provider switch can re-derive
-	// the window from the newly selected model instead of inheriting the last
-	// model's size.
-	contextWindowExplicit int
-	budgetSoft            float64
-	budgetHard            float64
-	tailTokens            int
-	rotateRounds          int
-	lastUsageTokens       int
-	budgetReminded        bool
+	maxOutput       int
+	budgetSoft      float64
+	budgetHard      float64
+	tailTokens      int
+	lastUsageTokens int
+	budgetReminded  bool
 }
 
 // workerTypeOrDefault returns the worker's announced type, defaulting to the

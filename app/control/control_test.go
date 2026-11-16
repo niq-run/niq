@@ -19,6 +19,8 @@ import (
 	"github.com/niq-run/niq/app/niqhome"
 	"github.com/niq-run/niq/app/project"
 	"github.com/niq-run/niq/app/project/provider"
+	"github.com/niq-run/niq/app/project/template"
+	projworker "github.com/niq-run/niq/app/project/worker"
 	"github.com/niq-run/niq/app/webui"
 )
 
@@ -44,9 +46,11 @@ func setupProjectsRoot(t *testing.T) {
 
 // fakeTemplate returns a small TemplateConfig usable as a project template.
 func fakeTemplate() *project.TemplateConfig {
-	return &project.TemplateConfig{Workers: []project.WorkerConfig{
-		{Type: "hiw", ID: "default-hiw"},
-		{Type: "reason", ID: "niq", Provider: "volcan-ark", Model: "deepseek-v4-flash"},
+	return &project.TemplateConfig{SchemaVersion: 2, Workers: []project.WorkerConfig{
+		{Config: projworker.Config{Type: "hiw", ID: "default-hiw"}},
+		{Config: projworker.Config{Type: "reason", ID: "niq", Params: map[string]any{
+			"provider": "volcan-ark", "model": "deepseek-v4-flash",
+		}}},
 	}}
 }
 
@@ -262,7 +266,7 @@ func TestControlTemplateCloneDelete(t *testing.T) {
 	if strings.Contains(body, "t1") {
 		t.Fatalf("templates still has t1: %s", body)
 	}
-	_ = os.RemoveAll(project.TemplateDir(project.TemplatesDir(), "t1"))
+	_ = os.RemoveAll(template.Dir(template.TemplatesDir(), "t1"))
 }
 
 // TestControlStopNotRunning asserts stopping a project with no live process
@@ -329,12 +333,12 @@ func TestControlTemplateFromProject(t *testing.T) {
 	if code != 200 || !strings.Contains(body, `"niq"`) || !strings.Contains(body, "volcan-ark") {
 		t.Fatalf("preview status=%d body=%s", code, body)
 	}
-	if _, err := os.Stat(project.TemplatePath(project.TemplatesDir(), "t1")); err == nil {
+	if _, err := os.Stat(template.Path(template.TemplatesDir(), "t1")); err == nil {
 		t.Fatal("preview must not write a template file")
 	}
 
 	// Save the draft (as the edited webui drawer would) under a new id.
-	draft := `{"id":"t1","template":{"workers":[{"type":"hiw","id":"default-hiw"},{"type":"reason","id":"niq","instruction":"edited goal"}]}}`
+	draft := `{"id":"t1","template":{"schema_version":2,"workers":[{"type":"hiw","id":"default-hiw"},{"type":"reason","id":"niq","params":{"instruction":"edited goal"}}]}}}`
 	if code, _ = do("POST", "/api/templates", draft); code != 201 {
 		t.Fatalf("create from draft status=%d, want 201", code)
 	}
@@ -344,7 +348,7 @@ func TestControlTemplateFromProject(t *testing.T) {
 	}
 
 	// Edit the saved template through PUT.
-	if code, _ = do("PUT", "/api/templates/t1", `{"workers":[{"type":"hiw","id":"default-hiw"}]}`); code != 204 {
+	if code, _ = do("PUT", "/api/templates/t1", `{"schema_version":2,"workers":[{"type":"hiw","id":"default-hiw"}]}`); code != 204 {
 		t.Fatalf("put status=%d, want 204", code)
 	}
 	_, body = do("GET", "/api/templates/t1", "")

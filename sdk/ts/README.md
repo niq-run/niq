@@ -286,3 +286,36 @@ Early, moving fast. Pre-1.0; the wire protocol is stabilizing alongside
 `core/bus` and the Go `httptrans` transport.
 
 `node >= 18` (uses global `fetch` and `ReadableStream`).
+## Interface worker
+
+`InterfaceWorker` is the TS mirror of Go's `core/impl/iface`: a worker whose job
+is a seam between the bus and an external world (a chat-platform bridge, an admin
+UI, a notifier). It faces the bus like any worker, and holds `Backend`s behind it.
+
+```ts
+import { InterfaceWorker, type Backend, type Handler } from "@niq.run/worker-sdk";
+
+class FeishuBridge implements Backend {
+  private h?: Handler;
+  setHandler(h: Handler) { this.h = h; }        // injected once, before start
+  async onMessage(text: string, to: string) {
+    await this.h!.send(createEvent("worker.input", { content: [{ type: "text", text }] }), to);
+  }
+}
+
+const worker = new InterfaceWorker({
+  id: "feishu",
+  channel,                       // any WorkerSideChannel (HTTPWorkerClient)
+  type: "interface",
+  backends: [new FeishuBridge()],
+});
+await worker.start();
+```
+
+- `Handler.request(target, evt, opts?)` — send and await the correlated reply;
+  a `request.failed`/`request.rejected` rejects with `ReplyError` (its `.reply`
+  carries the event). Timed out → rejects; `stop()` fails whatever is in flight.
+- `Handler.onEvent(fn, filter?)` — inbound interest; each registration is isolated,
+  so a throwing backend cannot break the loop or another backend.
+- What it does NOT do: edit ACLs or render the global event stream. Those are the
+  app's own bus handles, the same split as in Go.

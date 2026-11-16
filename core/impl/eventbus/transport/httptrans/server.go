@@ -197,8 +197,18 @@ func (s *Server) handleEvents(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	}
 
 	// Store for /publish handler.
+	//
+	// The entry is removed only when it is still OURS: a replacement connection
+	// (same worker id, e.g. a reconnect racing the old stream's teardown) stores
+	// its own channel, and deleting that would make the live stream's publishes
+	// fail with "worker not connected" — which a reconnecting client reads as
+	// "the link is broken" and reconnects again, flapping forever.
 	s.sessions.Store(workerID, bs)
-	defer s.sessions.Delete(workerID)
+	defer func() {
+		if cur, ok := s.sessions.Load(workerID); ok && cur == any(bs) {
+			s.sessions.Delete(workerID)
+		}
+	}()
 
 	// Close the channel when this SSE stream ends (connection drop, restart,
 	// shutdown) so the watch goroutine's Receive loop unblocks and the engine
@@ -230,7 +240,7 @@ func (s *Server) handleEvents(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	// other bus traffic wakes it up.
 	flusher.Flush()
 
-	log.Printf("[httptrans] SSE stream started for %s", workerID)
+	log.Printf("[httptrans] SSE stream started for %s from %s", workerID, r.RemoteAddr)
 
 	// SSE loop: read from toWorker, push via SSE. A keepalive ticker writes
 	// an SSE comment each interval so the connection never sits idle long

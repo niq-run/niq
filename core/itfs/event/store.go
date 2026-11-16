@@ -1,0 +1,73 @@
+package event
+
+import "context"
+
+// Event persistence: the read-side contract. Workers query persisted events
+// through these interfaces; writes happen on the bus side, during routing.
+//
+// The whole family lives here rather than in a package of its own because every
+// type below is expressed purely in terms of Event: a store exists to hand back
+// events, and QueryOpts exists to select them. Compare program.Store, the same
+// arrangement for Programs.
+
+// EventStore is the read-side interface for querying persisted events.
+// Workers consume this to replay history or display past interactions.
+type EventStore interface {
+	// List returns events for a single worker, filtered by opts.
+	// Use Desc=true for display (newest first), Desc=false for replay (oldest first).
+	// When AfterID is set, only events after that event are returned (for rebuild).
+	List(ctx context.Context, workerID string, opts QueryOpts) ([]Event, error)
+
+	// Get returns the single event with the given ID, or (zero, false) when
+	// no such event has been persisted. It is the store's point lookup, used
+	// by detail/introspection views that need one full event without the
+	// worker-scoped filtering and pagination of List.
+	Get(ctx context.Context, id string) (Event, bool, error)
+}
+
+// Append writes events to the store. Workers should not call this directly;
+// the bus injects events during routing. To support pluggable backends
+// (in-memory, SQLite, etc.) through a single interface, this lives alongside
+// the read methods rather than on a separate type.
+type AppendStore interface {
+	EventStore
+
+	// Append persists one or more events.
+	Append(ctx context.Context, events ...Event) error
+}
+
+// Worker traffic roles, used by QueryOpts.WorkerRoles (and the API layer's
+// filter). A worker both sends events and receives them (as target or
+// broadcast recipient); the role says which side the worker filter matches.
+const (
+	RoleSent     = "sent"     // the worker is the event's source (worker_id)
+	RoleReceived = "received" // the worker is the target or a recipient
+)
+
+// QueryOpts controls the results returned by [EventStore.List].
+type QueryOpts struct {
+	Limit     int      // max events to return; 0 means unlimited
+	Since     int64    // Unix timestamp; only events at or after this time
+	AfterID   string   // only events after this event ID (for replay / rebuild)
+	BeforeID  string   // only events before this event ID (for pagination)
+	WorkerIDs []string // filter by worker ID set (overrides List's workerID arg)
+	// WorkerRoles restricts which side of the worker's traffic WorkerIDs
+	// matches (RoleSent / RoleReceived). Empty means both.
+	WorkerRoles []string
+	TraceID     string // filter by trace ID
+	RequestID   string // filter by request ID (request → response pairing)
+	// Types restricts results to the given exact event types (e.g. "bash",
+	// "request.completed"). Empty means any type. These are exact matches —
+	// for wildcard subscription-style matching a caller would filter in worker
+	// code.
+	Types []string
+	// ExcludeTypes / ExcludeTypePrefixes / KeepTypes are the blacklist half of
+	// Types: exact event types and type prefixes to exclude, with KeepTypes
+	// overriding a matching prefix. Used to hide broad "invisible" event
+	// families (e.g. worker.* lifecycle noise) server-side so stream and
+	// history stay in sync with the client's visible rows.
+	ExcludeTypes        []string
+	ExcludeTypePrefixes []string
+	KeepTypes           []string
+	Desc                bool // true = newest first (display), false = oldest first (replay)
+}

@@ -81,6 +81,19 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	w.immediateReasoningCause = ""
 	w.parkPending(cause)
 
+	// Program ledger settlement. Applied is the only input of the system prompt,
+	// so it may only change at a moment whose cache cost is already being paid:
+	// before the first request this worker ever sends (nothing is cached), or
+	// after a reset boundary (a compaction committed — ApplyProgramsAtNextRound).
+	// Folding here, inside the same critical section that builds the request, is
+	// what keeps "new transcript with the old prompt" from ever being sent.
+	if !w.promptSent || w.programs.ApplyPending {
+		if ops := w.programs.Apply(); len(ops) > 0 {
+			log.Printf("[reason %s] applied %d program change(s) to the system prompt", w.ID(), len(ops))
+		}
+	}
+	w.promptSent = true
+
 	traceID = w.currentTraceID
 	tools := w.LLMToolDefs()
 	msgs := w.transcript.Render()

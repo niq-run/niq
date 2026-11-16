@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 )
 
 // TestMemoryStoreTypeBlacklist verifies the exact + prefix type blacklist (with
@@ -26,7 +25,7 @@ func TestMemoryStoreTypeBlacklist(t *testing.T) {
 	if err := s.Append(ctx, evs...); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	got, err := s.List(ctx, "*", store.QueryOpts{
+	got, err := s.List(ctx, "*", event.QueryOpts{
 		ExcludeTypes:        []string{"reason.thinking_delta"},
 		ExcludeTypePrefixes: []string{"worker."},
 		KeepTypes:           []string{"worker.input", "worker.abort"},
@@ -68,7 +67,7 @@ func TestMemoryStoreInsertionOrder(t *testing.T) {
 	}
 
 	// Ascending (oldest first): must be e1,e2,e3,e4.
-	asc, err := s.List(ctx, "*", store.QueryOpts{})
+	asc, err := s.List(ctx, "*", event.QueryOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +78,7 @@ func TestMemoryStoreInsertionOrder(t *testing.T) {
 	}
 
 	// Descending (newest first): reversed insertion order e4,e3,e2,e1.
-	desc, err := s.List(ctx, "*", store.QueryOpts{Desc: true})
+	desc, err := s.List(ctx, "*", event.QueryOpts{Desc: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +89,7 @@ func TestMemoryStoreInsertionOrder(t *testing.T) {
 	}
 
 	// Pagination before e3 (all same second): returns e1,e2 (older), not nothing.
-	before, err := s.List(ctx, "*", store.QueryOpts{BeforeID: "e3", Desc: true})
+	before, err := s.List(ctx, "*", event.QueryOpts{BeforeID: "e3", Desc: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +126,7 @@ func TestMemoryStoreRequestIDFilter(t *testing.T) {
 		t.Fatalf("get of unknown id must report found=false")
 	}
 
-	got, err := s.List(ctx, "*", store.QueryOpts{RequestID: "req-1"})
+	got, err := s.List(ctx, "*", event.QueryOpts{RequestID: "req-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +136,7 @@ func TestMemoryStoreRequestIDFilter(t *testing.T) {
 	}
 
 	// No match → empty.
-	none, err := s.List(ctx, "*", store.QueryOpts{RequestID: "req-9"})
+	none, err := s.List(ctx, "*", event.QueryOpts{RequestID: "req-9"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +190,7 @@ func (r *recStore) Append(_ context.Context, evts ...event.Event) error {
 	r.evts = append(r.evts, evts...)
 	return nil
 }
-func (r *recStore) List(_ context.Context, _ string, _ store.QueryOpts) ([]event.Event, error) {
+func (r *recStore) List(_ context.Context, _ string, _ event.QueryOpts) ([]event.Event, error) {
 	return nil, nil
 }
 func (r *recStore) Get(_ context.Context, _ string) (event.Event, bool, error) {

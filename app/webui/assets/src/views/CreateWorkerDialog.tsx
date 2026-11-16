@@ -29,8 +29,8 @@ interface CreateWorkerDialogProps {
 // Managed worker types offered by the form. host/hiw are infrastructure the
 // assembly owns — creating them from the UI is not a thing. timer, directory
 // and history are built-in singletons (one per project), so a second one is
-// never wanted. niw is a bridge worker that dials another niq's bus.
-const MANAGED_TYPES = ['reason', 'coding', 'workspace', 'program', 'niw', 'mcp'] as const
+// never wanted. niq is a worker whose backend is another niq instance.
+const MANAGED_TYPES = ['reason', 'coding', 'workspace', 'program', 'niq', 'mcp'] as const
 
 // The form opens on a managed reason worker; its permission drafts start from
 // that type's backend defaults (see allowDefaults.ts).
@@ -38,9 +38,9 @@ const INITIAL_MODE: WorkerCreateMode = 'managed'
 const INITIAL_TYPE = 'reason'
 const INITIAL_ALLOW = defaultAllow(INITIAL_MODE, INITIAL_TYPE)
 
-// parseNiwConfig turns the far-side bus's copyable worker config (KEY=value
+// parseNiqConfig turns the far-side bus's copyable worker config (KEY=value
 // lines, as rendered by that bus for a created remote worker) into a map.
-const parseNiwConfig = (s: string): Record<string, string> => {
+const parseNiqConfig = (s: string): Record<string, string> => {
   const out: Record<string, string> = {}
   for (const line of s.split('\n')) {
     const i = line.indexOf('=')
@@ -93,8 +93,8 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [mcpServersText, setMcpServersText] = useState('')
   const [mcpAllowedTools, setMcpAllowedTools] = useState('')
   const [tokenTtl, setTokenTtl] = useState('')
-  const [niwConfig, setNiwConfig] = useState('')
-  const [niwRecipient, setNiwRecipient] = useState('')
+  const [niqConfig, setNiqConfig] = useState('')
+  const [niqRecipient, setNiqRecipient] = useState('')
   const [workerLabel, setWorkerLabel] = useState('')
   const [tags, setTags] = useState('')
   const [description, setDescription] = useState('')
@@ -149,53 +149,42 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     if (!/^[A-Za-z0-9._-]+$/.test(id)) { setNote(t('workers.create.errId')); return null }
     if (isExternal && !command.trim()) { setNote(t('workers.create.errCommand')); return null }
 
+    // All construction parameters live in ONE params bag. The form's typed
+    // fields are a frontend convenience only; they are lowered here.
+    const params: Record<string, unknown> = {}
     const env: Record<string, string> = {}
     for (const row of envRows) {
       const k = row.key.trim()
       if (k) env[k] = row.value
     }
+    const placement = isManaged ? 'in-process' : isRemote ? 'unmanaged-process' : 'managed-process'
     const body: Record<string, unknown> = {
       type: effType,
       id: id.trim(),
-      managed: isManaged,
+      placement,
     }
-    // A remote (third-party) worker: host-managed=false, remote=true, and no
-    // local command — the worker connects to the bus on its own.
-    if (isRemote) body.remote = true
     // Display metadata: label (the name shown instead of the id), slash-path
-    // tags (grouping) and a purpose note. Applies to every worker kind, managed
-    // or external; carried in the declaration.
+    // tags (grouping) and a purpose note.
     if (workerLabel.trim()) body.label = workerLabel.trim()
     const tagList = tags.split(',').map(x => x.trim()).filter(Boolean)
     if (tagList.length > 0) body.tags = tagList
     if (description.trim()) body.description = description.trim()
     if (isManaged) {
       if (isReasonFamilyType(effType)) {
-        if (instruction.trim()) body.instruction = instruction.trim()
-        if (provider.trim()) body.provider = provider.trim()
-        if (model.trim()) body.model = model.trim()
-        // Spawn seeding has no typed declaration field: it is a param
-        // (context-builder: goal → system prompt, brief → first message).
-        const params: Record<string, unknown> = {}
+        if (instruction.trim()) params.instruction = instruction.trim()
+        if (provider.trim()) params.provider = provider.trim()
+        if (model.trim()) params.model = model.trim()
+        // Spawn seeding is a param now (context-builder: goal → system prompt,
+        // brief → first message).
         if (goal.trim()) params.goal = goal.trim()
         if (brief.trim()) params.brief = brief.trim()
-        // Self-description (worker.readme). A param, not display metadata: the
-        // worker can revise it at runtime and other workers read it by recall.
         if (readme.trim()) params.readme = readme.trim()
-        // Coding's only knob: the tool-list policy. Which peers PTC keeps is
-        // part of the PTC contract (program for invocation, directory for
-        // discovery), not configuration.
         if (effType === 'coding') params.tool_mode = toolMode
-        if (Object.keys(params).length > 0) body.params = params
       }
       if ((effType === 'workspace' || effType === 'program') && rootDir.trim()) {
-        // WorkerConfig takes a mounts array (first entry = primary mount).
-        // More mounts can be added at runtime via the workspace's mount.add.
-        body.mounts = [rootDir.trim()]
+        params.mounts = [rootDir.trim()]
       }
       if (effType === 'mcp') {
-        // MCP worker: params.mcp carries the expose mode + remote servers.
-        // headers may reference env as ${VAR}; plaintext is accepted for now.
         let servers: unknown[] = []
         if (mcpServersText.trim()) {
           try {
@@ -212,48 +201,38 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           }
         }
         const allowedTools = mcpAllowedTools.split(',').map(x => x.trim()).filter(Boolean)
-        body.params = {
-          expose: mcpExpose,
-          fixed: mcpFixed,
-          servers,
-          ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
-        }
+        params.expose = mcpExpose
+        params.fixed = mcpFixed
+        params.servers = servers
+        if (allowedTools.length > 0) params.allowed_tools = allowedTools
       }
     } else if (isExternal) {
       body.command = command.trim().split(/\s+/)
       if (cwd.trim()) body.cwd = cwd.trim()
-      if (Object.keys(env).length > 0) body.env = env
+      // A managed-process worker's params ARE its child environment.
+      Object.assign(params, env)
     }
-    if (isManaged && effType === 'niw') {
-      // NIW is a MANAGED bridge worker: map the pasted far-side config onto
-      // the NIW construction params (remote_url / remote_worker_id /
-      // remote_credential) plus the optional local recipient seed. This is
-      // intentionally scoped to managed mode — a THIRD-PARTY worker typing
-      // "niw" (or "remote-niw") is a remote peer, not a local bridge, and
-      // must not hit the local-niw parameter requirements.
-      const c = parseNiwConfig(niwConfig)
-      const params: Record<string, unknown> = {}
+    if (isManaged && effType === 'niq') {
+      const c = parseNiqConfig(niqConfig)
       if (c.NIQ_BUS_URL) params.remote_url = c.NIQ_BUS_URL
       if (c.NIQ_WORKER_ID) params.remote_worker_id = c.NIQ_WORKER_ID
       if (c.NIQ_WORKER_CREDENTIAL) params.remote_credential = c.NIQ_WORKER_CREDENTIAL
-      if (niwRecipient.trim()) params.recipient = niwRecipient.trim()
+      if (niqRecipient.trim()) params.recipient = niqRecipient.trim()
       if (!params.remote_url || !params.remote_worker_id) {
-        setNote(t('workers.create.niwErr'))
+        setNote(t('workers.create.niqErr'))
         return null
       }
-      body.params = params
     }
-    // Optional token lifetime override for workers whose credential WE issue
-    // (external second-party and remote third-party workers).
-    if ((isExternal || isRemote) && tokenTtl.trim()) {
+    // token_ttl_seconds is only meaningful for a persisted remote credential;
+    // a managed-process credential is process-lifetime.
+    if (isRemote && tokenTtl.trim()) {
       const d = Number(tokenTtl.trim())
       if (Number.isFinite(d) && d > 0) body.token_ttl_seconds = Math.round(d * 86400)
     }
+    if (Object.keys(params).length > 0) body.params = params
     const subs = subscriptions.filter((r) => r.type.trim() !== '')
     const pubs = publish.filter((r) => r.type.trim() !== '')
     if (subs.length > 0) {
-      // An empty source is the legacy spelling of "any source"; write the
-      // canonical wildcard so the declaration matches what the backend stores.
       body.subscriptions = subs.map((r) => ({ type: r.type.trim(), source: r.source.trim() || '*' }))
     }
     if (pubs.length > 0) {
@@ -395,19 +374,8 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
             </select>
           )}
           {isRemote && (
-            <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-              <span
-                onClick={() => { setExtType('remote-niw'); setNote('') }}
-                className="btn-hover"
-                style={{ cursor: 'pointer', border: '1px solid ' + (extType === 'remote-niw' ? colors.accent : colors.border), borderRadius: 3, padding: '2px 10px', fontSize: fontSizes.xs, color: (extType === 'remote-niw' ? colors.accent : colors.textDim), userSelect: 'none' }}
-              >
-                remote-niw
-              </span>
-            </div>
-          )}
-          {isRemote && (
             <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 6, lineHeight: 1.5 }}>
-              {t('workers.create.remoteNiwHint')}
+              {t('workers.create.remoteNiqHint')}
             </div>
           )}
         </div>
@@ -498,23 +466,23 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
           </div>
         )}
 
-        {isManaged && effType === 'niw' && (
+        {isManaged && effType === 'niq' && (
           <>
             <div style={field}>
-              <label style={label}>{t('workers.create.niwConfig')}</label>
+              <label style={label}>{t('workers.create.niqConfig')}</label>
               <textarea
                 style={{ ...input, resize: 'vertical', minHeight: 72 }}
-                value={niwConfig}
-                onChange={e => setNiwConfig(e.target.value)}
-                placeholder={t('workers.create.niwConfigPlaceholder')}
+                value={niqConfig}
+                onChange={e => setNiqConfig(e.target.value)}
+                placeholder={t('workers.create.niqConfigPlaceholder')}
               />
               <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginTop: 4, lineHeight: 1.5 }}>
-                {t('workers.create.niwHint')}
+                {t('workers.create.niqHint')}
               </div>
             </div>
             <div style={field}>
-              <label style={label}>{t('workers.create.niwRecipient')}</label>
-              <input style={input} value={niwRecipient} onChange={e => setNiwRecipient(e.target.value)} placeholder="reason.local" />
+              <label style={label}>{t('workers.create.niqRecipient')}</label>
+              <input style={input} value={niqRecipient} onChange={e => setNiqRecipient(e.target.value)} placeholder="reason.local" />
             </div>
           </>
         )}

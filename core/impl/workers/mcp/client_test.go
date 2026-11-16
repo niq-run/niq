@@ -33,6 +33,13 @@ var _ corebus.WorkerSideChannel = channel{}
 // requiring an Authorization header.
 func newTestMCPServer(t *testing.T, requireAuth string) *httptest.Server {
 	t.Helper()
+	return newTestMCPServerWith(t, requireAuth, nil)
+}
+
+// newTestMCPServerWith is newTestMCPServer plus a hook to register further
+// tools (a slow one, for the async-dispatch tests).
+func newTestMCPServerWith(t *testing.T, requireAuth string, addTools func(*mcp.Server)) *httptest.Server {
+	t.Helper()
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1.0"}, nil)
 	server.AddTool(&mcp.Tool{
 		Name:        "echo",
@@ -56,6 +63,9 @@ func newTestMCPServer(t *testing.T, requireAuth string) *httptest.Server {
 			StructuredContent: map[string]any{"echoed": text},
 		}, nil
 	})
+	if addTools != nil {
+		addTools(server)
+	}
 	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		return server
 	}, nil)

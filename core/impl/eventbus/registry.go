@@ -1,7 +1,8 @@
 // Package eventbus provides the built-in bus engine implementation.
 //
 // It implements the core protocol interfaces defined in core/bus:
-//   - IdentityRegistry (file-backed)
+//   - IdentityRegistry (in-memory for a running host; a file-backed variant
+//     exists for standalone use and tests)
 //   - BusSideChannel / WorkerSideChannel (in-process transport)
 //   - Event routing (Send + Broadcast) via Engine
 package eventbus
@@ -18,11 +19,15 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
-// FileIdentityRegistry implements corebus.IdentityRegistry backed by a JSON file.
+// FileIdentityRegistry implements corebus.IdentityRegistry backed by a JSON
+// file: read once on construction, rewritten on every mutation, reads served
+// from an in-memory map.
 //
-// Identities are persisted to disk so they survive process restarts.
-// The file is read once on construction and rewritten on every mutation.
-// Reads are served from an in-memory map for performance.
+// It is NOT what a project uses. The project's durable source of truth is
+// workers.json (declarations carry ACL + credential), and its runtime registry
+// is MemoryIdentityRegistry, seeded from those declarations at startup. This
+// implementation stays for a host that genuinely wants a standalone identity
+// file (and for bus-level tests).
 type FileIdentityRegistry struct {
 	mu         sync.RWMutex
 	path       string

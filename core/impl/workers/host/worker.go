@@ -1,17 +1,17 @@
-// Package host provides the HostWorker — the bus-facing worker that exposes
-// spawn/suspend/resume tools for managing other workers' lifecycles, plus the
-// generic worker.readme and worker.help capabilities.
+// Package host provides the HostWorker — the bus-facing worker that owns other
+// workers' lifecycles, plus the generic worker.readme and worker.help
+// capabilities.
 //
 // HostWorker is deliberately thin: it handles the bus protocol (tool
-// invocation events, replies) and forwards lifecycle operations to
-// workerhost.WorkerService. It holds no knowledge of how specific worker
-// types are built — that lives in the Builder registry the assembly layer
-// registers on the WorkerService.
+// invocation events and replies) and forwards lifecycle operations to a
+// worker.Lifecycle backend. It holds no knowledge of how specific worker types
+// are built, where declarations live, or how a third-party process is launched
+// — that is the backend the assembly layer supplies.
 //
-// Lifecycle operations are host's ONLY job. The fleet roster (who exists,
-// with what tools) deliberately lives on the separate directory worker — a
-// reason worker must not be led to think host can suspend arbitrary workers,
-// nor that host's knowledge is limited to workers it spawned.
+// Lifecycle operations are host's ONLY job. The fleet roster (who exists, with
+// what tools) deliberately lives on the separate directory worker — a reason
+// worker must not be led to think host can enumerate capabilities, nor that
+// host's knowledge is limited to workers it spawned.
 package host
 
 import (
@@ -21,28 +21,45 @@ import (
 	"sync"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
-	"github.com/niq-run/niq/core/impl/workerhost"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
+	"github.com/niq-run/niq/core/itfs/worker"
 )
+
+// Control is the backend surface the host needs: worker lifecycles, plus the
+// declaration edits that are not lifecycle steps. It is a named composite so the
+// host states exactly which capabilities it drives instead of taking the whole
+// backend.
+type Control interface {
+	worker.Lifecycle
+	worker.Editor
+	worker.Archiver
+}
 
 // Config holds the configuration for a HostWorker.
 type Config struct {
 	ID     string
 	Bus    corebus.WorkerSideChannel // data-plane client
-	Engine *workerhost.WorkerService
+	Engine Control                   // lifecycle + declaration backend
+	// ACL is the bus identity administrator. Grants are bus state, not
+	// lifecycle state, so they arrive through their own port; nil disables the
+	// acl.update tool.
+	ACL worker.ACLAdmin
 	// Params is the declaration's construction params, read only for the
-	// optional readme/readme_append guide customization (see RegisterReadme).
+	// optional readme/readme_append guide customization.
 	Params map[string]any
 }
 
 // HostWorker is a bus-facing worker that manages other worker lifecycles.
 // It subscribes to its tool events and worker.discover, and exposes
-// spawn/suspend/resume tools on the bus. Actual lifecycle operations are
-// delegated to workerhost.WorkerService.
+// spawn/suspend/resume/restart/destroy/update/archive/acl.update on the bus.
+// Actual operations are delegated to the backend (lifecycle + declarations) and
+// the ACL administrator (bus identity); the host adds only the bus protocol
+// (validation, protected ids, reply shaping).
 type HostWorker struct {
 	baseworker.BaseWorker
-	engine  *workerhost.WorkerService
+	engine  Control
+	acl     worker.ACLAdmin
 	params  map[string]any
 	started bool
 	cancel  context.CancelFunc
@@ -58,6 +75,7 @@ func New(cfg Config) *HostWorker {
 	w := &HostWorker{
 		BaseWorker: baseworker.NewBaseWorker(id, cfg.Bus),
 		engine:     cfg.Engine,
+		acl:        cfg.ACL,
 		params:     cfg.Params,
 	}
 	w.registerExtensions()
@@ -105,8 +123,11 @@ func (w *HostWorker) Stop() error {
 	return nil
 }
 
-func (w *HostWorker) Snapshot() ([]byte, error)  { return nil, nil }
-func (w *HostWorker) Restore(state []byte) error { return nil }
+// Snapshot has no host state to persist: lifecycle state lives in the backend.
+func (w *HostWorker) Snapshot() ([]byte, error) { return nil, nil }
+
+// Restore is a no-op for the host; the backend owns recovered lifecycle state.
+func (w *HostWorker) Restore([]byte) error { return nil }
 
 // ── Event loop ──
 

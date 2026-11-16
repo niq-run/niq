@@ -120,7 +120,7 @@ export default function CreateMcpWorkerDialog({ open, onClose, onCreated }: Crea
     const params: Record<string, unknown> = { fixed, expose, servers: list }
     if (allowedTools.length > 0) params.allowed_tools = allowedTools
 
-    const body: Record<string, unknown> = { type: 'mcp', id: workerID, managed: true, params }
+    const body: Record<string, unknown> = { type: 'mcp', id: workerID, placement: 'in-process', params }
     const tagList = splitList(tags)
     if (tagList.length > 0) body.tags = tagList
     if (description.trim()) body.description = description.trim()

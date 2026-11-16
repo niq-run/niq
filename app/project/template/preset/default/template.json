@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "workers": [
+    {
+      "type": "reason",
+      "id": "niq",
+      "params": {
+        "programs": [
+          {
+            "name": "using-niq",
+            "content_type": "playbook",
+            "description": "How to operate inside niq — discover the workers that are here, talk to them the right way, and decide when to split your focus."
+          }
+        ]
+      }
+    },
+    {
+      "type": "timer",
+      "id": "timer"
+    },
+    {
+      "type": "host",
+      "id": "host"
+    },
+    {
+      "type": "directory",
+      "id": "directory"
+    },
+    {
+      "type": "history",
+      "id": "history"
+    },
+    {
+      "type": "program",
+      "id": "program",
+      "params": {
+        "mounts": [
+          "~/.niq/projects/{project}/programs"
+        ]
+      }
+    },
+    {
+      "type": "workspace",
+      "id": "ws",
+      "params": {
+        "mounts": [
+          "~/.niq/projects/{project}/workspace",
+          "~/.niq/projects/{project}/programs",
+          "~/.niq/projects/{project}/uploads"
+        ]
+      }
+    }
+  ]
+}

@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -15,6 +16,19 @@ const (
 	TypeSpawn   event.EventType = "spawn"
 	TypeSuspend event.EventType = "suspend"
 	TypeResume  event.EventType = "resume"
+	TypeRestart event.EventType = "restart"
+	TypeDestroy event.EventType = "destroy"
+	// TypeUpdate edits a worker's DECLARATION (display metadata and construction
+	// params). It is not a lifecycle step: nothing is started or stopped, and a
+	// params edit follows the worker into its next start.
+	TypeUpdate event.EventType = "update"
+	// TypeArchive moves a worker in or out of the archived set: one operation,
+	// because "stop it, hide its declaration, drop its identity" is one intent.
+	TypeArchive event.EventType = "archive"
+	// TypeUpdateACL edits a worker's bus identity: its publish/subscribe grants.
+	// It is a separate tool from `update` because it is a different domain —
+	// identity data owned by the bus control plane, not a worker's declaration.
+	TypeUpdateACL event.EventType = "acl.update"
 )
 
 // registerExtensions declares the host tools: each is an extension served by
@@ -26,16 +40,34 @@ func (w *HostWorker) registerExtensions() {
 
 	w.Register(baseworker.Extension{
 		Event:       TypeSpawn,
-		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"created"}}, "type": map[string]any{"type": "string"}}),
-		Description: "Create a new worker. Type determines worker kind (reason, workspace, ...). Type-specific arguments (e.g. path, provider, model, programs, events) are passed as top-level properties. Parameters are validated per type: one the type does not read fails the call and the error lists what that type accepts, so a mistake is not silently ignored.",
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"created"}}, "type": map[string]any{"type": "string"}, "placement": map[string]any{"type": "string"}}),
+		Description: "Create a worker and start it immediately. `type` selects the kind (reason, workspace, mcp, ...); `placement` selects where it runs: in-process (default, host builds it), managed-process (host launches the command and supervises the OS process), or unmanaged-process (a third party dials in on its own; nothing is launched here). Type-specific arguments are passed as top-level properties. For managed-process, every argument other than the fixed fields (type/id/placement/command/cwd/label/tags/description) becomes a child environment variable. Parameters are validated per type: one the type does not read fails the call and the error lists what that type accepts.",
 		Parameters: obj(map[string]any{
 			"type": map[string]any{
 				"type":        "string",
-				"description": "Worker type to spawn (reason, workspace, ...).",
+				"description": "Worker type label (reason, workspace, mcp, timer, ...). It names the identity and, for in-process placement, the builder to run.",
 			},
 			"id": map[string]any{
 				"type":        "string",
-				"description": "Optional worker ID. Builders may derive a default (e.g. workspace from path).",
+				"description": "Optional worker ID. Builders may derive a default (e.g. workspace from path); the reply carries the id actually used.",
+			},
+			"placement": map[string]any{
+				"type":        "string",
+				"enum":        []string{"in-process", "managed-process", "unmanaged-process"},
+				"description": "Where the worker runs. in-process (default): built by the host and runs inside the host process. managed-process: the host launches `command` as an OS process and supervises it (crash restart, start/stop). unmanaged-process: the third party starts itself and dials the bus; the host only declares it and issues a bus credential, which is NOT returned here.",
+			},
+			"command": map[string]any{
+				"type":        "array",
+				"description": "Required for placement=managed-process: argv of the process, e.g. [\"npx\",\"-y\",\"@modelcontextprotocol/server-filesystem\",\"/data\"]. Rejected for other placements.",
+				"items":       map[string]any{"type": "string"},
+			},
+			"cwd": map[string]any{
+				"type":        "string",
+				"description": "Working directory for a managed-process child (must exist).",
+			},
+			"token_ttl_seconds": map[string]any{
+				"type":        "integer",
+				"description": "Lifetime of a provisioned remote (unmanaged-process) credential, in seconds. Applies only to that placement: a managed-process credential's lifetime is its child process, and an in-process worker never authenticates over the wire.",
 			},
 			"path": map[string]any{
 				"type":        "string",
@@ -50,7 +82,7 @@ func (w *HostWorker) registerExtensions() {
 			},
 			"approver": map[string]any{
 				"type":        "string",
-				"description": "Worker that approves boundary-expansion requests (when type=workspace). Defaults to webui-hiw; empty disables the approval flow.",
+				"description": "Worker that approves boundary-expansion requests (when type=workspace). Defaults to webui; empty disables the approval flow.",
 			},
 			"tags": map[string]any{
 				"type":        "array",
@@ -74,13 +106,13 @@ func (w *HostWorker) registerExtensions() {
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
 		result, err := w.handleSpawn(tc)
-		w.reply(evt, string(TypeSpawn), result, err)
+		w.reply(evt, result, err)
 	})
 
 	w.Register(baseworker.Extension{
 		Event:       TypeSuspend,
 		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"suspended"}}}),
-		Description: "Suspend a running worker: snapshots its state, stops its goroutine and releases its bus connection. The worker can later be resumed.",
+		Description: "Suspend a running worker: an in-process worker is snapshotted, stopped and its bus connection released; a managed-process worker's OS process is stopped (it persists its own state). The worker stays declared and can be resumed.",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{
 				"type":        "string",
@@ -90,13 +122,13 @@ func (w *HostWorker) registerExtensions() {
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
 		result, err := w.handleSuspend(tc)
-		w.reply(evt, string(TypeSuspend), result, err)
+		w.reply(evt, result, err)
 	})
 
 	w.Register(baseworker.Extension{
 		Event:       TypeResume,
 		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"running"}}}),
-		Description: "Resume a suspended worker: reconnects its bus channel, restores its snapshot and starts it.",
+		Description: "Resume a worker that is declared but not running: an in-process worker reconnects and restores its snapshot; a managed-process worker is relaunched; an unmanaged-process worker only gets its bus identity re-ensured (it starts itself).",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{
 				"type":        "string",
@@ -106,12 +138,139 @@ func (w *HostWorker) registerExtensions() {
 	}, func(evt event.Event) {
 		tc := baseworker.ParseToolCall(evt)
 		result, err := w.handleResume(tc)
-		w.reply(evt, string(TypeResume), result, err)
+		w.reply(evt, result, err)
 	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeRestart,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"running"}}}),
+		Description: "Restart a worker from its declaration. Construction params follow the declaration edit; what the worker itself persisted survives (an in-process worker's snapshot, a managed-process worker's own state directory).",
+		Parameters: obj(map[string]any{
+			"worker_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the worker to restart.",
+			},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		result, err := w.handleRestart(tc)
+		w.reply(evt, result, err)
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeDestroy,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"destroyed"}}}),
+		Description: "Destroy a worker: stop it, delete its declaration, its persisted state, its bus connection and its identity. This is irreversible. The removal happens immediately.",
+		Parameters: obj(map[string]any{
+			"worker_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the worker to destroy.",
+			},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		result, err := w.handleDestroy(tc)
+		w.reply(evt, result, err)
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeUpdate,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"updated"}}}),
+		Description: "Edit a worker's declaration without touching its runtime state. `label`/`tags`/`description` are display metadata (cosmetic, visible immediately). `params` replaces the construction params wholesale, and takes effect on the worker's NEXT start (params are build input; use restart to apply them now). Bus ACL is not editable here: publish/subscribe grants belong to the bus identity layer, not to a worker's lifecycle.",
+		Parameters: obj(map[string]any{
+			"worker_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the worker to edit.",
+			},
+			"label": map[string]any{
+				"type":        "string",
+				"description": "Display name shown in place of the worker id. Display metadata only.",
+			},
+			"tags": map[string]any{
+				"type":        "array",
+				"description": "Slash-path labels that group this worker in the UI. Replaces the whole set; an empty list clears it. Omit to leave it unchanged.",
+				"items":       map[string]any{"type": "string"},
+			},
+			"description": map[string]any{
+				"type":        "string",
+				"description": "Short note explaining what this worker is for. Display metadata only.",
+			},
+			"params": map[string]any{
+				"type":        "object",
+				"description": "Replacement construction params for the worker's type. Replaces the whole object; an empty object clears it. Omit to leave it unchanged. Applied on the next start.",
+			},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		result, err := w.handleUpdate(tc)
+		w.reply(evt, result, err)
+	})
+
+	w.Register(baseworker.Extension{
+		Event:       TypeArchive,
+		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "archived": map[string]any{"type": "boolean"}}),
+		Description: "Move a worker in or out of the archived set. Archiving stops a live worker (an in-process one is snapshotted first) and drops its bus identity, but KEEPS its declaration in workers.archived.json so it can be restored unchanged. Unarchiving moves the declaration back and starts the worker again. Not a delete: use destroy for that.",
+		Parameters: obj(map[string]any{
+			"worker_id": map[string]any{
+				"type":        "string",
+				"description": "ID of the worker to archive or restore.",
+			},
+			"archived": map[string]any{
+				"type":        "boolean",
+				"description": "true archives the worker; false restores it.",
+			},
+		}),
+	}, func(evt event.Event) {
+		tc := baseworker.ParseToolCall(evt)
+		result, err := w.handleArchive(tc)
+		w.reply(evt, result, err)
+	})
+
+	if w.acl != nil {
+		w.Register(baseworker.Extension{
+			Event:       TypeUpdateACL,
+			Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"updated"}}}),
+			Description: "Edit a worker's bus identity: what it may publish and what it subscribes to. Both lists are replaced wholesale. This is identity data, not lifecycle: it takes effect immediately for routing, it is persisted into the worker's declaration (the durable source), and it does not restart anything. A worker that is not declared or registered is an error.",
+			Parameters: obj(map[string]any{
+				"worker_id": map[string]any{
+					"type":        "string",
+					"description": "ID of the worker whose grants change.",
+				},
+				"publish_allow": map[string]any{
+					"type":        "array",
+					"description": "Grants to publish. Each entry is {type, target?}: the event type (supports \"*\" and \"Prefix.*\") and, optionally, the only target a directed send may reach. Replaces the whole list.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":   map[string]any{"type": "string"},
+							"target": map[string]any{"type": "string"},
+						},
+						"required": []string{"type"},
+					},
+				},
+				"subscribe_allow": map[string]any{
+					"type":        "array",
+					"description": "Grants to subscribe. Each entry is {type, source?}: the event pattern and, optionally, the only worker whose broadcasts it accepts (omitted means any). Replaces the whole list.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":   map[string]any{"type": "string"},
+							"source": map[string]any{"type": "string"},
+						},
+						"required": []string{"type"},
+					},
+				},
+			}),
+		}, func(evt event.Event) {
+			tc := baseworker.ParseToolCall(evt)
+			result, err := w.handleUpdateACL(tc)
+			w.reply(evt, result, err)
+		})
+	}
 }
 
 // reply answers a tool invocation with request.completed / request.failed.
-func (w *HostWorker) reply(evt event.Event, toolName string, result any, err error) {
+func (w *HostWorker) reply(evt event.Event, result any, err error) {
 	if err != nil {
 		w.ReplyFailed(evt.WorkerId, evt.RequestId, err.Error(), evt.TraceID)
 		return
@@ -119,11 +278,9 @@ func (w *HostWorker) reply(evt event.Event, toolName string, result any, err err
 	w.ReplyCompleted(evt.WorkerId, evt.RequestId, result, evt.TraceID)
 }
 
-// handleSpawn forwards the spawn request to the WorkerService, which
-// dispatches to the registered builder for the requested type.
 // liftDisplayMeta strips the display-only spawn arguments (label / tags /
 // description) out of the construction params and returns them, so builders
-// never see them. They travel on typed fields and land in the project.json
+// never see them. They travel on typed fields and land in the project
 // declaration for the WebUI selector/filter; the params map is mutated in place
 // and keeps every type-specific key.
 func liftDisplayMeta(args map[string]any) (label string, tags []string, desc string) {
@@ -140,41 +297,271 @@ func liftDisplayMeta(args map[string]any) (label string, tags []string, desc str
 	return label, tags, desc
 }
 
+// liftPlacement strips the placement/launch arguments out of the params map:
+// they describe HOW the worker runs, not what type it is, so a builder must
+// never see them.
+// liftACL pulls the optional publish/subscriptions grants out of the spawn
+// args. They are identity data, not construction params.
+func liftACL(args map[string]any) (pub []event.PublishPattern, sub []event.EventPattern) {
+	if raw, ok := args["publish"]; ok {
+		b, _ := json.Marshal(raw)
+		_ = json.Unmarshal(b, &pub)
+		delete(args, "publish")
+	}
+	if raw, ok := args["subscriptions"]; ok {
+		b, _ := json.Marshal(raw)
+		_ = json.Unmarshal(b, &sub)
+		delete(args, "subscriptions")
+	}
+	return pub, sub
+}
+
+// liftTokenTTL pulls the optional credential lifetime out of the spawn args. It
+// only applies to a persisted (unmanaged-process) credential: a managed-process
+// credential's lifetime is its child process.
+func liftTokenTTL(args map[string]any) *int64 {
+	raw, ok := args["token_ttl_seconds"]
+	if !ok {
+		return nil
+	}
+	delete(args, "token_ttl_seconds")
+	f, ok := raw.(float64)
+	if !ok || f <= 0 {
+		return nil
+	}
+	ttl := int64(f)
+	return &ttl
+}
+
+func liftPlacement(args map[string]any) (placement worker.Placement, command []string, cwd string) {
+	placement = worker.Placement(strings.TrimSpace(baseworker.ArgString(args, "placement")))
+	command = baseworker.ArgStrings(args, "command")
+	cwd = baseworker.ArgString(args, "cwd")
+	delete(args, "placement")
+	delete(args, "command")
+	delete(args, "cwd")
+	return placement, command, cwd
+}
+
 func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
+	// Construction params may arrive flat (an agent passes them next to `type`)
+	// or nested under `params` (a UI form groups the type-specific part). Both
+	// mean the same thing, so the flattening lives here, at the tool's own input
+	// boundary, and no caller has to know the shape spawn expects. Flattening
+	// comes FIRST so a nested param cannot shadow a control field.
+	if err := flattenParams(tc.Args); err != nil {
+		return "", err
+	}
+
 	typ := baseworker.ArgString(tc.Args, "type")
 	if typ == "" {
 		return "", fmt.Errorf("type is required")
 	}
 	id := baseworker.ArgString(tc.Args, "id")
+	// type/id are identity fields, not construction params. The declaration
+	// carries them; a builder must not see them inside params (and a
+	// managed-process child must not receive them as env).
+	delete(tc.Args, "type")
+	delete(tc.Args, "id")
 
 	label, tags, desc := liftDisplayMeta(tc.Args)
-	cfg := worker.WorkerConfig{ID: id, Type: typ, Params: tc.Args, Label: label, Tags: tags, Description: desc}
-	if err := w.engine.CreateWorker(context.Background(), cfg); err != nil {
+	placement, command, cwd := liftPlacement(tc.Args)
+	publish, subscribe := liftACL(tc.Args)
+	ttl := liftTokenTTL(tc.Args)
+	spec := worker.WorkerSpec{
+		Placement:       placement,
+		Command:         command,
+		Cwd:             cwd,
+		TokenTTLSeconds: ttl,
+	}
+	spec.ID = id
+	spec.Type = typ
+	spec.Params = tc.Args
+	spec.Label = label
+	spec.Tags = tags
+	spec.Description = desc
+	spec.PublishAllow = publish
+	spec.SubscribeAllow = subscribe
+	info, err := w.engine.Create(context.Background(), spec)
+	if err != nil {
 		return "", err
 	}
-	// The builder may derive a default ID (e.g. workspace from path).
-	info, _ := w.engine.WorkerType(id)
-	return map[string]any{"worker_id": id, "status": "created", "type": info}, nil
+	return map[string]any{
+		"worker_id": info.ID,
+		"status":    "created",
+		"type":      info.Type,
+		"placement": string(info.Placement),
+	}, nil
 }
 
-func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (any, error) {
+// flattenParams merges a nested `params` object into the argument map. A key that
+// already exists at the top level is a collision, not a silent override: the
+// top level also carries the control fields (type/id/placement/command/cwd/...),
+// and letting a param shadow one of those would change how the worker runs.
+func flattenParams(args map[string]any) error {
+	raw, ok := args["params"]
+	if !ok {
+		return nil
+	}
+	delete(args, "params")
+	params, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("params must be an object, got %T", raw)
+	}
+	for k, v := range params {
+		if _, taken := args[k]; taken {
+			return fmt.Errorf("param %q collides with the \"%s\" field", k, k)
+		}
+		args[k] = v
+	}
+	return nil
+}
+
+// workerIDArg pulls the target id out of a lifecycle call.
+func workerIDArg(tc baseworker.ToolCall) (string, error) {
 	id := baseworker.ArgString(tc.Args, "worker_id")
 	if id == "" {
 		return "", fmt.Errorf("worker_id is required")
 	}
-	if err := w.engine.SuspendWorker(id); err != nil {
+	return id, nil
+}
+
+func (w *HostWorker) handleSuspend(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	if err := w.engine.Suspend(context.Background(), id); err != nil {
 		return "", err
 	}
 	return map[string]any{"worker_id": id, "status": "suspended"}, nil
 }
 
 func (w *HostWorker) handleResume(tc baseworker.ToolCall) (any, error) {
-	id := baseworker.ArgString(tc.Args, "worker_id")
-	if id == "" {
-		return "", fmt.Errorf("worker_id is required")
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
 	}
-	if err := w.engine.ResumeWorker(context.Background(), id); err != nil {
+	if err := w.engine.Resume(context.Background(), id); err != nil {
 		return "", err
 	}
 	return map[string]any{"worker_id": id, "status": "running"}, nil
+}
+
+func (w *HostWorker) handleDestroy(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	if w.engine.Protected(id) {
+		return "", fmt.Errorf("worker %s is protected and cannot be destroyed", id)
+	}
+	if err := w.engine.Destroy(context.Background(), id); err != nil {
+		return "", err
+	}
+	return map[string]any{"worker_id": id, "status": "destroyed"}, nil
+}
+
+func (w *HostWorker) handleRestart(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	if err := w.engine.Restart(context.Background(), id); err != nil {
+		return "", err
+	}
+	return map[string]any{"worker_id": id, "status": "running"}, nil
+}
+
+func (w *HostWorker) handleUpdate(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	// A patch field counts as "given" only when the caller actually sent it:
+	// an omitted key leaves that part of the declaration alone, while an empty
+	// string / list / object clears it.
+	patch := worker.WorkerPatch{}
+	if v, ok := tc.Args["label"]; ok {
+		s, _ := v.(string)
+		patch.Label = &s
+	}
+	if v, ok := tc.Args["description"]; ok {
+		s, _ := v.(string)
+		patch.Description = &s
+	}
+	if v, ok := tc.Args["tags"]; ok {
+		patch.Tags = baseworker.ArgStrings(map[string]any{"tags": v}, "tags")
+		if patch.Tags == nil {
+			patch.Tags = []string{}
+		}
+	}
+	if v, ok := tc.Args["params"]; ok {
+		m, _ := v.(map[string]any)
+		if m == nil {
+			m = map[string]any{}
+		}
+		patch.Params = m
+	}
+	if _, err := w.engine.Update(context.Background(), id, patch); err != nil {
+		return "", err
+	}
+	return map[string]any{"worker_id": id, "status": "updated"}, nil
+}
+
+func (w *HostWorker) handleArchive(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	archived, _ := tc.Args["archived"].(bool)
+	if w.engine.Protected(id) {
+		return "", fmt.Errorf("worker %s is protected and cannot be archived", id)
+	}
+	if err := w.engine.Archive(context.Background(), id, archived); err != nil {
+		return "", err
+	}
+	return map[string]any{"worker_id": id, "archived": archived}, nil
+}
+
+func (w *HostWorker) handleUpdateACL(tc baseworker.ToolCall) (any, error) {
+	id, err := workerIDArg(tc)
+	if err != nil {
+		return "", err
+	}
+	publish, subscribe, err := liftACLLists(tc.Args)
+	if err != nil {
+		return "", err
+	}
+	if err := w.acl.UpdateACL(id, publish, subscribe); err != nil {
+		return "", err
+	}
+	return map[string]any{"worker_id": id, "status": "updated"}, nil
+}
+
+// liftACLLists decodes the two grant lists from a tool call. A missing list is an
+// empty grant set, not "keep the old one": this tool replaces both wholesale, so
+// the caller always says what the worker may do.
+func liftACLLists(args map[string]any) ([]event.PublishPattern, []event.EventPattern, error) {
+	var publish []event.PublishPattern
+	if raw, ok := args["publish_allow"]; ok {
+		b, err := json.Marshal(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("publish_allow: %w", err)
+		}
+		if err := json.Unmarshal(b, &publish); err != nil {
+			return nil, nil, fmt.Errorf("publish_allow: %w", err)
+		}
+	}
+	var subscribe []event.EventPattern
+	if raw, ok := args["subscribe_allow"]; ok {
+		b, err := json.Marshal(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("subscribe_allow: %w", err)
+		}
+		if err := json.Unmarshal(b, &subscribe); err != nil {
+			return nil, nil, fmt.Errorf("subscribe_allow: %w", err)
+		}
+	}
+	return publish, subscribe, nil
 }

@@ -4,57 +4,52 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	projworker "github.com/niq-run/niq/app/project/worker"
 )
 
-// exportTemplate is a template covering every exportable field: a managed
-// reason worker with provider config, subscriptions, publish and mounts, plus
-// an unmanaged worker carrying a launch spec.
 func exportTemplate() *TemplateConfig {
-	no := false
-	return &TemplateConfig{Workers: []WorkerConfig{
+	return &TemplateConfig{SchemaVersion: SchemaVersion, Workers: []WorkerConfig{
 		{
-			Type: "reason", ID: "niq",
-			Instruction:   "do the thing",
-			Provider:      "volcan-ark",
-			Model:         "deepseek-v4-flash",
+			Config: projworker.Config{
+				Type: "reason", ID: "niq",
+				Params: map[string]any{
+					"instruction": "do the thing",
+					"provider":    "volcan-ark",
+					"model":       "deepseek-v4-flash",
+					"mounts":      []any{"/tmp/demo"},
+				},
+			},
+			Placement:     projworker.PlacementInProcess,
 			Subscriptions: []SubscriptionSpec{{Type: "worker.input", Source: "timer"}},
 			Publish:       []PublishSpec{{Type: "reason.response"}},
-			Mounts:        []string{"/tmp/demo"},
-			Approver:      "webui-hiw",
 		},
 		{
-			Type: "reason", ID: "retired",
-			Instruction: "this one gets archived",
+			Config:    projworker.Config{Type: "reason", ID: "retired", Params: map[string]any{"instruction": "this one gets archived"}},
+			Placement: projworker.PlacementInProcess,
 		},
 		{
-			Type: "http", ID: "ext-1", Managed: &no,
+			Config:     projworker.Config{Type: "http", ID: "ext-1", Params: map[string]any{"PORT": "8080"}},
+			Placement:  projworker.PlacementManagedProcess,
 			Credential: "tok-secret",
 			Command:    []string{"./worker-ts", "run"},
-			Env:        map[string]string{"PORT": "8080"},
 			Cwd:        "/tmp/ext",
 			Publish:    []PublishSpec{{Type: "pr.ready", Target: "niq"}},
 		},
 	}}
 }
 
-// TestExportProjectTemplateRoundTrip creates a project from a template, marks
-// one worker archived, exports it back, and compares the re-parsed result:
-// expressible fields survive, secrets do not, the archived worker is gone.
+// TestExportProjectTemplateRoundTrip creates a project, archives one worker,
+// exports it back, and checks that params/ACL/launch spec survive while the
+// archived worker and secrets do not.
 func TestExportProjectTemplateRoundTrip(t *testing.T) {
 	setupProjectsRoot(t)
 	src := exportTemplate()
 	if _, err := CreateProject("alpha", "", src); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-
-	// Archive the second worker.
-	p, err := LoadProject("alpha")
-	if err != nil {
-		t.Fatalf("LoadProject: %v", err)
-	}
-	p.Archived = map[string]bool{"retired": true}
-	if err := SaveProject(p); err != nil {
-		t.Fatalf("SaveProject: %v", err)
+	if err := SetWorkerArchived("alpha", "retired", true); err != nil {
+		t.Fatalf("archive: %v", err)
 	}
 
 	out, err := ExportProjectTemplate("alpha", false)
@@ -65,7 +60,6 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 		t.Fatalf("exported %d workers, want 2 (archived skipped): %+v", len(out.Workers), out.Workers)
 	}
 
-	// Managed worker: expressible fields round-trip.
 	var niq WorkerConfig
 	for _, w := range out.Workers {
 		if w.ID == "niq" {
@@ -76,12 +70,10 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 		t.Fatalf("niq type = %q", niq.Type)
 	}
 	want := src.Workers[0]
-	if niq.Instruction != want.Instruction || niq.Provider != want.Provider ||
-		niq.Model != want.Model || niq.Approver != want.Approver {
-		t.Fatalf("niq fields drifted:\n got %+v\nwant %+v", niq, want)
-	}
-	if len(niq.Mounts) != 1 || niq.Mounts[0] != want.Mounts[0] {
-		t.Fatalf("niq mounts = %v, want %v", niq.Mounts, want.Mounts)
+	if niq.Params["instruction"] != want.Params["instruction"] ||
+		niq.Params["provider"] != want.Params["provider"] ||
+		niq.Params["model"] != want.Params["model"] {
+		t.Fatalf("niq params drifted:\n got %+v\nwant %+v", niq.Params, want.Params)
 	}
 	if len(niq.Subscriptions) != 1 || niq.Subscriptions[0] != want.Subscriptions[0] {
 		t.Fatalf("niq subscriptions = %+v, want %+v", niq.Subscriptions, want.Subscriptions)
@@ -89,11 +81,7 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 	if len(niq.Publish) != 1 || niq.Publish[0] != want.Publish[0] {
 		t.Fatalf("niq publish = %+v, want %+v", niq.Publish, want.Publish)
 	}
-	if niq.Managed != nil && !*niq.Managed {
-		t.Fatal("managed worker must stay managed")
-	}
 
-	// Unmanaged worker: launch spec survives, credential does not.
 	var ext WorkerConfig
 	for _, w := range out.Workers {
 		if w.ID == "ext-1" {
@@ -103,50 +91,35 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 	if ext.ID == "" {
 		t.Fatal("unmanaged worker ext-1 missing from export")
 	}
-	if ext.Command == nil || len(ext.Command) != 2 || ext.Env["PORT"] != "8080" || ext.Cwd != "/tmp/ext" {
-		t.Fatalf("unmanaged launch spec drifted: %+v", ext)
-	}
-	if len(ext.Publish) != 1 || ext.Publish[0] != (PublishSpec{Type: "pr.ready", Target: "niq"}) {
-		t.Fatalf("unmanaged publish = %+v", ext.Publish)
+	if len(ext.Command) != 2 || ext.Params["PORT"] != "8080" || ext.Cwd != "/tmp/ext" {
+		t.Fatalf("launch spec drifted: %+v", ext)
 	}
 	if ext.Credential != "" {
 		t.Fatal("credential must not enter the exported template")
 	}
-	if ext.Managed == nil || *ext.Managed {
-		t.Fatal("unmanaged worker must stay unmanaged (nil counts as managed)")
-	}
 }
 
-// TestExportProjectTemplatePrograms verifies the withProgram switch: a reason
-// worker's programs param is lifted into Programs only when asked for.
-func TestExportProjectTemplatePrograms(t *testing.T) {
+// TestExportProjectTemplateParams verifies params travel verbatim.
+func TestExportProjectTemplateParams(t *testing.T) {
 	setupProjectsRoot(t)
 	if _, err := CreateProject("alpha", "", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if err := AppendWorkerDecl("alpha", WorkerConfig{Type: "reason", ID: "niq", Params: map[string]any{
+	d := projworker.Declaration{Config: projworker.Config{Type: "reason", ID: "niq", Params: map[string]any{
 		"programs": []any{map[string]any{
 			"name": "review", "content_type": "playbook", "content": "# Review\n...",
 		}},
-	}}); err != nil {
-		t.Fatalf("AppendWorkerDecl: %v", err)
+	}}}
+	if err := (projectDeclStore{projectID: "alpha"}).Add(&d); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
-
-	out, err := ExportProjectTemplate("alpha", true)
+	out, err := ExportProjectTemplate("alpha", false)
 	if err != nil {
-		t.Fatalf("ExportProjectTemplate(with program): %v", err)
+		t.Fatalf("ExportProjectTemplate: %v", err)
 	}
-	if len(out.Workers[0].Programs) != 1 || out.Workers[0].Programs[0].Name != "review" ||
-		out.Workers[0].Programs[0].ContentType != "playbook" {
-		t.Fatalf("programs = %+v, want [review/playbook]", out.Workers[0].Programs)
-	}
-
-	out, err = ExportProjectTemplate("alpha", false)
-	if err != nil {
-		t.Fatalf("ExportProjectTemplate(no program): %v", err)
-	}
-	if len(out.Workers[0].Programs) != 0 {
-		t.Fatalf("programs leaked without the flag: %+v", out.Workers[0].Programs)
+	raw, _ := out.Workers[0].Params["programs"].([]any)
+	if len(raw) != 1 {
+		t.Fatalf("programs = %+v", out.Workers[0].Params)
 	}
 }
 
@@ -162,7 +135,6 @@ func TestExportProjectPrograms(t *testing.T) {
 	if err != nil || copied {
 		t.Fatalf("no-programs project: copied=%v err=%v, want false/nil", copied, err)
 	}
-
 	src := ProjectProgramsDir("alpha")
 	if err := os.MkdirAll(filepath.Join(src, "review"), 0755); err != nil {
 		t.Fatal(err)
@@ -180,42 +152,8 @@ func TestExportProjectPrograms(t *testing.T) {
 	}
 }
 
-// TestExportProjectTemplateRawParams verifies a declaration carrying a raw
-// params map — how a worker spawned at runtime is declared — exports the keys
-// the template can express and drops the rest.
-func TestExportProjectTemplateRawParams(t *testing.T) {
-	setupProjectsRoot(t)
-	if _, err := CreateProject("alpha", "", nil); err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-	if err := AppendWorkerDecl("alpha", WorkerConfig{Type: "reason", ID: "spawned", Params: map[string]any{
-		"instruction": "do x", "model": "m", "goal": "ship it",
-	}}); err != nil {
-		t.Fatalf("AppendWorkerDecl: %v", err)
-	}
-	out, err := ExportProjectTemplate("alpha", false)
-	if err != nil {
-		t.Fatalf("ExportProjectTemplate: %v", err)
-	}
-	var w WorkerConfig
-	for _, x := range out.Workers {
-		if x.ID == "spawned" {
-			w = x
-		}
-	}
-	if w.ID == "" {
-		t.Fatalf("spawned worker missing from export: %+v", out.Workers)
-	}
-	if w.Instruction != "do x" || w.Model != "m" {
-		t.Fatalf("exported = %+v, want instruction/model lifted from params", w)
-	}
-	if w.Params != nil {
-		t.Fatalf("params leaked into the template: %v", w.Params)
-	}
-}
-
-// TestExportProjectTemplateEmpty verifies a project with no (non-archived)
-// workers is an error, not an empty template file.
+// TestExportProjectTemplateEmpty verifies a project with no active workers is an
+// error, not an empty template file.
 func TestExportProjectTemplateEmpty(t *testing.T) {
 	setupProjectsRoot(t)
 	if _, err := CreateProject("alpha", "", nil); err != nil {

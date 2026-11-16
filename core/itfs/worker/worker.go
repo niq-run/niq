@@ -4,6 +4,7 @@ import (
 	"context"
 
 	corebus "github.com/niq-run/niq/core/itfs/bus"
+	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // Worker is the contract for built-in Go workers running inside
@@ -68,6 +69,13 @@ type WorkerConfig struct {
 	// Label is the worker's display name (备注名): what the UI shows instead
 	// of the id. Display metadata only — the id stays the identity on the bus.
 	Label string `json:"label,omitempty"`
+
+	// PublishAllow / SubscribeAllow are the worker's bus ACL. They are part of
+	// the declaration (workers.json) and are handed to the builder so it can
+	// register the identity without consulting a second store. Empty means
+	// "use the type's default".
+	PublishAllow   []event.PublishPattern `json:"publish_allow,omitempty"`
+	SubscribeAllow []event.EventPattern   `json:"subscribe_allow,omitempty"`
 }
 
 // SpawnSpec describes how to construct and connect a managed worker.

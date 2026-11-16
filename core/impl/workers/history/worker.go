@@ -6,7 +6,7 @@
 //
 // The worker is deliberately a participant over the bus like any other: reason
 // workers (or a human HIW) discover its tools via worker.ready and call them
-// as directed tool invocations. Its read side is the store.EventStore its
+// as directed tool invocations. Its read side is the event.EventStore its
 // builder injects — the domain backend, a pure read service that never touches
 // the bus.
 package history
@@ -20,7 +20,6 @@ import (
 	"github.com/niq-run/niq/core/impl/baseworker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 )
 
 // Default tunables for the list tool. MaxListEvents caps how many events a
@@ -40,7 +39,7 @@ type Config struct {
 	// Store is the read-only event store to query. In-process workers get the
 	// project's store injected by the assembly layer (see build.go); the
 	// worker never writes to it.
-	Store store.EventStore
+	Store event.EventStore
 	// MaxListEvents / MaxListItemBytes tune the list tool. 0 uses the package
 	// defaults. history.get ignores both.
 	MaxListEvents    int
@@ -55,7 +54,7 @@ type Config struct {
 // history.get tools over the bus.
 type Worker struct {
 	baseworker.BaseWorker
-	store            store.EventStore
+	store            event.EventStore
 	maxListEvents    int
 	maxListItemBytes int
 	params           map[string]any // declaration params, for the readme customization
@@ -357,11 +356,11 @@ func (w *Worker) handleList(tc baseworker.ToolCall) {
 }
 
 // listOpts builds the store query opts for a history.list invocation, mapping
-// the tool args onto store.QueryOpts. `desc` defaults open (true): a listing is
+// the tool args onto event.QueryOpts. `desc` defaults open (true): a listing is
 // a display view, newest first. result is that reason workers paging through a
 // worker's history get the most recent activity.
-func (w *Worker) listOpts(args map[string]any) (store.QueryOpts, error) {
-	opts := store.QueryOpts{
+func (w *Worker) listOpts(args map[string]any) (event.QueryOpts, error) {
+	opts := event.QueryOpts{
 		Desc:    true,
 		Limit:   baseworker.ArgInt(args, "limit", w.maxListEvents),
 		Since:   int64(baseworker.ArgInt(args, "since", 0)),
@@ -454,7 +453,7 @@ func (w *Worker) handleGet(tc baseworker.ToolCall) {
 		events = []event.Event{evt}
 	case req != "":
 		var err error
-		events, err = w.store.List(ctx, "*", store.QueryOpts{RequestID: req})
+		events, err = w.store.List(ctx, "*", event.QueryOpts{RequestID: req})
 		if err != nil {
 			w.ReplyFailed(tc.CallerID, tc.CallID, fmt.Sprintf("history.get: %v", err), tc.TraceID)
 			return
@@ -484,10 +483,10 @@ func (w *Worker) handleGet(tc baseworker.ToolCall) {
 // "received" translate directly; anything else (empty etc.) means both.
 func roleToStore(v any) []string {
 	switch r, _ := v.(string); r {
-	case store.RoleSent:
-		return []string{store.RoleSent}
-	case store.RoleReceived:
-		return []string{store.RoleReceived}
+	case event.RoleSent:
+		return []string{event.RoleSent}
+	case event.RoleReceived:
+		return []string{event.RoleReceived}
 	}
 	return nil
 }

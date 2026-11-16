@@ -6,6 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -273,7 +274,7 @@ func TestHandleExposeSetsAndReadsMode(t *testing.T) {
 
 	set := event.New(EvtExpose, "caller", map[string]any{"mode": ExposeReady})
 	set.RequestId = "r1"
-	w.handleExpose(set)
+	w.handleExpose(context.Background(), set)
 	w.mu.Lock()
 	got := w.cfg.Expose
 	w.mu.Unlock()
@@ -283,7 +284,7 @@ func TestHandleExposeSetsAndReadsMode(t *testing.T) {
 
 	read := event.New(EvtExpose, "caller", map[string]any{})
 	read.RequestId = "r2"
-	w.handleExpose(read)
+	w.handleExpose(context.Background(), read)
 	w.mu.Lock()
 	got = w.cfg.Expose
 	w.mu.Unlock()
@@ -380,7 +381,7 @@ func TestRemoveSignalsDurableChange(t *testing.T) {
 
 	evt := event.New(EvtServerRemove, "caller", map[string]any{"name": "a"})
 	evt.RequestId = "req-1"
-	w.handleServerRemove(evt)
+	w.handleServerRemove(context.Background(), evt)
 
 	if _, ok := w.clients["a"]; ok {
 		t.Fatal("server not removed from clients")
@@ -424,6 +425,127 @@ func TestReadyToolsCarryOutputSchema(t *testing.T) {
 	}
 	if _, present := byEvent[string(toolEventName("srv", "plain"))]["response"]; present {
 		t.Fatal("a tool without outputSchema must not advertise a response schema")
+	}
+}
+
+// replyStream captures the events a worker sends, so a test can observe the
+// replies that travel back over the bus (concurrently dispatched handlers need
+// a channel, not the slice recordingChannel uses).
+type replyStream struct {
+	sent chan event.Event
+}
+
+func newReplyStream() *replyStream {
+	return &replyStream{sent: make(chan event.Event, 32)}
+}
+
+func (c *replyStream) ID() string { return "replies" }
+func (c *replyStream) Send(_ context.Context, evt event.Event, _ ...string) error {
+	select {
+	case c.sent <- evt:
+	default: // never block the code under test
+	}
+	return nil
+}
+func (c *replyStream) Broadcast(_ context.Context, _ event.Event) error { return nil }
+func (c *replyStream) Receive(context.Context) (<-chan event.Event, error) {
+	ch := make(chan event.Event)
+	close(ch)
+	return ch, nil
+}
+func (c *replyStream) Close() error { return nil }
+
+// waitReply waits for the request.completed answering callID.
+func waitReply(t *testing.T, sent <-chan event.Event, callID string) event.Event {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case evt := <-sent:
+			if evt.RequestId != callID {
+				continue
+			}
+			if evt.Type != event.TypeRequestCompleted {
+				t.Fatalf("reply for %s = %s %#v", callID, evt.Type, evt.Payload)
+			}
+			return evt
+		case <-deadline:
+			t.Fatalf("no reply for %s", callID)
+		}
+	}
+}
+
+// TestToolCallDoesNotBlockTheEventLoop verifies a remote call is dispatched and
+// answered asynchronously: process returns immediately, a second call to the
+// same (slow) server completes while the first is still in flight, and both
+// replies reach the caller over the bus.
+func TestToolCallDoesNotBlockTheEventLoop(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+
+	ts := newTestMCPServerWith(t, "", func(s *mcp.Server) {
+		s.AddTool(&mcp.Tool{
+			Name:        "slow",
+			Description: "blocks until released",
+			InputSchema: map[string]any{"type": "object"},
+		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{&mcp.TextContent{Text: "slow done"}},
+			}, nil
+		})
+	})
+	defer ts.Close()
+
+	ch := newReplyStream()
+	w := New(WorkerConfig{
+		ID: "mcp", Bus: ch, Expose: ExposeAgentic,
+		Servers: []ServerConfig{{Name: "test", URL: ts.URL}},
+	})
+	// Start so the handlers run on the worker's run context and Stop tears the
+	// sessions down (a live session would keep ts.Close waiting).
+	if err := w.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer w.Stop()
+
+	slow := event.New(EvtToolCall, "caller", map[string]any{
+		"server": "test", "tool": "slow", "arguments": map[string]any{},
+	})
+	slow.RequestId = "slow"
+	start := time.Now()
+	w.process(slow)
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("dispatching a tool call blocked the event loop for %v", d)
+	}
+
+	fast := event.New(EvtToolCall, "caller", map[string]any{
+		"server": "test", "tool": "echo", "arguments": map[string]any{"text": "hi"},
+	})
+	fast.RequestId = "fast"
+	w.process(fast)
+
+	// The fast call answers while the slow one still occupies the same server.
+	reply := waitReply(t, ch.sent, "fast")
+	if got, _ := reply.Payload["result"].(string); !strings.Contains(got, "echo: hi") {
+		t.Fatalf("fast reply = %#v, want the echoed text", reply.Payload)
+	}
+	// ... and the slow call has NOT answered yet: it is still running.
+	select {
+	case evt := <-ch.sent:
+		t.Fatalf("unexpected reply before the slow call finished: %s %#v", evt.Type, evt.Payload)
+	default:
+	}
+
+	unblock()
+	if got, _ := waitReply(t, ch.sent, "slow").Payload["result"].(string); !strings.Contains(got, "slow done") {
+		t.Fatalf("slow reply = %q", got)
 	}
 }
 

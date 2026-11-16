@@ -252,10 +252,10 @@ func (b *AccumulateTranscript) BeginEdit() []llm.Message {
 // Commit applies an edit: it rewrites the transcript to the caller-supplied
 // head messages followed by the caller-selected retained tail, then merges the
 // Apply inputs buffered during the edit and strips dangling tool calls. How the
-// tail is chosen (TailTokensBudget by token budget, TailRoundsClean by round
-// count) and what head to prepend (a digest the caller built) are the caller's
-// policy, not this method's. It returns true if an edit was in progress (the
-// rewrite was applied); false if no edit is in progress.
+// tail is chosen (by TailTokensBudget) and what head to prepend (a digest the
+// caller built) are the caller's policy, not this method's. It returns true if
+// an edit was in progress (the rewrite was applied); false if no edit is in
+// progress.
 func (b *AccumulateTranscript) Commit(head []llm.Message, tail []llm.Message) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -276,83 +276,12 @@ func (b *AccumulateTranscript) Commit(head []llm.Message, tail []llm.Message) bo
 	return true
 }
 
-// TailRoundsClean returns the most recent keepRounds user/assistant rounds of
-// msgs as clean messages: tool_result role messages are dropped and assistant
-// tool-call blocks are stripped, so only the conversational spine (user inputs
-// and assistant responses) survives. Messages are kept as-is (no same-role
-// merging); consecutive-message normalization is the provider layer's
-// responsibility. keepRounds <= 0 (or no user messages) yields nothing. It is a
-// caller-visible tail selector a client passes to Commit for a rotate-style
-// edit.
-func TailRoundsClean(msgs []llm.Message, keepRounds int) []llm.Message {
-	if keepRounds <= 0 {
-		return nil
-	}
-	// Locate round boundaries: each round starts at a user message.
-	userIdx := make([]int, 0, 4)
-	for i, m := range msgs {
-		if m.Role == llm.RoleUser {
-			userIdx = append(userIdx, i)
-		}
-	}
-	if len(userIdx) == 0 {
-		return nil
-	}
-	start := 0
-	first := len(userIdx) - keepRounds
-	if first > start {
-		start = userIdx[first]
-	}
-
-	var out []llm.Message
-	for i := start; i < len(msgs); i++ {
-		m := msgs[i]
-		switch m.Role {
-		case llm.RoleToolResult:
-			continue // discard tool messages
-		case llm.RoleAssistant:
-			m = stripToolCallBlocks(m)
-			if len(m.Content) == 0 {
-				continue // an assistant message that was only a tool call
-			}
-		}
-		out = append(out, m)
-	}
-	return out
-}
-
-// stripToolCallBlocks returns a copy of m with all tool-call content blocks
-// removed, keeping text/thinking. The original message is not mutated.
-func stripToolCallBlocks(m llm.Message) llm.Message {
-	out := m
-	if !hasContentBlocks(out.Content, llm.ContentToolCall) {
-		return out
-	}
-	kept := make([]llm.ContentBlock, 0, len(out.Content))
-	for _, b := range out.Content {
-		if b.Type != llm.ContentToolCall {
-			kept = append(kept, b)
-		}
-	}
-	out.Content = kept
-	return out
-}
-
-func hasContentBlocks(blocks []llm.ContentBlock, typ llm.ContentBlockType) bool {
-	for _, b := range blocks {
-		if b.Type == typ {
-			return true
-		}
-	}
-	return false
-}
-
 // sanitizeDanglingToolCalls strips tool_calls from assistant messages that
 // have no following tool_result. Compaction can orphan a tool call two ways:
 // a cut landing between an assistant tool_calls and its results, or a meta
-// tool call (compress/rotate) that never produces a result. A dangling
-// tool_calls message is rejected by providers ("assistant with tool_calls
-// must be followed by tool messages"), so the call is dropped while the
+// tool call (compress) that never produces a result. A dangling tool_calls
+// message is rejected by providers ("assistant with tool_calls must be
+// followed by tool messages"), so the call is dropped while the
 // message's text/thinking is kept.
 func sanitizeDanglingToolCalls(msgs []llm.Message) {
 	for i := range msgs {

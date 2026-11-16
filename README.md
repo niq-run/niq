@@ -184,20 +184,25 @@ each project's `webui` and `bus` ports.
 
 The control plane is the only port a deployment needs to expose: it serves the
 SPA, the project-management API and every project's WebUI (at `/p/<id>/`).
-Projects and the event bus bind loopback only, so they stay unreachable from
-outside even on a public machine.
+Each project's WebUI binds loopback only, so it stays unreachable from outside
+even on a public machine; the event bus listens on all interfaces but
+authenticates every connection with a signed worker token.
 
 ```sh
 niq --addr :9527 --auth alice:s3cret
 ```
 
-Configure credentials before exposing the port: requests from any non-loopback
-address are then answered with a 401 until they authenticate, while requests from
-the machine itself stay password-free. `--auth` (control plane) and
-`--webui-auth` (a project started by hand) persist to and read from the same
-`~/.niq/common/auth.json`, so one pair of credentials covers everything. Without
-credentials remote callers are locked out entirely, and niq warns about the
-binding at startup.
+A non-loopback bind is not required to have credentials — auth is opt-in. With
+basic auth configured, requests from any non-loopback address are answered with
+a 401 until they authenticate, while requests from the machine itself stay
+password-free. `--auth` (control plane) and `--webui-auth` (a project started by
+hand) persist to and read from the same `~/.niq/common/auth.json`, so one pair
+of credentials covers everything.
+
+With no credentials configured the server enforces nothing: every caller that
+can reach it is served. That is why the control plane listens on loopback by
+default — pass an explicit `--addr` (and, ideally, `--auth`) to accept remote
+connections.
 
 Basic auth sends the credentials on every request, so terminate TLS in front (or
 tunnel through SSH/WireGuard) before exposing niq to the open internet — niq

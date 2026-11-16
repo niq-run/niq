@@ -1,6 +1,6 @@
 # embedws
 
-embedws (formerly `wsbackend`) is niq's workspace backend abstraction layer (under core/impl/, alongside workerhost). It defines **interface contracts** for filesystem operations, command execution, and file search, and provides an **embedded local implementation** along with **pure helper functions**.
+embedws (formerly `wsbackend`) is niq's workspace backend abstraction layer (under core/impl/, alongside workersvc). It defines **interface contracts** for filesystem operations, command execution, and file search, and provides an **embedded local implementation** along with **pure helper functions**.
 
 The workspace worker consumes embedws through interface assertions and never imports concrete implementations.
 

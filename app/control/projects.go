@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/project/template"
 )
 
 // projectView augments a project definition with its live run state.
@@ -194,7 +195,7 @@ func (c *Control) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Reque
 	if body.Template == "" {
 		body.Template = "default"
 	}
-	tmpl, err := project.LoadTemplate(project.TemplatesDir(), body.Template)
+	tmpl, err := template.Load(template.TemplatesDir(), body.Template)
 	if err != nil {
 		stdhttp.Error(w, "unknown template: "+body.Template, 400)
 		return

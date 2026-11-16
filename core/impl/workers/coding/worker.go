@@ -53,11 +53,9 @@ type Config struct {
 
 	Transcript transcript.Transcript
 
-	ContextWindow    int
 	BudgetSoft       float64
 	BudgetHard       float64
 	TailTokens       int
-	RotateRounds     int
 	CompactDirective string
 
 	MaxPayloadBytes int
@@ -115,11 +113,9 @@ func NewWorker(cfg Config) *Worker {
 		Transcript:      cfg.Transcript,
 		ReasoningEffort: cfg.ReasoningEffort,
 		OnDurableChange: cfg.OnDurableChange,
-		ContextWindow:   cfg.ContextWindow,
 		BudgetSoft:      cfg.BudgetSoft,
 		BudgetHard:      cfg.BudgetHard,
 		TailTokens:      cfg.TailTokens,
-		RotateRounds:    cfg.RotateRounds,
 		MaxPayloadBytes: cfg.MaxPayloadBytes,
 		SeedMessages:    cfg.SeedMessages,
 		Readme:          cfg.Readme,

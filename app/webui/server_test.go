@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/niq-run/niq/core/impl/eventbus"
-	"github.com/niq-run/niq/core/impl/workerhost"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
@@ -25,7 +25,7 @@ import (
 // server with nil deps is enough to exercise bind/serve. Established here so
 // we test dynamic-port allocation without standing up a full HIW/engine.
 func TestBindDynamicWebUIPort(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -51,40 +51,25 @@ func TestBindDynamicWebUIPort(t *testing.T) {
 // TestHandleUpdateAllow verifies PUT /api/workers/{id}/allow edits the bus
 // registry: subscribe_allow is replaced wholesale (source restriction kept),
 // a missing publish_allow keeps the current value, and unknown workers 404.
-func TestHandleUpdateAllow(t *testing.T) {
-	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(t.TempDir(), "identities.json"))
-	if err != nil {
-		t.Fatalf("registry: %v", err)
-	}
-	if err := registry.Register(corebus.Identity{
-		WorkerID:       "w1",
-		Type:           "timer",
-		PublishAllow:   []event.PublishPattern{event.NewPublishPattern("*")},
-		SubscribeAllow: []event.EventPattern{{Type: "worker.discover"}},
-	}); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-
-	s := New(nil, nil, nil, nil, registry, ":0", false)
-	addr, err := s.Bind()
-	if err != nil {
-		t.Fatalf("Bind: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- s.Start(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+// TestHandleUpdateAllowGoesThroughHost verifies an ACL edit is one bus call to the
+// host's acl.update tool. The WebUI no longer touches the registry or any file:
+// it only normalizes the request (an absent list keeps the current value, an
+// omitted subscription source becomes the any-source wildcard).
+func TestHandleUpdateAllowGoesThroughHost(t *testing.T) {
+	rig := newLifecycleRig(t)
+	// The rig's registry holds webui and host; add the worker being edited so
+	// the "keep the other list" path has a current value to keep.
+	t.Cleanup(func() {})
 
 	put := func(id, body string) (*http.Response, error) {
-		req, err := http.NewRequest("PUT", "http://"+addr+"/api/workers/"+id+"/allow", strings.NewReader(body))
+		req, err := http.NewRequest("PUT", "http://"+rig.addr+"/api/workers/"+id+"/allow", strings.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		return http.DefaultClient.Do(req)
 	}
 
-	// Source-restricted subscription replaces the list; publish_allow untouched.
-	resp, err := put("w1", `{"subscribe_allow":[{"type":"request.completed","source_id":"timer"},{"type":"worker.ready"}]}`)
+	resp, err := put("webui", `{"subscribe_allow":[{"type":"request.completed","source_id":"timer"},{"type":"worker.ready"}]}`)
 	if err != nil {
 		t.Fatalf("PUT allow: %v", err)
 	}
@@ -92,33 +77,28 @@ func TestHandleUpdateAllow(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PUT allow status = %d, want 200", resp.StatusCode)
 	}
-
-	idt, ok := registry.Lookup("w1")
-	if !ok {
-		t.Fatal("identity gone after update")
+	payload := expectHostCall(t, rig, "webui")
+	if payload["worker_id"] != "webui" {
+		t.Fatalf("payload = %v", payload)
 	}
-	if len(idt.SubscribeAllow) != 2 ||
-		idt.SubscribeAllow[0].Type != "request.completed" || idt.SubscribeAllow[0].SourceID != "timer" ||
-		// An omitted source is stored as the canonical any-source wildcard.
-		idt.SubscribeAllow[1].Type != "worker.ready" || idt.SubscribeAllow[1].SourceID != "*" {
-		t.Fatalf("subscribe_allow = %+v, want [request.completed@timer, worker.ready@*]", idt.SubscribeAllow)
+	// publish_allow was omitted, so the current grants travel unchanged.
+	if pubs, ok := payload["publish_allow"].([]any); !ok || len(pubs) == 0 {
+		t.Fatalf("publish_allow = %v, want the current list", payload["publish_allow"])
 	}
-	if len(idt.PublishAllow) != 1 || idt.PublishAllow[0].Type != "*" {
-		t.Fatalf("publish_allow clobbered = %+v, want [*]", idt.PublishAllow)
+	subs, ok := payload["subscribe_allow"].([]any)
+	if !ok || len(subs) != 2 {
+		t.Fatalf("subscribe_allow = %v", payload["subscribe_allow"])
 	}
-
-	// Empty subscribe_allow clears the list (worker receives no broadcasts).
-	resp, err = put("w1", `{"subscribe_allow":[]}`)
-	if err != nil {
-		t.Fatalf("PUT clear: %v", err)
+	first, _ := subs[0].(map[string]any)
+	if first["type"] != "request.completed" || first["source"] != "timer" {
+		t.Fatalf("first grant = %v", first)
 	}
-	resp.Body.Close()
-	idt, _ = registry.Lookup("w1")
-	if len(idt.SubscribeAllow) != 0 {
-		t.Fatalf("clear failed: subscribe_allow = %+v", idt.SubscribeAllow)
+	second, _ := subs[1].(map[string]any)
+	if second["type"] != "worker.ready" || second["source"] != "*" {
+		t.Fatalf("an omitted source must be stored as the any-source wildcard: %v", second)
 	}
 
-	// Unknown worker → 404.
+	// Unknown worker: refused before any bus call.
 	resp, err = put("nope", `{"subscribe_allow":[]}`)
 	if err != nil {
 		t.Fatalf("PUT unknown: %v", err)
@@ -127,13 +107,18 @@ func TestHandleUpdateAllow(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown worker status = %d, want 404", resp.StatusCode)
 	}
+	select {
+	case p := <-rig.hostReqs:
+		t.Fatalf("unknown worker reached the host: %v", p)
+	case <-time.After(150 * time.Millisecond):
+	}
 }
 
 // TestWebUIContextProjectMode verifies a project instance reports itself as a
 // project (not control) via /api via /api/context.
 func TestWebUIContextProjectMode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	s.SetContext(ContextInfo{Mode: "project", Project: "mydemo"})
 	addr, err := s.Bind()
 	if err != nil {
@@ -165,7 +150,7 @@ func TestWebUIContextProjectMode(t *testing.T) {
 // endpoint is data-plane driven, so there is nothing to list offline.
 func TestHandleListPrograms(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -211,7 +196,7 @@ func TestParseProgramSearch(t *testing.T) {
 // bus, mirroring the other program endpoints.
 func TestHandleGetProgramContentOffline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -231,7 +216,7 @@ func TestHandleGetProgramContentOffline(t *testing.T) {
 }
 
 func TestBasicAuthNonLoopback(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	s.SetBasicAuth("alice", "s3cret")
 
 	hit := false
@@ -284,16 +269,25 @@ func TestBasicAuthNonLoopback(t *testing.T) {
 	}
 }
 
-func TestBasicAuthDisabledBypassesAll(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, ":0", false) // no credentials configured
+// TestBasicAuthUnconfiguredPassesThrough asserts auth is opt-in: with no
+// credentials configured the gate lets every caller through rather than forcing
+// a login the operator never asked for. Whether to expose an unauthenticated
+// server is the operator's call (the bind address is their choice), not the
+// server's.
+func TestBasicAuthUnconfiguredPassesThrough(t *testing.T) {
+	s := New(nil, nil, nil, nil, ":0", false) // no credentials configured
 	hit := false
 	h := s.basicAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
-	req := httptest.NewRequest("GET", "/api/context", nil)
-	req.RemoteAddr = "203.0.113.7:5555"
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if !hit || rr.Code != http.StatusOK {
-		t.Fatalf("disabled: hit=%v code=%d, want pass-through", hit, rr.Code)
+
+	for _, remote := range []string{"127.0.0.1:5555", "203.0.113.7:5555"} {
+		hit = false
+		req := httptest.NewRequest("GET", "/api/context", nil)
+		req.RemoteAddr = remote
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if !hit || rr.Code != http.StatusOK {
+			t.Fatalf("peer %s: hit=%v code=%d, want pass-through 200", remote, hit, rr.Code)
+		}
 	}
 }
 
@@ -303,7 +297,7 @@ func TestBasicAuthDisabledBypassesAll(t *testing.T) {
 // a handler that captured the credentials at construction time would silently
 // serve remote peers without auth on a non-loopback bind.
 func TestBasicAuthAppliesAfterNew(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	s.SetContext(ContextInfo{Mode: "project", Project: "mydemo"})
 	s.SetBasicAuth("alice", "s3cret")
 
@@ -358,7 +352,7 @@ func TestParseAuthSpec(t *testing.T) {
 
 func TestWebUIServeOnBoundListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -378,30 +372,43 @@ func TestWebUIServeOnBoundListener(t *testing.T) {
 	}
 }
 
-// stubUnmanagedController drives handleWorkers's declaration merge with
-// in-memory statuses.
-type stubUnmanagedController struct {
-	declared []UnmanagedStatus
-}
-
-func (c *stubUnmanagedController) Start(id string) error       { return nil }
-func (c *stubUnmanagedController) Stop(id string) error        { return nil }
-func (c *stubUnmanagedController) Restart(id string) error     { return nil }
-func (c *stubUnmanagedController) List() []UnmanagedStatus     { return nil }
-func (c *stubUnmanagedController) Declared() []UnmanagedStatus { return c.declared }
-func (c *stubUnmanagedController) Remove(id string) error      { return nil }
-
 // fakeBuilderSpec returns a SpawnSpec whose closures are never called by the
 // code paths under test (RestoreSuspended builds the spec without connecting).
 func fakeBuilderSpec(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 	return worker.SpawnSpec{Config: cfg}, nil
 }
 
-// TestHandleWorkersDeclaredMerge verifies how project.json declarations merge
-// into GET /api/workers: never-started externals carry the unmanaged badge,
-// managed declarations known to the worker service do not, and managed
-// declarations absent from both the registry and the worker service surface as
-// managed rows in the "stopped" state (start spawns them via the host worker).
+// stubCatalog is an in-memory worker.Catalog: the read model the workers view
+// is rendered from.
+type stubCatalog struct {
+	infos    []worker.WorkerInfo
+	archived []string
+	decls    map[string]worker.Decl
+}
+
+func (c *stubCatalog) Get(id string) (worker.WorkerInfo, bool, error) {
+	for _, info := range c.infos {
+		if info.ID == id {
+			return info, true, nil
+		}
+	}
+	return worker.WorkerInfo{}, false, nil
+}
+
+func (c *stubCatalog) List() []worker.WorkerInfo { return c.infos }
+
+func (c *stubCatalog) Archived() []string { return c.archived }
+
+func (c *stubCatalog) Declarations() map[string]worker.Decl { return c.decls }
+
+// archived is the archived-id set the archive panel renders.
+type stubCatalogArchived = []string
+
+// TestHandleWorkersDeclaredMerge verifies how declarations merge into
+// GET /api/workers: a never-started managed-process worker carries the
+// unmanaged badge in "stopped", an in-process worker known to the worker
+// service reports its live state, and a declared-but-never-instantiated
+// in-process worker surfaces as managed/stopped for the start button.
 func TestHandleWorkersDeclaredMerge(t *testing.T) {
 	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(t.TempDir(), "identities.json"))
 	if err != nil {
@@ -412,20 +419,15 @@ func TestHandleWorkersDeclaredMerge(t *testing.T) {
 			t.Fatalf("register %s: %v", id, err)
 		}
 	}
-	workerSvc := workerhost.New()
-	workerSvc.RegisterBuilder("reason", fakeBuilderSpec)
-	if err := workerSvc.RestoreSuspended(worker.WorkerConfig{ID: "susp-managed", Type: "reason"}, nil); err != nil {
-		t.Fatalf("restore suspended: %v", err)
-	}
 
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
-	s := New(nil, nil, engine, workerSvc, registry, ":0", false)
-	s.SetUnmanagedController(&stubUnmanagedController{declared: []UnmanagedStatus{
-		{ID: "live-ext", Type: "mcp", State: "running", Alive: true},
-		{ID: "idle-ext", Type: "mcp", State: "stopped"},
-		{ID: "susp-managed", Type: "reason", Managed: true, State: "stopped"},
-		{ID: "ghost-managed", Type: "timer", Managed: true, State: "stopped"},
-	}})
+	s := New(nil, engine, &stubCatalog{infos: []worker.WorkerInfo{
+		{ID: "live-ext", Type: "mcp", Placement: worker.PlacementManagedProcess, State: "running"},
+		{ID: "idle-ext", Type: "mcp", Placement: worker.PlacementManagedProcess, State: "stopped"},
+		{ID: "susp-managed", Type: "reason", Placement: worker.PlacementInProcess, State: "suspended"},
+		{ID: "ghost-managed", Type: "timer", Placement: worker.PlacementInProcess, State: "stopped"},
+		{ID: "dial-in", Type: "mcp", Placement: worker.PlacementUnmanagedProcess, State: "stopped"},
+	}}, registry, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -455,8 +457,8 @@ func TestHandleWorkersDeclaredMerge(t *testing.T) {
 	if v := byID["idle-ext"]; !v.Unmanaged || v.UnmanagedState != "stopped" || v.Managed {
 		t.Fatalf("idle-ext = %+v, want unmanaged/stopped", v)
 	}
-	// The suspended managed worker is known to the worker service: its live
-	// state wins and the managed declaration must not badge it unmanaged.
+	// The suspended in-process worker is known to the lifecycle: its live state
+	// wins and the managed-process badge must not appear.
 	if v := byID["susp-managed"]; !v.Managed || v.State != "suspended" || v.Unmanaged {
 		t.Fatalf("susp-managed = %+v, want managed/suspended without unmanaged badge", v)
 	}
@@ -464,24 +466,22 @@ func TestHandleWorkersDeclaredMerge(t *testing.T) {
 	if v := byID["ghost-managed"]; !v.Managed || v.State != "stopped" || v.Unmanaged {
 		t.Fatalf("ghost-managed = %+v, want managed/stopped", v)
 	}
+	// A dial-in worker is remote and has no local lifecycle.
+	if v := byID["dial-in"]; !v.Remote || !v.Unmanaged || v.Managed {
+		t.Fatalf("dial-in = %+v, want remote/unmanaged", v)
+	}
 }
 
-// TestHandleUnmanagedStartConflict verifies start refuses a worker the worker
-// service already owns (suspend/resume own that lifecycle), and that worker
-// creation is 404 without an assembly-provided creator.
-func TestHandleUnmanagedStartConflict(t *testing.T) {
+// TestHandleUnmanagedStartRequiresHost verifies the lifecycle endpoints go to
+// the host worker: with no host online they fail closed and never touch the
+// worker service directly.
+func TestHandleUnmanagedStartRequiresHost(t *testing.T) {
 	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(t.TempDir(), "identities.json"))
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
-	workerSvc := workerhost.New()
-	workerSvc.RegisterBuilder("reason", fakeBuilderSpec)
-	if err := workerSvc.RestoreSuspended(worker.WorkerConfig{ID: "susp-managed", Type: "reason"}, nil); err != nil {
-		t.Fatalf("restore suspended: %v", err)
-	}
-
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
-	s := New(nil, nil, engine, workerSvc, registry, ":0", false)
+	s := New(nil, engine, &stubCatalog{}, registry, ":0", false)
 	addr, err := s.Bind()
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
@@ -491,22 +491,24 @@ func TestHandleUnmanagedStartConflict(t *testing.T) {
 	go func() { done <- s.Start(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
 
-	resp, err := http.Post("http://"+addr+"/api/workers/susp-managed/start", "", nil)
+	resp, err := http.Post("http://"+addr+"/api/workers/whatever/start", "", nil)
 	if err != nil {
 		t.Fatalf("POST start: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("start status = %d, want 409", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("start status = %d, want 502 (host offline)", resp.StatusCode)
 	}
 
-	resp, err = http.Post("http://"+addr+"/api/workers/create", "application/json", strings.NewReader(`{}`))
+	// Create is a bus call too: with the host offline it reports the same
+	// actionable failure as start, not "endpoint unavailable".
+	resp, err = http.Post("http://"+addr+"/api/workers/create", "application/json", strings.NewReader(`{"type":"reason","id":"r1"}`))
 	if err != nil {
 		t.Fatalf("POST create: %v", err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("create status = %d, want 404 without a creator", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create status = %d, want 400 (host offline)", resp.StatusCode)
 	}
 }
 
@@ -518,7 +520,7 @@ func TestHandleUnmanagedStartConflict(t *testing.T) {
 func TestHandleUploadPersistsFile(t *testing.T) {
 	// SetProjectDir pins the default upload dir to <projectDir>/uploads.
 	projDir := filepath.Join(t.TempDir(), "projects", "alpha")
-	s := New(nil, nil, nil, nil, nil, ":0", false)
+	s := New(nil, nil, nil, nil, ":0", false)
 	s.SetProjectDir(projDir)
 	addr, err := s.Bind()
 	if err != nil {

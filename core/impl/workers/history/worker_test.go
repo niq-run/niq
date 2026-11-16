@@ -11,7 +11,6 @@ import (
 
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 )
 
 // stubChannel satisfies corebus.WorkerSideChannel for handler tests. history
@@ -40,7 +39,7 @@ func (s *stubChannel) replies() []event.Event {
 	return append([]event.Event(nil), s.sent...)
 }
 
-func newTestWorker(t *testing.T, s store.EventStore, maxListEvents, maxListItemBytes int) (*Worker, *stubChannel) {
+func newTestWorker(t *testing.T, s event.EventStore, maxListEvents, maxListItemBytes int) (*Worker, *stubChannel) {
 	t.Helper()
 	ch := &stubChannel{}
 	w := New(Config{ID: "history", Bus: ch, Store: s, MaxListEvents: maxListEvents, MaxListItemBytes: maxListItemBytes})

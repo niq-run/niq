@@ -120,6 +120,13 @@ start (`ready`) or on demand (`agentic`).
 - Capabilities are extensions: `WatchEntries` renders the registry into
   `worker.ready`, and `process` routes incoming events through
   `DispatchExtension`.
+- Every extension is served **asynchronously** (`serve`): dispatch starts the
+  handler on its own goroutine and the answer goes out over the bus when it
+  finishes. A remote call can take minutes; the worker's single event loop — and
+  with it every other request, including the purely local `mcp.server.list` —
+  must not wait behind it. Concurrent calls to one server share its session,
+  which the SDK multiplexes by JSON-RPC id; connecting and dropping a session
+  are serialized per client, so a slow call costs nothing but its goroutine.
 - In `ready` mode, `setTools` binds one extension per tool
   (`mcp.<server>.<tool>`) with the tool's description/schema, tracked per server
   in `toolEvents`; `setTools(server, nil)` withdraws exactly that server's

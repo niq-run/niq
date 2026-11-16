@@ -192,7 +192,7 @@ func TestSnapshotRestoreRoundtrip(t *testing.T) {
 		t.Fatal("expected a non-nil snapshot with pending timers")
 	}
 
-	// Restore into a fresh worker (same way workerhost reconstructs it) with
+	// Restore into a fresh worker (same way workersvc reconstructs it) with
 	// its own channel, so its fires are isolated from the origin's replies.
 	ch2 := &stubChannel{}
 	fresh := New(Config{ID: "timer", Bus: ch2})

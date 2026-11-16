@@ -167,12 +167,12 @@ func TestDirectoryCollectsFromBus(t *testing.T) {
 func TestDirectoryParsesRemoteReadyWatch(t *testing.T) {
 	ch := &stubChannel{}
 	w := New(Config{ID: "directory", Bus: ch})
-	w.process(event.New(event.TypeWorkerReady, "niw-a", map[string]any{
-		"worker_id": "niw-a", "type": "niw",
-		"watch": []any{map[string]any{"event": "niw.recipient.set"}, map[string]any{"event": "niw.recipient.unset"}},
+	w.process(event.New(event.TypeWorkerReady, "niq-a", map[string]any{
+		"worker_id": "niq-a", "type": "niq",
+		"watch": []any{map[string]any{"event": "niq.recipient.set"}, map[string]any{"event": "niq.recipient.unset"}},
 	}))
 
-	invoke(w, TypeDescribe, map[string]any{"worker": "niw-a"})
+	invoke(w, TypeDescribe, map[string]any{"worker": "niq-a"})
 	var rec map[string]any
 	if err := json.Unmarshal([]byte(ch.result()), &rec); err != nil {
 		t.Fatalf("describe not JSON: %v", err)

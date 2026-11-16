@@ -7,10 +7,9 @@ import (
 	"sync"
 
 	"github.com/niq-run/niq/core/itfs/event"
-	"github.com/niq-run/niq/core/itfs/store"
 )
 
-// MemoryEventStore implements both store.AppendStore and store.EventStore
+// MemoryEventStore implements both event.AppendStore and event.EventStore
 // using an in-memory slice. It is the simplest possible event store,
 // suitable for development and single-process deployments.
 type MemoryEventStore struct {
@@ -25,7 +24,7 @@ func NewMemoryEventStore() *MemoryEventStore {
 	}
 }
 
-// Append implements store.AppendStore.
+// Append implements event.AppendStore.
 func (s *MemoryEventStore) Append(ctx context.Context, events ...event.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -33,8 +32,8 @@ func (s *MemoryEventStore) Append(ctx context.Context, events ...event.Event) er
 	return nil
 }
 
-// List implements store.EventStore.
-func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store.QueryOpts) ([]event.Event, error) {
+// List implements event.EventStore.
+func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts event.QueryOpts) ([]event.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -106,7 +105,7 @@ func (s *MemoryEventStore) List(ctx context.Context, workerID string, opts store
 	return result, nil
 }
 
-// Get implements store.EventStore: a linear scan by event ID over the
+// Get implements event.EventStore: a linear scan by event ID over the
 // in-memory list (the slice is insertion-ordered and append-mostly; a point
 // lookup is rare compared to List). Returns (event, false) when absent.
 func (s *MemoryEventStore) Get(ctx context.Context, id string) (event.Event, bool, error) {
@@ -133,8 +132,8 @@ func workerInRecipients(e event.Event, id string) bool {
 }
 
 // workerMatchesAny reports whether the event involves any of the given worker
-// IDs on at least one of the requested roles. Roles are store.RoleSent
-// (the event's source) / store.RoleReceived (target or recipient); empty
+// IDs on at least one of the requested roles. Roles are event.RoleSent
+// (the event's source) / event.RoleReceived (target or recipient); empty
 // means both.
 // hiddenType reports whether an event type is hidden by the blacklist:
 // excluded by exact or prefix match, unless explicitly kept. Kept mirrors the
@@ -155,8 +154,8 @@ func hiddenType(t string, exclude, prefixes, keep []string) bool {
 }
 
 func workerMatchesAny(e event.Event, ids, roles []string) bool {
-	sent := len(roles) == 0 || slices.Contains(roles, store.RoleSent)
-	received := len(roles) == 0 || slices.Contains(roles, store.RoleReceived)
+	sent := len(roles) == 0 || slices.Contains(roles, event.RoleSent)
+	received := len(roles) == 0 || slices.Contains(roles, event.RoleReceived)
 	for _, id := range ids {
 		if sent && e.WorkerId == id {
 			return true
@@ -169,5 +168,5 @@ func workerMatchesAny(e event.Event, ids, roles []string) bool {
 }
 
 // Compile-time checks.
-var _ store.AppendStore = (*MemoryEventStore)(nil)
-var _ store.EventStore = (*MemoryEventStore)(nil)
+var _ event.AppendStore = (*MemoryEventStore)(nil)
+var _ event.EventStore = (*MemoryEventStore)(nil)

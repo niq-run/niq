@@ -92,10 +92,10 @@ func TestStartupAuthLoopbackNoAuthNoWarning(t *testing.T) {
 	}
 }
 
-// TestStartupAuthRemoteNoAuthWarnsButNotForced verifies a remote-reachable bind
-// with no auth configured produces a local-only warning and is NOT forced
-// (disabled, warning, no file write).
-func TestStartupAuthRemoteNoAuthWarnsButNotForced(t *testing.T) {
+// TestStartupAuthRemoteNoAuthWarnsNotForced verifies a remote-reachable bind
+// with no auth configured produces an "unauthenticated" warning and is NOT
+// forced (disabled, warning, no file write): auth is opt-in.
+func TestStartupAuthRemoteNoAuthWarnsNotForced(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	path := filepath.Join(home, ".niq", "common", "auth.json")
@@ -107,8 +107,8 @@ func TestStartupAuthRemoteNoAuthWarnsButNotForced(t *testing.T) {
 	if warning == "" {
 		t.Fatal("expected a local-only/needs-config warning for remote bind without auth")
 	}
-	if !strings.Contains(warning, "only local access works") || !strings.Contains(warning, path) {
-		t.Fatalf("warning should mention local-only and the auth path: %q", warning)
+	if !strings.Contains(warning, "without authentication") || !strings.Contains(warning, path) {
+		t.Fatalf("warning should say the bind is unauthenticated and name the auth path: %q", warning)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("no-auth start must not write auth file (stat err=%v)", err)

@@ -9,11 +9,24 @@ import (
 
 // registerHelp declares worker.help on the host: asking for "spawn" returns
 // either the general spawn reference or, when params.worker names a worker
-// type, a guide specialized for that type.
+// type, a guide specialized for that type. The lifecycle verbs share one
+// reference, since the placement rules that matter are common to them.
 func (w *HostWorker) registerHelp() {
 	w.RegisterHelp(map[event.EventType]baseworker.HelpFunc{
-		TypeSpawn: spawnHelp,
+		TypeSpawn:     spawnHelp,
+		TypeSuspend:   staticHelp(lifecycleHelp),
+		TypeResume:    staticHelp(lifecycleHelp),
+		TypeRestart:   staticHelp(lifecycleHelp),
+		TypeDestroy:   staticHelp(lifecycleHelp),
+		TypeUpdate:    staticHelp(updateHelp),
+		TypeArchive:   staticHelp(archiveHelp),
+		TypeUpdateACL: staticHelp(aclHelp),
 	})
+}
+
+// staticHelp adapts a fixed guide to a HelpFunc.
+func staticHelp(text string) baseworker.HelpFunc {
+	return func(map[string]any) (string, bool) { return text, true }
 }
 
 // spawnHelp answers worker.help for spawn. params.worker selects the guide —
@@ -31,24 +44,127 @@ func spawnHelp(params map[string]any) (string, bool) {
 	}
 }
 
-const spawnGeneralHelp = `# spawn
+// lifecycleHelp is the shared guide for suspend / resume / restart / destroy:
+// all four take one worker id and differ only in what they do to it.
+const lifecycleHelp = `# suspend / resume / restart / destroy
 
-Create a worker and start it immediately. The host registers the new worker's
-bus identity and builds it in-process; the reply is:
+All four lifecycle tools take one argument:
 
 ` + "```json" + `
-{"worker_id": "<id>", "status": "created", "type": "<type>"}
+{"worker_id": "<id from spawn or the directory roster>"}
 ` + "```" + `
+
+- ` + "`suspend`" + ` — stop it. An in-process worker is snapshotted, stopped and
+  disconnected; a managed-process worker's OS process is stopped (it persists
+  its own state). The worker stays declared and can be resumed.
+- ` + "`resume`" + ` — start a declared-but-stopped worker. This is the start action:
+  an in-process worker builds from its declaration (or resumes from its
+  snapshot), a managed-process worker is relaunched, an unmanaged-process worker
+  only gets its identity re-ensured — it starts itself.
+- ` + "`restart`" + ` — rebuild from the declaration. Construction params follow the
+  declaration edit; what the worker itself persisted survives.
+- ` + "`destroy`" + ` — stop it and remove its declaration, persisted state, bus
+  connection and identity. Irreversible; the removal happens immediately.
+
+## Notes
+
+- ` + "`unmanaged-process`" + ` workers have no local lifecycle: suspend/restart are
+  refused, because the host does not run them.
+- A protected worker (the host itself, the WebUI's HIW) cannot be suspended,
+  restarted or destroyed.
+`
+
+// updateHelp is the guide for the declaration-editing tool.
+const updateHelp = `# update
+
+Edit a worker's declaration without touching its runtime state.
+
+` + "```json" + `
+{"worker_id": "<id>", "label": "值班", "tags": ["ops"], "params": {"model": "m"}}
+` + "```" + `
+
+- Omitted fields stay as they are; an empty string, list or object clears that
+  field. Every field is optional except ` + "`worker_id`" + `.
+- ` + "`label`" + ` / ` + "`tags`" + ` / ` + "`description`" + ` are display metadata: visible immediately.
+- ` + "`params`" + ` replaces the construction params WHOLESALE. Params are build input,
+  so the change applies on the next start — use ` + "`restart`" + ` to apply it now.
+- Bus ACL is not editable here. Publish/subscribe grants are bus identity data,
+  owned by the bus control plane, not by a worker's lifecycle backend.
+`
+
+// aclHelp is the guide for the bus-identity tool.
+const aclHelp = `# acl.update
+
+Replace a worker's bus grants.
+
+` + "```json" + `
+{"worker_id": "<id>",
+ "publish_allow":   [{"type": "worker.ready"}, {"type": "request.*", "target": "*"}],
+ "subscribe_allow": [{"type": "worker.discover", "source": "*"}]}
+` + "```" + `
+
+- Both lists are replaced WHOLESALE: an omitted list means "no grants", so always
+  send the complete set you want.
+- ` + "`type`" + ` supports ` + "`*`" + ` and ` + "`Prefix.*`" + `. A publish entry's ` + "`target`" + ` limits a directed
+  send to one worker; a subscribe entry's ` + "`source`" + ` limits broadcasts to one
+  publisher (omitted means any).
+- This is identity data, not lifecycle: routing changes immediately, the grant is
+  persisted into the declaration, and nothing is restarted.
+- A worker that is not declared is an error. A declared worker that has not
+  started yet is fine — its identity registers with the persisted grant.
+`
+
+// archiveHelp is the guide for the archive tool.
+const archiveHelp = `# archive
+
+Move a worker in or out of the archived set.
+
+` + "```json" + `
+{"worker_id": "<id>", "archived": true}
+` + "```" + `
+
+- Archiving stops a live worker (an in-process one is snapshotted first), moves
+  its declaration to workers.archived.json and drops its bus identity. The
+  declaration is kept verbatim, so restoring it brings the worker back exactly
+  as it was.
+- A ` + "`unmanaged-process`" + ` worker has nothing local to stop; archiving only hides it.
+- Unarchiving moves the declaration back and starts the worker again (in-process
+  builds, managed-process launches, unmanaged re-provisions its identity).
+- archive is not destroy: the declaration and its state survive.
+`
+
+const spawnGeneralHelp = `# spawn
+
+Create a worker and start it. The reply is:
+
+` + "```json" + `
+{"worker_id": "<id>", "status": "created", "type": "<type>", "placement": "<placement>"}
+` + "```" + `
+
+` + "`worker_id`" + ` is the id actually used: some builders derive one (a workspace from
+its ` + "`path`" + `), so it can differ from the ` + "`id`" + ` you passed — or be the id you must
+use when you passed none.
 
 ## Arguments
 
 Required:
-- ` + "`type`" + ` — worker type to spawn: reason, coding, workspace, program, timer,
-  history, directory, mcp, niw, or hiw.
+- ` + "`type`" + ` — worker type: reason, coding, workspace, program, timer, history,
+  directory, mcp, niq, or interface. For ` + "`in-process`" + ` it selects the builder; for a
+  process placement it labels the worker's identity.
+
+Placement:
+- ` + "`placement`" + ` — ` + "`in-process`" + ` (default), ` + "`managed-process`" + ` or
+  ` + "`unmanaged-process`" + `.
+- ` + "`command`" + ` — argv array. Required for ` + "`managed-process`" + `: the host launches it
+  as an OS process and supervises it. Rejected elsewhere. No shell: the array is
+  executed as-is.
+- every other argument — for ` + "`managed-process`" + `, all remaining keys become the
+  child's environment variables (flat string values). Prefer ` + "`env:VAR`" + `
+  references for secrets.
+- ` + "`cwd`" + ` — child working directory (` + "`managed-process`" + ` only; must exist).
 
 Common:
-- ` + "`id`" + ` — worker id, unique on the bus. Some builders derive one (workspace
-  derives it from ` + "`path`" + `); reason and coding require it.
+- ` + "`id`" + ` — worker id, unique on the bus. Required for a process placement.
 - ` + "`tags`" + ` — array or comma-separated string of slash-path labels for the WebUI
   selector, e.g. ` + "`[\"ops/backlog\"]`" + `.
 - ` + "`description`" + ` — one-line purpose note for the WebUI.
@@ -56,6 +172,24 @@ Common:
 
 Type-specific arguments are passed as top-level properties next to ` + "`type`" + `.
 For example workspace takes ` + "`path`" + ` (or ` + "`mounts`" + `) and ` + "`approver`" + `.
+
+## Process example
+
+` + "```json" + `
+{
+  "type": "mcp",
+  "id": "mcp-filesystem",
+  "placement": "managed-process",
+  "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"],
+  "GITHUB_TOKEN": "env:GITHUB_TOKEN"
+}
+` + "```" + `
+
+A process worker connects back to the bus on its own: the host injects
+` + "`NIQ_BUS_URL`" + `, ` + "`NIQ_WORKER_ID`" + `, ` + "`NIQ_WORKER_CREDENTIAL`" + ` and a persistent
+` + "`NIQ_STATE_DIR`" + `. An ` + "`unmanaged-process`" + ` worker gets a durable credential instead
+and is never launched here — do not ask for its credential through spawn; it is
+the declaration's field.
 
 ## Parameters are checked
 
@@ -143,17 +277,17 @@ endpoint, add it as a provider entry and reference it by name.
 
 ## Context budget
 
-- ` + "`context_window`" + ` (int) — model window in tokens; 0 disables budget handling.
-  Normally supplied by the provider/model config.
 - ` + "`budget_soft`" + ` (ratio, default 0.85) and ` + "`budget_hard`" + ` (ratio, default 0.97) —
   window occupancy that triggers a compression reminder / forced compression.
+  The window itself is never configured here: it is the selected model's
+  window, taken from provider.json's per-model ` + "`context_window`" + ` (or the
+  provider API). If neither declares one, budget handling stays off rather
+  than guessing a size.
 - ` + "`tail_tokens`" + ` (int, default 10000; legacy alias ` + "`keep_tail`" + `) — token budget of
   recent transcript kept verbatim after compression. A tool call and its
   results are never split.
 - ` + "`compact_directive`" + ` (string) — overrides the built-in summarizer prompt used
   when compressing.
-- ` + "`rotate_rounds`" + ` (int, default 2) — rounds retained by ` + "`context.rotate`" + `; that
-  tool is currently disabled.
 
 ## Display metadata
 

@@ -1,7 +1,9 @@
 // system prompt template.
 //
-// The system prompt is built from a fixed template and the worker's loaded
-// Programs. Instruction Programs contribute their full content; Playbook
+// The system prompt is a pure function of the worker's APPLIED program set
+// (programState.Applied), never of the pending ledger: the prompt is the head of
+// every request, so it may only change when a cache reset is already being paid
+// for (see programs.go). Instruction Programs contribute their full content; Playbook
 // Programs contribute only their metadata (name, path, description, tags) —
 // the path is what the model passes to program.read to pull the content.
 //
@@ -33,7 +35,7 @@ You can discover and get to know workers on demand in these ways:
 
 You have a few built-in tools for sending events to other workers:
 - request(target, event, arguments) — send the target worker (usually a domain or tool worker) a request event it can respond to, asking it to perform an operation, and expect a response
-- message(target, text) — send the target worker a worker.input event to leave a note or to reply; this is an important way of collaborating with another intelligent worker (reason / coding / niw)
+- message(target, text) — send the target worker a worker.input event to leave a note or to reply; this is an important way of collaborating with another intelligent worker (reason, coding, or a niq link)
 - run() — execute a script program. A script program is code that orchestrates request and message calls
 
 ## reason worker
@@ -87,13 +89,13 @@ var systemPromptTmpl = template.Must(
 )
 
 // buildInstruction executes the system prompt template with the worker's
-// current programs. Instruction Programs provide full content; Playbook
+// applied programs. Instruction Programs provide full content; Playbook
 // Programs provide only metadata plus the path that addresses their content.
 func (w *BaseReasonWorker) buildInstruction() string {
 	var data templateData
 	data.WorkerID = w.ID()
 
-	for _, p := range w.programs {
+	for _, p := range w.programs.Applied {
 		switch p.ContentType {
 		case "instruction":
 			if p.EntryContent.Content != "" {

@@ -83,7 +83,7 @@ func newReasonBase(t *testing.T, prov llm.LLMProvider, tailTokens int, seed []ll
 	t.Helper()
 	w := reasonBase.NewBaseReasonWorker(reasonBase.Config{
 		ID: "r1", Provider: prov, Bus: newMockChannel(),
-		ContextWindow: 1000, TailTokens: tailTokens, SeedMessages: seed,
+		TailTokens: tailTokens, SeedMessages: seed,
 	})
 	return w
 }
@@ -378,28 +378,4 @@ func TestMetaCompressRecordsToolPair(t *testing.T) {
 		}
 		return false
 	}, "compress tool pair (assistant tool_call + tool result) to be recorded")
-}
-
-// TestMetaRotateViaUpdateRequested verifies the rotate meta operation runs
-// asynchronously: it compacts the transcript into a carried digest head.
-func TestMetaRotateViaUpdateRequested(t *testing.T) {
-	prov := &summarizeProvider{summarized: "episode",
-		chatMessage: llm.Message{Role: llm.RoleAssistant, StopReason: "stop"}}
-	seed := make([]llm.Message, 0, 6)
-	for i := 0; i < 4; i++ {
-		seed = append(seed, llm.Message{Role: llm.RoleUser,
-			Content: []llm.ContentBlock{{Type: llm.ContentText, Text: string(rune('a' + i))}}})
-	}
-	seed = append(seed, llm.Message{Role: llm.RoleAssistant, StopReason: "tool_calls",
-		Content: []llm.ContentBlock{{Type: llm.ContentToolCall, ToolCallID: "call_ep", ToolName: "context_rotate"}}})
-	seed = append(seed, llm.Message{Role: llm.RoleToolResult, ToolCallID: "call_ep", ToolName: "context_rotate",
-		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "[pending]"}}})
-	w := newReasonBase(t, prov, 2, seed)
-
-	handleContextOp(w, event.New(TypeContextRotate, "me", nil), "")
-
-	waitCond(t, 2*time.Second, func() bool {
-		msgs := w.Messages()
-		return len(msgs) > 0 && strings.Contains(msgs[0].Content[0].Text, "DIGEST")
-	}, "rotate to complete")
 }

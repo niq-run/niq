@@ -49,6 +49,10 @@ export interface WorkerInfo {
   state?: string
   unmanaged?: boolean
   unmanaged_state?: string // "running" | "stopped" (unmanaged only)
+  // placement: where the worker runs — in-process (built by the host),
+  // managed-process (the host launches and supervises its OS process), or
+  // unmanaged-process (the third party dials in; nothing is launched here).
+  placement?: string
   // remote = a third-party worker that connected on its own: the project
   // issued its credential but does not launch any process, so there is no
   // unmanaged start/stop. Shown for the connect configuration to copy.
@@ -67,12 +71,12 @@ export interface WorkerInfo {
 // The set of worker types that can be a talk conversation partner: ones that
 // consume worker.input. Beyond the reason worker (which reasons), the coding
 // reason worker is a reason-family worker that also consumes worker.input and
-// publishes reason.response; a NIW (niq interface worker) accepts worker.input
+// publishes reason.response; a niq worker accepts worker.input
 // and bridges it to another niq instance; on the far side such a link is
-// registered as a remote-niw worker (the A-side niw seen from B), which is
+// registered as a niq worker (the local side of a niq link), which is
 // likewise a valid talk partner. This is the single gate the mention component
 // and the talk worker selector use.
-export const TALK_PARTNER_TYPES = ['reason', 'coding', 'niw', 'remote-niw'] as const
+export const TALK_PARTNER_TYPES = ['reason', 'coding', 'niq', 'niq'] as const
 
 // The reason FAMILY: workers built on the shared reasoning mechanism. They all
 // emit the reason.* event stream and produce left-side conversation bubbles, so
@@ -109,6 +113,7 @@ export interface CreateWorkerResult {
   type: string
   managed: boolean
   remote?: boolean
+  placement?: string
   credential?: string
 }
 

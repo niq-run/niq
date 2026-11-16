@@ -1,8 +1,8 @@
-// Control-plane HTTP service: the fixed-port (default :9527) control plane a
-// user opens when no project is attached. It serves the same SPA in "control"
-// mode — project management only — and can start a project, which runs as its
-// own process on its own dynamically-assigned bus/WebUI ports; the user is then
-// redirected to the project's WebUI.
+// Control-plane HTTP service: the fixed-port (default 127.0.0.1:9527) control
+// plane a user opens when no project is attached. It serves the same SPA in
+// "control" mode — project management only — and can start a project, which
+// runs as its own process on its own dynamically-assigned bus/WebUI ports; the
+// user is then redirected to the project's WebUI.
 //
 // Project instances are not children of this process in any way that matters:
 // an instance is identified by the ports persisted in its project.json, so one
@@ -28,13 +28,14 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/project/template"
 	"github.com/niq-run/niq/app/webui"
 )
 
 // ControlOptions configures the control-plane service.
 type ControlOptions struct {
-	Addr string // default ":9527"
-	Auth string // optional user:pass basic-auth spec (non-localhost access; empty disables)
+	Addr string // default "127.0.0.1:9527"; pass an explicit addr to accept remote connections
+	Auth string // optional user:pass basic-auth spec (protects non-localhost access; empty disables auth)
 	// OnReady, when set, runs once the listen socket is bound and before
 	// serving starts. It receives the resolved address (e.g. "[::]:9527") so a
 	// launcher can record where the daemon actually landed instead of guessing
@@ -48,7 +49,7 @@ func RunControl(opts ControlOptions) error {
 	defer cancel()
 	// Make sure the built-in project templates are on disk so the new-project
 	// dropdown has something to offer on first run.
-	if err := project.SeedTemplates(project.TemplatesDir()); err != nil {
+	if err := template.Seed(template.TemplatesDir()); err != nil {
 		log.Printf("[control] seed templates: %v", err)
 	}
 	c := NewControl(opts.Addr)
@@ -56,7 +57,8 @@ func RunControl(opts ControlOptions) error {
 		c.SetBasicAuth(user, pass)
 		log.Printf("[control] WebUI remote access protected with basic auth (localhost stays open)")
 	} else if warning != "" {
-		// Also into the service log: a background start has no stderr to show.
+		// Auth is opt-in. Say clearly that an exposed bind is unauthenticated, and
+		// also put it in the service log: a background start has no stderr to show.
 		log.Printf("[control] %s", warning)
 		fmt.Fprintln(os.Stderr, warning)
 	}
@@ -90,10 +92,12 @@ type Control struct {
 	authPass string
 }
 
-// NewControl creates a control-plane service bound to addr (":9527" when empty).
+// NewControl creates a control-plane service bound to addr ("127.0.0.1:9527"
+// when empty). The default is loopback so a credential-less server stays on this
+// machine; passing an explicit addr is what exposes it.
 func NewControl(addr string) *Control {
 	if addr == "" {
-		addr = ":9527"
+		addr = "127.0.0.1:9527"
 	}
 	c := &Control{addr: addr}
 	c.proxy = c.newProjectProxy()
