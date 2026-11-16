@@ -204,11 +204,25 @@ func (w *Worker) dispatch(ctx context.Context, evt event.Event) {
 		w.AnswerDiscover(evt, w.typ, w.pubs, false)
 		return
 	}
-	if w.DispatchExtension(evt) {
+	// Order matters. A served tool is answered by the extension registry; any other
+	// event belongs to the backends, and a message a backend consumes is NOT a
+	// "no handler" error — that reply is only for events nobody wants. Asking the
+	// subscriptions first is what keeps a forwarded message from being answered
+	// with request.failed just because it carried a request id.
+	if !w.serves(evt.Type) && w.h.publish(evt) {
 		return
 	}
-	// Not a tool this worker serves: it is a message for the outside world.
-	w.h.publish(evt)
+	w.DispatchExtension(evt)
+}
+
+// serves reports whether the extension registry handles this event type.
+func (w *Worker) serves(typ event.EventType) bool {
+	for _, ext := range w.Extensions() {
+		if ext.Event == typ {
+			return true
+		}
+	}
+	return false
 }
 
 // Stop leaves the bus and closes every subscription. Backends are not told to

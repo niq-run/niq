@@ -235,8 +235,9 @@ func (s *subscription) matches(evt event.Event) bool {
 	return false
 }
 
-// publish fans evt out to every interested subscription.
-func (h *handler) publish(evt event.Event) {
+// publish fans evt out to every interested subscription, reporting whether any
+// subscription took it.
+func (h *handler) publish(evt event.Event) bool {
 	h.mu.Lock()
 	subs := make([]*subscription, 0, len(h.subs))
 	for s := range h.subs {
@@ -253,6 +254,7 @@ func (h *handler) publish(evt event.Event) {
 			logf("%s: dropping %s for a slow subscriber", h.id, evt.Type)
 		}
 	}
+	return len(subs) > 0
 }
 
 // close stops every subscription and unblocks in-flight requests.

@@ -1,6 +1,7 @@
 package httptrans
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
@@ -154,5 +155,71 @@ func TestAuthErrorDistinctExpiredCode(t *testing.T) {
 	// Other codes stay ordinary errors.
 	if err := remoteAuthError(401, `{"error":"invalid"}`); errors.Is(err, ErrRemoteTokenExpired) {
 		t.Fatal("non-expired code must not wrap ErrRemoteTokenExpired")
+	}
+}
+
+// TestStaleStreamTeardownKeepsTheReplacementSession covers the reconnect race that
+// makes a worker flap forever: when a second SSE arrives for the same id, the
+// engine replaces the first connection, whose handler then runs its teardown. The
+// teardown must NOT delete the replacement's session — doing so makes every
+// publish from the live stream fail with "worker not connected", which the client
+// reads as a broken link and reconnects again.
+func TestStaleStreamTeardownKeepsTheReplacementSession(t *testing.T) {
+	signer, srv := newAuthHarness(t)
+	tok, _ := signer.Mint("remote-w", time.Hour)
+
+	// Two SSE streams for the same id; each handleEvents call blocks until its
+	// request context is cancelled, so drive them on their own contexts.
+	open := func() (*httptest.ResponseRecorder, context.CancelFunc, chan struct{}) {
+		ctx, cancel := context.WithCancel(context.Background())
+		req := httptest.NewRequest("GET", "/events?credential="+tok, nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() {
+			srv.handleEvents(w, req)
+			close(done)
+		}()
+		// Wait until the session is registered.
+		waitSession := func() {
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, ok := srv.sessions.Load("remote-w"); ok {
+					return
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			t.Fatal("session never registered")
+		}
+		waitSession()
+		return w, cancel, done
+	}
+
+	_, cancelFirst, firstDone := open()
+	_, cancelSecond, secondDone := open()
+
+	// Tear the FIRST stream down, as the engine's replacement does.
+	cancelFirst()
+	select {
+	case <-firstDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first stream did not end")
+	}
+
+	// The replacement must still be publishable.
+	body := `{"credential":"` + tok + `","type":"broadcast","events":[{"id":"e1","type":"worker.ready","payload":{},"worker_id":""}]}`
+	pw := httptest.NewRecorder()
+	srv.handlePublish(pw, httptest.NewRequest("POST", "/publish", strings.NewReader(body)))
+	if pw.Code != 200 {
+		t.Fatalf("publish after the stale stream's teardown = %d (%s), want 200", pw.Code, pw.Body.String())
+	}
+
+	cancelSecond()
+	select {
+	case <-secondDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("second stream did not end")
+	}
+	if _, ok := srv.sessions.Load("remote-w"); ok {
+		t.Fatal("session survived the last stream's teardown")
 	}
 }

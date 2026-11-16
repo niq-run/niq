@@ -434,3 +434,32 @@ func (b *runnableBackend) Start(context.Context) error {
 }
 
 func (b *runnableBackend) Stop() error { b.mu.Lock(); b.stopped = true; b.mu.Unlock(); return nil }
+
+// TestConsumedMessageIsNotAnsweredAsNoHandler verifies a message a backend takes
+// is not answered with request.failed just because it carried a request id. It is
+// the shape of a forwarded worker.input: an event addressed to this worker that
+// no tool serves, only the backend that forwards it.
+func TestConsumedMessageIsNotAnsweredAsNoHandler(t *testing.T) {
+	be := newFakeBackend()
+	_, p := startWorker(t, Config{ID: "w1", Backends: []Backend{be}})
+	be.handler(t).OnEvent(func(event.Event) {}, event.TypeWorkerInput)
+
+	req := event.New(event.TypeWorkerInput, "peer", map[string]any{"content": "hi"})
+	req.RequestId = "r1"
+	p.push(req)
+
+	time.Sleep(100 * time.Millisecond)
+	if last, ok := p.lastSent(); ok && last.Type == event.TypeRequestFailed {
+		t.Fatalf("a consumed message was answered with request.failed: %+v", last.Payload)
+	}
+
+	// An event nobody wants still gets the diagnostic reply, so a caller cannot
+	// hang on a silent drop.
+	orphan := event.New("nobody.wants.this", "peer", nil)
+	orphan.RequestId = "r2"
+	p.push(orphan)
+	waitFor(t, "no-handler reply", func() bool {
+		last, ok := p.lastSent()
+		return ok && last.Type == event.TypeRequestFailed
+	})
+}
