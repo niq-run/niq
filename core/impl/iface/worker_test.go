@@ -2,6 +2,7 @@ package iface
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -333,8 +334,9 @@ func TestSubscriberPanicIsIsolated(t *testing.T) {
 	waitFor(t, "healthy subscriber deliveries", func() bool { mu.Lock(); defer mu.Unlock(); return n == 2 })
 }
 
-// TestSnapshotDelegatesToBackend verifies the worker keeps no state of its own:
-// what survives a restart is whatever the injected state provider holds.
+// TestSnapshotDelegatesToBackend verifies a stateful backend's bytes ride inside
+// the worker's snapshot, and that a snapshot written before the envelope existed
+// (the backend's own shape) still restores.
 func TestSnapshotDelegatesToBackend(t *testing.T) {
 	be := newFakeBackend()
 	state := &fakeState{}
@@ -343,7 +345,7 @@ func TestSnapshotDelegatesToBackend(t *testing.T) {
 
 	state.value = []byte(`{"local":"a"}`)
 	snap, err := w.Snapshot()
-	if err != nil || string(snap) != `{"local":"a"}` {
+	if err != nil || len(snap) == 0 {
 		t.Fatalf("Snapshot = %q, %v", snap, err)
 	}
 	if err := w.Restore([]byte(`{"local":"b"}`)); err != nil {
@@ -351,6 +353,18 @@ func TestSnapshotDelegatesToBackend(t *testing.T) {
 	}
 	if string(state.value) != `{"local":"b"}` {
 		t.Fatalf("state = %q", state.value)
+	}
+	// The envelope is what gets persisted: the backend's bytes ride inside it.
+	if !json.Valid(snap) || !strings.Contains(string(snap), `"backend"`) {
+		t.Fatalf("snapshot = %q, want the {approvals, backend} envelope", snap)
+	}
+	// A legacy blob (bare backend state) still restores.
+	legacy := New(Config{ID: "w3", Bus: newPipe(), Backends: []Backend{state}})
+	if err := legacy.Restore([]byte(`{"local":"c"}`)); err != nil {
+		t.Fatalf("legacy Restore: %v", err)
+	}
+	if string(state.value) != `{"local":"c"}` {
+		t.Fatalf("legacy state = %q", state.value)
 	}
 
 	// No state provider: nothing to persist, and restore is a no-op.

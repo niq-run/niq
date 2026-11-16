@@ -369,7 +369,7 @@ func runAssembly(opts assemblyOptions) error {
 		if opts.UploadDir != "" {
 			app.SetUploadDir(opts.UploadDir)
 		}
-		uiWorker, err := joinWebUIWorker(ctx, app, registry, listener)
+		uiWorker, err := joinWebUIWorker(ctx, app, registry, listener, stateStore)
 		if err != nil {
 			return fmt.Errorf("project: join webui worker: %w", err)
 		}
@@ -591,6 +591,7 @@ func joinWebUIWorker(
 	app *webui.Server,
 	registry corebus.IdentityRegistry,
 	listener *inprocess.InProcListener,
+	store workersvc.WorkerStore,
 ) (*iface.Worker, error) {
 	id := projworker.DefaultWebUIID
 	if err := registry.Register(corebus.Identity{
@@ -618,17 +619,63 @@ func joinWebUIWorker(
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 
-	w := iface.New(iface.Config{
+	var w *iface.Worker
+	// Persist the worker's own state (the approval inbox) through the same project
+	// store every other worker's snapshot goes to. It is a signal, not a policy:
+	// iface says "my state changed", the assembly decides when it lands.
+	save := func() {
+		if w == nil || store == nil {
+			return
+		}
+		snap, err := w.Snapshot()
+		if err != nil {
+			log.Printf("[project] %s: snapshot: %v", id, err)
+			return
+		}
+		if len(snap) == 0 {
+			return
+		}
+		if err := store.SaveState(id, worker.StateRunning, snap); err != nil {
+			log.Printf("[project] %s: persist state: %v", id, err)
+		}
+	}
+	w = iface.New(iface.Config{
 		ID:       id,
 		Type:     projworker.TypeInterface,
 		Bus:      ch,
 		Backends: []iface.Backend{app},
 		// The human answers approvals here: the worker declares the capability in
 		// its watch contract and parks requests for the app to render.
-		Approvals: true,
+		Approvals:       true,
+		OnDurableChange: save,
 	})
+	// Restore BEFORE Start: the worker must come up holding the inbox it had, so a
+	// request parked before the restart is still answerable.
+	if err := restoreWorkerState(store, id, w); err != nil {
+		return nil, err
+	}
 	if err := w.Start(ctx); err != nil {
 		return nil, err
 	}
 	return w, nil
+}
+
+// restoreWorkerState replays id's persisted snapshot into an interface worker.
+func restoreWorkerState(store workersvc.WorkerStore, id string, w *iface.Worker) error {
+	if store == nil {
+		return nil
+	}
+	recs, err := store.LoadAll()
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+	for _, rec := range recs {
+		if rec.ID != id || len(rec.Snapshot) == 0 {
+			continue
+		}
+		if err := w.Restore(rec.Snapshot); err != nil {
+			return fmt.Errorf("restore %s: %w", id, err)
+		}
+	}
+	return nil
 }

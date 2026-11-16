@@ -117,16 +117,6 @@ func TestApprovalsInboxFlow(t *testing.T) {
 	}
 }
 
-// TestApprovalsSnapshotShape documents that the inbox is in-memory: the worker's
-// state is the backend's, and an app-hosted worker is not snapshotted at all.
-func TestApprovalsSnapshotShape(t *testing.T) {
-	w := New(Config{ID: "w1", Bus: newPipe(), Approvals: true})
-	snap, err := w.Snapshot()
-	if err != nil || snap != nil {
-		t.Fatalf("Snapshot = %q, %v; the inbox is memory-only", snap, err)
-	}
-}
-
 // TestApprovalsDoNotLeakIntoBackendTraffic verifies a parked request is consumed
 // by the capability instead of being fanned out as a message: the backend sees
 // messages, and reads approvals from the inbox.
@@ -149,40 +139,47 @@ func TestApprovalsDoNotLeakIntoBackendTraffic(t *testing.T) {
 	}
 }
 
-// TestApprovalsSeedReplaysUnanswered verifies the recovery path: replaying the
-// event log rebuilds the pending inbox from requests that have no decision, keeps
-// the order, and does not duplicate what is already parked.
-func TestApprovalsSeedReplaysUnanswered(t *testing.T) {
-	w := New(Config{ID: "w1", Bus: newPipe(), Approvals: true})
+// TestInboxSurvivesASnapshot verifies recovery is a SNAPSHOT: the inbox round
+// trips, pending stays pending (so the request is still answerable), decided stays
+// decided, and the change signal fires when the inbox moves.
+func TestInboxSurvivesASnapshot(t *testing.T) {
+	var durable int
+	w := New(Config{ID: "w1", Bus: newPipe(), Approvals: true, OnDurableChange: func() { durable++ }})
 	in, ok := w.handle.(Inbox)
 	if !ok {
 		t.Fatal("handle does not expose the inbox")
 	}
 
-	req := func(id string, ts int64) event.Event {
-		e := event.New(event.TypeApprovalRequest, "workspace", map[string]any{"action": "mount.add", "path": "/p/" + id})
-		e.RequestId = id
-		e.Timestamp = ts
-		return e
-	}
-	in.Seed([]event.Event{req("a", 1), req("b", 2), req("c", 3)}, nil)
-
-	pending := in.Pending()
-	if len(pending) != 3 || pending[0].RequestID != "a" || pending[2].RequestID != "c" {
-		t.Fatalf("pending = %+v, want a,b,c in order", pending)
+	req := event.New(event.TypeApprovalRequest, "workspace", map[string]any{
+		"action": "mount.add", "tool": "read", "path": "/etc/hosts",
+	})
+	req.RequestId = "req-1"
+	w.inbox.record(req)
+	if durable != 1 {
+		t.Fatalf("durable signals = %d, want 1 after parking", durable)
 	}
 
-	// Replaying the same log again must not duplicate; a decided request must not
-	// come back.
-	decided := event.New(event.TypeApprovalDecision, "w1", map[string]any{"approved": true})
-	decided.RequestId = "b"
-	in.Seed([]event.Event{req("a", 1), req("b", 2), req("c", 3), req("d", 4)}, []event.Event{decided})
-
-	pending = in.Pending()
-	if len(pending) != 3 {
-		t.Fatalf("pending after replay = %d entries, want a,c,d", len(pending))
+	snap, err := w.Snapshot()
+	if err != nil || len(snap) == 0 {
+		t.Fatalf("Snapshot = %q, %v", snap, err)
 	}
-	if pending[0].RequestID != "a" || pending[1].RequestID != "c" || pending[2].RequestID != "d" {
-		t.Fatalf("pending after replay = %+v", pending)
+
+	restored := New(Config{ID: "w1", Bus: newPipe(), Approvals: true})
+	if err := restored.Restore(snap); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	pending := restored.Inbox().Pending()
+	if len(pending) != 1 {
+		t.Fatalf("pending after restore = %+v", pending)
+	}
+	if pending[0].RequestID != "req-1" || pending[0].Path != "/etc/hosts" || pending[0].WorkerID != "workspace" {
+		t.Fatalf("restored entry = %+v", pending[0])
+	}
+	// Still answerable: that is the whole point of restoring a pending request.
+	if err := restored.Inbox().Decide(context.Background(), "req-1", true, "ok"); err != nil {
+		t.Fatalf("Decide after restore: %v", err)
+	}
+	if len(in.Decided())+len(restored.Inbox().Decided()) == 0 {
+		t.Fatal("decision did not move the entry")
 	}
 }

@@ -50,9 +50,15 @@ if inbox, ok := h.(iface.Inbox); ok {   // h is the injected Handler
 }
 ```
 
-The inbox is memory-only — an app-hosted worker is not snapshotted — so recovery
-is a replay of durable `approval.request`/`approval.decision` events, which also
-heals a request parked before a restart.
+Recovery is a **snapshot**, like every other worker's state: `Worker.Snapshot`
+writes `{"approvals": {...}}` (plus the backend's bytes under `"backend"` when it
+is stateful), and `Restore` puts it back before `Start`, so a request parked
+before a restart is still answerable. `Config.OnDurableChange` fires whenever the
+inbox moves — the assembly owns the store and decides when it lands (the WebUI's
+app-hosted worker persists to the project's `workers/webui/state.json`).
+
+Replay from the event log is deliberately NOT used: it has no bound (how far back
+do you replay?). A snapshot is exactly the state the worker last had.
 
 ## Deliveries and failures
 

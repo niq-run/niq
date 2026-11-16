@@ -64,12 +64,6 @@ type Inbox interface {
 	// requester, echoing its request and trace ids. It is the ONLY way a request
 	// is answered: approval.request has no request.completed reply.
 	Decide(ctx context.Context, requestID string, approved bool, note string) error
-	// Seed reconciles the inbox with recorded events: a pending request that has
-	// since been answered is dropped, and an unanswered one the inbox does not know
-	// is parked (oldest first). A surface's inbox is memory-only (an app-hosted
-	// worker is not snapshotted), so recovery is a replay of the event log — the
-	// caller supplies both lists because only it holds the store.
-	Seed(requests []event.Event, decisions []event.Event)
 	// OnChange registers a callback fired when the inbox changes (a request
 	// arrived, a verdict was recorded), so a surface can refresh a badge or a
 	// panel without polling. It returns a cancel func.
@@ -205,47 +199,6 @@ func (a *approvals) Decide(ctx context.Context, requestID string, approved bool,
 	return nil
 }
 
-// Seed implements Inbox. Existing entries are kept: a replay after a partial
-// inbox (a late start, a repeated call) must not duplicate or reorder what the
-// worker already parked.
-func (a *approvals) Seed(requests []event.Event, decisions []event.Event) {
-	answered := make(map[string]bool, len(decisions))
-	for _, evt := range decisions {
-		if evt.RequestId != "" {
-			answered[evt.RequestId] = true
-		}
-	}
-
-	a.mu.Lock()
-	// Drop what has been answered meanwhile (an inbox that missed a decision).
-	kept := a.pending[:0]
-	for _, e := range a.pending {
-		if answered[e.RequestID] {
-			continue
-		}
-		kept = append(kept, e)
-	}
-	a.pending = kept
-	known := make(map[string]bool, len(kept))
-	for _, e := range kept {
-		known[e.RequestID] = true
-	}
-	var added int
-	for _, evt := range requests {
-		if evt.RequestId == "" || answered[evt.RequestId] || known[evt.RequestId] {
-			continue
-		}
-		known[evt.RequestId] = true
-		a.pending = append(a.pending, newApprovalEntry(evt))
-		added++
-	}
-	a.mu.Unlock()
-	if added > 0 {
-		log.Printf("[iface %s] restored %d pending approval(s)", a.h.ID(), added)
-		a.changed()
-	}
-}
-
 // OnChange implements Inbox.
 func (a *approvals) OnChange(fn func()) func() {
 	if fn == nil {
@@ -283,4 +236,29 @@ func (a *approvals) changed() {
 			fn()
 		}()
 	}
+}
+
+// approvalsState is the inbox's share of the worker snapshot: what was parked and
+// what was already settled.
+type approvalsState struct {
+	Pending []*ApprovalEntry `json:"pending"`
+	Decided []*ApprovalEntry `json:"decided"`
+}
+
+// snapshot captures the inbox.
+func (a *approvals) snapshot() *approvalsState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return &approvalsState{Pending: a.pending, Decided: a.decided}
+}
+
+// restore rehydrates the inbox from a snapshot.
+func (a *approvals) restore(state *approvalsState) {
+	if state == nil {
+		return
+	}
+	a.mu.Lock()
+	a.pending, a.decided = state.Pending, state.Decided
+	a.mu.Unlock()
+	log.Printf("[iface %s] restored %d pending / %d decided approval(s)", a.h.ID(), len(state.Pending), len(state.Decided))
 }

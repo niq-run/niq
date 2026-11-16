@@ -2,6 +2,7 @@ package iface
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -25,7 +26,12 @@ type Config struct {
 	// Backends are the outward-facing surfaces this worker bridges to. At least
 	// one is normally present; a worker with none starts and simply serves its
 	// tools.
-	Backends []Backend
+	//
+	// OnDurableChange, when set, is called whenever the WORKER's own state changed
+	// (the approval inbox). It is the same signal other workers raise: the layer
+	// that owns the snapshot store decides when to write it.
+	OnDurableChange func()
+	Backends        []Backend
 	// Publishes is the presence contract announced via worker.ready: the event
 	// types this worker emits, described for peers and the directory roster.
 	Publishes []map[string]any
@@ -90,6 +96,9 @@ func New(cfg Config) *Worker {
 		w.inbox = newApprovals(w.h)
 		w.handle = &inboxHandle{Handler: w.h, approvals: w.inbox}
 		w.inbox.registerOn(w)
+		if cfg.OnDurableChange != nil {
+			w.inbox.OnChange(cfg.OnDurableChange)
+		}
 	}
 	return w
 }
@@ -230,22 +239,63 @@ func (w *Worker) Stop() error {
 	return nil
 }
 
-// Snapshot returns the backend's durable state, or nothing when the worker keeps
-// no state. The worker itself has none: everything worth persisting belongs to
-// the thing behind it.
-func (w *Worker) Snapshot() ([]byte, error) {
-	if w.state == nil {
-		return nil, nil
-	}
-	return w.state.Snapshot()
+// snapshot is the worker's durable state: its own (the approval inbox) plus the
+// backend's, which stays opaque here.
+//
+//	{"approvals": {...}}              only the inbox
+//	{"backend":   <backend bytes>}    only the backend
+//	{"approvals": {...}, "backend": …} both
+//
+// A nil result means "nothing to persist". Recovery is a snapshot, not a replay:
+// replaying an event log has no bound (how far back?), while a snapshot is exactly
+// the state the worker last had.
+type snapshot struct {
+	Approvals *approvalsState `json:"approvals,omitempty"`
+	Backend   json.RawMessage `json:"backend,omitempty"`
 }
 
-// Restore replays the backend's durable state.
+// Snapshot captures the inbox and asks the stateful backend for its own bytes.
+func (w *Worker) Snapshot() ([]byte, error) {
+	var snap snapshot
+	if w.inbox != nil {
+		snap.Approvals = w.inbox.snapshot()
+	}
+	if w.state != nil {
+		raw, err := w.state.Snapshot()
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) > 0 {
+			snap.Backend = json.RawMessage(raw)
+		}
+	}
+	if snap.Approvals == nil && snap.Backend == nil {
+		return nil, nil
+	}
+	return json.Marshal(snap)
+}
+
+// Restore replays a snapshot into the inbox and the stateful backend.
 func (w *Worker) Restore(state []byte) error {
-	if w.state == nil || len(state) == 0 {
+	if len(state) == 0 {
 		return nil
 	}
-	return w.state.Restore(state)
+	var snap snapshot
+	if err := json.Unmarshal(state, &snap); err == nil && (snap.Approvals != nil || snap.Backend != nil) {
+		if w.inbox != nil {
+			w.inbox.restore(snap.Approvals)
+		}
+		if w.state != nil && len(snap.Backend) > 0 {
+			return w.state.Restore(snap.Backend)
+		}
+		return nil
+	}
+	// Backward compatibility: a snapshot written before the envelope existed is the
+	// backend's own shape, so hand it over whole.
+	if w.state != nil {
+		return w.state.Restore(state)
+	}
+	return fmt.Errorf("iface: %s: snapshot is not this worker's", w.ID())
 }
 
 // logf is the package's single logging seam, so tests stay quiet.
