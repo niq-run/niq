@@ -1,10 +1,13 @@
 import { BaseWorker } from "./baseworker.js";
 import { createEvent } from "./createEvent.js";
 import { newId } from "./id.js";
+import type { HelpFunc } from "./help.js";
 import {
   EventType,
   type Event,
   type EventTypeName,
+  type Extension,
+  type ExtensionHandler,
   type WorkerSideChannel,
 } from "./types/index.js";
 
@@ -64,7 +67,52 @@ export interface RequestOptions {
 
 /** One outward-facing surface: the thing behind the worker. */
 export interface Backend {
+  /**
+   * Receive the handles for reaching the bus, and register inbound interest.
+   *
+   * Called exactly ONCE, before the worker starts its loop and before any event
+   * is delivered, so the backend can build its outward side already knowing how
+   * to reach inward.
+   */
   setHandler(handler: Handler): void;
+}
+
+/**
+ * A backend that needs a lifetime of its own: a WebSocket connection, a render
+ * loop, a subscription pump. `start()` runs after every backend has its handler;
+ * `stop()` runs in reverse order when the worker stops.
+ */
+export interface Runnable {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+/**
+ * The part of the worker a backend needs to serve its own tools: register the
+ * extension (schema included, so it rides `worker.ready`), then reply. The
+ * worker itself satisfies it, so a backend is wired by
+ * `backend.registerTools(worker)` — mirroring Go's `iface.ToolHost`.
+ */
+export interface ToolHost {
+  register(ext: Extension, handler: ExtensionHandler): void;
+  registerReadme(
+    description: string,
+    text: () => string,
+    params?: Record<string, unknown>,
+  ): void;
+  registerHelp(guides?: Record<string, HelpFunc>): void;
+  replyCompleted(
+    callerID: string,
+    callID: string,
+    result: unknown,
+    traceID?: string,
+  ): Promise<void>;
+  replyFailed(
+    callerID: string,
+    callID: string,
+    errorMessage: string,
+    traceID?: string,
+  ): Promise<void>;
 }
 
 export interface InterfaceWorkerOptions {
@@ -149,13 +197,33 @@ export class InterfaceWorker extends BaseWorker {
     for (const backend of this.backends) {
       backend.setHandler(this.handler);
     }
+    // Then give each backend its own lifetime: a backend whose start fails would
+    // leave the worker deaf, so it is a start error.
+    for (const backend of this.backends) {
+      const runnable = backend as Partial<Runnable>;
+      if (typeof runnable.start === "function") {
+        await runnable.start();
+      }
+    }
     await this.announceReady(this.typ, this.publishes);
     this.loop = this.serve();
   }
 
-  /** Leave the bus: fail in-flight requests, drop subscriptions, close. */
+  /** Leave the bus: stop backends, fail in-flight requests, close. */
   async stop(): Promise<void> {
     this.stopping = true;
+    // Backends stop first, in reverse, so a backend's last delivery can still
+    // reach the bus.
+    for (let i = this.backends.length - 1; i >= 0; i -= 1) {
+      const runnable = this.backends[i] as Partial<Runnable>;
+      if (typeof runnable.stop === "function") {
+        try {
+          await runnable.stop();
+        } catch (err) {
+          console.warn(`[iface ${this.id}] backend stop failed:`, err);
+        }
+      }
+    }
     for (const [id, p] of this.pending) {
       clearTimeout(p.timer);
       p.reject(new Error(`interface worker stopped while waiting for request ${id}`));
@@ -190,8 +258,18 @@ export class InterfaceWorker extends BaseWorker {
       this.publish(evt);
       return;
     }
-    if (this.dispatchExtension(evt)) return;
-    this.publish(evt);
+    // Order matters. A served tool is answered by the extension registry; any
+    // other event belongs to the backends, and a message a backend consumes is NOT
+    // a "no handler" error — that reply is only for events nobody wants. Asking
+    // the subscriptions first keeps a forwarded message from being answered with
+    // request.failed just because it carried a request id.
+    if (!this.serves(evt.type) && this.publish(evt)) return;
+    this.dispatchExtension(evt);
+  }
+
+  /** Whether the extension registry handles this event type. */
+  private serves(type: string): boolean {
+    return this.extensions().some((ext) => ext.event === type);
   }
 
   private resolve(evt: Event): boolean {
@@ -213,14 +291,18 @@ export class InterfaceWorker extends BaseWorker {
     return true;
   }
 
-  private publish(evt: Event): void {
+  /** Fan out to interested subscriptions, reporting whether any took it. */
+  private publish(evt: Event): boolean {
+    let taken = false;
     for (const sub of this.subs) {
       if (!sub.active) continue;
       if (sub.filter && sub.filter.length > 0 && !sub.filter.includes(evt.type)) {
         continue;
       }
+      taken = true;
       this.deliver(sub, evt);
     }
+    return taken;
   }
 
   /** Isolates a failing subscriber: one broken backend must not stop the rest. */
