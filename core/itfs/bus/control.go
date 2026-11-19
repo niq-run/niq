@@ -25,6 +25,10 @@ type Control interface {
 	// Revoke removes an identity. Revoking an unknown id is a no-op, so a
 	// destroy path can call it unconditionally.
 	Revoke(workerID string) error
+	// Project applies an existing durable identity to the runtime registry. It is
+	// how a caller restores the projection after deliberately dropping it (an
+	// archived worker that is being restored) without rewriting the grants.
+	Project(workerID string) error
 	// Lookup returns one identity from the durable store.
 	Lookup(workerID string) (Identity, bool)
 	// List returns every durable identity, sorted by worker id.

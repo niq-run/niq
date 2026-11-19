@@ -157,6 +157,11 @@ func ProvisionUnmanagedProcess(control corebus.Control, signer *eventbus.TokenSi
 		cur.PublishAllow, cur.SubscribeAllow = spec.Publish, spec.Subscriptions
 	}
 	if cur.Credential != "" {
+		// The durable record may exist while the runtime projection was dropped
+		// (an archived worker being restored): make it routable again.
+		if err := control.Project(spec.ID); err != nil {
+			return "", err
+		}
 		return cur.Credential, nil
 	}
 	tok, err := signer.Mint(spec.ID, persistRemoteTokenTTL)

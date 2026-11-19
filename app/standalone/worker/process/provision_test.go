@@ -119,6 +119,30 @@ func TestProvisionUnmanagedProcessPersists(t *testing.T) {
 	}
 }
 
+// TestUnmanagedReprojectAfterArchive verifies restoring an archived dial-in
+// worker makes its identity routable again without re-minting anything.
+func TestUnmanagedReprojectAfterArchive(t *testing.T) {
+	control, registry, signer := testRig(t)
+	cred, err := ProvisionUnmanagedProcess(control, signer, IdentitySpec{ID: "remote", Type: "mcp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Revoke("remote"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := ProvisionUnmanagedProcess(control, signer, IdentitySpec{ID: "remote", Type: "mcp"})
+	if err != nil {
+		t.Fatalf("re-provision: %v", err)
+	}
+	if again != cred {
+		t.Fatalf("credential changed: %q -> %q", cred, again)
+	}
+	id, ok := registry.Lookup("remote")
+	if !ok || id.Credential != cred {
+		t.Fatalf("runtime identity = %+v (ok=%v)", id, ok)
+	}
+}
+
 // TestManagedProcessReusesDurableGrants verifies an explicit grant (here: deny
 // all) survives a relaunch instead of being re-seeded with the default.
 func TestManagedProcessReusesDurableGrants(t *testing.T) {

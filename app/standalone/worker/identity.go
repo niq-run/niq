@@ -33,7 +33,11 @@ func ensureIdentity(control corebus.Control, id corebus.Identity) error {
 	// (a nil list is "never seeded"; an explicit empty list is "deny all").
 	if cur.PublishAllow == nil && cur.SubscribeAllow == nil &&
 		(id.PublishAllow != nil || id.SubscribeAllow != nil) {
-		return control.UpdateACL(id.WorkerID, id.PublishAllow, id.SubscribeAllow)
+		if err := control.UpdateACL(id.WorkerID, id.PublishAllow, id.SubscribeAllow); err != nil {
+			return err
+		}
 	}
-	return nil
+	// The durable record may exist while the runtime projection was deliberately
+	// dropped (an archived worker being restored): make it routable again.
+	return control.Project(id.WorkerID)
 }

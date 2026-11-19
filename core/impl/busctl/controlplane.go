@@ -39,16 +39,25 @@ var _ corebus.Control = (*ControlPlane)(nil)
 // Seed projects every durable identity onto the runtime registry. It runs once
 // at startup, before the bus serves connections, so a remote worker can
 // authenticate on its first reconnect instead of waiting to be re-provisioned.
-func (c *ControlPlane) Seed() error {
+//
+// exclude names identities that are durable but must NOT be routable (archived
+// workers): their grants are kept for a restore, but they are not part of the
+// running swarm. The assembly computes the set from the manifest store — the
+// control plane stays ignorant of manifests.
+func (c *ControlPlane) Seed(exclude []string) error {
 	if c.runtime == nil {
 		return nil
+	}
+	skip := make(map[string]bool, len(exclude))
+	for _, id := range exclude {
+		skip[id] = true
 	}
 	ids, err := c.store.All()
 	if err != nil {
 		return fmt.Errorf("busctl: seed: %w", err)
 	}
 	for _, id := range ids {
-		if awaitingLaunch(id) {
+		if awaitingLaunch(id) || skip[id.WorkerID] {
 			continue
 		}
 		if err := project(c.runtime, id); err != nil {
@@ -118,14 +127,22 @@ func (c *ControlPlane) UpdateACL(workerID string, publish []event.PublishPattern
 	if err := c.store.Save(workerID, id); err != nil {
 		return err
 	}
-	if c.runtime != nil {
-		// A declared-but-never-connected worker has no runtime entry; the next
-		// connect seeds it from the store.
-		if _, ok := c.runtime.Lookup(workerID); ok {
-			return c.runtime.Update(workerID, publish, subscribe)
-		}
+	// A write is always reflected live. A host-launched child awaiting its
+	// credential is the one exception: its runtime identity is the temporary one
+	// created at launch.
+	return projectIfRoutable(c.runtime, id)
+}
+
+// Project implements corebus.Control.
+func (c *ControlPlane) Project(workerID string) error {
+	id, ok, err := c.store.Load(workerID)
+	if err != nil {
+		return err
 	}
-	return nil
+	if !ok {
+		return fmt.Errorf("busctl: identity %s not found", workerID)
+	}
+	return projectIfRoutable(c.runtime, id)
 }
 
 // Revoke implements corebus.Control. An unknown id is a no-op for the store,
@@ -164,6 +181,15 @@ func (c *ControlPlane) List() []corebus.Identity {
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].WorkerID < ids[j].WorkerID })
 	return ids
+}
+
+// projectIfRoutable projects id unless it is a host-launched child waiting for
+// its per-launch credential (that identity belongs to the temporary tier).
+func projectIfRoutable(runtime corebus.IdentityRegistry, id corebus.Identity) error {
+	if runtime == nil || awaitingLaunch(id) {
+		return nil
+	}
+	return project(runtime, id)
 }
 
 // project makes the runtime registry match id, replacing an entry whose

@@ -209,7 +209,18 @@ func runAssembly(opts assemblyOptions) error {
 		return fmt.Errorf("project: open identity store: %w", err)
 	}
 	busControl := busctl.New(identityStore, registry)
-	if err := busControl.Seed(); err != nil {
+	// Archived workers keep their durable grants but are not part of the running
+	// swarm, so they are not projected at startup.
+	manifests := manifestStore{projectID: opts.ContextInfo.Project}
+	archivedManifests, err := manifests.List(true)
+	if err != nil {
+		return fmt.Errorf("project: list archived manifests: %w", err)
+	}
+	archivedIDs := make([]string, 0, len(archivedManifests))
+	for _, m := range archivedManifests {
+		archivedIDs = append(archivedIDs, m.ID)
+	}
+	if err := busControl.Seed(archivedIDs); err != nil {
 		return fmt.Errorf("project: seed identities: %w", err)
 	}
 
@@ -283,7 +294,6 @@ func runAssembly(opts assemblyOptions) error {
 	// The worker control plane: ONE owner of every placement and of the
 	// manifest. The host worker drives it over the bus; this assembly only
 	// injects the providers and starts/stops it.
-	manifests := manifestStore{projectID: opts.ContextInfo.Project}
 	protected := []string{hostWorkerID}
 	if opts.WebUIAddr != "" {
 		protected = append(protected, projworker.DefaultWebUIID)

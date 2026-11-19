@@ -610,7 +610,8 @@ func TestUpdateRejectsUnreadParams(t *testing.T) {
 }
 
 // TestArchiveRoundTrip verifies archive stops a live worker, moves the
-// declaration, drops the identity, and that unarchive restores and starts it.
+// manifest, drops the RUNTIME identity but keeps the durable grants, and that
+// unarchive restores and starts it with those grants.
 func TestArchiveRoundTrip(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
@@ -636,7 +637,10 @@ func TestArchiveRoundTrip(t *testing.T) {
 		t.Fatalf("catalog archived = %v", got)
 	}
 	if _, ok := rig.registry.Lookup("w1"); ok {
-		t.Fatal("identity survived archive")
+		t.Fatal("runtime identity survived archive")
+	}
+	if _, ok := rig.bus.Lookup("w1"); !ok {
+		t.Fatal("durable identity must survive archive so a restore keeps its grants")
 	}
 	if info, ok, _ := rig.backend.Get("w1"); ok {
 		t.Fatalf("archived worker still in the active catalog: %+v", info)
@@ -657,6 +661,9 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 	if info, ok, _ := rig.backend.Get("w1"); !ok || info.State != "running" {
 		t.Fatalf("restored worker = %+v, ok=%v; want running", info, ok)
+	}
+	if _, ok := rig.registry.Lookup("w1"); !ok {
+		t.Fatal("unarchive did not re-project the runtime identity")
 	}
 }
 
