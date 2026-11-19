@@ -241,7 +241,7 @@ func TestSanitizeID(t *testing.T) {
 func TestLinkProjectExisting(t *testing.T) {
 	setupProjectsRoot(t)
 	ext := t.TempDir()
-	if err := writeProjectJSON(filepath.Join(ext, "project.json"), &Project{ID: "alpha", CreatedAt: "2026-01-01T00:00:00Z"}); err != nil {
+	if err := store.SaveProject(ext, &store.Project{ID: "alpha", CreatedAt: "2026-01-01T00:00:00Z"}); err != nil {
 		t.Fatalf("seed project.json: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(ext, "workers.json"), []byte(`{"schema_version":2,"workers":[{"id":"default-ui","type":"interface"}]}`), 0644); err != nil {

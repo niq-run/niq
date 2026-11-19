@@ -1,4 +1,4 @@
-package sqlite
+package eventstore
 
 import (
 	"context"

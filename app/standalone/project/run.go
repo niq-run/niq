@@ -19,8 +19,8 @@ import (
 	"github.com/niq-run/niq/app/standalone/project/migrate"
 	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
 	"github.com/niq-run/niq/app/standalone/project/store"
+	"github.com/niq-run/niq/app/standalone/project/store/event"
 	"github.com/niq-run/niq/app/standalone/project/store/identity"
-	evtsqlite "github.com/niq-run/niq/app/standalone/project/store/sqlite"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/app/webui"
@@ -234,7 +234,7 @@ func runAssembly(opts assemblyOptions) error {
 		if err := os.MkdirAll(filepath.Dir(opts.EventsDB), 0755); err != nil {
 			return fmt.Errorf("project: mkdir events db: %w", err)
 		}
-		evts, err := evtsqlite.New(opts.EventsDB)
+		evts, err := eventstore.New(opts.EventsDB)
 		if err != nil {
 			return fmt.Errorf("project: open events db: %w", err)
 		}

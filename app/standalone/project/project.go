@@ -31,22 +31,12 @@ import (
 // projects are converted once by app/project/migrate before they reach here.
 const SchemaVersion = store.SchemaVersion
 
-// ProjectPorts records the ports assigned to a project instance: its event-bus
-// (HTTP transport) port and its WebUI port. Zero means "not allocated".
-type ProjectPorts struct {
-	Bus   int `json:"bus,omitempty"`
-	WebUI int `json:"webui,omitempty"`
-}
-
-// Project is the project-level metadata. Worker declarations live in
-// workers.json / workers.archived.json, never here.
-type Project struct {
-	SchemaVersion int          `json:"schema_version,omitempty"`
-	ID            string       `json:"id"`
-	CreatedAt     string       `json:"created_at,omitempty"`
-	Ports         ProjectPorts `json:"ports,omitempty"`
-	UploadDir     string       `json:"upload_dir,omitempty"`
-}
+// ProjectPorts and Project are the on-disk metadata shape; the IO lives in
+// store/project.go. The aliases keep the project package's vocabulary.
+type (
+	ProjectPorts = store.ProjectPorts
+	Project      = store.Project
+)
 
 // ProjectsRoot returns <niq root>/projects (created lazily on write).
 func ProjectsRoot() string { return filepath.Join(home.Root(), "projects") }
@@ -106,65 +96,16 @@ func CreateProject(id, templateName string, template *TemplateConfig) (*Project,
 
 // LoadProject loads a project's metadata from project.json.
 func LoadProject(id string) (*Project, error) {
-	// One-time conversion of legacy projects. Idempotent and cheap once the
-	// schema marker is present.
-	if err := migrate.EnsureProject(ProjectDir(id)); err != nil {
-		return nil, err
-	}
-	raw, err := os.ReadFile(ProjectPath(id))
-	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("project: %q not found", id)
-	}
+	p, err := store.LoadProject(ProjectDir(id))
 	if err != nil {
-		return nil, fmt.Errorf("project: read %s: %w", id, err)
+		return nil, fmt.Errorf("project: %q: %w", id, err)
 	}
-	var p Project
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, fmt.Errorf("project: parse %s: %w", id, err)
-	}
-	return &p, nil
+	return p, nil
 }
 
 // SaveProject writes a project's metadata back to project.json.
 func SaveProject(p *Project) error {
-	if p.SchemaVersion == 0 {
-		p.SchemaVersion = SchemaVersion
-	}
-	if p.ID == "" {
-		return fmt.Errorf("project: cannot save project with empty id")
-	}
-	if err := os.MkdirAll(ProjectDir(p.ID), 0755); err != nil {
-		return fmt.Errorf("project: mkdir: %w", err)
-	}
-	return writeJSONAtomic(ProjectPath(p.ID), p)
-}
-
-// writeJSONAtomic writes v as JSON through a temp file + rename, so a crash
-// never leaves a half-written declaration file.
-func writeJSONAtomic(path string, v any) error {
-	raw, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return fmt.Errorf("project: marshal %s: %w", path, err)
-	}
-	raw = append(raw, '\n')
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0644); err != nil {
-		return fmt.Errorf("project: write %s: %w", path, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("project: rename %s: %w", path, err)
-	}
-	return nil
-}
-
-// writeProjectJSON is kept for the linker: it seeds project.json into an
-// external directory.
-func writeProjectJSON(path string, p *Project) error {
-	if p.SchemaVersion == 0 {
-		p.SchemaVersion = SchemaVersion
-	}
-	return writeJSONAtomic(path, p)
+	return store.SaveProject(ProjectDir(p.ID), p)
 }
 
 // ListProjects returns every project's metadata, sorted by id.
@@ -253,7 +194,7 @@ func ensureProjectJSON(dir, id string) error {
 	path := filepath.Join(dir, "project.json")
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return writeProjectJSON(path, &Project{SchemaVersion: SchemaVersion, ID: id, CreatedAt: time.Now().Format(time.RFC3339)})
+		return store.SaveProject(dir, &Project{SchemaVersion: SchemaVersion, ID: id, CreatedAt: time.Now().Format(time.RFC3339)})
 	}
 	if err != nil {
 		return fmt.Errorf("project: read %s: %w", path, err)
@@ -266,7 +207,7 @@ func ensureProjectJSON(dir, id string) error {
 	if p.SchemaVersion == 0 {
 		p.SchemaVersion = SchemaVersion
 	}
-	return writeProjectJSON(path, &p)
+	return store.SaveProject(dir, &p)
 }
 
 func sanitizeID(id string) string {

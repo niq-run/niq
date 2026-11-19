@@ -1,5 +1,6 @@
-// Package sqlite implements [event.AppendStore] backed by a local SQLite database.
-package sqlite
+// Package eventstore implements [event.AppendStore] backed by a local SQLite
+// database. The directory says what it stores (events); SQLite is the backend.
+package eventstore
 
 import (
 	"context"
