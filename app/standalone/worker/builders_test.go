@@ -201,11 +201,7 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 		}
 	}()
 
-	store, err := busctl.NewFileStore(filepath.Join(dir, "identities.json"))
-	if err != nil {
-		t.Fatalf("identity store: %v", err)
-	}
-	bus := busctl.New(store, registry)
+	bus := busctl.New(newMemIdentityStore(), registry)
 	types := newTypeRegistry()
 	mgr := workerlife.New(workerlife.Config{Build: types.Build})
 	bc := BuildContext{

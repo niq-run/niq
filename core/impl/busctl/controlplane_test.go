@@ -1,7 +1,8 @@
 package busctl
 
 import (
-	"path/filepath"
+	"sort"
+	"sync"
 	"testing"
 
 	"github.com/niq-run/niq/core/impl/eventbus"
@@ -9,21 +10,57 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
-func testPlane(t *testing.T) (*ControlPlane, *eventbus.LayeredRegistry, string) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "identities.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("store: %v", err)
+// memStore is a test-only bus.Store. Durable storage is exercised where it
+// lives (the standalone file store), so the control plane only needs a map.
+type memStore struct {
+	mu  sync.RWMutex
+	ids map[string]corebus.Identity
+}
+
+func newMemStore() *memStore { return &memStore{ids: map[string]corebus.Identity{}} }
+
+func (s *memStore) Load(id string) (corebus.Identity, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	idt, ok := s.ids[id]
+	return idt, ok, nil
+}
+
+func (s *memStore) Save(id string, idt corebus.Identity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ids[id] = idt
+	return nil
+}
+
+func (s *memStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.ids, id)
+	return nil
+}
+
+func (s *memStore) All() ([]corebus.Identity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]corebus.Identity, 0, len(s.ids))
+	for _, idt := range s.ids {
+		out = append(out, idt)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].WorkerID < out[j].WorkerID })
+	return out, nil
+}
+
+func testPlane(t *testing.T) (*ControlPlane, *eventbus.LayeredRegistry) {
+	t.Helper()
 	runtime := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
-	return New(store, runtime), runtime, path
+	return New(newMemStore(), runtime), runtime
 }
 
 // TestRegisterProjectsAndRejectsDuplicates verifies the durable write and the
 // runtime projection happen together, and that identity ownership is explicit.
 func TestRegisterProjectsAndRejectsDuplicates(t *testing.T) {
-	cp, runtime, _ := testPlane(t)
+	cp, runtime := testPlane(t)
 	id := corebus.Identity{
 		WorkerID:       "w1",
 		Type:           "reason",
@@ -44,7 +81,7 @@ func TestRegisterProjectsAndRejectsDuplicates(t *testing.T) {
 // TestUpdateACLPersistsAndProjects verifies a grant edit is one call that
 // reaches both the store and the live registry.
 func TestUpdateACLPersistsAndProjects(t *testing.T) {
-	cp, runtime, _ := testPlane(t)
+	cp, runtime := testPlane(t)
 	if err := cp.Register(corebus.Identity{WorkerID: "w1", Type: "reason"}); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +107,7 @@ func TestUpdateACLPersistsAndProjects(t *testing.T) {
 // call Revoke unconditionally: a temp or legacy identity has no store record but
 // must stop being routable.
 func TestRevokeClearsRuntimeEvenWithoutDurableRecord(t *testing.T) {
-	cp, runtime, _ := testPlane(t)
+	cp, runtime := testPlane(t)
 	if err := runtime.Register(corebus.Identity{WorkerID: "temp", Type: "mcp", Remote: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +125,7 @@ func TestRevokeClearsRuntimeEvenWithoutDurableRecord(t *testing.T) {
 // TestProjectRestoresDroppedProjection verifies a caller can re-apply a durable
 // identity after dropping the runtime entry (archive → unarchive).
 func TestProjectRestoresDroppedProjection(t *testing.T) {
-	cp, runtime, _ := testPlane(t)
+	cp, runtime := testPlane(t)
 	if err := cp.Register(corebus.Identity{WorkerID: "w1", Type: "reason"}); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +150,7 @@ func TestProjectRestoresDroppedProjection(t *testing.T) {
 // record reserves its grants but is not routable until a credential is minted
 // for that launch.
 func TestAwaitingLaunchIsNotProjected(t *testing.T) {
-	cp, runtime, _ := testPlane(t)
+	cp, runtime := testPlane(t)
 	child := corebus.Identity{WorkerID: "child", Type: "mcp", Remote: true}
 	if err := cp.Register(child); err != nil {
 		t.Fatal(err)
@@ -136,11 +173,7 @@ func TestAwaitingLaunchIsNotProjected(t *testing.T) {
 // TestSeedProjectsDurableIdentities verifies startup seeds the runtime registry
 // before the bus serves, and applies the same awaiting-launch rule.
 func TestSeedProjectsDurableIdentities(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "identities.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemStore()
 	durable := []corebus.Identity{
 		{WorkerID: "inproc", Type: "timer", PublishAllow: []event.PublishPattern{event.NewPublishPattern("request.*")}},
 		{WorkerID: "remote", Type: "mcp", Remote: true, Credential: "tok"},
@@ -171,11 +204,7 @@ func TestSeedProjectsDurableIdentities(t *testing.T) {
 // TestSeedSkipsExcludedIdentities verifies an archived worker's durable grants
 // stay on disk but its identity is not routable at startup.
 func TestSeedSkipsExcludedIdentities(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "identities.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemStore()
 	if err := store.Save("archived", corebus.Identity{WorkerID: "archived", Type: "mcp", Remote: true, Credential: "tok"}); err != nil {
 		t.Fatal(err)
 	}
@@ -188,77 +217,5 @@ func TestSeedSkipsExcludedIdentities(t *testing.T) {
 	}
 	if _, ok, _ := store.Load("archived"); !ok {
 		t.Fatal("seed/exclude must not delete the durable record")
-	}
-}
-
-// TestFileStoreRoundTripsGrantsAndDistinguishesNilFromEmpty verifies the on-disk
-// format: "never seeded" (nil) and "deny all" (explicit empty) are different
-// states, so a later connect knows whether to seed the type default.
-func TestFileStoreRoundTripsGrantsAndDistinguishesNilFromEmpty(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "identities.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save("unseeded", corebus.Identity{WorkerID: "unseeded", Type: "reason"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save("denied", corebus.Identity{
-		WorkerID:       "denied",
-		Type:           "reason",
-		PublishAllow:   []event.PublishPattern{},
-		SubscribeAllow: []event.EventPattern{},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := NewFileStore(path)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	unseeded, ok, err := reopened.Load("unseeded")
-	if err != nil || !ok {
-		t.Fatalf("load unseeded: %v %v", ok, err)
-	}
-	if unseeded.PublishAllow != nil || unseeded.SubscribeAllow != nil {
-		t.Fatalf("unseeded = %+v, want nil grants", unseeded)
-	}
-	denied, ok, err := reopened.Load("denied")
-	if err != nil || !ok {
-		t.Fatalf("load denied: %v %v", ok, err)
-	}
-	if denied.PublishAllow == nil || denied.SubscribeAllow == nil || len(denied.PublishAllow) != 0 {
-		t.Fatalf("denied = %+v, want explicit empty grants", denied)
-	}
-}
-
-// TestWriteFileMergesForMigration verifies the migration writer keeps existing
-// records and creates the file even when there is nothing to merge (its presence
-// marks the migration done).
-func TestWriteFileMergesForMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "identities.json")
-	if err := WriteFile(path, nil); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ids, _ := store.All(); len(ids) != 0 {
-		t.Fatalf("empty migration wrote %+v", ids)
-	}
-	if err := store.Save("keep", corebus.Identity{WorkerID: "keep", Type: "timer"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteFile(path, []corebus.Identity{{WorkerID: "moved", Type: "mcp", Remote: true, Credential: "tok"}}); err != nil {
-		t.Fatalf("merge: %v", err)
-	}
-	reopened, err := NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ids, _ := reopened.All()
-	if len(ids) != 2 {
-		t.Fatalf("merged ids = %+v, want keep + moved", ids)
 	}
 }

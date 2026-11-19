@@ -3,10 +3,12 @@ package process
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
@@ -54,14 +56,50 @@ func TestBuildRemoteIdentityDefaults(t *testing.T) {
 	}
 }
 
+// memStore is a test-only bus.Store; the standalone file store is tested where
+// it lives.
+type memStore struct {
+	mu  sync.RWMutex
+	ids map[string]corebus.Identity
+}
+
+func newMemStore() *memStore { return &memStore{ids: map[string]corebus.Identity{}} }
+
+func (s *memStore) Load(id string) (corebus.Identity, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	idt, ok := s.ids[id]
+	return idt, ok, nil
+}
+
+func (s *memStore) Save(id string, idt corebus.Identity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ids[id] = idt
+	return nil
+}
+
+func (s *memStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.ids, id)
+	return nil
+}
+
+func (s *memStore) All() ([]corebus.Identity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]corebus.Identity, 0, len(s.ids))
+	for _, idt := range s.ids {
+		out = append(out, idt)
+	}
+	return out, nil
+}
+
 func testRig(t *testing.T) (*busctl.ControlPlane, *eventbus.LayeredRegistry, *eventbus.TokenSigner) {
 	t.Helper()
-	store, err := busctl.NewFileStore(filepath.Join(t.TempDir(), "identities.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	registry := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
-	return busctl.New(store, registry), registry, eventbus.NewTokenSigner([]byte("test-secret"))
+	return busctl.New(newMemStore(), registry), registry, eventbus.NewTokenSigner([]byte("test-secret"))
 }
 
 // TestProvisionManagedProcessIsTemp verifies a launched child gets a credential

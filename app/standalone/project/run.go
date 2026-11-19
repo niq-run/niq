@@ -17,6 +17,7 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/home"
 	evtsqlite "github.com/niq-run/niq/app/standalone/project/evtstore/sqlite"
+	"github.com/niq-run/niq/app/standalone/project/internal/idfile"
 	"github.com/niq-run/niq/app/standalone/project/migrate"
 	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
@@ -205,7 +206,7 @@ func runAssembly(opts assemblyOptions) error {
 	// Bus identity control plane: the single durable owner of who may say what.
 	// It is seeded BEFORE the bus starts serving, so a remote worker can
 	// authenticate on its first reconnect.
-	identityStore, err := busctl.NewFileStore(filepath.Join(opts.ProjDir, "identities.json"))
+	identityStore, err := idfile.New(filepath.Join(opts.ProjDir, "identities.json"))
 	if err != nil {
 		return fmt.Errorf("project: open identity store: %w", err)
 	}

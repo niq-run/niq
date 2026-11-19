@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,46 @@ import (
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 )
+
+// memStore is a test-only bus.Store; durable storage lives with the standalone
+// form and is tested there.
+type memStore struct {
+	mu  sync.RWMutex
+	ids map[string]corebus.Identity
+}
+
+func newMemStore() *memStore { return &memStore{ids: map[string]corebus.Identity{}} }
+
+func (s *memStore) Load(id string) (corebus.Identity, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	idt, ok := s.ids[id]
+	return idt, ok, nil
+}
+
+func (s *memStore) Save(id string, idt corebus.Identity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ids[id] = idt
+	return nil
+}
+
+func (s *memStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.ids, id)
+	return nil
+}
+
+func (s *memStore) All() ([]corebus.Identity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]corebus.Identity, 0, len(s.ids))
+	for _, idt := range s.ids {
+		out = append(out, idt)
+	}
+	return out, nil
+}
 
 // lifecycleRig stands up the real thing the lifecycle endpoints talk to: a
 // webui-hiw worker holding a bus channel, a host worker that answers restart,
@@ -43,11 +84,7 @@ func newLifecycleRig(t *testing.T) *lifecycleRig {
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
-	identityStore, err := busctl.NewFileStore(filepath.Join(dir, "bus-identities.json"))
-	if err != nil {
-		t.Fatalf("identity store: %v", err)
-	}
-	bus := busctl.New(identityStore, registry)
+	bus := busctl.New(newMemStore(), registry)
 	for _, id := range []corebus.Identity{
 		{WorkerID: "webui", Type: "interface", PublishAllow: []event.PublishPattern{event.NewPublishPattern("*")}},
 		{WorkerID: "host", Type: "host", PublishAllow: []event.PublishPattern{event.NewPublishPattern("request.*")}},

@@ -9,12 +9,8 @@
 package busctl
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
-	"sync"
 
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -207,119 +203,4 @@ func project(runtime corebus.IdentityRegistry, id corebus.Identity) error {
 		return runtime.Register(id)
 	}
 	return runtime.Update(id.WorkerID, id.PublishAllow, id.SubscribeAllow)
-}
-
-// ── file store ──
-
-// FileStore is a JSON-file corebus.Store: read once on construction, rewritten
-// atomically on every mutation, reads served from memory. The file is the
-// durable source; there is no second copy.
-type FileStore struct {
-	mu   sync.RWMutex
-	path string
-	ids  map[string]corebus.Identity
-}
-
-// NewFileStore opens (or creates) the identity file at path.
-func NewFileStore(path string) (*FileStore, error) {
-	s := &FileStore{path: path, ids: map[string]corebus.Identity{}}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, fmt.Errorf("busctl: create identity dir: %w", err)
-	}
-	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return s, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("busctl: read %s: %w", path, err)
-	}
-	var file identityFile
-	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, fmt.Errorf("busctl: parse %s: %w", path, err)
-	}
-	for _, id := range file.Identities {
-		s.ids[id.WorkerID] = id
-	}
-	return s, nil
-}
-
-var _ corebus.Store = (*FileStore)(nil)
-
-// Load implements corebus.Store.
-func (s *FileStore) Load(id string) (corebus.Identity, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	idt, ok := s.ids[id]
-	return idt, ok, nil
-}
-
-// Save implements corebus.Store.
-func (s *FileStore) Save(id string, idt corebus.Identity) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.ids[id] = idt
-	return s.persistLocked()
-}
-
-// Delete implements corebus.Store.
-func (s *FileStore) Delete(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.ids, id)
-	return s.persistLocked()
-}
-
-// All implements corebus.Store.
-func (s *FileStore) All() ([]corebus.Identity, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]corebus.Identity, 0, len(s.ids))
-	for _, id := range s.ids {
-		out = append(out, id)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].WorkerID < out[j].WorkerID })
-	return out, nil
-}
-
-// WriteFile merges ids into the identity file at path, in the store's on-disk
-// format, and writes the file even when the merge is empty. It exists for the
-// one-time migration of legacy inline ACLs (and for marking that migration
-// done), so the file format stays owned by this package.
-func WriteFile(path string, ids []corebus.Identity) error {
-	store, err := NewFileStore(path)
-	if err != nil {
-		return err
-	}
-	for _, id := range ids {
-		store.ids[id.WorkerID] = id
-	}
-	return store.persistLocked()
-}
-
-type identityFile struct {
-	SchemaVersion int                `json:"schema_version"`
-	Identities    []corebus.Identity `json:"identities"`
-}
-
-// persistLocked writes the file through a temp file + rename, so a crash never
-// leaves half an identity file. The caller holds s.mu.
-func (s *FileStore) persistLocked() error {
-	ids := make([]corebus.Identity, 0, len(s.ids))
-	for _, id := range s.ids {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i].WorkerID < ids[j].WorkerID })
-	raw, err := json.MarshalIndent(identityFile{SchemaVersion: 1, Identities: ids}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("busctl: marshal identities: %w", err)
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0644); err != nil {
-		return fmt.Errorf("busctl: write %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("busctl: rename %s: %w", s.path, err)
-	}
-	return nil
 }

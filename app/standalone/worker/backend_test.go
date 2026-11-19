@@ -171,11 +171,7 @@ func newTestRig(t *testing.T, protect ...string) *testRig {
 		}
 	}()
 
-	identityStore, err := busctl.NewFileStore(filepath.Join(dir, "identities.json"))
-	if err != nil {
-		t.Fatalf("identity store: %v", err)
-	}
-	bus := busctl.New(identityStore, registry)
+	bus := busctl.New(newMemIdentityStore(), registry)
 	manifests := &memManifests{}
 	sup := projprocess.NewSupervisor("http://127.0.0.1:1", filepath.Join(dir, "workers"), func(string, ...any) {})
 	t.Cleanup(sup.Shutdown)

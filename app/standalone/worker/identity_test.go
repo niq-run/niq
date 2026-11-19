@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/niq-run/niq/core/impl/busctl"
@@ -12,12 +11,8 @@ import (
 
 func testIdentityControl(t *testing.T) (*busctl.ControlPlane, *eventbus.LayeredRegistry) {
 	t.Helper()
-	store, err := busctl.NewFileStore(filepath.Join(t.TempDir(), "identities.json"))
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
 	runtime := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
-	return busctl.New(store, runtime), runtime
+	return busctl.New(newMemIdentityStore(), runtime), runtime
 }
 
 // TestEnsureIdentitySeedsOnlyOnce verifies the connect-time rule: the first

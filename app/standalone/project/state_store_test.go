@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/niq-run/niq/app/standalone/project/internal/idfile"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/baseworker"
@@ -81,7 +82,7 @@ func TestStateStorePersistsAndRecovers(t *testing.T) {
 	}
 	identityPath := filepath.Join(dir, "identities.json")
 	newCP := func() *projworker.ControlPlane {
-		ids, err := busctl.NewFileStore(identityPath)
+		ids, err := idfile.New(identityPath)
 		if err != nil {
 			t.Fatalf("identity store: %v", err)
 		}
