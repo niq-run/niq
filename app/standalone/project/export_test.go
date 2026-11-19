@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/niq-run/niq/app/standalone/project/store"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
@@ -44,7 +45,7 @@ func TestExportProjectTemplateRoundTrip(t *testing.T) {
 	if _, err := CreateProject("alpha", "", src); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if err := SetWorkerArchived("alpha", "retired", true); err != nil {
+	if err := store.SetArchived(ProjectDir("alpha"), "retired", true); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 
@@ -97,7 +98,7 @@ func TestExportProjectTemplateParams(t *testing.T) {
 			"name": "review", "content_type": "playbook", "content": "# Review\n...",
 		}},
 	}}}
-	if err := (manifestStore{projectID: "alpha"}).Add(&d); err != nil {
+	if err := store.NewManifest(ProjectDir("alpha")).Add(&d); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	out, err := ExportProjectTemplate("alpha", false)

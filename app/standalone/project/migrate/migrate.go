@@ -20,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/niq-run/niq/app/standalone/project/internal/idfile"
+	"github.com/niq-run/niq/app/standalone/project/store/identity"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -130,7 +130,7 @@ func EnsureProject(dir string) error {
 	if err := writeJSON(filepath.Join(dir, "workers.archived.json"), map[string]any{"schema_version": schemaVersion, "workers": archived}); err != nil {
 		return err
 	}
-	if err := idfile.Merge(filepath.Join(dir, "identities.json"), identitiesOut); err != nil {
+	if err := identity.Merge(filepath.Join(dir, "identities.json"), identitiesOut); err != nil {
 		return fmt.Errorf("migrate: write identities: %w", err)
 	}
 
@@ -417,7 +417,7 @@ func migrateInlineIdentities(dir string) error {
 			}
 		}
 	}
-	if err := idfile.Merge(identityPath, ids); err != nil {
+	if err := identity.Merge(identityPath, ids); err != nil {
 		return fmt.Errorf("migrate: write identities: %w", err)
 	}
 	return nil

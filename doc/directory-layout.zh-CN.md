@@ -34,13 +34,15 @@ niq/
 │   │   ├── control/              #   多 project 编排、聚合 UI、代理
 │   │   ├── project/              #   单 project 装配根
 │   │   │   ├── run.go            #     启动编排（持有信号 ctx）
-│   │   │   ├── project.go        #     project.json / workers.json 读写
-│   │   │   ├── store.go          #     ManifestStore + StateStore
-│   │   │   ├── internal/idfile/  #     identities.json 的 bus.Store（运行时 + 迁移共用）
+│   │   │   ├── project.go        #     project.json 元信息 + 创建/链接
+│   │   │   ├── store/            #     全部存储实现（路径驱动，不知道 project id）
+│   │   │   │   ├── manifest.go   #       workers.json + worker.ManifestStore
+│   │   │   │   ├── state.go      #       state.json + workerlife.WorkerStore
+│   │   │   │   ├── identity/     #       identities.json 的 bus.Store（运行时 + 迁移共用）
+│   │   │   │   └── sqlite/       #       事件存储
 │   │   │   ├── migrate/          #     旧格式 → 当前 schema（唯一读旧格式的地方）
 │   │   │   ├── template/         #     模板与 preset
-│   │   │   ├── provider/         #     provider.json 读取与启动门控
-│   │   │   └── evtstore/sqlite/  #     事件存储
+│   │   │   └── provider/         #     provider.json 读取与启动门控
 │   │   ├── worker/               #   worker 控制面（自闭环）
 │   │   │   ├── controlplane.go   #     New / Recover / Stop / HostBackend / Manifest
 │   │   │   ├── backend.go        #     worker.Backend：placement 路由 + 生命周期
@@ -85,7 +87,7 @@ niq/
 
 它们都是**与形态无关**的：
 
-- `busctl.ControlPlane` 只认 `bus.Identity` + 注入的 `bus.Store`，不碰文件系统（`go list` 的 import 只有 `fmt/sort/sync` + 契约）；standalone 注入 `project/internal/idfile`，cluster 换成 KV 即可复用。
+- `busctl.ControlPlane` 只认 `bus.Identity` + 注入的 `bus.Store`，不碰文件系统（`go list` 的 import 只有 `fmt/sort/sync` + 契约）；standalone 注入 `project/store/identity`，cluster 换成 KV 即可复用。
 - `workerlife.Manager` 只认 `WorkerConfig` / `SpawnSpec` / `ManagedWorker`，不管 placement、总线语义、类型注册。
 
 worker 的**控制面**不在这里，因为 placement 集合、builder 表、进程托管是形态知识，所以它在 `app/standalone/worker`。cluster 会带自己的控制面，但可以复用这两个库。
@@ -120,7 +122,7 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为�
 | 新增总线身份规则 | `core/itfs/bus` 契约 + `core/impl/busctl` |
 | 新增实例生命周期能力 | `core/impl/workerlife` |
 | 新增部署形态 | `app/<form>/`，实现 `worker.Backend` 与自己的一套存储/placement |
-| 新的形态内存储 | 该形态的 `project/internal/<name>`（例如 `idfile`） |
+| 新的形态内存储 | 该形态的 `store/` 子包（例如 `project/store/identity`） |
 | 新的上层界面 | 实现 `iface.Backend`，由形态装配一个 interface worker（不需要 manifest） |
 | 新的 CLI 命令 / 发行配置 | `app/publish` |
 | 跨形态共享的 UI / HTTP | `app/webui`（或 `app/` 下新的共享包，且不得 import 形态） |

@@ -9,10 +9,22 @@ import (
 	"testing"
 
 	"github.com/niq-run/niq/app/standalone/home"
+	"github.com/niq-run/niq/app/standalone/project/store"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 )
+
+// loadWorkers / loadArchived are the project-scoped shortcuts the tests read.
+func loadWorkers(id string) (*store.WorkerSet, error) { return store.LoadWorkers(ProjectDir(id)) }
+func loadArchived(id string) (*store.WorkerSet, error) {
+	return store.LoadArchived(ProjectDir(id))
+}
+func workersPath(id string) string  { return store.WorkersPath(ProjectDir(id)) }
+func archivedPath(id string) string { return store.ArchivedPath(ProjectDir(id)) }
+func setArchived(id, workerID string, archived bool) error {
+	return store.SetArchived(ProjectDir(id), workerID, archived)
+}
 
 func setupProjectsRoot(t *testing.T) string {
 	tmpHome := t.TempDir()
@@ -59,23 +71,23 @@ func TestCreateLoadListProject(t *testing.T) {
 	if _, err := os.Stat(ProjectPath("alpha")); err != nil {
 		t.Fatalf("project.json missing: %v", err)
 	}
-	if _, err := os.Stat(WorkersPath("alpha")); err != nil {
+	if _, err := os.Stat(workersPath("alpha")); err != nil {
 		t.Fatalf("workers.json missing: %v", err)
 	}
 	p, err := LoadProject("alpha")
 	if err != nil || p.ID != "alpha" {
 		t.Fatalf("LoadProject = %+v (%v)", p, err)
 	}
-	set, err := LoadWorkers("alpha")
+	set, err := loadWorkers("alpha")
 	if err != nil {
 		t.Fatalf("LoadWorkers: %v", err)
 	}
 	for _, id := range []string{"default-ui", "niq"} {
-		if _, ok := FindWorker(set, id); !ok {
+		if _, ok := store.FindWorker(set, id); !ok {
 			t.Fatalf("worker %s not declared", id)
 		}
 	}
-	if wc, ok := FindWorker(set, "niq"); ok {
+	if wc, ok := store.FindWorker(set, "niq"); ok {
 		if wc.Params["provider"] != "volcan-ark" || wc.Params["model"] != "deepseek-v4-flash" {
 			t.Fatalf("niq params = %v", wc.Params)
 		}
@@ -102,11 +114,11 @@ func TestCreateProjectExpandsPlaceholder(t *testing.T) {
 	if _, err := CreateProject("alpha", "", tpl); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	set, err := LoadWorkers("alpha")
+	set, err := loadWorkers("alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wc, ok := FindWorker(set, "ws")
+	wc, ok := store.FindWorker(set, "ws")
 	if !ok {
 		t.Fatal("ws not declared")
 	}
@@ -124,28 +136,28 @@ func TestArchiveMovesDeclaration(t *testing.T) {
 	if _, err := CreateProject("beta", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetWorkerArchived("beta", "niq", true); err != nil {
+	if err := setArchived("beta", "niq", true); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := ArchivedWorkerIDs("beta"); err != nil || len(got) != 1 || got[0] != "niq" {
+	if got, err := store.ArchivedIDs(ProjectDir("beta")); err != nil || len(got) != 1 || got[0] != "niq" {
 		t.Fatalf("ArchivedWorkerIDs() = %+v, %v", got, err)
 	}
-	active, _ := LoadWorkers("beta")
-	if _, ok := FindWorker(active, "niq"); ok {
+	active, _ := loadWorkers("beta")
+	if _, ok := store.FindWorker(active, "niq"); ok {
 		t.Fatal("archived worker still in active set")
 	}
-	arch, _ := LoadArchived("beta")
-	if wc, ok := FindWorker(arch, "niq"); !ok || wc.Params["provider"] != "volcan-ark" {
+	arch, _ := loadArchived("beta")
+	if wc, ok := store.FindWorker(arch, "niq"); !ok || wc.Params["provider"] != "volcan-ark" {
 		t.Fatalf("archived declaration = %+v", wc)
 	}
-	if err := SetWorkerArchived("beta", "niq", false); err != nil {
+	if err := setArchived("beta", "niq", false); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := ArchivedWorkerIDs("beta"); err != nil || len(got) != 0 {
+	if got, err := store.ArchivedIDs(ProjectDir("beta")); err != nil || len(got) != 0 {
 		t.Fatalf("ArchivedWorkerIDs() = %+v, %v, want empty", got, err)
 	}
-	restored, _ := LoadWorkers("beta")
-	if _, ok := FindWorker(restored, "niq"); !ok {
+	restored, _ := loadWorkers("beta")
+	if _, ok := store.FindWorker(restored, "niq"); !ok {
 		t.Fatal("unarchived worker is not active again")
 	}
 }
@@ -163,11 +175,11 @@ func TestCreateProjectProcessWorkers(t *testing.T) {
 	if _, err := CreateProject("gamma", "", tmpl); err != nil {
 		t.Fatal(err)
 	}
-	set, _ := LoadWorkers("gamma")
+	set, _ := loadWorkers("gamma")
 	if len(set.Workers) != 3 {
 		t.Fatalf("workers = %d", len(set.Workers))
 	}
-	mcp, ok := FindWorker(set, "mcp-fs")
+	mcp, ok := store.FindWorker(set, "mcp-fs")
 	if !ok || projworker.PlacementOf(mcp) != projworker.PlacementManagedProcess {
 		t.Fatalf("mcp-fs = %+v", mcp)
 	}
@@ -376,14 +388,14 @@ func TestLinkProjectMigratesLegacy(t *testing.T) {
 	if _, err := LinkProject(ext); err != nil {
 		t.Fatalf("LinkProject: %v", err)
 	}
-	set, err := LoadWorkers("legacy")
+	set, err := loadWorkers("legacy")
 	if err != nil {
 		t.Fatalf("LoadWorkers: %v", err)
 	}
-	if wc, ok := FindWorker(set, "niq"); !ok || wc.Params["instruction"] != "do x" {
+	if wc, ok := store.FindWorker(set, "niq"); !ok || wc.Params["instruction"] != "do x" {
 		t.Fatalf("legacy declaration lost: %+v", wc)
 	}
-	if _, err := os.Stat(ArchivedPath("legacy")); err != nil {
+	if _, err := os.Stat(archivedPath("legacy")); err != nil {
 		t.Fatalf("archived file missing: %v", err)
 	}
 }

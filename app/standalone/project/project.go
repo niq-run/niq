@@ -1,13 +1,15 @@
-// Project storage: each project lives under <niq root>/projects/<id>/.
+// Project metadata and lifecycle: each project lives under
+// <niq root>/projects/<id>/.
 //
 //	project.json            project metadata only (id / ports / created_at / upload_dir)
-//	workers.json            active worker declarations
-//	workers.archived.json   archived worker declarations (same shape)
+//	workers.json            active worker manifests
+//	workers.archived.json   archived worker manifests (same shape)
+//	identities.json         bus identities
 //	root_secret             bus token signing secret
 //	workers/<id>/           runtime state (state.json / stdout.log / process state)
 //
-// The split keeps startup proportional to the active set: archived declarations
-// can number in the hundreds without being loaded or re-materialized.
+// The concrete store implementations live in ./store; this package owns the
+// project's identity (id → directory) and the creation/link lifecycle.
 package project
 
 import (
@@ -16,18 +18,18 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/project/migrate"
+	"github.com/niq-run/niq/app/standalone/project/store"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
 // SchemaVersion is the on-disk format this package reads and writes. Legacy
 // projects are converted once by app/project/migrate before they reach here.
-const SchemaVersion = 2
+const SchemaVersion = store.SchemaVersion
 
 // ProjectPorts records the ports assigned to a project instance: its event-bus
 // (HTTP transport) port and its WebUI port. Zero means "not allocated".
@@ -46,13 +48,6 @@ type Project struct {
 	UploadDir     string       `json:"upload_dir,omitempty"`
 }
 
-// WorkerSet is the on-disk shape of both workers.json and
-// workers.archived.json: the filename is the only difference.
-type WorkerSet struct {
-	SchemaVersion int                   `json:"schema_version"`
-	Workers       []projworker.Manifest `json:"workers"`
-}
-
 // ProjectsRoot returns <niq root>/projects (created lazily on write).
 func ProjectsRoot() string { return filepath.Join(home.Root(), "projects") }
 
@@ -61,12 +56,6 @@ func ProjectDir(id string) string { return filepath.Join(ProjectsRoot(), sanitiz
 
 // ProjectPath returns the project.json path for a project id.
 func ProjectPath(id string) string { return filepath.Join(ProjectDir(id), "project.json") }
-
-// WorkersPath returns the active worker-declaration file for a project.
-func WorkersPath(id string) string { return filepath.Join(ProjectDir(id), "workers.json") }
-
-// ArchivedPath returns the archived worker-declaration file for a project.
-func ArchivedPath(id string) string { return filepath.Join(ProjectDir(id), "workers.archived.json") }
 
 // RootSecretPath returns the project's token-signing secret path.
 func RootSecretPath(id string) string { return filepath.Join(ProjectDir(id), "root_secret") }
@@ -98,13 +87,13 @@ func CreateProject(id, templateName string, template *TemplateConfig) (*Project,
 	if err := SaveProject(p); err != nil {
 		return nil, err
 	}
-	set := &WorkerSet{SchemaVersion: SchemaVersion}
+	set := &store.WorkerSet{SchemaVersion: SchemaVersion}
 	if template != nil {
 		for _, d := range template.Workers {
 			set.Workers = append(set.Workers, projworker.Instantiate(d, id))
 		}
 	}
-	if err := SaveWorkers(id, set); err != nil {
+	if err := store.SaveWorkers(ProjectDir(id), set); err != nil {
 		return nil, err
 	}
 	if templateName != "" {
@@ -113,212 +102,6 @@ func CreateProject(id, templateName string, template *TemplateConfig) (*Project,
 		}
 	}
 	return p, nil
-}
-
-// FindWorker returns a declaration from a worker set by id.
-func FindWorker(set *WorkerSet, id string) (projworker.Manifest, bool) {
-	if set == nil {
-		return projworker.Manifest{}, false
-	}
-	for _, d := range set.Workers {
-		if d.ID == id {
-			return d, true
-		}
-	}
-	return projworker.Manifest{}, false
-}
-
-// declWrites serializes read-modify-write cycles on a project's declaration
-// files. Every writer goes through it — the lifecycle's declaration store, the
-// WebUI's edits (which arrive as host tool calls), an archive move, the archive
-// cleanup — so two concurrent writers cannot silently revert each other. Reads
-// take no lock: they need a consistent file, which the atomic rename gives them.
-var declWrites sync.Mutex
-
-// withManifestWrite runs fn under the declaration write lock.
-func withManifestWrite(fn func() error) error {
-	declWrites.Lock()
-	defer declWrites.Unlock()
-	return fn()
-}
-
-// SetWorkerArchived moves a declaration between the active and archived files.
-//
-// The destination is written first and the source second: a crash in between
-// leaves the declaration in BOTH files (visible, and fixed by the next archive
-// or unarchive) rather than in neither. Archiving is not a delete — the
-// declaration is preserved verbatim so unarchiving restores the worker as it
-// was.
-func SetWorkerArchived(projectID, id string, archived bool) error {
-	return withManifestWrite(func() error {
-		// Archiving moves active → archived; unarchiving moves archived → active.
-		srcArchived, dstArchived := !archived, archived
-		src, err := loadSetFor(projectID, srcArchived)
-		if err != nil {
-			return err
-		}
-		var moved *projworker.Manifest
-		kept := src.Workers[:0]
-		for i := range src.Workers {
-			if src.Workers[i].ID == id {
-				d := src.Workers[i]
-				moved = &d
-				continue
-			}
-			kept = append(kept, src.Workers[i])
-		}
-		if moved == nil {
-			// Already on the requested side, or unknown: either way there is
-			// nothing to move.
-			return nil
-		}
-
-		dst, err := loadSetFor(projectID, dstArchived)
-		if err != nil {
-			return err
-		}
-		if _, ok := FindWorker(dst, id); !ok {
-			dst.Workers = append(dst.Workers, *moved)
-			if err := saveSet(projectID, dst, dstArchived); err != nil {
-				return err
-			}
-		}
-		src.Workers = kept
-		return saveSet(projectID, src, srcArchived)
-	})
-}
-
-// ArchivedWorkerIDs returns the ids held in the archived file.
-func ArchivedWorkerIDs(projectID string) ([]string, error) {
-	set, err := LoadArchived(projectID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(set.Workers))
-	for i := range set.Workers {
-		out = append(out, set.Workers[i].ID)
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
-// updateDecl applies fn to a manifest in whichever worker file holds it.
-func updateDecl(projectID, id string, fn func(*projworker.Manifest)) error {
-	return withManifestWrite(func() error {
-		for _, archived := range []bool{false, true} {
-			set, err := loadSetFor(projectID, archived)
-			if err != nil {
-				return err
-			}
-			for i := range set.Workers {
-				if set.Workers[i].ID == id {
-					fn(&set.Workers[i])
-					return saveSet(projectID, set, archived)
-				}
-			}
-		}
-		return fmt.Errorf("worker %s not found", id)
-	})
-}
-
-func loadSetFor(projectID string, archived bool) (*WorkerSet, error) {
-	path := WorkersPath(projectID)
-	if archived {
-		path = ArchivedPath(projectID)
-	}
-	if err := migrate.EnsureProject(ProjectDir(projectID)); err != nil {
-		return nil, err
-	}
-	return loadSet(path)
-}
-
-// RemoveWorkerDecl removes a declaration from both worker files.
-func RemoveWorkerDecl(projectID, id string) error {
-	return withManifestWrite(func() error {
-		for _, archived := range []bool{false, true} {
-			set, err := loadSetFor(projectID, archived)
-			if err != nil {
-				return err
-			}
-			out := set.Workers[:0]
-			changed := false
-			for _, d := range set.Workers {
-				if d.ID == id {
-					changed = true
-					continue
-				}
-				out = append(out, d)
-			}
-			if changed {
-				set.Workers = out
-				if err := saveSet(projectID, set, archived); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
-}
-
-// LoadWorkers loads a project's active worker declarations. A missing file is
-// an empty set (a project may legitimately have no workers).
-func LoadWorkers(projectID string) (*WorkerSet, error) {
-	if err := migrate.EnsureProject(ProjectDir(projectID)); err != nil {
-		return nil, err
-	}
-	return loadSet(WorkersPath(projectID))
-}
-
-// SaveWorkers writes a project's active worker declarations.
-func SaveWorkers(projectID string, set *WorkerSet) error { return saveSet(projectID, set, false) }
-
-// LoadArchived loads a project's archived worker declarations.
-func LoadArchived(projectID string) (*WorkerSet, error) {
-	if err := migrate.EnsureProject(ProjectDir(projectID)); err != nil {
-		return nil, err
-	}
-	return loadSet(ArchivedPath(projectID))
-}
-
-// SaveArchived writes a project's archived worker declarations.
-func SaveArchived(projectID string, set *WorkerSet) error { return saveSet(projectID, set, true) }
-
-func loadSet(path string) (*WorkerSet, error) {
-	set := &WorkerSet{SchemaVersion: SchemaVersion}
-	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return set, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("project: read %s: %w", path, err)
-	}
-	if err := json.Unmarshal(raw, set); err != nil {
-		return nil, fmt.Errorf("project: parse %s: %w", path, err)
-	}
-	if set.SchemaVersion == 0 {
-		set.SchemaVersion = SchemaVersion
-	}
-	if set.Workers == nil {
-		set.Workers = []projworker.Manifest{}
-	}
-	return set, nil
-}
-
-func saveSet(projectID string, set *WorkerSet, archived bool) error {
-	if set.SchemaVersion == 0 {
-		set.SchemaVersion = SchemaVersion
-	}
-	if set.Workers == nil {
-		set.Workers = []projworker.Manifest{}
-	}
-	path := WorkersPath(projectID)
-	if archived {
-		path = ArchivedPath(projectID)
-	}
-	if err := os.MkdirAll(ProjectDir(projectID), 0755); err != nil {
-		return fmt.Errorf("project: mkdir: %w", err)
-	}
-	return writeJSONAtomic(path, set)
 }
 
 // LoadProject loads a project's metadata from project.json.

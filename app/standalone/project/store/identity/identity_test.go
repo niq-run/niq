@@ -1,4 +1,4 @@
-package idfile
+package identity
 
 import (
 	"path/filepath"

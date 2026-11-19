@@ -1,8 +1,8 @@
-// Package idfile is the standalone form's durable bus identity file:
+// Package identity is the standalone form's durable bus identity file:
 // identities.json, one per project. It implements corebus.Store for the bus
 // control plane (core/impl/busctl) and is the one place that knows the file
 // format — the runtime store and the one-time migration share it.
-package idfile
+package identity
 
 import (
 	"encoding/json"
@@ -28,18 +28,18 @@ type Store struct {
 func New(path string) (*Store, error) {
 	s := &Store{path: path, ids: map[string]corebus.Identity{}}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, fmt.Errorf("idfile: create dir: %w", err)
+		return nil, fmt.Errorf("identity store: create dir: %w", err)
 	}
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return s, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("idfile: read %s: %w", path, err)
+		return nil, fmt.Errorf("identity store: read %s: %w", path, err)
 	}
 	var file identityFile
 	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, fmt.Errorf("idfile: parse %s: %w", path, err)
+		return nil, fmt.Errorf("identity store: parse %s: %w", path, err)
 	}
 	for _, id := range file.Identities {
 		s.ids[id.WorkerID] = id
@@ -117,15 +117,15 @@ func (s *Store) persistLocked() error {
 	sort.Slice(ids, func(i, j int) bool { return ids[i].WorkerID < ids[j].WorkerID })
 	raw, err := json.MarshalIndent(identityFile{SchemaVersion: 1, Identities: ids}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("idfile: marshal: %w", err)
+		return fmt.Errorf("identity store: marshal: %w", err)
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, append(raw, '\n'), 0644); err != nil {
-		return fmt.Errorf("idfile: write %s: %w", tmp, err)
+		return fmt.Errorf("identity store: write %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("idfile: rename %s: %w", s.path, err)
+		return fmt.Errorf("identity store: rename %s: %w", s.path, err)
 	}
 	return nil
 }

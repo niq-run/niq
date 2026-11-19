@@ -16,10 +16,11 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/standalone/home"
-	evtsqlite "github.com/niq-run/niq/app/standalone/project/evtstore/sqlite"
-	"github.com/niq-run/niq/app/standalone/project/internal/idfile"
 	"github.com/niq-run/niq/app/standalone/project/migrate"
 	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
+	"github.com/niq-run/niq/app/standalone/project/store"
+	"github.com/niq-run/niq/app/standalone/project/store/identity"
+	evtsqlite "github.com/niq-run/niq/app/standalone/project/store/sqlite"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/app/webui"
@@ -58,11 +59,11 @@ func RunProject(opts ProjectRunOptions) error {
 	if err != nil {
 		return err
 	}
-	workerSet, err := LoadWorkers(opts.ProjectID)
+	projDir := ProjectDir(opts.ProjectID)
+	workerSet, err := store.LoadWorkers(projDir)
 	if err != nil {
 		return err
 	}
-	projDir := ProjectDir(opts.ProjectID)
 
 	// Ports are stable: reuse the project's persisted bus/WebUI ports across runs
 	// so a restarted project lands on the same addresses. Only fall back to an
@@ -206,14 +207,14 @@ func runAssembly(opts assemblyOptions) error {
 	// Bus identity control plane: the single durable owner of who may say what.
 	// It is seeded BEFORE the bus starts serving, so a remote worker can
 	// authenticate on its first reconnect.
-	identityStore, err := idfile.New(filepath.Join(opts.ProjDir, "identities.json"))
+	identityStore, err := identity.New(filepath.Join(opts.ProjDir, "identities.json"))
 	if err != nil {
 		return fmt.Errorf("project: open identity store: %w", err)
 	}
 	busControl := busctl.New(identityStore, registry)
 	// Archived workers keep their durable grants but are not part of the running
 	// swarm, so they are not projected at startup.
-	manifests := manifestStore{projectID: opts.ContextInfo.Project}
+	manifests := store.NewManifest(opts.ProjDir)
 	archivedManifests, err := manifests.List(true)
 	if err != nil {
 		return fmt.Errorf("project: list archived manifests: %w", err)
@@ -260,7 +261,7 @@ func runAssembly(opts assemblyOptions) error {
 	}()
 
 	// Runtime state layout for in-process workers.
-	stateStore, err := NewStateStore(opts.StateDir)
+	stateStore, err := store.NewState(opts.StateDir)
 	if err != nil {
 		return fmt.Errorf("project: create worker store: %w", err)
 	}

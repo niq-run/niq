@@ -5,7 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/niq-run/niq/app/standalone/project/internal/idfile"
+	"github.com/niq-run/niq/app/standalone/project/store"
+	"github.com/niq-run/niq/app/standalone/project/store/identity"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/baseworker"
@@ -76,20 +77,20 @@ func TestStateStorePersistsAndRecovers(t *testing.T) {
 		}
 	}()
 
-	store, err := NewStateStore(filepath.Join(dir, "workers"))
+	stateStore, err := store.NewState(filepath.Join(dir, "workers"))
 	if err != nil {
-		t.Fatalf("NewStateStore: %v", err)
+		t.Fatalf("NewState: %v", err)
 	}
 	identityPath := filepath.Join(dir, "identities.json")
 	newCP := func() *projworker.ControlPlane {
-		ids, err := idfile.New(identityPath)
+		ids, err := identity.New(identityPath)
 		if err != nil {
 			t.Fatalf("identity store: %v", err)
 		}
 		cp := projworker.New(projworker.Config{
 			ProjectID:  "p",
-			Manifests:  manifestStore{projectID: "p"},
-			StateStore: store,
+			Manifests:  store.NewManifest(ProjectDir("p")),
+			StateStore: stateStore,
 			Registry:   registry,
 			Bus:        busctl.New(ids, registry),
 		})
@@ -105,7 +106,7 @@ func TestStateStorePersistsAndRecovers(t *testing.T) {
 	if err := cp.Manager().Suspend("w1"); err != nil {
 		t.Fatalf("Suspend: %v", err)
 	}
-	recs, err := store.LoadAll()
+	recs, err := stateStore.LoadAll()
 	if err != nil || len(recs) != 1 || recs[0].State != worker.StateSuspended {
 		t.Fatalf("store records = %+v (%v)", recs, err)
 	}
@@ -135,7 +136,7 @@ func TestStateStorePersistsAndRecovers(t *testing.T) {
 	if err := cp2.HostBackend().Destroy(ctx, "w1"); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
-	if recs, _ := store.LoadAll(); len(recs) != 0 {
+	if recs, _ := stateStore.LoadAll(); len(recs) != 0 {
 		t.Fatalf("destroy left state records: %+v", recs)
 	}
 }
@@ -146,27 +147,27 @@ func TestProjectManifestStore(t *testing.T) {
 	if _, err := CreateProject("p", "", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	store := manifestStore{projectID: "p"}
+	manifests := store.NewManifest(ProjectDir("p"))
 	m := projworker.Manifest{Definition: projworker.Definition{ID: "w", Type: "timer"}}
-	if err := store.Add(&m); err != nil {
+	if err := manifests.Add(&m); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if _, ok, err := store.Get("w"); err != nil || !ok {
+	if _, ok, err := manifests.Get("w"); err != nil || !ok {
 		t.Fatalf("Get = %v %v", ok, err)
 	}
-	if active, err := store.List(false); err != nil || len(active) != 1 {
+	if active, err := manifests.List(false); err != nil || len(active) != 1 {
 		t.Fatalf("active list = %v %v", active, err)
 	}
-	if err := store.Archive("w", true); err != nil {
+	if err := manifests.Archive("w", true); err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
-	if archived, err := store.List(true); err != nil || len(archived) != 1 {
+	if archived, err := manifests.List(true); err != nil || len(archived) != 1 {
 		t.Fatalf("archived list = %v %v", archived, err)
 	}
-	if err := store.Delete("w"); err != nil {
+	if err := manifests.Delete("w"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, ok, _ := store.Get("w"); ok {
+	if _, ok, _ := manifests.Get("w"); ok {
 		t.Fatal("delete left manifest")
 	}
 }

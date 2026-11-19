@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/niq-run/niq/app/standalone/project/store"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
@@ -20,7 +21,7 @@ import (
 // hollow template file. With withProgram kept for API compatibility, programs
 // are part of params now, so it no longer changes the payload.
 func ExportProjectTemplate(projectID string, withProgram bool) (*TemplateConfig, error) {
-	set, err := LoadWorkers(projectID)
+	set, err := store.LoadWorkers(ProjectDir(projectID))
 	if err != nil {
 		return nil, err
 	}
