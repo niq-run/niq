@@ -16,7 +16,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/standalone/home"
 	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	wsbackend "github.com/niq-run/niq/core/impl/embedws"
@@ -663,7 +663,7 @@ func buildProgramSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker
 		root = mounts[0]
 	}
 	if root == "" {
-		root = filepath.Join(niqhome.Root(), "programs")
+		root = filepath.Join(home.Root(), "programs")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {

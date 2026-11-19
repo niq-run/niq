@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/niq-run/niq/app/niqhome"
 	"github.com/niq-run/niq/app/standalone/control"
+	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/project"
 )
 
@@ -39,9 +39,9 @@ type controlState struct {
 // choice that also requires basic auth.
 const defaultAddr = "127.0.0.1:9527"
 
-func controlStatePath() string { return filepath.Join(niqhome.Root(), "control.json") }
+func controlStatePath() string { return filepath.Join(home.Root(), "control.json") }
 
-func controlLogPath() string { return filepath.Join(niqhome.Root(), "niq.log") }
+func controlLogPath() string { return filepath.Join(home.Root(), "niq.log") }
 
 func readControlState() (*controlState, bool) {
 	b, err := os.ReadFile(controlStatePath())
@@ -59,7 +59,7 @@ func readControlState() (*controlState, bool) {
 // a temp file and a rename so a reader (the starting parent, `niq status`)
 // never sees a half-written record.
 func writeControlState(st *controlState) {
-	if err := os.MkdirAll(niqhome.Root(), 0755); err != nil {
+	if err := os.MkdirAll(home.Root(), 0755); err != nil {
 		log.Printf("[control] record pid file: %v", err)
 		return
 	}

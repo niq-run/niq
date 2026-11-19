@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/project/migrate"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
@@ -54,7 +54,7 @@ type WorkerSet struct {
 }
 
 // ProjectsRoot returns <niq root>/projects (created lazily on write).
-func ProjectsRoot() string { return filepath.Join(niqhome.Root(), "projects") }
+func ProjectsRoot() string { return filepath.Join(home.Root(), "projects") }
 
 // ProjectDir returns the directory for a project id.
 func ProjectDir(id string) string { return filepath.Join(ProjectsRoot(), sanitizeID(id)) }

@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/project/migrate"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
@@ -90,7 +90,7 @@ func LoadPreset(name string) (*Template, error) {
 // reference. Templates are seeded here from the built-ins on first run and
 // become user-editable files from then on.
 func TemplatesDir() string {
-	return filepath.Join(niqhome.Root(), "common", "templates")
+	return filepath.Join(home.Root(), "common", "templates")
 }
 
 // Seed copies the built-in preset templates to dir, but only when dir holds no

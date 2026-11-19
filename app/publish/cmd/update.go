@@ -24,7 +24,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/standalone/home"
 )
 
 const (
@@ -46,7 +46,7 @@ type updateCache struct {
 	Latest  string `json:"latest"`
 }
 
-func updateCachePath() string { return filepath.Join(niqhome.Root(), "update-check.json") }
+func updateCachePath() string { return filepath.Join(home.Root(), "update-check.json") }
 
 // latestRelease asks the registry which version is published.
 func latestRelease(timeout time.Duration) (string, error) {
@@ -130,7 +130,7 @@ func writeUpdateCache(latest string) {
 	if err != nil {
 		return
 	}
-	if err := os.MkdirAll(niqhome.Root(), 0755); err != nil {
+	if err := os.MkdirAll(home.Root(), 0755); err != nil {
 		return
 	}
 	_ = os.WriteFile(updateCachePath(), append(b, '\n'), 0644)

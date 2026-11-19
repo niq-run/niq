@@ -1,4 +1,4 @@
-// Package niqhome resolves where niq's configuration/state root lives.
+// Package home resolves where niq's configuration/state root lives.
 //
 // The root is normally ~/.niq, but can be relocated wholesale by setting the
 // NIQ_HOME environment variable. Everything under the root (projects, shared
@@ -9,7 +9,10 @@
 // Some individual files predate NIQ_HOME and already have their own dedicated
 // override (NIQ_AUTH_CONFIG, NIQ_PROVIDER_CONFIG). Those are absolute-file
 // overrides and take priority over NIQ_HOME; NIQ_HOME only changes the default.
-package niqhome
+//
+// This is host environment knowledge for the standalone form: a shared display
+// layer (webui) must not import it. Callers hand in resolved paths instead.
+package home
 
 import (
 	"os"
@@ -46,4 +49,13 @@ func expandHome(s string) string {
 	default:
 		return s
 	}
+}
+
+// AuthConfigPath returns the WebUI/control basic-auth file:
+// <root>/common/auth.json, or the NIQ_AUTH_CONFIG override.
+func AuthConfigPath() string {
+	if p := os.Getenv("NIQ_AUTH_CONFIG"); p != "" {
+		return p
+	}
+	return filepath.Join(Root(), "common", "auth.json")
 }

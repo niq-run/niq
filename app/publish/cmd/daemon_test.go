@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/standalone/home"
 )
 
 func TestProbeAddr(t *testing.T) {
@@ -26,7 +26,7 @@ func TestProbeAddr(t *testing.T) {
 // TestControlStateRoundTrip covers the record start/stop/status share: it must
 // survive a write and only be cleared by its owner.
 func TestControlStateRoundTrip(t *testing.T) {
-	t.Setenv(niqhome.Env, t.TempDir())
+	t.Setenv(home.Env, t.TempDir())
 
 	if _, ok := readControlState(); ok {
 		t.Fatal("empty root reported a running control plane")

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/niq-run/niq/app/standalone/home"
 	evtsqlite "github.com/niq-run/niq/app/standalone/project/evtstore/sqlite"
 	"github.com/niq-run/niq/app/standalone/project/migrate"
 	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
@@ -179,7 +180,7 @@ func runAssembly(opts assemblyOptions) error {
 	var webUIAuthUser, webUIAuthPass string
 	var webUIAuthEnabled bool
 	if opts.WebUIAddr != "" {
-		user, pass, enabled, warning := webui.StartupAuth(opts.WebUIAddr, opts.WebUIAuth, webui.AuthPath())
+		user, pass, enabled, warning := webui.StartupAuth(opts.WebUIAddr, opts.WebUIAuth, home.AuthConfigPath())
 		webUIAuthUser, webUIAuthPass, webUIAuthEnabled = user, pass, enabled
 		if warning != "" {
 			fmt.Fprintln(os.Stderr, warning)

@@ -1,4 +1,4 @@
-package niqhome
+package home
 
 import (
 	"os"

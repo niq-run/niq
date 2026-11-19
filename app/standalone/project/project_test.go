@@ -8,23 +8,23 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/standalone/home"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 )
 
 func setupProjectsRoot(t *testing.T) string {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	_ = os.Unsetenv(niqhome.Env)
-	return filepath.Join(home, ".niq", "projects")
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	_ = os.Unsetenv(home.Env)
+	return filepath.Join(tmpHome, ".niq", "projects")
 }
 
 func TestProjectsRootHonorsNIQHome(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv(niqhome.Env, filepath.Join(t.TempDir(), "custom-root"))
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv(home.Env, filepath.Join(t.TempDir(), "custom-root"))
 
 	projects := ProjectsRoot()
 	if _, err := CreateProject("beta", "", fakeTemplate()); err != nil {
@@ -36,7 +36,7 @@ func TestProjectsRootHonorsNIQHome(t *testing.T) {
 	if _, err := os.Stat(ProjectPath("beta")); err != nil {
 		t.Fatalf("project.json missing under NIQ_HOME: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".niq")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tmpHome, ".niq")); !os.IsNotExist(err) {
 		t.Fatalf("default ~/.niq was touched: %v", err)
 	}
 }

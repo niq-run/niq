@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/standalone/home"
 )
 
 // makeZip builds a zip archive in memory from a map of name -> content.
@@ -151,8 +151,8 @@ func TestImportTemplateZipSlipGuard(t *testing.T) {
 // a temp HOME, so tests never touch a real ~/.niq.
 func setupHome(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	_ = os.Unsetenv(niqhome.Env)
-	return filepath.Join(home, ".niq")
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	_ = os.Unsetenv(home.Env)
+	return filepath.Join(tmpHome, ".niq")
 }

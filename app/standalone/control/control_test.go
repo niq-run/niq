@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/provider"
 	"github.com/niq-run/niq/app/standalone/project/template"
@@ -41,7 +41,7 @@ func setupProjectsRoot(t *testing.T) {
 	// so tests never touch a real ~/.niq/projects. Ensure a stray NIQ_HOME
 	// can't override that relocation.
 	t.Setenv("HOME", t.TempDir())
-	_ = os.Unsetenv(niqhome.Env)
+	_ = os.Unsetenv(home.Env)
 }
 
 // fakeTemplate returns a small TemplateConfig usable as a project template.

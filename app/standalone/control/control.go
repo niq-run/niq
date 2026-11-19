@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/template"
 	"github.com/niq-run/niq/app/webui"
@@ -53,7 +54,7 @@ func RunControl(opts ControlOptions) error {
 		log.Printf("[control] seed templates: %v", err)
 	}
 	c := NewControl(opts.Addr)
-	if user, pass, enabled, warning := webui.StartupAuth(opts.Addr, opts.Auth, webui.AuthPath()); enabled {
+	if user, pass, enabled, warning := webui.StartupAuth(opts.Addr, opts.Auth, home.AuthConfigPath()); enabled {
 		c.SetBasicAuth(user, pass)
 		log.Printf("[control] WebUI remote access protected with basic auth (localhost stays open)")
 	} else if warning != "" {
