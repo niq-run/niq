@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	projprocess "github.com/niq-run/niq/app/project/worker/process"
+	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/standalone/project"
 )
 
 // setProjectWebUIPort gives an existing project the given WebUI port, as the

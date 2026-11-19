@@ -14,8 +14,8 @@
 package project
 
 import (
-	projtemplate "github.com/niq-run/niq/app/project/template"
-	projworker "github.com/niq-run/niq/app/project/worker"
+	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
 // Worker declarations and their ACL / program shapes. Aliased (not redeclared)

@@ -20,8 +20,8 @@ import (
 	"sort"
 
 	"github.com/niq-run/niq/app/niqhome"
-	"github.com/niq-run/niq/app/project/migrate"
-	projworker "github.com/niq-run/niq/app/project/worker"
+	"github.com/niq-run/niq/app/standalone/project/migrate"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
 // Template is the top-level structure of a template file: the set of workers a

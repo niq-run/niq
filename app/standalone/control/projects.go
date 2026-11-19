@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/niq-run/niq/app/project"
-	"github.com/niq-run/niq/app/project/template"
+	"github.com/niq-run/niq/app/standalone/project"
+	"github.com/niq-run/niq/app/standalone/project/template"
 )
 
 // projectView augments a project definition with its live run state.

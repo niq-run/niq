@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	projworker "github.com/niq-run/niq/app/project/worker"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"github.com/niq-run/niq/core/impl/workersvc"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )

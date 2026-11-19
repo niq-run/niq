@@ -21,9 +21,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/niq-run/niq/app/control"
+	"github.com/niq-run/niq/app/standalone/control"
 	"github.com/niq-run/niq/app/niqhome"
-	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/standalone/project"
 )
 
 // controlState is the on-disk record of a running control plane.

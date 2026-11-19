@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/niqhome"
-	"github.com/niq-run/niq/app/project/migrate"
-	projtemplate "github.com/niq-run/niq/app/project/template"
-	projworker "github.com/niq-run/niq/app/project/worker"
+	"github.com/niq-run/niq/app/standalone/project/migrate"
+	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"github.com/niq-run/niq/core/itfs/event"
 )
 

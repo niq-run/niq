@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
-	projtemplate "github.com/niq-run/niq/app/project/template"
-	projworker "github.com/niq-run/niq/app/project/worker"
+	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
 // ExportProjectTemplate builds a template from a project's active workers.

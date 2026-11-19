@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/standalone/project"
 )
 
 type statusSnapshot struct {

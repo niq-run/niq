@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/niq-run/niq/app/niqhome"
-	projtemplate "github.com/niq-run/niq/app/project/template"
-	projworker "github.com/niq-run/niq/app/project/worker"
+	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 )
 

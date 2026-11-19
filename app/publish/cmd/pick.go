@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/standalone/project"
 )
 
 // errNotTerminal means stdin is not a TTY (piped input, cron, a script), so

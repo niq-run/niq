@@ -25,8 +25,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/niq-run/niq/app/project"
-	"github.com/niq-run/niq/app/project/template"
+	"github.com/niq-run/niq/app/standalone/project"
+	"github.com/niq-run/niq/app/standalone/project/template"
 )
 
 // version is injected at build time via -ldflags:

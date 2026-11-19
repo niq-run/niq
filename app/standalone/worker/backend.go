@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	projprocess "github.com/niq-run/niq/app/project/worker/process"
+	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/workersvc"
 	corebus "github.com/niq-run/niq/core/itfs/bus"

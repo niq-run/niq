@@ -10,7 +10,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
-	projworker "github.com/niq-run/niq/app/project/worker"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"io"
 	"os"
 	"path"

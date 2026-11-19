@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	projworker "github.com/niq-run/niq/app/project/worker"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
 func exportTemplate() *TemplateConfig {

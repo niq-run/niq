@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	providerpkg "github.com/niq-run/niq/app/project/provider"
+	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/iface"

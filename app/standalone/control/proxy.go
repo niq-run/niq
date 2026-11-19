@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/niq-run/niq/app/project"
+	"github.com/niq-run/niq/app/standalone/project"
 )
 
 // projectPrefix is where a project's WebUI is mounted on the control plane:

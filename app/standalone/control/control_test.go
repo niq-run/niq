@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/niqhome"
-	"github.com/niq-run/niq/app/project"
-	"github.com/niq-run/niq/app/project/provider"
-	"github.com/niq-run/niq/app/project/template"
-	projworker "github.com/niq-run/niq/app/project/worker"
+	"github.com/niq-run/niq/app/standalone/project"
+	"github.com/niq-run/niq/app/standalone/project/provider"
+	"github.com/niq-run/niq/app/standalone/project/template"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"github.com/niq-run/niq/app/webui"
 )
 
