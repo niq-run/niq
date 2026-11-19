@@ -27,8 +27,8 @@ import (
 // Template is the top-level structure of a template file: the set of workers a
 // new project is seeded with.
 type Template struct {
-	SchemaVersion int                      `json:"schema_version,omitempty"`
-	Workers       []projworker.Declaration `json:"workers"`
+	SchemaVersion int                   `json:"schema_version,omitempty"`
+	Workers       []projworker.Manifest `json:"workers"`
 
 	// UploadDir is where the WebUI stores files uploaded from the talk input
 	// (project.json upload_dir, project metadata). Empty means <project dir>/uploads. Relative

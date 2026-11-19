@@ -273,7 +273,7 @@ func (w *Worker) Stop() error {
 	return nil
 }
 
-// snapshotState is the persisted form carried by workersvc snapshot/restore.
+// snapshotState is the persisted form carried by the workerlife snapshot/restore.
 // Expose rides along because the mode can change between runs: the restored
 // state must carry the surface the servers were last exposed with.
 type snapshotState struct {

@@ -22,28 +22,25 @@ import (
 
 // Params returns the declaration's construction params. It is the single
 // construction bag; no typed field overlays it.
-func Params(d Declaration) map[string]any { return d.Params }
+func Params(d Manifest) map[string]any { return d.Params }
 
 // SpawnConfig lowers a declaration into the lifecycle-level config the worker
-// service builds from. The declaration's ACL travels with it so the builder can
-// register the identity without a second store lookup.
-func SpawnConfig(d Declaration) coreworker.WorkerConfig {
+// manager builds from.
+func SpawnConfig(d Manifest) coreworker.WorkerConfig {
 	return coreworker.WorkerConfig{
-		ID:             d.ID,
-		Type:           d.Type,
-		Params:         d.Params,
-		Label:          d.Label,
-		Tags:           append([]string(nil), d.Tags...),
-		Description:    d.Description,
-		PublishAllow:   publishPatterns(d.Publish),
-		SubscribeAllow: subscriptionPatterns(d.Subscriptions),
+		ID:          d.ID,
+		Type:        d.Type,
+		Params:      d.Params,
+		Label:       d.Label,
+		Tags:        append([]string(nil), d.Tags...),
+		Description: d.Description,
 	}
 }
 
 // Spec lowers a declaration into a full lifecycle spec, including the launch
 // fields a managed-process worker needs. Env is derived from Params by the
 // backend, not stored here.
-func Spec(d Declaration) coreworker.WorkerSpec {
+func Spec(d Manifest) coreworker.WorkerSpec {
 	return coreworker.WorkerSpec{
 		WorkerConfig: SpawnConfig(d),
 		Placement:    PlacementOf(d),
@@ -52,78 +49,26 @@ func Spec(d Declaration) coreworker.WorkerSpec {
 	}
 }
 
-// DeclFromSpec turns a lifecycle spec into a declaration. The params map is
-// stored verbatim. ACL patterns are lowered back to their config spelling;
-// display metadata is carried on typed fields.
-func DeclFromSpec(spec coreworker.WorkerSpec) Declaration {
+// ManifestFromSpec turns a lifecycle spec into a manifest. The params map is
+// stored verbatim; display metadata is carried on typed fields.
+func ManifestFromSpec(spec coreworker.WorkerSpec) Manifest {
 	placement := spec.Placement
 	if placement == "" {
 		placement = coreworker.PlacementInProcess
 	}
-	return Declaration{
-		Config: Config{
+	return Manifest{
+		Definition: Definition{
 			ID:     spec.ID,
 			Type:   spec.Type,
 			Params: spec.Params,
 		},
-		Placement:       placement,
-		Label:           spec.Label,
-		Tags:            append([]string(nil), spec.Tags...),
-		Description:     spec.Description,
-		Publish:         publishSpecs(spec.PublishAllow),
-		Subscriptions:   subscriptionSpecs(spec.SubscribeAllow),
-		Command:         spec.Command,
-		Cwd:             spec.Cwd,
-		TokenTTLSeconds: spec.TokenTTLSeconds,
+		Placement:   placement,
+		Label:       spec.Label,
+		Tags:        append([]string(nil), spec.Tags...),
+		Description: spec.Description,
+		Command:     spec.Command,
+		Cwd:         spec.Cwd,
 	}
-}
-
-// publishPatterns lowers config publish entries to bus patterns.
-func publishPatterns(specs []PublishSpec) []event.PublishPattern {
-	if len(specs) == 0 {
-		return nil
-	}
-	out := make([]event.PublishPattern, 0, len(specs))
-	for _, p := range specs {
-		out = append(out, p.ToPublishPattern())
-	}
-	return out
-}
-
-// subscriptionPatterns lowers config subscribe entries to bus patterns.
-func subscriptionPatterns(specs []SubscriptionSpec) []event.EventPattern {
-	if len(specs) == 0 {
-		return nil
-	}
-	out := make([]event.EventPattern, 0, len(specs))
-	for _, s := range specs {
-		out = append(out, s.ToPattern())
-	}
-	return out
-}
-
-// publishSpecs is the inverse of publishPatterns.
-func publishSpecs(patterns []event.PublishPattern) []PublishSpec {
-	if len(patterns) == 0 {
-		return nil
-	}
-	out := make([]PublishSpec, 0, len(patterns))
-	for _, p := range patterns {
-		out = append(out, PublishSpec{Type: p.Type, Target: p.Target})
-	}
-	return out
-}
-
-// subscriptionSpecs is the inverse of subscriptionPatterns.
-func subscriptionSpecs(patterns []event.EventPattern) []SubscriptionSpec {
-	if len(patterns) == 0 {
-		return nil
-	}
-	out := make([]SubscriptionSpec, 0, len(patterns))
-	for _, s := range patterns {
-		out = append(out, SubscriptionSpec{Type: s.Type, Source: s.SourceID})
-	}
-	return out
 }
 
 // parseMountsParam extracts the mount list from worker params: "mounts" as a

@@ -10,9 +10,9 @@ import (
 )
 
 // MemoryIdentityRegistry is the runtime identity table: an in-memory
-// corebus.IdentityRegistry with no persistence. The project seeds it from
-// workers.json at startup, and callers that must survive a restart write the
-// declaration file instead of relying on this registry.
+// corebus.IdentityRegistry with no persistence. The assembly seeds it from the
+// durable identity store at startup, and callers that must survive a restart
+// write through the bus control plane instead of relying on this registry.
 type MemoryIdentityRegistry struct {
 	mu         sync.RWMutex
 	identities map[string]corebus.Identity

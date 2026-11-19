@@ -1,34 +1,29 @@
-// Declaration storage boundary for the worker lifecycle. The project owns where
-// declarations live and how they are written; the lifecycle only sees this
-// interface. The concrete implementation is app/project/store.go.
+// Manifest storage boundary for the worker control plane. The project owns
+// where manifests live and how they are written; the control plane only sees
+// this interface. The concrete implementation is app/standalone/project.
 //
 // Runtime state (state.json / snapshots) is NOT declared here: its single
-// definition is workersvc.WorkerStore, the contract the in-process lifecycle
-// engine calls. The project supplies a concrete implementation.
+// definition is workerlife.WorkerStore, the contract the instance manager calls.
 package worker
 
-// DeclStore is the declaration storage the lifecycle drives. It is the only
-// place that knows WHERE declarations are written; the lifecycle only asks
-// what is declared and records changes.
-type DeclStore interface {
-	// Get returns one declaration. ok is false when the id is not declared.
-	Get(id string) (*Declaration, bool, error)
-	// List returns every declaration, in declaration order.
-	List() ([]*Declaration, error)
-	// Add records a new declaration. Declaring an existing id is an error: the
-	// lifecycle checks for duplicates so it can report them precisely.
-	Add(d *Declaration) error
-	// Update replaces an existing declaration; an unknown id is an error.
-	Update(d *Declaration) error
-	// Delete removes a declaration; an unknown id is a no-op.
+// ManifestStore is the manifest storage the control plane drives. It is the
+// only place that knows WHERE manifests are written; the control plane only
+// asks what is declared and records changes.
+type ManifestStore interface {
+	// Get returns one manifest. ok is false when the id is not declared.
+	Get(id string) (*Manifest, bool, error)
+	// List returns manifests: archived=false is the active set, archived=true
+	// the archived set. Both are returned in declaration order.
+	List(archived bool) ([]*Manifest, error)
+	// Add records a new manifest. Declaring an existing id is an error: the
+	// control plane checks for duplicates so it can report them precisely.
+	Add(m *Manifest) error
+	// Update replaces an existing manifest; an unknown id is an error.
+	Update(m *Manifest) error
+	// Delete removes a manifest from either set; an unknown id is a no-op.
 	Delete(id string) error
-	// SetCredential persists a generated bus credential onto a declaration, so
-	// an unmanaged-process worker reuses it across restarts.
-	SetCredential(id, credential string) error
-	// Archive moves a declaration between the active and archived files. An
-	// archived declaration is kept verbatim (it can be restored unchanged); a
+	// Archive moves a manifest between the active and archived files. An
+	// archived manifest is kept verbatim (it can be restored unchanged); a
 	// missing id in the source file is a no-op.
 	Archive(id string, archived bool) error
-	// Archived returns the ids held in the archived file.
-	Archived() ([]string, error)
 }

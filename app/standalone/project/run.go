@@ -21,12 +21,12 @@ import (
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/app/webui"
+	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/httptrans"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/iface"
-	"github.com/niq-run/niq/core/impl/workersvc"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
@@ -186,15 +186,10 @@ func runAssembly(opts assemblyOptions) error {
 		}
 	}
 
-	// Identity registry: two tiers behind one IdentityRegistry. The lower tier
-	// is memory-resident but declarative — it holds managed workers and
-	// provisioned remote peers, seeded from workers.json at startup. The upper
-	// tier holds the temporary identities of the third-party processes the host
-	// itself launches; they live only as long as this process.
-	//
-	// There is no identity file: workers.json is the only durable source, and
-	// this registry is its runtime projection. Remote credentials are seeded
-	// from it; local-process credentials are minted in memory per launch.
+	// Identity registry: two tiers behind one IdentityRegistry. The durable tier
+	// is projected from the bus identity store at startup; the temporary tier
+	// holds identities of the third-party processes the host itself launches,
+	// which live only as long as this process.
 	registry := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
 
 	// Token signer: the bus's single issuing/verifying authority for remote
@@ -205,6 +200,18 @@ func runAssembly(opts assemblyOptions) error {
 		return fmt.Errorf("project: create signer: %w", err)
 	}
 	signer := eventbus.NewTokenSigner(secret)
+
+	// Bus identity control plane: the single durable owner of who may say what.
+	// It is seeded BEFORE the bus starts serving, so a remote worker can
+	// authenticate on its first reconnect.
+	identityStore, err := busctl.NewFileStore(filepath.Join(opts.ProjDir, "identities.json"))
+	if err != nil {
+		return fmt.Errorf("project: open identity store: %w", err)
+	}
+	busControl := busctl.New(identityStore, registry)
+	if err := busControl.Seed(); err != nil {
+		return fmt.Errorf("project: seed identities: %w", err)
+	}
 
 	// Event bus engine with an event store: SQLite (per project) when configured,
 	// else in-memory.
@@ -239,9 +246,7 @@ func runAssembly(opts assemblyOptions) error {
 		}
 	}()
 
-	// In-process lifecycle engine + the project's state layout. The store is
-	// injected into the backend, which owns both storage boundaries.
-	workerSvc := workersvc.New()
+	// Runtime state layout for in-process workers.
 	stateStore, err := NewStateStore(opts.StateDir)
 	if err != nil {
 		return fmt.Errorf("project: create worker store: %w", err)
@@ -270,86 +275,66 @@ func runAssembly(opts assemblyOptions) error {
 
 	// The process supervisor exists for the whole bus lifetime: the WebUI and
 	// agents start process workers through it at runtime, not just at boot.
-	var supervisor *projprocess.ProcessSupervisor
+	var supervisor *projprocess.Supervisor
 	if busAddr != "" {
-		supervisor = projprocess.NewProcessSupervisor(LocalhostURL(busAddr), opts.StateDir, log.Printf)
+		supervisor = projprocess.NewSupervisor(LocalhostURL(busAddr), opts.StateDir, log.Printf)
 	}
 
-	// The lifecycle backend: ONE owner of every placement. The host worker
-	// drives it over the bus, and this assembly uses the same instance for
-	// recovery and shutdown.
-	declStore := projectDeclStore{projectID: opts.ContextInfo.Project}
-	backend := projworker.NewBackend(projworker.BackendConfig{
+	// The worker control plane: ONE owner of every placement and of the
+	// manifest. The host worker drives it over the bus; this assembly only
+	// injects the providers and starts/stops it.
+	manifests := manifestStore{projectID: opts.ContextInfo.Project}
+	protected := []string{hostWorkerID}
+	if opts.WebUIAddr != "" {
+		protected = append(protected, projworker.DefaultWebUIID)
+	}
+	cp := projworker.New(projworker.Config{
 		ProjectID:  opts.ContextInfo.Project,
-		Service:    workerSvc,
+		Manifests:  manifests,
 		StateStore: stateStore,
-		Supervisor: supervisor,
 		Registry:   registry,
+		Bus:        busControl,
 		Signer:     signer,
 		Engine:     engine,
-		Decls:      declStore,
+		Supervisor: supervisor,
+		Protect:    protected,
 	})
-	if err := backend.SeedRemoteIdentities(ctx); err != nil {
-		return fmt.Errorf("project: seed remote identities: %w", err)
-	}
 
-	// Bus identity editing is its own capability: grants live in the declaration
-	// (durable) and in the registry (live projection), so one owner spans both.
-	aclAdmin := &projworker.ACLAdmin{
-		ProjectID: opts.ContextInfo.Project,
-		Decls:     declStore,
-		Registry:  registry,
-	}
-
-	// Build context and register builders.
 	buildCtx := projworker.BuildContext{
 		Registry:      registry,
+		Bus:           busControl,
 		Listener:      listener,
 		Engine:        engine,
-		WorkerSvc:     workerSvc,
-		WorkerBackend: backend,
-		ACLAdmin:      aclAdmin,
+		Manager:       cp.Manager(),
+		WorkerBackend: cp.HostBackend(),
 		EventLog:      eventLog,
 		EventStore:    evtStore,
 		ProgramsRoot:  opts.ProgramsRoot,
 		StateDir:      opts.StateDir,
 	}
-	projworker.RegisterBuilders(buildCtx, workerSvc)
+	cp.RegisterBuilders(buildCtx)
 
-	// The declared worker set is the recovery input: config comes from
-	// project.json, runtime state (and snapshot) from the state store.
-	declared := make([]projworker.Declaration, 0, len(opts.Workers))
-	for _, wc := range opts.Workers {
-		declared = append(declared, wc)
+	// Gate startup on an LLM provider when any declared in-process worker needs
+	// one. This is a preflight check, not a control-plane concern, so it reads
+	// the manifest store directly.
+	declared, err := manifests.List(false)
+	if err != nil {
+		return fmt.Errorf("project: list manifests: %w", err)
 	}
 	inProc := make([]worker.WorkerConfig, 0, len(declared))
-	for _, d := range declared {
-		if projworker.IsInProcess(d) {
-			inProc = append(inProc, projworker.SpawnConfig(d))
+	for _, m := range declared {
+		if projworker.IsInProcess(*m) {
+			inProc = append(inProc, projworker.SpawnConfig(*m))
 		}
 	}
-
-	// Gate startup on an LLM provider when any declared worker needs one.
 	if err := providerpkg.EnsureLLMConfigured(inProc); err != nil {
 		return err
 	}
 
-	// Recover the whole declared worker set. The host is protected: it is the
-	// lifecycle control plane, so nothing may suspend or destroy it. The WebUI is
-	// NOT part of this set — it is an app-hosted worker (below), joined directly
-	// by the assembly and therefore also protected.
-	recoverSpecs := make([]worker.WorkerSpec, 0, len(declared))
-	for _, d := range declared {
-		recoverSpecs = append(recoverSpecs, projworker.Spec(d))
-	}
-	protected := []string{hostWorkerID}
-	if opts.WebUIAddr != "" {
-		protected = append(protected, projworker.DefaultWebUIID)
-	}
-	if err := backend.Recover(ctx, worker.RecoverOptions{
-		Declared: recoverSpecs,
-		Protect:  protected,
-	}); err != nil {
+	// Recover the whole declared worker set. The control plane lists the
+	// manifests itself: the host is protected (it is the lifecycle control
+	// plane), and so is the WebUI's worker, joined directly below.
+	if err := cp.Recover(ctx); err != nil {
 		return fmt.Errorf("project: recover workers: %w", err)
 	}
 
@@ -359,9 +344,10 @@ func runAssembly(opts assemblyOptions) error {
 	// through SetHandler before the worker starts.
 	var webUIAddr string
 	if opts.WebUIAddr != "" {
-		app := webui.New(eventLog, engine, backend, registry, opts.WebUIAddr, false)
+		app := webui.New(eventLog, engine, cp.Manifest(), registry, opts.WebUIAddr, false)
 		app.SetContext(opts.ContextInfo)
 		app.SetProjectDir(opts.ProjDir)
+		app.SetBusControl(busControl)
 		if webUIAuthEnabled {
 			app.SetBasicAuth(webUIAuthUser, webUIAuthPass)
 			log.Printf("[project] WebUI remote access protected with basic auth (localhost stays open)")
@@ -369,7 +355,7 @@ func runAssembly(opts assemblyOptions) error {
 		if opts.UploadDir != "" {
 			app.SetUploadDir(opts.UploadDir)
 		}
-		uiWorker, err := joinWebUIWorker(ctx, app, registry, listener, stateStore)
+		uiWorker, err := joinWebUIWorker(ctx, app, busControl, listener, cp)
 		if err != nil {
 			return fmt.Errorf("project: join webui worker: %w", err)
 		}
@@ -397,11 +383,12 @@ func runAssembly(opts assemblyOptions) error {
 		opts.OnResolved(busAddr, webUIAddr)
 	}
 
-	// Run — blocks until ctx is cancelled; the backend snapshots in-process
-	// workers and reaps process workers on the way out.
+	// Process liveness belongs here, not to the control plane: wait for the
+	// signal, then let the control plane release what it owns.
 	fmt.Printf("%s started. Press Ctrl+C to stop.\n", opts.Banner)
-	if err := backend.Run(ctx); err != nil && err != context.Canceled {
-		return fmt.Errorf("%s: %w", opts.Banner, err)
+	<-ctx.Done()
+	if err := cp.Stop(ctx); err != nil {
+		return fmt.Errorf("%s: stop: %w", opts.Banner, err)
 	}
 	fmt.Printf("\n%s stopped.\n", opts.Banner)
 	return nil
@@ -582,19 +569,19 @@ func loadOrCreateRootSecret(dir string) ([]byte, error) {
 // joinWebUIWorker brings the app-hosted interface worker onto the bus.
 //
 // It is the one worker the assembly joins itself instead of materializing from a
-// declaration: its backend is a process-local object (the WebUI app), which no
-// declaration can describe, so it has no builder and is never spawnable. Its
+// manifest: its backend is a process-local object (the WebUI app), which no
+// manifest can describe, so it has no builder and is never spawnable. Its
 // identity and grants are declared here, in code — that is also why it needs no
-// ACL editing: there is no user-editable declaration to persist into.
+// ACL editing: there is no user-editable grant to persist.
 func joinWebUIWorker(
 	ctx context.Context,
 	app *webui.Server,
-	registry corebus.IdentityRegistry,
+	bus corebus.Control,
 	listener *inprocess.InProcListener,
-	store workersvc.WorkerStore,
+	cp *projworker.ControlPlane,
 ) (*iface.Worker, error) {
 	id := projworker.DefaultWebUIID
-	if err := registry.Register(corebus.Identity{
+	identity := corebus.Identity{
 		WorkerID: id,
 		Type:     projworker.TypeInterface,
 		// The human's voice: input, arbitrary worker events, approval decisions,
@@ -608,7 +595,14 @@ func joinWebUIWorker(
 			event.NewPattern(event.TypeApprovalDecision),
 			event.NewPattern("worker.discover"),
 		},
-	}); err != nil {
+	}
+	// Grants are declared in code, so they are authoritative on every start:
+	// create the identity on first run, refresh its grants afterwards.
+	if _, ok := bus.Lookup(id); ok {
+		if err := bus.UpdateACL(id, identity.PublishAllow, identity.SubscribeAllow); err != nil {
+			return nil, fmt.Errorf("refresh identity: %w", err)
+		}
+	} else if err := bus.Register(identity); err != nil {
 		return nil, fmt.Errorf("register identity: %w", err)
 	}
 
@@ -620,11 +614,12 @@ func joinWebUIWorker(
 	}
 
 	var w *iface.Worker
-	// Persist the worker's own state (the approval inbox) through the same project
-	// store every other worker's snapshot goes to. It is a signal, not a policy:
-	// iface says "my state changed", the assembly decides when it lands.
+	// Persist the worker's own state (the approval inbox) through the control
+	// plane, which owns runtime state for the project. It is a signal, not a
+	// policy: iface says "my state changed", the control plane decides when it
+	// lands.
 	save := func() {
-		if w == nil || store == nil {
+		if w == nil {
 			return
 		}
 		snap, err := w.Snapshot()
@@ -632,10 +627,7 @@ func joinWebUIWorker(
 			log.Printf("[project] %s: snapshot: %v", id, err)
 			return
 		}
-		if len(snap) == 0 {
-			return
-		}
-		if err := store.SaveState(id, worker.StateRunning, snap); err != nil {
+		if err := cp.SaveState(id, snap); err != nil {
 			log.Printf("[project] %s: persist state: %v", id, err)
 		}
 	}
@@ -651,31 +643,15 @@ func joinWebUIWorker(
 	})
 	// Restore BEFORE Start: the worker must come up holding the inbox it had, so a
 	// request parked before the restart is still answerable.
-	if err := restoreWorkerState(store, id, w); err != nil {
+	if snap, ok, err := cp.State(id); err != nil {
 		return nil, err
+	} else if ok {
+		if err := w.Restore(snap); err != nil {
+			return nil, fmt.Errorf("restore %s: %w", id, err)
+		}
 	}
 	if err := w.Start(ctx); err != nil {
 		return nil, err
 	}
 	return w, nil
-}
-
-// restoreWorkerState replays id's persisted snapshot into an interface worker.
-func restoreWorkerState(store workersvc.WorkerStore, id string, w *iface.Worker) error {
-	if store == nil {
-		return nil
-	}
-	recs, err := store.LoadAll()
-	if err != nil {
-		return fmt.Errorf("load state: %w", err)
-	}
-	for _, rec := range recs {
-		if rec.ID != id || len(rec.Snapshot) == 0 {
-			continue
-		}
-		if err := w.Restore(rec.Snapshot); err != nil {
-			return fmt.Errorf("restore %s: %w", id, err)
-		}
-	}
-	return nil
 }

@@ -6,21 +6,61 @@ import (
 	"testing"
 
 	projworker "github.com/niq-run/niq/app/standalone/worker"
+	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
+	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workersvc"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
 
-// TestStateStorePersistsAndRecovers exercises the concrete project StateStore
-// through the in-process lifecycle: suspend persists state.json, a fresh
-// WorkerService over the same store recovers the declaration.
-func TestStateStorePersistsAndRecovers(t *testing.T) {
-	dir := t.TempDir()
-	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(dir, "identities.json"))
-	if err != nil {
-		t.Fatalf("registry: %v", err)
+// idWorker is a ManagedWorker with no state of its own.
+type idWorker struct {
+	baseworker.BaseWorker
+}
+
+func (w *idWorker) Stop() error               { return nil }
+func (w *idWorker) Snapshot() ([]byte, error) { return nil, nil }
+func (w *idWorker) Restore([]byte) error      { return nil }
+
+// fakeType builds a trivial in-process worker: enough to exercise the state
+// store through the real control plane.
+type fakeType struct {
+	registry corebus.IdentityRegistry
+	listener *inprocess.InProcListener
+}
+
+func (f fakeType) build(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	id := cfg.ID
+	connect := func() (corebus.WorkerSideChannel, error) {
+		if err := projprocess.RegisterIdentity(f.registry, corebus.Identity{WorkerID: id, Type: cfg.Type}); err != nil {
+			return nil, err
+		}
+		ch := inprocess.NewWorkerSide(id, f.listener)
+		if err := ch.Connect(context.Background(), "inproc://test"); err != nil {
+			return nil, err
+		}
+		return ch, nil
 	}
+	build := func(ch corebus.WorkerSideChannel) worker.ManagedWorker {
+		return &idWorker{BaseWorker: baseworker.NewBaseWorker(id, ch)}
+	}
+	return worker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
+}
+
+// TestStateStorePersistsAndRecovers exercises the concrete project StateStore
+// through the control plane: suspend persists state.json, and a fresh control
+// plane over the same store recovers the manifest as suspended.
+func TestStateStorePersistsAndRecovers(t *testing.T) {
+	// The manifest store writes through the project layout, so isolate HOME.
+	t.Setenv("HOME", t.TempDir())
+	if _, err := CreateProject("p", "", nil); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	dir := t.TempDir()
+	registry := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
 	listener := inprocess.NewInProcListener()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -39,89 +79,93 @@ func TestStateStorePersistsAndRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStateStore: %v", err)
 	}
-	svc := workersvc.New()
-	svc.SetStore(store)
-	bc := projworker.BuildContext{Registry: registry, Listener: listener, Engine: engine, WorkerSvc: svc}
-	projworker.RegisterBuilders(bc, svc)
+	identityPath := filepath.Join(dir, "identities.json")
+	newCP := func() *projworker.ControlPlane {
+		ids, err := busctl.NewFileStore(identityPath)
+		if err != nil {
+			t.Fatalf("identity store: %v", err)
+		}
+		cp := projworker.New(projworker.Config{
+			ProjectID:  "p",
+			Manifests:  manifestStore{projectID: "p"},
+			StateStore: store,
+			Registry:   registry,
+			Bus:        busctl.New(ids, registry),
+		})
+		ft := fakeType{registry: registry, listener: listener}
+		cp.RegisterBuilder("probe", ft.build, nil)
+		return cp
+	}
 
-	mount := t.TempDir()
-	resolved, err := svc.CreateWorker(ctx, worker.WorkerConfig{
-		Type: "workspace", Params: map[string]any{"mounts": []string{mount}},
-	})
-	if err != nil {
-		t.Fatalf("CreateWorker: %v", err)
+	cp := newCP()
+	if _, err := cp.Manager().Create(ctx, worker.WorkerConfig{ID: "w1", Type: "probe"}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	id := resolved.ID
-	if id == "" {
-		t.Fatal("workspace builder did not resolve an id")
-	}
-	if err := svc.SuspendWorker(id); err != nil {
-		t.Fatalf("SuspendWorker: %v", err)
+	if err := cp.Manager().Suspend("w1"); err != nil {
+		t.Fatalf("Suspend: %v", err)
 	}
 	recs, err := store.LoadAll()
 	if err != nil || len(recs) != 1 || recs[0].State != worker.StateSuspended {
 		t.Fatalf("store records = %+v (%v)", recs, err)
 	}
 
-	// A fresh service over the same store recovers the declared worker.
-	svc2 := workersvc.New()
-	svc2.SetStore(store)
-	bc2 := projworker.BuildContext{Registry: registry, Listener: listener, Engine: engine, WorkerSvc: svc2}
-	projworker.RegisterBuilders(bc2, svc2)
-	if err := svc2.RecoverAll(ctx, workersvc.RecoverOptions{
-		Workers: []worker.WorkerConfig{{ID: id, Type: "workspace", Params: map[string]any{"mounts": []string{mount}}}},
-	}); err != nil {
-		t.Fatalf("RecoverAll: %v", err)
+	// A fresh control plane over the same store recovers the declared worker.
+	cp2 := newCP()
+	if err := cp2.Recover(ctx); err != nil {
+		t.Fatalf("Recover: %v", err)
 	}
 	var state string
-	for _, wi := range svc2.ListWorkers("") {
-		if wi.ID == id {
-			state = string(wi.State)
+	for _, wi := range cp2.Manager().List("") {
+		if wi.ID == "w1" {
+			state = wi.State
 		}
 	}
 	if state != string(worker.StateSuspended) {
 		t.Fatalf("recovered state = %q, want suspended", state)
 	}
-	if err := svc2.ResumeWorker(ctx, id); err != nil {
-		t.Fatalf("ResumeWorker: %v", err)
+	if err := cp2.Manager().Resume(ctx, "w1"); err != nil {
+		t.Fatalf("Resume: %v", err)
 	}
-	if _, ok := svc2.Worker(id); !ok {
+	if !cp2.Manager().Has("w1") {
 		t.Fatal("resumed worker is not running")
 	}
 
-	// Destroying through the service removes the state directory.
-	if err := svc2.DestroyWorker(id); err != nil {
-		t.Fatalf("DestroyWorker: %v", err)
+	// Destroying through the control plane removes the state directory.
+	if err := cp2.HostBackend().Destroy(ctx, "w1"); err != nil {
+		t.Fatalf("Destroy: %v", err)
 	}
 	if recs, _ := store.LoadAll(); len(recs) != 0 {
 		t.Fatalf("destroy left state records: %+v", recs)
 	}
 }
 
-// TestProjectDeclStore exercises the concrete workers.json DeclStore.
-func TestProjectDeclStore(t *testing.T) {
+// TestProjectManifestStore exercises the concrete workers.json ManifestStore.
+func TestProjectManifestStore(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if _, err := CreateProject("p", "", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	store := projectDeclStore{projectID: "p"}
-	d := projworker.Declaration{Config: projworker.Config{ID: "w", Type: "timer"}}
-	if err := store.Add(&d); err != nil {
+	store := manifestStore{projectID: "p"}
+	m := projworker.Manifest{Definition: projworker.Definition{ID: "w", Type: "timer"}}
+	if err := store.Add(&m); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if _, ok, err := store.Get("w"); err != nil || !ok {
 		t.Fatalf("Get = %v %v", ok, err)
 	}
-	if err := store.SetCredential("w", "tok"); err != nil {
-		t.Fatalf("SetCredential: %v", err)
+	if active, err := store.List(false); err != nil || len(active) != 1 {
+		t.Fatalf("active list = %v %v", active, err)
 	}
-	if got, _, _ := store.Get("w"); got.Credential != "tok" {
-		t.Fatalf("credential not persisted: %+v", got)
+	if err := store.Archive("w", true); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	if archived, err := store.List(true); err != nil || len(archived) != 1 {
+		t.Fatalf("archived list = %v %v", archived, err)
 	}
 	if err := store.Delete("w"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if _, ok, _ := store.Get("w"); ok {
-		t.Fatal("delete left declaration")
+		t.Fatal("delete left manifest")
 	}
 }

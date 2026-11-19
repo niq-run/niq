@@ -4,7 +4,7 @@
 // launched child and a worker that dials in on its own).
 //
 // It deliberately does not depend on the declaration model in the parent
-// worker package. Callers lower a Declaration into the two input types below
+// worker package. Callers lower a Manifest into the two input types below
 // (Spec for supervision, IdentitySpec for provisioning), so this package can be
 // tested with real child processes and a fake credential store, and the
 // lifecycle backend remains its only orchestrator.
@@ -28,25 +28,14 @@ type Spec struct {
 	Credential string
 }
 
-// IdentitySpec is the bus-facing input for provisioning: the ACL the worker is
-// granted, and the credential to reuse (empty means mint one).
+// IdentitySpec is the bus-facing input for provisioning: the worker's identity,
+// and the grants to seed it with when it has no durable record yet. Empty
+// grants mean the placement's default.
 type IdentitySpec struct {
-	ID         string
-	Type       string
-	Credential string
+	ID   string
+	Type string
 	// Subscriptions / Publish are the broadcast/publish grants already lowered
 	// to bus patterns. Empty means the placement's default.
 	Subscriptions []event.EventPattern
 	Publish       []event.PublishPattern
-	// TokenTTLSeconds overrides the credential lifetime for an
-	// unmanaged-process worker. Managed-process tokens are process-lifetime and
-	// deliberately ignore it.
-	TokenTTLSeconds *int64
-}
-
-// CredentialStore persists a generated credential onto the worker's
-// declaration, so an unmanaged-process worker reuses it across restarts.
-// The declaration store in the parent package satisfies it.
-type CredentialStore interface {
-	SetCredential(id, credential string) error
 }

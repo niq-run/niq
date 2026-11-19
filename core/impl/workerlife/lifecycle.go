@@ -1,10 +1,12 @@
-// Package workersvc provides WorkerService — the in-process worker lifecycle
-// engine: register, create, suspend, resume, restart, destroy, recover.
+// Package workerlife manages live worker instances: construct, connect, start,
+// snapshot, suspend, resume, restart, destroy, and their persisted state.
 //
-// WorkerService owns worker construction via a per-type Builder registry
-// (injected by the assembly layer) and the lifecycle state machine. It calls
-// the Builder to obtain a SpawnSpec (connect/build closures), then manages
-// the worker's connection, goroutine, and persisted runtime state.
+// It knows nothing about bus semantics or placements. It receives a Build
+// function (the type registry lives in the assembly layer) and turns a
+// serializable WorkerConfig into a SpawnSpec, then owns the instance, its
+// connection, its goroutine and its snapshot. External effects are two explicit
+// ports: WorkerStore for runtime state, and the spawn hook for recording a
+// runtime-created worker.
 //
 // Concurrency: lifecycle operations are serialized per worker id. Slow
 // operations (Connect, Build, Start, Snapshot, Stop, Close, store I/O) run
@@ -12,24 +14,32 @@
 // Checkpoint intentionally does not take the per-id lock: it is called from a
 // worker's own durable-state callback and may run while that worker is being
 // suspended. It only updates the cached snapshot under the registry lock.
-package workersvc
+package workerlife
 
 import (
 	"context"
 	"fmt"
 	"log"
 	"slices"
-	"sort"
 	"sync"
 
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
 
-// Builder constructs a SpawnSpec from a serializable WorkerConfig. Builders
-// are provided by the assembly layer (project), which knows the concrete worker
-// types and the bus transport.
+// Builder constructs a SpawnSpec from a serializable WorkerConfig. It is
+// supplied by the assembly layer, which knows the concrete worker types and the
+// bus transport.
 type Builder func(cfg worker.WorkerConfig) (worker.SpawnSpec, error)
+
+// Config parameterizes a Manager.
+type Config struct {
+	// Store persists runtime state and snapshots. Optional: nil disables
+	// persistence (tests, ephemeral hosts).
+	Store WorkerStore
+	// Build resolves a config into a SpawnSpec. Required.
+	Build Builder
+}
 
 // workerEntry pairs a managed worker with its construction spec and lifecycle
 // state.
@@ -43,38 +53,44 @@ type workerEntry struct {
 	snapSeq  uint64 // increments whenever snapshot is replaced
 }
 
-// WorkerService manages worker lifecycles. It has no awareness of event types
-// or subscriptions — it only knows about worker.SpawnSpec, ManagedWorker and
-// lifecycle operations. External effects are two explicit ports: WorkerStore
-// for runtime state, and the onSpawn hook for declaring a runtime-created
-// worker.
-type WorkerService struct {
-	entries  []workerEntry
-	builders map[string]Builder
-	// paramChecks is the per-type spawn-parameter validator, registered next to
-	// the builder: "which parameters this type reads" is type knowledge the
-	// mechanism does not have.
-	paramChecks map[string]func(params map[string]any) error
-	store       WorkerStore     // optional; nil disables persistence
-	protected   map[string]bool // essential worker ids: cannot be suspended/destroyed
-	onSpawn     func(cfg worker.WorkerConfig) error
-	mu          sync.Mutex
+// Manager manages worker lifecycles. It has no awareness of event types,
+// subscriptions or placements — it only knows about worker.SpawnSpec,
+// ManagedWorker and lifecycle operations.
+type Manager struct {
+	entries   []workerEntry
+	build     Builder
+	store     WorkerStore     // optional; nil disables persistence
+	protected map[string]bool // protected worker ids: cannot be suspended/destroyed
+	onSpawn   func(cfg worker.WorkerConfig) error
+	mu        sync.Mutex
 	// locks serializes lifecycle operations per worker id, so create/suspend/
 	// resume/restart/destroy cannot interleave for the same worker.
 	locks map[string]*sync.Mutex
 }
 
-// New creates an empty WorkerService.
-func New() *WorkerService {
-	return &WorkerService{
-		builders:    make(map[string]Builder),
-		paramChecks: make(map[string]func(map[string]any) error),
-		protected:   map[string]bool{},
-		locks:       make(map[string]*sync.Mutex),
+// New creates a Manager over cfg.
+func New(cfg Config) *Manager {
+	return &Manager{
+		build:     cfg.Build,
+		store:     cfg.Store,
+		protected: map[string]bool{},
+		locks:     make(map[string]*sync.Mutex),
 	}
 }
 
-func (s *WorkerService) isProtected(id string) bool {
+// buildSpec runs the injected builder, naming the wrapper clearly in errors.
+func (m *Manager) buildSpec(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	if m.build == nil {
+		return worker.SpawnSpec{}, fmt.Errorf("workerlife: no builder configured")
+	}
+	spec, err := m.build(cfg)
+	if err != nil {
+		return worker.SpawnSpec{}, fmt.Errorf("workerlife: build %q: %w", cfg.ID, err)
+	}
+	return spec, nil
+}
+
+func (s *Manager) isProtected(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.protected[id]
@@ -83,7 +99,7 @@ func (s *WorkerService) isProtected(id string) bool {
 // idLock returns the per-worker lifecycle mutex. Call it BEFORE taking s.mu
 // for the operation; the returned lock is held across the whole lifecycle
 // transition.
-func (s *WorkerService) idLock(id string) *sync.Mutex {
+func (s *Manager) idLock(id string) *sync.Mutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	l, ok := s.locks[id]
@@ -95,7 +111,7 @@ func (s *WorkerService) idLock(id string) *sync.Mutex {
 }
 
 // SetStore attaches a persistence backend. May be nil to disable persistence.
-func (s *WorkerService) SetStore(store WorkerStore) {
+func (s *Manager) SetStore(store WorkerStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.store = store
@@ -105,100 +121,32 @@ func (s *WorkerService) SetStore(store WorkerStore) {
 // declaring layer (project) uses it to persist the declaration of a worker
 // spawned at runtime, so it survives a restart. Recovery does not go through
 // it — declared workers are already on disk.
-func (s *WorkerService) SetSpawnHook(fn func(cfg worker.WorkerConfig) error) {
+func (s *Manager) SetSpawnHook(fn func(cfg worker.WorkerConfig) error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onSpawn = fn
 }
 
-// RegisterBuilder registers a Builder for a worker type. CreateWorker dispatches
-// to the registered builder for the config's Type.
-func (s *WorkerService) RegisterBuilder(typ string, b Builder) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.builders[typ] = b
-}
-
-// RegisterParamCheck registers the spawn-parameter validator for a worker type.
-// It is registered next to its builder because the valid set is that type's own
-// knowledge. CreateWorker runs it before building, so a caller learns that a
-// parameter would be ignored instead of receiving a worker that quietly does not
-// do what was asked. Recovery (RestoreAndRun / RestoreSuspended) deliberately
-// skips it: a declaration already accepted must not be stranded by a stricter
-// check added later.
-func (s *WorkerService) RegisterParamCheck(typ string, check func(params map[string]any) error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.paramChecks[typ] = check
-}
-
-// paramCheck returns the registered validator for typ, or nil.
-func (s *WorkerService) paramCheck(typ string) func(map[string]any) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.paramChecks[typ]
-}
-
-// RegisteredTypes returns the worker types this service can build, sorted. It
-// is the set CreateWorker accepts; the assembly layer uses it to keep its
-// per-type knowledge (such as spawn-parameter validation) in step with the
-// builders it registered.
-func (s *WorkerService) RegisteredTypes() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	types := make([]string, 0, len(s.builders))
-	for typ := range s.builders {
-		types = append(types, typ)
-	}
-	sort.Strings(types)
-	return types
-}
-
-// ValidateSpawn reports whether a config could be built: a builder is
-// registered for its type and that type's spawn-parameter check passes. It
-// lets a caller validate before persisting a declaration, so a rejected spawn
-// leaves nothing behind.
-func (s *WorkerService) ValidateSpawn(cfg worker.WorkerConfig) error {
-	s.mu.Lock()
-	_, ok := s.builders[cfg.Type]
-	s.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("workersvc: no builder for type %q", cfg.Type)
-	}
-	if check := s.paramCheck(cfg.Type); check != nil {
-		if err := check(cfg.Params); err != nil {
-			return fmt.Errorf("workersvc: build %q: %w", cfg.ID, err)
-		}
-	}
-	return nil
-}
-
-// CreateWorker builds and starts a worker from a serializable config. It
-// dispatches to the registered builder for cfg.Type, then spawns it. The type's
-// spawn-parameter check runs first, so an unsupported parameter fails here
-// rather than being silently dropped by the builder.
+// Create builds and starts a worker from a serializable config. It calls the
+// injected Builder, then spawns the result. Parameter validation belongs to the
+// type registry in the assembly layer, which calls it before Create when it
+// wants a rejected spawn to leave nothing behind.
 //
 // It returns the config the builder actually built (the spec's Config, not the
 // input): a builder may derive the worker's id or complete its params, and that
 // resolved config — not the request — is the worker's identity on the bus and in
 // its declaration.
-func (s *WorkerService) CreateWorker(ctx context.Context, cfg worker.WorkerConfig) (worker.WorkerConfig, error) {
-	if err := s.ValidateSpawn(cfg); err != nil {
-		return worker.WorkerConfig{}, err
-	}
-	s.mu.Lock()
-	b := s.builders[cfg.Type]
-	s.mu.Unlock()
-	spec, err := b(cfg)
+func (s *Manager) Create(ctx context.Context, cfg worker.WorkerConfig) (worker.WorkerConfig, error) {
+	spec, err := s.buildSpec(cfg)
 	if err != nil {
-		return worker.WorkerConfig{}, fmt.Errorf("workersvc: build %q: %w", cfg.ID, err)
+		return worker.WorkerConfig{}, err
 	}
 
 	l := s.idLock(spec.ID())
 	l.Lock()
 	defer l.Unlock()
-	if s.HasWorker(spec.ID()) {
-		return worker.WorkerConfig{}, fmt.Errorf("workersvc: worker %s already exists", spec.ID())
+	if s.Has(spec.ID()) {
+		return worker.WorkerConfig{}, fmt.Errorf("workerlife: worker %s already exists", spec.ID())
 	}
 	if err := s.spawn(ctx, spec); err != nil {
 		return worker.WorkerConfig{}, err
@@ -210,7 +158,7 @@ func (s *WorkerService) CreateWorker(ctx context.Context, cfg worker.WorkerConfi
 	if s.onSpawn != nil {
 		if err := s.onSpawn(spec.Config); err != nil {
 			_ = s.destroyLocked(spec.ID())
-			return spec.Config, fmt.Errorf("workersvc: declare %q: %w", spec.ID(), err)
+			return spec.Config, fmt.Errorf("workerlife: declare %q: %w", spec.ID(), err)
 		}
 	}
 	return spec.Config, nil
@@ -218,20 +166,20 @@ func (s *WorkerService) CreateWorker(ctx context.Context, cfg worker.WorkerConfi
 
 // spawn connects, builds and starts a worker from a SpawnSpec, then records it.
 // The caller holds the worker's id lock.
-func (s *WorkerService) spawn(ctx context.Context, spec worker.SpawnSpec) error {
+func (s *Manager) spawn(ctx context.Context, spec worker.SpawnSpec) error {
 	// Check before opening a connection: a duplicate must not leak a worker or
 	// a channel. The id lock makes this a definitive check.
-	if s.HasWorker(spec.ID()) {
-		return fmt.Errorf("workersvc: worker %s already exists", spec.ID())
+	if s.Has(spec.ID()) {
+		return fmt.Errorf("workerlife: worker %s already exists", spec.ID())
 	}
 	ch, err := spec.Connect()
 	if err != nil {
-		return fmt.Errorf("workersvc: connect %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerlife: connect %q: %w", spec.ID(), err)
 	}
 	w := spec.Build(ch)
 	if err := w.Start(ctx); err != nil {
 		_ = ch.Close()
-		return fmt.Errorf("workersvc: start %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerlife: start %q: %w", spec.ID(), err)
 	}
 
 	s.mu.Lock()
@@ -239,7 +187,7 @@ func (s *WorkerService) spawn(ctx context.Context, spec worker.SpawnSpec) error 
 		s.mu.Unlock()
 		_ = w.Stop()
 		_ = ch.Close()
-		return fmt.Errorf("workersvc: worker %s already exists", spec.ID())
+		return fmt.Errorf("workerlife: worker %s already exists", spec.ID())
 	}
 	s.entries = append(s.entries, workerEntry{
 		spec:   spec,
@@ -252,10 +200,10 @@ func (s *WorkerService) spawn(ctx context.Context, spec worker.SpawnSpec) error 
 	s.mu.Unlock()
 	if store != nil {
 		if err := store.SaveState(spec.ID(), worker.StateRunning, nil); err != nil {
-			log.Printf("[workersvc] persist state %s: %v", spec.ID(), err)
+			log.Printf("[workerlife] persist state %s: %v", spec.ID(), err)
 		}
 	}
-	log.Printf("[workersvc] created worker %s (type=%s)", spec.ID(), spec.Type())
+	log.Printf("[workerlife] created worker %s (type=%s)", spec.ID(), spec.Type())
 	return nil
 }
 
@@ -264,16 +212,10 @@ func (s *WorkerService) spawn(ctx context.Context, spec worker.SpawnSpec) error 
 // making persisted state authoritative over any (template-sourced) definition.
 // When snapshot is non-empty it is applied before Start. Used by project
 // recovery; it records the worker as running and persists it again.
-func (s *WorkerService) RestoreAndRun(ctx context.Context, cfg worker.WorkerConfig, snapshot []byte) error {
-	s.mu.Lock()
-	b, ok := s.builders[cfg.Type]
-	s.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("workersvc: no builder for type %q", cfg.Type)
-	}
-	spec, err := b(cfg)
+func (s *Manager) RestoreAndRun(ctx context.Context, cfg worker.WorkerConfig, snapshot []byte) error {
+	spec, err := s.buildSpec(cfg)
 	if err != nil {
-		return fmt.Errorf("workersvc: build %q: %w", cfg.ID, err)
+		return err
 	}
 	l := s.idLock(spec.ID())
 	l.Lock()
@@ -284,24 +226,24 @@ func (s *WorkerService) RestoreAndRun(ctx context.Context, cfg worker.WorkerConf
 // restoreAndRunLocked connects/builds/restores/starts a worker and records it.
 // The caller holds the worker's id lock; the duplicate check happens before a
 // connection is opened, and a race is cleaned up rather than leaked.
-func (s *WorkerService) restoreAndRunLocked(ctx context.Context, spec worker.SpawnSpec, snapshot []byte) error {
-	if s.HasWorker(spec.ID()) {
-		return fmt.Errorf("workersvc: worker %s already exists", spec.ID())
+func (s *Manager) restoreAndRunLocked(ctx context.Context, spec worker.SpawnSpec, snapshot []byte) error {
+	if s.Has(spec.ID()) {
+		return fmt.Errorf("workerlife: worker %s already exists", spec.ID())
 	}
 	ch, err := spec.Connect()
 	if err != nil {
-		return fmt.Errorf("workersvc: connect %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerlife: connect %q: %w", spec.ID(), err)
 	}
 	w := spec.Build(ch)
 	if len(snapshot) > 0 {
 		if err := w.Restore(snapshot); err != nil {
 			_ = ch.Close()
-			return fmt.Errorf("workersvc: restore %q: %w", spec.ID(), err)
+			return fmt.Errorf("workerlife: restore %q: %w", spec.ID(), err)
 		}
 	}
 	if err := w.Start(ctx); err != nil {
 		_ = ch.Close()
-		return fmt.Errorf("workersvc: start %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerlife: start %q: %w", spec.ID(), err)
 	}
 
 	s.mu.Lock()
@@ -309,7 +251,7 @@ func (s *WorkerService) restoreAndRunLocked(ctx context.Context, spec worker.Spa
 		s.mu.Unlock()
 		_ = w.Stop()
 		_ = ch.Close()
-		return fmt.Errorf("workersvc: worker %s already exists", spec.ID())
+		return fmt.Errorf("workerlife: worker %s already exists", spec.ID())
 	}
 	s.entries = append(s.entries, workerEntry{
 		spec:   spec,
@@ -322,17 +264,17 @@ func (s *WorkerService) restoreAndRunLocked(ctx context.Context, spec worker.Spa
 	s.mu.Unlock()
 	if store != nil {
 		if err := store.SaveState(spec.ID(), worker.StateRunning, snapshot); err != nil {
-			log.Printf("[workersvc] persist state %s: %v", spec.ID(), err)
+			log.Printf("[workerlife] persist state %s: %v", spec.ID(), err)
 		}
 	}
-	log.Printf("[workersvc] restored worker %s (type=%s)", spec.ID(), spec.Type())
+	log.Printf("[workerlife] restored worker %s (type=%s)", spec.ID(), spec.Type())
 	return nil
 }
 
-// SuspendWorker stops a running worker: snapshots its state, stops its
+// Suspend stops a running worker: snapshots its state, stops its
 // goroutine, and releases its bus connection. The worker's identity and
 // definition are retained so it can be resumed. no-op if already suspended.
-func (s *WorkerService) SuspendWorker(id string) error {
+func (s *Manager) Suspend(id string) error {
 	l := s.idLock(id)
 	l.Lock()
 	defer l.Unlock()
@@ -343,16 +285,16 @@ func (s *WorkerService) SuspendWorker(id string) error {
 // Snapshot/Stop run outside s.mu: they can be slow and may call back into the
 // service (durable checkpoints), so holding the registry lock would stall every
 // worker operation.
-func (s *WorkerService) suspendLocked(id string) error {
+func (s *Manager) suspendLocked(id string) error {
 	s.mu.Lock()
 	if s.protected[id] {
 		s.mu.Unlock()
-		return fmt.Errorf("workersvc: worker %s is protected and cannot be suspended", id)
+		return fmt.Errorf("workerlife: worker %s is protected and cannot be suspended", id)
 	}
 	e := s.findLocked(id)
 	if e == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workersvc: worker %s not found", id)
+		return fmt.Errorf("workerlife: worker %s not found", id)
 	}
 	if e.state == worker.StateSuspended {
 		s.mu.Unlock()
@@ -366,10 +308,10 @@ func (s *WorkerService) suspendLocked(id string) error {
 	// Snapshot must happen before stopping so we capture a consistent state.
 	snap, err := w.Snapshot()
 	if err != nil {
-		return fmt.Errorf("workersvc: snapshot %s: %w", id, err)
+		return fmt.Errorf("workerlife: snapshot %s: %w", id, err)
 	}
 	if err := w.Stop(); err != nil {
-		return fmt.Errorf("workersvc: stop %s: %w", id, err)
+		return fmt.Errorf("workerlife: stop %s: %w", id, err)
 	}
 	if ch != nil {
 		_ = ch.Close()
@@ -393,18 +335,18 @@ func (s *WorkerService) suspendLocked(id string) error {
 	}
 	store := s.store
 	s.mu.Unlock()
-	log.Printf("[workersvc] suspended worker %s", id)
+	log.Printf("[workerlife] suspended worker %s", id)
 	if store != nil {
 		if err := store.SaveState(id, worker.StateSuspended, snap); err != nil {
-			log.Printf("[workersvc] persist state %s: %v", id, err)
+			log.Printf("[workerlife] persist state %s: %v", id, err)
 		}
 	}
 	return nil
 }
 
-// ResumeWorker restores a suspended worker: reconnects its bus channel,
+// Resume restores a suspended worker: reconnects its bus channel,
 // rebuilds the instance, restores its snapshot, and starts it. no-op if running.
-func (s *WorkerService) ResumeWorker(ctx context.Context, id string) error {
+func (s *Manager) Resume(ctx context.Context, id string) error {
 	l := s.idLock(id)
 	l.Lock()
 	defer l.Unlock()
@@ -413,7 +355,7 @@ func (s *WorkerService) ResumeWorker(ctx context.Context, id string) error {
 	e := s.findLocked(id)
 	if e == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workersvc: worker %s not found", id)
+		return fmt.Errorf("workerlife: worker %s not found", id)
 	}
 	if e.state == worker.StateRunning {
 		s.mu.Unlock()
@@ -425,18 +367,18 @@ func (s *WorkerService) ResumeWorker(ctx context.Context, id string) error {
 
 	ch, err := spec.Connect()
 	if err != nil {
-		return fmt.Errorf("workersvc: reconnect %q: %w", id, err)
+		return fmt.Errorf("workerlife: reconnect %q: %w", id, err)
 	}
 	w := spec.Build(ch)
 	if snapshot != nil {
 		if err := w.Restore(snapshot); err != nil {
 			_ = ch.Close()
-			return fmt.Errorf("workersvc: restore %q: %w", id, err)
+			return fmt.Errorf("workerlife: restore %q: %w", id, err)
 		}
 	}
 	if err := w.Start(ctx); err != nil {
 		_ = ch.Close()
-		return fmt.Errorf("workersvc: start %q: %w", id, err)
+		return fmt.Errorf("workerlife: start %q: %w", id, err)
 	}
 
 	s.mu.Lock()
@@ -447,10 +389,10 @@ func (s *WorkerService) ResumeWorker(ctx context.Context, id string) error {
 	}
 	store := s.store
 	s.mu.Unlock()
-	log.Printf("[workersvc] resumed worker %s", id)
+	log.Printf("[workerlife] resumed worker %s", id)
 	if store != nil {
 		if err := store.SaveState(id, worker.StateRunning, snapshot); err != nil {
-			log.Printf("[workersvc] persist state %s: %v", id, err)
+			log.Printf("[workerlife] persist state %s: %v", id, err)
 		}
 	}
 	return nil
@@ -466,16 +408,16 @@ func (s *WorkerService) ResumeWorker(ctx context.Context, id string) error {
 // Safe to call from the worker's own goroutine: it holds the service lock only
 // to look the entry up, and takes the snapshot outside it — the snapshot
 // itself takes the worker's lock, so the caller must not hold it.
-func (s *WorkerService) Checkpoint(id string) error {
+func (s *Manager) Checkpoint(id string) error {
 	s.mu.Lock()
 	e := s.findLocked(id)
 	if e == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workersvc: worker %s not found", id)
+		return fmt.Errorf("workerlife: worker %s not found", id)
 	}
 	if e.worker == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workersvc: worker %s is not running (nothing to snapshot)", id)
+		return fmt.Errorf("workerlife: worker %s is not running (nothing to snapshot)", id)
 	}
 	w := e.worker
 	store := s.store
@@ -486,31 +428,31 @@ func (s *WorkerService) Checkpoint(id string) error {
 	}
 	snap, err := w.Snapshot()
 	if err != nil {
-		return fmt.Errorf("workersvc: snapshot %s: %w", id, err)
+		return fmt.Errorf("workerlife: snapshot %s: %w", id, err)
 	}
 
 	// Keep the entry's cached snapshot in step: it is what a later
-	// ResumeWorker replays. Do not let a checkpoint that raced with suspend or
+	// Resume replays. Do not let a checkpoint that raced with suspend or
 	// destroy resurrect a worker that is no longer running.
 	s.mu.Lock()
 	e = s.findLocked(id)
 	if e == nil || e.worker != w || e.state != worker.StateRunning {
 		s.mu.Unlock()
-		return fmt.Errorf("workersvc: worker %s stopped while checkpointing", id)
+		return fmt.Errorf("workerlife: worker %s stopped while checkpointing", id)
 	}
 	e.snapshot = snap
 	e.snapSeq++
 	s.mu.Unlock()
 
 	if err := store.SaveState(id, worker.StateRunning, snap); err != nil {
-		return fmt.Errorf("workersvc: persist state %s: %w", id, err)
+		return fmt.Errorf("workerlife: persist state %s: %w", id, err)
 	}
 	return nil
 }
 
-// DestroyWorker stops a worker, removes it from the registry and deletes its
+// Destroy stops a worker, removes it from the registry and deletes its
 // persisted state.
-func (s *WorkerService) DestroyWorker(id string) error {
+func (s *Manager) Destroy(id string) error {
 	l := s.idLock(id)
 	l.Lock()
 	defer l.Unlock()
@@ -521,16 +463,16 @@ func (s *WorkerService) DestroyWorker(id string) error {
 // persisted state. The caller holds the id lock. Stop/Close run outside s.mu.
 // If Stop fails the entry is left in place and no state is deleted: a failed
 // destroy must not make a still-live worker invisible.
-func (s *WorkerService) destroyLocked(id string) error {
+func (s *Manager) destroyLocked(id string) error {
 	s.mu.Lock()
 	if s.protected[id] {
 		s.mu.Unlock()
-		return fmt.Errorf("workersvc: worker %s is protected and cannot be destroyed", id)
+		return fmt.Errorf("workerlife: worker %s is protected and cannot be destroyed", id)
 	}
 	e := s.findLocked(id)
 	if e == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workersvc: worker %s not found", id)
+		return fmt.Errorf("workerlife: worker %s not found", id)
 	}
 	w := e.worker
 	ch := e.ch
@@ -539,7 +481,7 @@ func (s *WorkerService) destroyLocked(id string) error {
 
 	if w != nil {
 		if err := w.Stop(); err != nil {
-			return fmt.Errorf("workersvc: stop %s: %w", id, err)
+			return fmt.Errorf("workerlife: stop %s: %w", id, err)
 		}
 	}
 	if ch != nil {
@@ -552,11 +494,11 @@ func (s *WorkerService) destroyLocked(id string) error {
 	if store != nil {
 		_ = store.Delete(id)
 	}
-	log.Printf("[workersvc] destroyed worker %s", id)
+	log.Printf("[workerlife] destroyed worker %s", id)
 	return nil
 }
 
-// RestartWorker brings a worker up again from cfg while keeping the state it
+// Restart brings a worker up again from cfg while keeping the state it
 // already persisted.
 //
 // A restart is the same sequence every start follows — build the instance from
@@ -578,33 +520,27 @@ func (s *WorkerService) destroyLocked(id string) error {
 //
 // The id does not have to be live — an unknown id is simply started, which lets
 // callers use one path for "restart" and "start from declaration".
-func (s *WorkerService) RestartWorker(ctx context.Context, cfg worker.WorkerConfig) error {
-	s.mu.Lock()
-	b, ok := s.builders[cfg.Type]
-	s.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("workersvc: no builder for type %q", cfg.Type)
-	}
-	spec, err := b(cfg)
+func (s *Manager) Restart(ctx context.Context, cfg worker.WorkerConfig) error {
+	spec, err := s.buildSpec(cfg)
 	if err != nil {
-		return fmt.Errorf("workersvc: build %q: %w", cfg.ID, err)
+		return err
 	}
 
 	l := s.idLock(spec.ID())
 	l.Lock()
 	defer l.Unlock()
 
-	if !s.HasWorker(spec.ID()) {
+	if !s.Has(spec.ID()) {
 		return s.restoreAndRunLocked(ctx, spec, s.persistedSnapshot(spec.ID()))
 	}
 	if s.isProtected(spec.ID()) {
-		return fmt.Errorf("workersvc: worker %s is protected and cannot be restarted", spec.ID())
+		return fmt.Errorf("workerlife: worker %s is protected and cannot be restarted", spec.ID())
 	}
 
 	// Suspend snapshots before stopping and persists the result, so the state a
 	// restart has to keep is on disk before the live instance goes away.
 	if err := s.suspendLocked(spec.ID()); err != nil {
-		return fmt.Errorf("workersvc: restart %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerlife: restart %q: %w", spec.ID(), err)
 	}
 
 	s.mu.Lock()
@@ -625,7 +561,7 @@ func (s *WorkerService) RestartWorker(ctx context.Context, cfg worker.WorkerConf
 		snap = s.persistedSnapshot(spec.ID())
 	}
 	if prevType != "" && prevType != spec.Type() {
-		log.Printf("[workersvc] restart %s: type %s -> %s, dropping the %s snapshot", spec.ID(), prevType, spec.Type(), prevType)
+		log.Printf("[workerlife] restart %s: type %s -> %s, dropping the %s snapshot", spec.ID(), prevType, spec.Type(), prevType)
 		snap = nil
 	}
 	return s.restoreAndRunLocked(ctx, spec, snap)
@@ -634,13 +570,13 @@ func (s *WorkerService) RestartWorker(ctx context.Context, cfg worker.WorkerConf
 // persistedSnapshot returns the snapshot persisted for id, or nil when there is
 // none: no store, no record for that worker, or an unreadable store. It is the
 // disk copy of the state a start has to replay.
-func (s *WorkerService) persistedSnapshot(id string) []byte {
+func (s *Manager) persistedSnapshot(id string) []byte {
 	if s.store == nil {
 		return nil
 	}
 	recs, err := s.store.LoadAll()
 	if err != nil {
-		log.Printf("[workersvc] read persisted state %s: %v", id, err)
+		log.Printf("[workerlife] read persisted state %s: %v", id, err)
 		return nil
 	}
 	for _, rec := range recs {
@@ -651,9 +587,9 @@ func (s *WorkerService) persistedSnapshot(id string) []byte {
 	return nil
 }
 
-// ShutdownSnapshot snapshots every running worker and persists it, so a clean
+// SnapshotAll snapshots every running worker and persists it, so a clean
 // shutdown leaves the latest state on disk. Called on process shutdown.
-func (s *WorkerService) ShutdownSnapshot() {
+func (s *Manager) SnapshotAll() {
 	type target struct {
 		id  string
 		w   worker.ManagedWorker
@@ -673,7 +609,7 @@ func (s *WorkerService) ShutdownSnapshot() {
 	for _, t := range targets {
 		snap, err := t.w.Snapshot()
 		if err != nil {
-			log.Printf("[workersvc] shutdown snapshot %s: %v", t.id, err)
+			log.Printf("[workerlife] shutdown snapshot %s: %v", t.id, err)
 			continue
 		}
 		s.mu.Lock()
@@ -688,40 +624,36 @@ func (s *WorkerService) ShutdownSnapshot() {
 		s.mu.Unlock()
 		if store != nil {
 			if err := store.SaveState(t.id, worker.StateRunning, snap); err != nil {
-				log.Printf("[workersvc] persist shutdown state %s: %v", t.id, err)
+				log.Printf("[workerlife] persist shutdown state %s: %v", t.id, err)
 			}
 		}
 	}
 }
 
-// ListWorkers returns info for all managed workers, optionally filtered by type.
-func (s *WorkerService) ListWorkers(typ string) []WorkerInfo {
+// List returns info for all managed workers, optionally filtered by type.
+// List returns the live instances' identity and state, optionally filtered by
+// type. Placement is not known here — the control plane fills it in from the
+// manifest.
+func (s *Manager) List(typ string) []worker.WorkerInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var out []WorkerInfo
+	var out []worker.WorkerInfo
 	for _, e := range s.entries {
 		if typ != "" && e.typ != typ {
 			continue
 		}
-		out = append(out, WorkerInfo{
+		out = append(out, worker.WorkerInfo{
 			ID:    e.spec.ID(),
 			Type:  e.typ,
-			State: e.state,
+			State: string(e.state),
 		})
 	}
 	return out
 }
 
-// WorkerInfo is a read-only view of a managed worker.
-type WorkerInfo struct {
-	ID    string             `json:"id"`
-	Type  string             `json:"type"`
-	State worker.WorkerState `json:"state"`
-}
-
-// WorkerType returns the type label for the given worker ID, or false.
-func (s *WorkerService) WorkerType(id string) (string, bool) {
+// Type returns the type label for the given worker ID, or false.
+func (s *Manager) Type(id string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e := s.findLocked(id); e != nil {
@@ -730,15 +662,15 @@ func (s *WorkerService) WorkerType(id string) (string, bool) {
 	return "", false
 }
 
-// HasWorker reports whether the given worker ID is managed by this service.
-func (s *WorkerService) HasWorker(id string) bool {
+// Has reports whether the given worker ID is managed by this service.
+func (s *Manager) Has(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.findLocked(id) != nil
 }
 
 // Worker returns the live ManagedWorker instance for a running worker, or nil.
-func (s *WorkerService) Worker(id string) (worker.ManagedWorker, bool) {
+func (s *Manager) Instance(id string) (worker.ManagedWorker, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e := s.findLocked(id); e != nil && e.worker != nil {
@@ -747,8 +679,8 @@ func (s *WorkerService) Worker(id string) (worker.ManagedWorker, bool) {
 	return nil, false
 }
 
-// LoadAllWorkers returns every persisted worker state record from the store.
-func (s *WorkerService) LoadAllWorkers() ([]StateRecord, error) {
+// LoadAll returns every persisted worker state record from the store.
+func (s *Manager) LoadAll() ([]StateRecord, error) {
 	if s.store == nil {
 		return nil, nil
 	}
@@ -758,18 +690,12 @@ func (s *WorkerService) LoadAllWorkers() ([]StateRecord, error) {
 // RestoreSuspended re-materializes a persisted worker as suspended — it builds
 // the SpawnSpec via the registered builder but does not connect or start it.
 // The snapshot from the persisted record is retained on the entry so a later
-// ResumeWorker replays it (without it, a resumed worker would start empty).
-// The worker is available for a later manual ResumeWorker.
-func (s *WorkerService) RestoreSuspended(cfg worker.WorkerConfig, snapshot []byte) error {
-	s.mu.Lock()
-	b, ok := s.builders[cfg.Type]
-	s.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("workersvc: no builder for type %q", cfg.Type)
-	}
-	spec, err := b(cfg)
+// Resume replays it (without it, a resumed worker would start empty).
+// The worker is available for a later manual Resume.
+func (s *Manager) RestoreSuspended(cfg worker.WorkerConfig, snapshot []byte) error {
+	spec, err := s.buildSpec(cfg)
 	if err != nil {
-		return fmt.Errorf("workersvc: build %q: %w", cfg.ID, err)
+		return err
 	}
 
 	l := s.idLock(spec.ID())
@@ -786,112 +712,61 @@ func (s *WorkerService) RestoreSuspended(cfg worker.WorkerConfig, snapshot []byt
 		state:    worker.StateSuspended,
 		snapshot: snapshot,
 	})
-	log.Printf("[workersvc] restored suspended worker %s (type=%s)", spec.ID(), spec.Type())
+	log.Printf("[workerlife] restored suspended worker %s (type=%s)", spec.ID(), spec.Type())
 	return nil
 }
 
-// RecoverOptions parameterizes RecoverAll: which workers must exist and run,
-// and which must be suspended regardless of their persisted state.
-type RecoverOptions struct {
-	// Workers is the declared worker set to recover, with its config. The
-	// store only holds runtime state, so the definition comes from here; a
-	// persisted state without a declaration is an orphan and is skipped.
-	Workers []worker.WorkerConfig
-	// Essential workers must exist and run: created fresh when absent from the
-	// store, restored to running even when persisted suspended. Their ids are
-	// protected — SuspendWorker and DestroyWorker refuse them.
-	Essential []worker.WorkerConfig
-	// Suspend lists ids that must be suspended regardless of persisted state
-	// (e.g. the webui worker when the webui is not started). Ignored for
-	// Essential workers.
-	Suspend []string
-	// Protect lists ids that are protected from suspend / restart / destroy
-	// without being forced to run. Essential ids are always protected; this is
-	// for control-plane workers the assembly wants to keep alive (the host)
-	// without materializing them when a template does not declare them.
-	Protect []string
-}
-
-// RecoverAll restores the whole worker set: every declared worker is
+// RecoverAll restores the whole declared worker set: every config is
 // re-materialized per its persisted state (running → restore+run, suspended →
-// suspended), then the Essential/Suspend overrides are applied. It is the
-// single startup entry point — the assembly layer only boots the service.
-func (s *WorkerService) RecoverAll(ctx context.Context, opts RecoverOptions) error {
-	recs, err := s.LoadAllWorkers()
+// suspended). protect lists ids that may never be suspended, restarted or
+// destroyed. It is the single startup entry point — the assembly only builds the
+// Manager and calls this.
+func (s *Manager) RecoverAll(ctx context.Context, workers []worker.WorkerConfig, protect []string) error {
+	recs, err := s.LoadAll()
 	if err != nil {
-		return fmt.Errorf("workersvc: load all: %w", err)
+		return fmt.Errorf("workerlife: load all: %w", err)
 	}
 	byID := map[string]StateRecord{}
 	for _, rec := range recs {
 		byID[rec.ID] = rec
 	}
 
-	// Essential ids are protected from suspend/destroy.
-	essentialIDs := map[string]bool{}
-	for _, cfg := range opts.Essential {
-		essentialIDs[cfg.ID] = true
-	}
-	for _, id := range opts.Protect {
-		essentialIDs[id] = true
+	protected := map[string]bool{}
+	for _, id := range protect {
+		protected[id] = true
 	}
 	s.mu.Lock()
-	s.protected = essentialIDs
+	s.protected = protected
 	s.mu.Unlock()
 
-	suspended := map[string]bool{}
-	for _, id := range opts.Suspend {
-		suspended[id] = true
-	}
-
-	restored := map[string]bool{}
-	restoreOne := func(id string, cfg worker.WorkerConfig, rec StateRecord, forceRun bool) error {
-		restored[id] = true
-		if !forceRun && suspended[id] {
-			return s.RestoreSuspended(cfg, rec.Snapshot)
-		}
-		if forceRun || rec.State == worker.StateRunning {
-			if len(rec.Snapshot) > 0 {
-				return s.RestoreAndRun(ctx, cfg, rec.Snapshot)
-			}
-			_, err := s.CreateWorker(ctx, cfg)
-			return err
-		}
-		return s.RestoreSuspended(cfg, rec.Snapshot)
-	}
-
-	for _, cfg := range opts.Essential {
-		rec, ok := byID[cfg.ID]
-		if !ok {
-			if err := s.RestoreAndRun(ctx, cfg, nil); err != nil {
-				return fmt.Errorf("workersvc: recover essential %q: %w", cfg.ID, err)
-			}
-			restored[cfg.ID] = true
-			continue
-		}
-		if err := restoreOne(cfg.ID, cfg, rec, true); err != nil {
-			return fmt.Errorf("workersvc: recover essential %q: %w", cfg.ID, err)
-		}
-	}
-
-	for _, cfg := range opts.Workers {
-		if restored[cfg.ID] {
-			continue
-		}
+	for _, cfg := range workers {
 		rec, ok := byID[cfg.ID]
 		if !ok {
 			// Declared but never started: no persisted state yet means a
 			// fresh start, not a suspended one.
 			rec = StateRecord{ID: cfg.ID, State: worker.StateRunning}
 		}
-		if err := restoreOne(cfg.ID, cfg, rec, false); err != nil {
-			log.Printf("[workersvc] recover worker %s: %v", cfg.ID, err)
+		if err := s.restoreOne(ctx, cfg, rec); err != nil {
+			log.Printf("[workerlife] recover worker %s: %v", cfg.ID, err)
 		}
 	}
 	return nil
 }
 
+// restoreOne materializes one worker per its persisted state.
+func (s *Manager) restoreOne(ctx context.Context, cfg worker.WorkerConfig, rec StateRecord) error {
+	if rec.State == worker.StateRunning {
+		if len(rec.Snapshot) > 0 {
+			return s.RestoreAndRun(ctx, cfg, rec.Snapshot)
+		}
+		_, err := s.Create(ctx, cfg)
+		return err
+	}
+	return s.RestoreSuspended(cfg, rec.Snapshot)
+}
+
 // StopAll stops all registered workers in reverse registration order.
-func (s *WorkerService) StopAll() {
+func (s *Manager) StopAll() {
 	s.mu.Lock()
 	workers := make([]worker.ManagedWorker, 0, len(s.entries))
 	for _, e := range slices.Backward(s.entries) {
@@ -901,20 +776,12 @@ func (s *WorkerService) StopAll() {
 	}
 	s.mu.Unlock()
 	for _, w := range workers {
-		log.Printf("[workersvc] stopping worker %s", w.ID())
+		log.Printf("[workerlife] stopping worker %s", w.ID())
 		_ = w.Stop()
 	}
 }
 
-// Run blocks until ctx is cancelled, then snapshots and stops every worker.
-func (s *WorkerService) Run(ctx context.Context) error {
-	<-ctx.Done()
-	log.Println("[workersvc] shutting down")
-	s.ShutdownSnapshot()
-	s.StopAll()
-	return ctx.Err()
-}
-func (s *WorkerService) findLocked(id string) *workerEntry {
+func (s *Manager) findLocked(id string) *workerEntry {
 	for i := range s.entries {
 		if s.entries[i].spec.ID() == id {
 			return &s.entries[i]

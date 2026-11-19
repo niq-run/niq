@@ -47,8 +47,8 @@ func setupProjectsRoot(t *testing.T) {
 // fakeTemplate returns a small TemplateConfig usable as a project template.
 func fakeTemplate() *project.TemplateConfig {
 	return &project.TemplateConfig{SchemaVersion: 2, Workers: []project.WorkerConfig{
-		{Config: projworker.Config{Type: "hiw", ID: "default-hiw"}},
-		{Config: projworker.Config{Type: "reason", ID: "niq", Params: map[string]any{
+		{Definition: projworker.Definition{Type: "hiw", ID: "default-hiw"}},
+		{Definition: projworker.Definition{Type: "reason", ID: "niq", Params: map[string]any{
 			"provider": "volcan-ark", "model": "deepseek-v4-flash",
 		}}},
 	}}

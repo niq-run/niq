@@ -11,9 +11,9 @@ import (
 // testSupervisor builds a supervisor whose children log to a temp dir rather
 // than inheriting the test process's stdout: a leaked child holding the test
 // binary's output pipe would keep `go test` waiting for it long after PASS.
-func testSupervisor(t *testing.T) *ProcessSupervisor {
+func testSupervisor(t *testing.T) *Supervisor {
 	t.Helper()
-	sv := NewProcessSupervisor("http://127.0.0.1:1", t.TempDir(), func(string, ...any) {})
+	sv := NewSupervisor("http://127.0.0.1:1", t.TempDir(), func(string, ...any) {})
 	sv.initialDelay = 10 * time.Millisecond
 	sv.maxDelay = 30 * time.Millisecond
 	sv.stableAfter = time.Hour
@@ -153,7 +153,7 @@ func TestProcessSupervisorSingleInstance(t *testing.T) {
 // output.
 func TestProcessSupervisorStdoutLog(t *testing.T) {
 	root := t.TempDir()
-	sv := NewProcessSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
+	sv := NewSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
 	sv.initialDelay = 10 * time.Millisecond
 	sv.maxDelay = 30 * time.Millisecond
 	sv.stableAfter = time.Hour
@@ -189,7 +189,7 @@ func TestProcessSupervisorStdoutLog(t *testing.T) {
 // NIQ_STATE_DIR pointing at its persistent state directory.
 func TestProcessSupervisorStateDir(t *testing.T) {
 	root := t.TempDir()
-	sv := NewProcessSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
+	sv := NewSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
 	sv.initialDelay = 10 * time.Millisecond
 	sv.maxDelay = 30 * time.Millisecond
 	sv.stableAfter = time.Hour
@@ -238,7 +238,7 @@ func findStatus(sts []ProcessStatus, id string) *ProcessStatus {
 // restart) leaves it in place.
 func TestProcessSupervisorDestroyRemovesStateDir(t *testing.T) {
 	root := t.TempDir()
-	sv := NewProcessSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
+	sv := NewSupervisor("http://127.0.0.1:1", root, func(string, ...any) {})
 	sv.initialDelay = 10 * time.Millisecond
 	sv.maxDelay = 30 * time.Millisecond
 	sv.stableAfter = time.Hour

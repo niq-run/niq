@@ -43,8 +43,8 @@ func TestProjectsRootHonorsNIQHome(t *testing.T) {
 
 func fakeTemplate() *TemplateConfig {
 	return &TemplateConfig{SchemaVersion: SchemaVersion, Workers: []WorkerConfig{
-		{Config: projworker.Config{Type: "interface", ID: "default-ui"}},
-		{Config: projworker.Config{Type: "reason", ID: "niq", Params: map[string]any{
+		{Definition: projworker.Definition{Type: "interface", ID: "default-ui"}},
+		{Definition: projworker.Definition{Type: "reason", ID: "niq", Params: map[string]any{
 			"provider": "volcan-ark", "model": "deepseek-v4-flash",
 		}}, Placement: projworker.PlacementInProcess},
 	}}
@@ -95,7 +95,7 @@ func TestCreateLoadListProject(t *testing.T) {
 func TestCreateProjectExpandsPlaceholder(t *testing.T) {
 	setupProjectsRoot(t)
 	tpl := &TemplateConfig{Workers: []WorkerConfig{
-		{Config: projworker.Config{Type: "workspace", ID: "ws", Params: map[string]any{
+		{Definition: projworker.Definition{Type: "workspace", ID: "ws", Params: map[string]any{
 			"mounts": []any{"~/.niq/projects/{project}/workspace"},
 		}}, Placement: projworker.PlacementInProcess},
 	}}
@@ -153,11 +153,11 @@ func TestArchiveMovesDeclaration(t *testing.T) {
 func TestCreateProjectProcessWorkers(t *testing.T) {
 	setupProjectsRoot(t)
 	tmpl := &TemplateConfig{Workers: []WorkerConfig{
-		{Config: projworker.Config{Type: "reason", ID: "niq"}},
-		{Config: projworker.Config{Type: "mcp", ID: "mcp-fs", Params: map[string]any{"K": "V"}},
+		{Definition: projworker.Definition{Type: "reason", ID: "niq"}},
+		{Definition: projworker.Definition{Type: "mcp", ID: "mcp-fs", Params: map[string]any{"K": "V"}},
 			Placement: projworker.PlacementManagedProcess,
 			Command:   []string{"npx", "mcp-fs"}, Cwd: "/tmp"},
-		{Config: projworker.Config{Type: "mcp", ID: "remote"},
+		{Definition: projworker.Definition{Type: "mcp", ID: "remote"},
 			Placement: projworker.PlacementUnmanagedProcess},
 	}}
 	if _, err := CreateProject("gamma", "", tmpl); err != nil {

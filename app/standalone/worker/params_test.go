@@ -105,7 +105,7 @@ func TestCheckSpawnParamsRejectsIdentityKeys(t *testing.T) {
 		}
 	}
 }
-func TestDeclFromSpawnCarriesMeta(t *testing.T) {
+func TestManifestFromSpawnCarriesMeta(t *testing.T) {
 	cfg := coreworker.WorkerConfig{
 		ID:          "oncall",
 		Type:        "reason",
@@ -114,7 +114,7 @@ func TestDeclFromSpawnCarriesMeta(t *testing.T) {
 		Tags:        []string{"work", "ops/backup"},
 		Description: "值班专用",
 	}
-	decl := DeclFromSpec(coreworker.WorkerSpec{WorkerConfig: cfg})
+	decl := ManifestFromSpec(coreworker.WorkerSpec{WorkerConfig: cfg})
 	if decl.ID != "oncall" || decl.Type != "reason" {
 		t.Fatalf("decl base = %+v", decl)
 	}

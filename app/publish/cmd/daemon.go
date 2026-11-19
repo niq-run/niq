@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/niq-run/niq/app/standalone/control"
 	"github.com/niq-run/niq/app/niqhome"
+	"github.com/niq-run/niq/app/standalone/control"
 	"github.com/niq-run/niq/app/standalone/project"
 )
 

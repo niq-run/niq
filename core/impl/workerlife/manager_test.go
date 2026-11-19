@@ -1,9 +1,9 @@
-package workersvc
+package workerlife
 
 import (
 	"context"
 	"fmt"
-	"strings"
+	"sync"
 	"testing"
 
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -63,18 +63,46 @@ func (m *memoryStore) Delete(id string) error {
 	return nil
 }
 
-func newServiceWithStore(t *testing.T, _ string) *WorkerService {
+// testBuilder is the type registry a Manager receives: it maps a type label to
+// a builder. Production keeps this table in the worker control plane; here it is
+// minimal.
+type testBuilder struct {
+	mu       sync.Mutex
+	builders map[string]Builder
+}
+
+func newTestBuilder() *testBuilder {
+	return &testBuilder{builders: map[string]Builder{}}
+}
+
+func (b *testBuilder) register(typ string, fn Builder) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.builders[typ] = fn
+}
+
+func (b *testBuilder) Build(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	b.mu.Lock()
+	fn, ok := b.builders[cfg.Type]
+	b.mu.Unlock()
+	if !ok {
+		return worker.SpawnSpec{}, fmt.Errorf("no builder for type %q", cfg.Type)
+	}
+	return fn(cfg)
+}
+
+func newServiceWithStore(t *testing.T, _ string) (*Manager, *testBuilder) {
 	t.Helper()
-	svc := New()
-	svc.SetStore(newMemoryStore())
-	return svc
+	tb := newTestBuilder()
+	svc := New(Config{Store: newMemoryStore(), Build: tb.Build})
+	return svc, tb
 }
 
 // registerFakeBuilder registers a "fake" builder that appends every built
 // worker to the returned slice.
-func registerFakeBuilder(svc *WorkerService) *[]*fakeWorker {
+func registerFakeBuilder(tb *testBuilder) *[]*fakeWorker {
 	built := []*fakeWorker{}
-	svc.RegisterBuilder("fake", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
+	tb.register("fake", func(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 		w := &fakeWorker{id: cfg.ID, snap: []byte("snap")}
 		built = append(built, w)
 		return worker.SpawnSpec{
@@ -86,20 +114,20 @@ func registerFakeBuilder(svc *WorkerService) *[]*fakeWorker {
 	return &built
 }
 
-func workerStatus(svc *WorkerService, id string) WorkerInfo {
-	for _, wi := range svc.ListWorkers("") {
+func workerStatus(svc *Manager, id string) worker.WorkerInfo {
+	for _, wi := range svc.List("") {
 		if wi.ID == id {
 			return wi
 		}
 	}
-	return WorkerInfo{}
+	return worker.WorkerInfo{}
 }
 
 // TestRestoreAndRun verifies a persisted snapshot is replayed onto a freshly
 // built worker before start, and the worker ends up running and persisted.
 func TestRestoreAndRun(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(tb)
 
 	snapshot := []byte("the-persisted-transcript")
 	cfg := worker.WorkerConfig{ID: "reason-worker", Type: "fake", Params: map[string]any{"p": 1}}
@@ -116,12 +144,12 @@ func TestRestoreAndRun(t *testing.T) {
 	if string((*built)[0].restored) != string(snapshot) {
 		t.Fatalf("restored = %q, want %q", (*built)[0].restored, snapshot)
 	}
-	if info := workerStatus(svc, "reason-worker"); info.State != worker.StateRunning {
+	if info := workerStatus(svc, "reason-worker"); info.State != string(worker.StateRunning) {
 		t.Fatalf("state = %s, want running", info.State)
 	}
 
 	// Persisted config + running state should be on disk for a fresh process.
-	recs, err := svc.LoadAllWorkers()
+	recs, err := svc.LoadAll()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -133,15 +161,15 @@ func TestRestoreAndRun(t *testing.T) {
 // TestRestoreAndRunFreshNoSnapshotSkipsRestore verifies a nil/empty snapshot is
 // tolerated (no Restore call) — equivalent to starting a stateless worker.
 func TestRestoreAndRunNoSnapshot(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(tb)
 	if err := svc.RestoreAndRun(context.Background(), worker.WorkerConfig{ID: "x", Type: "fake"}, nil); err != nil {
 		t.Fatalf("RestoreAndRun: %v", err)
 	}
 	if (*built)[0].restored != nil {
 		t.Fatalf("Restore called with %q for nil snapshot", (*built)[0].restored)
 	}
-	if info := workerStatus(svc, "x"); info.State != worker.StateRunning {
+	if info := workerStatus(svc, "x"); info.State != string(worker.StateRunning) {
 		t.Fatalf("state = %s, want running", info.State)
 	}
 }
@@ -151,9 +179,10 @@ func TestRestoreAndRunNoSnapshot(t *testing.T) {
 // replayed), suspended → suspended.
 func TestRecoverAllRespectsPersistedState(t *testing.T) {
 	store := newMemoryStore()
-	svc := New()
+	tb := newTestBuilder()
+	svc := New(Config{Build: tb.Build})
 	svc.SetStore(store)
-	built := registerFakeBuilder(svc)
+	built := registerFakeBuilder(tb)
 
 	// Only the runtime state is persisted; the declaration is the caller's.
 	store.SaveState("run-w", worker.StateRunning, []byte("snap-run"))
@@ -163,14 +192,14 @@ func TestRecoverAllRespectsPersistedState(t *testing.T) {
 		{ID: "run-w", Type: "fake", Params: map[string]any{"p": 1}},
 		{ID: "susp-w", Type: "fake"},
 	}
-	if err := svc.RecoverAll(context.Background(), RecoverOptions{Workers: declared}); err != nil {
+	if err := svc.RecoverAll(context.Background(), declared, nil); err != nil {
 		t.Fatalf("RecoverAll: %v", err)
 	}
 
-	if info := workerStatus(svc, "run-w"); info.State != worker.StateRunning {
+	if info := workerStatus(svc, "run-w"); info.State != string(worker.StateRunning) {
 		t.Fatalf("run-w state = %s, want running", info.State)
 	}
-	if info := workerStatus(svc, "susp-w"); info.State != worker.StateSuspended {
+	if info := workerStatus(svc, "susp-w"); info.State != string(worker.StateSuspended) {
 		t.Fatalf("susp-w state = %s, want suspended", info.State)
 	}
 	// The running worker was restored with its snapshot; the suspended one was
@@ -185,69 +214,36 @@ func TestRecoverAllRespectsPersistedState(t *testing.T) {
 	}
 }
 
-// TestRecoverAllEssentialAndSuspend verifies the Essential/Suspend overrides:
-// essential workers are created when absent and force-run when suspended; ids
-// in Suspend are suspended even when persisted running.
-func TestRecoverAllEssentialAndSuspend(t *testing.T) {
-	store := newMemoryStore()
-	svc := New()
-	svc.SetStore(store)
-	_ = registerFakeBuilder(svc)
-
-	// webui-hiw persisted as suspended (defensive) + a worker persisted running.
-	store.SaveState("webui-hiw", worker.StateSuspended, []byte("snap-hiw"))
-	store.SaveState("idle", worker.StateRunning, []byte("snap-idle"))
-
-	opts := RecoverOptions{
-		Workers:   []worker.WorkerConfig{{ID: "idle", Type: "fake"}},
-		Essential: []worker.WorkerConfig{{ID: "webui-hiw", Type: "fake"}, {ID: "absent-essential", Type: "fake"}},
-		Suspend:   []string{"idle"},
-	}
-	if err := svc.RecoverAll(context.Background(), opts); err != nil {
-		t.Fatalf("RecoverAll: %v", err)
-	}
-
-	// Essential suspended → force-run; essential absent → created running.
-	if info := workerStatus(svc, "webui-hiw"); info.State != worker.StateRunning {
-		t.Fatalf("webui-hiw state = %s, want running (essential force-run)", info.State)
-	}
-	if info := workerStatus(svc, "absent-essential"); info.State != worker.StateRunning {
-		t.Fatalf("absent-essential state = %s, want running", info.State)
-	}
-	// Suspend set wins over persisted running.
-	if info := workerStatus(svc, "idle"); info.State != worker.StateSuspended {
-		t.Fatalf("idle state = %s, want suspended", info.State)
-	}
-}
-
-// TestProtectedWorkersCannotBeSuspendedOrDestroyed verifies essential ids are
-// protected after RecoverAll.
+// TestProtectedWorkersCannotBeSuspendedOrDestroyed verifies ids handed to
+// RecoverAll's protect list are protected afterwards.
 func TestProtectedWorkersCannotBeSuspendedOrDestroyed(t *testing.T) {
 	store := newMemoryStore()
-	svc := New()
+	tb := newTestBuilder()
+	svc := New(Config{Build: tb.Build})
 	svc.SetStore(store)
-	registerFakeBuilder(svc)
+	registerFakeBuilder(tb)
 
 	store.SaveState("essential-w", worker.StateRunning, nil)
 
-	if err := svc.RecoverAll(context.Background(), RecoverOptions{
-		Essential: []worker.WorkerConfig{{ID: "essential-w", Type: "fake"}},
-	}); err != nil {
+	if err := svc.RecoverAll(context.Background(),
+		[]worker.WorkerConfig{{ID: "essential-w", Type: "fake"}},
+		[]string{"essential-w"},
+	); err != nil {
 		t.Fatalf("RecoverAll: %v", err)
 	}
-	if err := svc.SuspendWorker("essential-w"); err == nil {
-		t.Fatal("SuspendWorker on protected worker should fail")
+	if err := svc.Suspend("essential-w"); err == nil {
+		t.Fatal("Suspend on protected worker should fail")
 	}
-	if err := svc.DestroyWorker("essential-w"); err == nil {
-		t.Fatal("DestroyWorker on protected worker should fail")
+	if err := svc.Destroy("essential-w"); err == nil {
+		t.Fatal("Destroy on protected worker should fail")
 	}
 	// A non-essential worker is not protected.
 	store.SaveState("plain", worker.StateRunning, nil)
-	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "plain", Type: "fake"}); err != nil {
+	if _, err := svc.Create(context.Background(), worker.WorkerConfig{ID: "plain", Type: "fake"}); err != nil {
 		t.Fatalf("create plain: %v", err)
 	}
-	if err := svc.SuspendWorker("plain"); err != nil {
-		t.Fatalf("SuspendWorker on non-protected should succeed: %v", err)
+	if err := svc.Suspend("plain"); err != nil {
+		t.Fatalf("Suspend on non-protected should succeed: %v", err)
 	}
 }
 
@@ -255,19 +251,18 @@ func TestProtectedWorkersCannotBeSuspendedOrDestroyed(t *testing.T) {
 // RecoverAll replays its snapshot when later resumed.
 func TestRestoreSuspendedKeepsSnapshot(t *testing.T) {
 	store := newMemoryStore()
-	svc := New()
+	tb := newTestBuilder()
+	svc := New(Config{Build: tb.Build})
 	svc.SetStore(store)
-	built := registerFakeBuilder(svc)
+	built := registerFakeBuilder(tb)
 
 	store.SaveState("w", worker.StateSuspended, []byte("snap-w"))
 
-	if err := svc.RecoverAll(context.Background(), RecoverOptions{
-		Workers: []worker.WorkerConfig{{ID: "w", Type: "fake"}},
-	}); err != nil {
+	if err := svc.RecoverAll(context.Background(), []worker.WorkerConfig{{ID: "w", Type: "fake"}}, nil); err != nil {
 		t.Fatalf("RecoverAll: %v", err)
 	}
-	if err := svc.ResumeWorker(context.Background(), "w"); err != nil {
-		t.Fatalf("ResumeWorker: %v", err)
+	if err := svc.Resume(context.Background(), "w"); err != nil {
+		t.Fatalf("Resume: %v", err)
 	}
 	for _, w := range *built {
 		if w.id == "w" && string(w.restored) != "snap-w" {
@@ -280,12 +275,12 @@ func TestRestoreSuspendedKeepsSnapshot(t *testing.T) {
 // current state to the store — the path a runtime provider switch takes so it
 // survives a crash rather than waiting for suspend/shutdown.
 func TestCheckpointPersistsRunningState(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(tb)
 
 	cfg := worker.WorkerConfig{ID: "reason-worker", Type: "fake"}
-	if _, err := svc.CreateWorker(context.Background(), cfg); err != nil {
-		t.Fatalf("CreateWorker: %v", err)
+	if _, err := svc.Create(context.Background(), cfg); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
 	// The worker's state changed after it was created (e.g. a provider switch).
 	(*built)[0].snap = []byte("after-switch")
@@ -294,7 +289,7 @@ func TestCheckpointPersistsRunningState(t *testing.T) {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 
-	recs, err := svc.LoadAllWorkers()
+	recs, err := svc.LoadAll()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -312,14 +307,14 @@ func TestCheckpointPersistsRunningState(t *testing.T) {
 // TestCheckpointRejectsNonRunning verifies Checkpoint refuses workers it cannot
 // snapshot: unknown ids and suspended ones (whose state is already persisted).
 func TestCheckpointRejectsNonRunning(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	registerFakeBuilder(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	registerFakeBuilder(tb)
 
-	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
-		t.Fatalf("CreateWorker: %v", err)
+	if _, err := svc.Create(context.Background(), worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	if err := svc.SuspendWorker("w"); err != nil {
-		t.Fatalf("SuspendWorker: %v", err)
+	if err := svc.Suspend("w"); err != nil {
+		t.Fatalf("Suspend: %v", err)
 	}
 	if err := svc.Checkpoint("w"); err == nil {
 		t.Fatal("Checkpoint on a suspended worker should fail")
@@ -329,112 +324,30 @@ func TestCheckpointRejectsNonRunning(t *testing.T) {
 	}
 }
 
-// TestCreateWorkerRejectsUnknownParams pins the spawn boundary: a parameter a
-// type does not read fails the call before the builder runs, instead of
-// producing a worker that silently ignores it.
-func TestCreateWorkerRejectsUnknownParams(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
-	svc.RegisterParamCheck("fake", func(params map[string]any) error {
-		if _, ok := params["bogus"]; ok {
-			return fmt.Errorf("unknown spawn parameter %q", "bogus")
-		}
-		return nil
-	})
-
-	_, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{
-		ID: "rejected", Type: "fake", Params: map[string]any{"bogus": 1},
-	})
-	if err == nil || !strings.Contains(err.Error(), "bogus") {
-		t.Fatalf("CreateWorker = %v, want the unknown-parameter error", err)
-	}
-	if len(*built) != 0 {
-		t.Fatalf("builder ran %d time(s), want 0: the check must reject first", len(*built))
-	}
-	if svc.HasWorker("rejected") {
-		t.Fatal("a rejected spawn must not register the worker")
-	}
-}
-
-// TestCreateWorkerAcceptsCheckedParams verifies a passing check does not stop
-// the normal path — the worker is built and running.
-func TestCreateWorkerAcceptsCheckedParams(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
-	svc.RegisterParamCheck("fake", func(map[string]any) error { return nil })
-
-	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "ok", Type: "fake"}); err != nil {
-		t.Fatalf("CreateWorker: %v", err)
-	}
-	if len(*built) != 1 {
-		t.Fatalf("built %d worker(s), want 1", len(*built))
-	}
-	if info := workerStatus(svc, "ok"); info.State != worker.StateRunning {
-		t.Fatalf("state = %s, want running", info.State)
-	}
-}
-
-// TestRestoreAndRunSkipsParamCheck pins that recovery is deliberately not gated
-// by the spawn check: a declaration accepted by an earlier build must still
-// start, even if a key it carries is no longer part of the spawn contract.
-func TestRestoreAndRunSkipsParamCheck(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
-	svc.RegisterParamCheck("fake", func(map[string]any) error {
-		return fmt.Errorf("unknown spawn parameter %q", "legacy")
-	})
-
-	cfg := worker.WorkerConfig{ID: "legacy", Type: "fake", Params: map[string]any{"legacy": true}}
-	if err := svc.RestoreAndRun(context.Background(), cfg, []byte("snap")); err != nil {
-		t.Fatalf("RestoreAndRun = %v, want recovery to bypass the spawn check", err)
-	}
-	if len(*built) != 1 || !(*built)[0].started {
-		t.Fatalf("built = %+v, want one started worker", *built)
-	}
-}
-
-// TestRegisteredTypes verifies the builder registry is introspectable, which is
-// what lets the assembly layer assert that every type it can build also has its
-// per-type knowledge (spawn-parameter validation) registered.
-func TestRegisteredTypes(t *testing.T) {
-	svc := New()
-	svc.RegisterBuilder("b", fakeBuilder)
-	svc.RegisterBuilder("a", fakeBuilder)
-
-	got := svc.RegisteredTypes()
-	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
-		t.Fatalf("RegisteredTypes = %v, want [a b] (sorted)", got)
-	}
-}
-
-func fakeBuilder(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
-	return worker.SpawnSpec{Config: cfg}, nil
-}
-
 // TestRestartWorkerKeepsState verifies a restart replays the persisted snapshot
 // onto the freshly built instance: construction inputs come from the new config,
 // state the worker already owns survives. That is the same sequence recovery and
 // resume use, so every way of bringing a worker up means one thing.
 func TestRestartWorkerKeepsState(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(tb)
 	ctx := context.Background()
 
-	if _, err := svc.CreateWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake", Params: map[string]any{"v": "old"}}); err != nil {
-		t.Fatalf("CreateWorker: %v", err)
+	if _, err := svc.Create(ctx, worker.WorkerConfig{ID: "w", Type: "fake", Params: map[string]any{"v": "old"}}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
 	// Suspend so the store holds a snapshot and the worker is not running: a
 	// restart must still replace it (suspended entries are restartable).
-	if err := svc.SuspendWorker("w"); err != nil {
-		t.Fatalf("SuspendWorker: %v", err)
+	if err := svc.Suspend("w"); err != nil {
+		t.Fatalf("Suspend: %v", err)
 	}
 	store := svc.store.(*memoryStore)
 	if rec := store.recs["w"]; len(rec.Snapshot) == 0 || rec.State != worker.StateSuspended {
 		t.Fatalf("store after suspend = %+v, want a suspended snapshot", rec)
 	}
 
-	if err := svc.RestartWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake", Params: map[string]any{"v": "new"}}); err != nil {
-		t.Fatalf("RestartWorker: %v", err)
+	if err := svc.Restart(ctx, worker.WorkerConfig{ID: "w", Type: "fake", Params: map[string]any{"v": "new"}}); err != nil {
+		t.Fatalf("Restart: %v", err)
 	}
 
 	if len(*built) != 2 {
@@ -447,7 +360,7 @@ func TestRestartWorkerKeepsState(t *testing.T) {
 	if !fresh.started {
 		t.Fatal("fresh worker was not started")
 	}
-	if got := workerStatus(svc, "w"); got.State != worker.StateRunning {
+	if got := workerStatus(svc, "w"); got.State != string(worker.StateRunning) {
 		t.Fatalf("state = %q, want running", got.State)
 	}
 	// The snapshot must survive: state is what the worker owns, not something a
@@ -460,18 +373,18 @@ func TestRestartWorkerKeepsState(t *testing.T) {
 // TestRestartWorkerSnapshotsRunning verifies a restart of a live instance
 // snapshots it first, so nothing the worker learned between starts is lost.
 func TestRestartWorkerSnapshotsRunning(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(tb)
 	ctx := context.Background()
 
-	if _, err := svc.CreateWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
-		t.Fatalf("CreateWorker: %v", err)
+	if _, err := svc.Create(ctx, worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
 	// Newer state than the store holds (spawn persisted no snapshot).
 	(*built)[0].snap = []byte("learned-since-start")
 
-	if err := svc.RestartWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake", Params: map[string]any{"v": "new"}}); err != nil {
-		t.Fatalf("RestartWorker: %v", err)
+	if err := svc.Restart(ctx, worker.WorkerConfig{ID: "w", Type: "fake", Params: map[string]any{"v": "new"}}); err != nil {
+		t.Fatalf("Restart: %v", err)
 	}
 	if len(*built) != 2 {
 		t.Fatalf("built %d workers, want 2", len(*built))
@@ -487,19 +400,19 @@ func TestRestartWorkerSnapshotsRunning(t *testing.T) {
 // TestRestartWorkerTypeChangeDropsSnapshot verifies a type change does not replay
 // a blob that belongs to a different implementation.
 func TestRestartWorkerTypeChangeDropsSnapshot(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	_, other := registerTwoFakeBuilders(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	_, other := registerTwoFakeBuilders(tb)
 	ctx := context.Background()
 
-	if _, err := svc.CreateWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
-		t.Fatalf("CreateWorker: %v", err)
+	if _, err := svc.Create(ctx, worker.WorkerConfig{ID: "w", Type: "fake"}); err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	if err := svc.SuspendWorker("w"); err != nil {
-		t.Fatalf("SuspendWorker: %v", err)
+	if err := svc.Suspend("w"); err != nil {
+		t.Fatalf("Suspend: %v", err)
 	}
 
-	if err := svc.RestartWorker(ctx, worker.WorkerConfig{ID: "w", Type: "fake2"}); err != nil {
-		t.Fatalf("RestartWorker: %v", err)
+	if err := svc.Restart(ctx, worker.WorkerConfig{ID: "w", Type: "fake2"}); err != nil {
+		t.Fatalf("Restart: %v", err)
 	}
 	if len(*other) != 1 {
 		t.Fatalf("built %d fake2 workers, want 1", len(*other))
@@ -512,23 +425,23 @@ func TestRestartWorkerTypeChangeDropsSnapshot(t *testing.T) {
 // TestRestartWorkerUnknownIDCreates verifies one path serves "restart" and
 // "start from declaration" (the WebUI's declared-but-stopped case).
 func TestRestartWorkerUnknownIDCreates(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(tb)
 
-	if err := svc.RestartWorker(context.Background(), worker.WorkerConfig{ID: "fresh", Type: "fake"}); err != nil {
-		t.Fatalf("RestartWorker: %v", err)
+	if err := svc.Restart(context.Background(), worker.WorkerConfig{ID: "fresh", Type: "fake"}); err != nil {
+		t.Fatalf("Restart: %v", err)
 	}
-	if len(*built) != 1 || !svc.HasWorker("fresh") {
-		t.Fatalf("built = %d, has = %v; want a running fresh worker", len(*built), svc.HasWorker("fresh"))
+	if len(*built) != 1 || !svc.Has("fresh") {
+		t.Fatalf("built = %d, has = %v; want a running fresh worker", len(*built), svc.Has("fresh"))
 	}
 }
 
 // registerTwoFakeBuilders registers "fake" and "fake2", each recording the
 // instances it builds, for the type-change test.
-func registerTwoFakeBuilders(svc *WorkerService) (first, second *[]*fakeWorker) {
+func registerTwoFakeBuilders(tb *testBuilder) (first, second *[]*fakeWorker) {
 	f, s := []*fakeWorker{}, []*fakeWorker{}
-	svc.RegisterBuilder("fake", fakeBuilderFor(&f))
-	svc.RegisterBuilder("fake2", fakeBuilderFor(&s))
+	tb.register("fake", fakeBuilderFor(&f))
+	tb.register("fake2", fakeBuilderFor(&s))
 	return &f, &s
 }
 
@@ -548,18 +461,18 @@ func fakeBuilderFor(built *[]*fakeWorker) Builder {
 // does not leave a live, undeclared worker behind, and that the resolved
 // config is still returned so the caller can diagnose it.
 func TestCreateWorkerRollsBackWhenSpawnHookFails(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(tb)
 	svc.SetSpawnHook(func(worker.WorkerConfig) error { return fmt.Errorf("disk full") })
 
-	resolved, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "rollback", Type: "fake"})
+	resolved, err := svc.Create(context.Background(), worker.WorkerConfig{ID: "rollback", Type: "fake"})
 	if err == nil {
-		t.Fatal("CreateWorker succeeded despite spawn-hook failure")
+		t.Fatal("Create succeeded despite spawn-hook failure")
 	}
 	if resolved.ID != "rollback" {
 		t.Fatalf("resolved id = %q, want rollback", resolved.ID)
 	}
-	if svc.HasWorker("rollback") {
+	if svc.Has("rollback") {
 		t.Fatal("worker is still registered after rollback")
 	}
 	if _, ok := svc.store.(*memoryStore).recs["rollback"]; ok {
@@ -573,16 +486,16 @@ func TestCreateWorkerRollsBackWhenSpawnHookFails(t *testing.T) {
 // TestCreateWorkerDuplicateDoesNotBuildOrStartAVisibleWorker verifies the
 // duplicate check happens before a second instance is exposed.
 func TestCreateWorkerDuplicateDoesNotBuildOrStartAVisibleWorker(t *testing.T) {
-	svc := newServiceWithStore(t, t.TempDir())
-	built := registerFakeBuilder(svc)
+	svc, tb := newServiceWithStore(t, t.TempDir())
+	built := registerFakeBuilder(tb)
 
-	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "dup", Type: "fake"}); err != nil {
-		t.Fatalf("first CreateWorker: %v", err)
+	if _, err := svc.Create(context.Background(), worker.WorkerConfig{ID: "dup", Type: "fake"}); err != nil {
+		t.Fatalf("first Create: %v", err)
 	}
-	if _, err := svc.CreateWorker(context.Background(), worker.WorkerConfig{ID: "dup", Type: "fake"}); err == nil {
-		t.Fatal("second CreateWorker succeeded for a duplicate id")
+	if _, err := svc.Create(context.Background(), worker.WorkerConfig{ID: "dup", Type: "fake"}); err == nil {
+		t.Fatal("second Create succeeded for a duplicate id")
 	}
-	if got := len(svc.ListWorkers("")); got != 1 {
+	if got := len(svc.List("")); got != 1 {
 		t.Fatalf("workers = %d, want 1", got)
 	}
 	_ = built

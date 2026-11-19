@@ -1,9 +1,13 @@
 // Bus identity and credential provisioning for third-party workers.
 //
-//   - ProvisionManagedProcess: a short-lived credential + in-memory identity for
-//     a child the host launches (placement managed-process).
-//   - ProvisionUnmanagedProcess: a durable credential + identity for a worker
-//     that dials in on its own (placement unmanaged-process).
+//   - ProvisionManagedProcess: a child the host launches. Its grants are durable
+//     (they survive restarts and ACL edits), but its credential is minted per
+//     launch into the temporary tier and never persisted.
+//   - ProvisionUnmanagedProcess: a worker that dials in on its own. Its grants
+//     and credential are both durable, so it can reconnect across restarts.
+//
+// Both write through the bus control plane — the single owner of identity data
+// — and return the credential to hand to the child.
 //
 // It does not supervise anything; process lifecycle lives in supervisor.go.
 package process
@@ -22,10 +26,9 @@ import (
 // ── identity and credential provisioning ──
 
 // BuildRemoteIdentity assembles the remotable identity record for a
-// third-party worker from its declaration. Remote is set so the transport
-// authenticates it: this is a worker that is allowed (indeed expected) to
-// connect over the HTTP bus, unlike an in-process worker whose id must never be
-// claimable there.
+// third-party worker. Remote is set so the transport authenticates it: this is
+// a worker that is allowed (indeed expected) to connect over the HTTP bus,
+// unlike an in-process worker whose id must never be claimable there.
 func BuildRemoteIdentity(spec *IdentitySpec) corebus.Identity {
 	subAllow := spec.Subscriptions
 	if len(subAllow) == 0 {
@@ -66,7 +69,6 @@ func BuildRemoteIdentity(spec *IdentitySpec) corebus.Identity {
 		Type:           spec.Type,
 		PublishAllow:   pubAllow,
 		SubscribeAllow: subAllow,
-		Credential:     spec.Credential,
 		Remote:         true,
 	}
 }
@@ -74,8 +76,7 @@ func BuildRemoteIdentity(spec *IdentitySpec) corebus.Identity {
 // persistRemoteTokenTTL is the DEFAULT lifetime of a provisioned remote
 // identity's signed token (180 days). A provisioned remote worker reuses the
 // persisted token across bus restarts, so the cap forces periodic
-// re-provisioning rather than infinitely-valid credentials. The expiry can be
-// overridden per-worker via Declaration.TokenTTLSeconds.
+// re-provisioning rather than infinitely-valid credentials.
 const persistRemoteTokenTTL = 180 * 24 * time.Hour
 
 // tempTokenTTL is the fixed backstop lifetime of a managed-process worker's
@@ -83,65 +84,112 @@ const persistRemoteTokenTTL = 180 * 24 * time.Hour
 // deliberately NOT configurable — its real lifetime is the child's lifetime.
 const tempTokenTTL = 30 * 24 * time.Hour
 
-// ttlFor resolves a worker's token lifetime: an explicit TokenTTLSeconds wins,
-// otherwise the default for the provisioning class.
-func ttlFor(spec *IdentitySpec, def time.Duration) time.Duration {
-	if spec != nil && spec.TokenTTLSeconds != nil && *spec.TokenTTLSeconds > 0 {
-		return time.Duration(*spec.TokenTTLSeconds) * time.Second
-	}
-	return def
-}
-
-// ProvisionManagedProcess provisions a worker process the host itself
-// launches: a short-lived signed token and an identity that lives in the
-// in-memory tier of a LayeredRegistry for the duration of the main process.
-// Nothing is persisted to project.json. The token is handed to the spawned
-// child via its environment (NIQ_WORKER_CREDENTIAL) and dies when the process
-// (or the identity's memory tier) goes away.
-func ProvisionManagedProcess(registry corebus.IdentityRegistry, signer *eventbus.TokenSigner, spec *IdentitySpec) error {
+// ProvisionManagedProcess provisions a child the host itself launches. The
+// durable identity record carries the grants (so an ACL edit survives a
+// restart) but no credential; a fresh token is minted per launch and registered
+// in the temporary tier, which is where the transport authenticates it. The
+// token is returned for the child's environment.
+func ProvisionManagedProcess(registry corebus.IdentityRegistry, signer *eventbus.TokenSigner, control corebus.Control, spec IdentitySpec) (string, error) {
 	if signer == nil {
-		return fmt.Errorf("provision %s: no token signer configured", spec.ID)
+		return "", fmt.Errorf("provision %s: no token signer configured", spec.ID)
+	}
+	if control == nil {
+		return "", fmt.Errorf("provision %s: no bus control plane", spec.ID)
+	}
+	idt, ok := control.Lookup(spec.ID)
+	switch {
+	case !ok:
+		idt = BuildRemoteIdentity(&spec)
+		idt.Credential = "" // never persisted
+		if err := control.Register(idt); err != nil {
+			return "", err
+		}
+	case idt.PublishAllow == nil && idt.SubscribeAllow == nil:
+		// A migrated/legacy record with no grants yet: seed the type default.
+		seed := BuildRemoteIdentity(&spec)
+		if err := control.UpdateACL(spec.ID, seed.PublishAllow, seed.SubscribeAllow); err != nil {
+			return "", err
+		}
+		idt.PublishAllow, idt.SubscribeAllow = seed.PublishAllow, seed.SubscribeAllow
 	}
 	tok, err := signer.Mint(spec.ID, tempTokenTTL)
 	if err != nil {
-		return err
+		return "", err
 	}
-	spec.Credential = tok
-	return RegisterTempIdentity(registry, BuildRemoteIdentity(spec))
+	idt.Credential = tok
+	if err := RegisterTempIdentity(registry, idt); err != nil {
+		return "", err
+	}
+	return tok, nil
 }
 
 // ProvisionUnmanagedProcess provisions a remotely-connected worker — one the
 // host did NOT launch (a third party dials in on its own) — with a durable
-// identity and a long-lived signed token. First provisioning mints the token
-// and persists it to the declaration; later runs reuse it (the bus verifies
-// the token by signature, and the signing secret also persists). The identity
-// (Remote=true) is registered durably so it survives restarts.
-func ProvisionUnmanagedProcess(registry corebus.IdentityRegistry, signer *eventbus.TokenSigner, store CredentialStore, spec *IdentitySpec) error {
+// identity and a long-lived signed token. The first provisioning mints the
+// token and persists it through the bus control plane; later runs reuse it (the
+// bus verifies the token by signature, and the signing secret also persists).
+func ProvisionUnmanagedProcess(control corebus.Control, signer *eventbus.TokenSigner, spec IdentitySpec) (string, error) {
 	if signer == nil {
-		return fmt.Errorf("provision %s: no token signer configured", spec.ID)
+		return "", fmt.Errorf("provision %s: no token signer configured", spec.ID)
 	}
-	if spec.Credential == "" {
-		tok, err := signer.Mint(spec.ID, ttlFor(spec, persistRemoteTokenTTL))
+	if control == nil {
+		return "", fmt.Errorf("provision %s: no bus control plane", spec.ID)
+	}
+	cur, ok := control.Lookup(spec.ID)
+	if !ok {
+		idt := BuildRemoteIdentity(&spec)
+		tok, err := signer.Mint(spec.ID, persistRemoteTokenTTL)
 		if err != nil {
-			return err
+			return "", err
 		}
-		spec.Credential = tok
-		if store != nil {
-			if err := store.SetCredential(spec.ID, spec.Credential); err != nil {
-				return err
-			}
+		idt.Credential = tok
+		if err := control.Register(idt); err != nil {
+			return "", err
 		}
+		return tok, nil
 	}
-	return RegisterIdentity(registry, BuildRemoteIdentity(spec))
+	// A stored grant is authoritative; only an unseeded record takes the
+	// caller's grant.
+	if cur.PublishAllow == nil && cur.SubscribeAllow == nil && (spec.Publish != nil || spec.Subscriptions != nil) {
+		if err := control.UpdateACL(spec.ID, spec.Publish, spec.Subscriptions); err != nil {
+			return "", err
+		}
+		cur.PublishAllow, cur.SubscribeAllow = spec.Publish, spec.Subscriptions
+	}
+	if cur.Credential != "" {
+		return cur.Credential, nil
+	}
+	tok, err := signer.Mint(spec.ID, persistRemoteTokenTTL)
+	if err != nil {
+		return "", err
+	}
+	if err := control.SetCredential(spec.ID, tok); err != nil {
+		return "", err
+	}
+	return tok, nil
 }
 
-// RegisterIdentity registers id with the bus registry, treating a pre-existing
-// identity as a re-run to refresh rather than an error. Registration is
-// idempotent: an identity that already exists has its allow lists updated to
-// match. If the stored credential differs from the one carried now (a newly
-// rotated external-worker credential), the old identity is revoked and
-// re-registered — an in-process identity always carries an empty credential, so
-// this branch never fires for it.
+// RegisterTempIdentity registers a temporary (process-lifetime) identity. It
+// prefers the in-memory tier of a LayeredRegistry so the id dies with the main
+// process; if the registry has no temp tier it falls back to a durable
+// registration so an unlayered registry still works in isolation. A stale temp
+// entry for the same id (from a prior provision before a respawn) is replaced
+// so re-provisioning is idempotent.
+func RegisterTempIdentity(registry corebus.IdentityRegistry, id corebus.Identity) error {
+	if lyr, ok := registry.(*eventbus.LayeredRegistry); ok {
+		if err := lyr.RegisterTemp(id); err == nil {
+			return nil
+		}
+		lyr.RevokeTemp(id.WorkerID)
+		return lyr.RegisterTemp(id)
+	}
+	return RegisterIdentity(registry, id)
+}
+
+// RegisterIdentity registers id with a plain identity registry, treating a
+// pre-existing identity as a re-run to refresh rather than an error. Used by
+// tests and unlayered registries; production goes through the bus control
+// plane.
 func RegisterIdentity(registry corebus.IdentityRegistry, id corebus.Identity) error {
 	err := registry.Register(id)
 	if err == nil {
@@ -163,26 +211,9 @@ func RegisterIdentity(registry corebus.IdentityRegistry, id corebus.Identity) er
 	return registry.Update(id.WorkerID, id.PublishAllow, id.SubscribeAllow)
 }
 
-// RegisterTempIdentity registers a temporary (process-lifetime) identity. It
-// prefers the in-memory tier of a LayeredRegistry so the id dies with the main
-// process; if the registry has no temp tier it falls back to a durable
-// registration so an unlayered registry still works in isolation. A stale temp
-// entry for the same id (from a prior provision before a respawn) is replaced
-// so re-provisioning is idempotent.
-func RegisterTempIdentity(registry corebus.IdentityRegistry, id corebus.Identity) error {
-	if lyr, ok := registry.(*eventbus.LayeredRegistry); ok {
-		if err := lyr.RegisterTemp(id); err == nil {
-			return nil
-		}
-		lyr.RevokeTemp(id.WorkerID)
-		return lyr.RegisterTemp(id)
-	}
-	return RegisterIdentity(registry, id)
-}
-
 // ResolveSecret resolves a credential that may be a literal value or an
 // "env:VAR" / "file:PATH" reference. References keep remote credentials out of
-// the declaration; a bare value passes through unchanged.
+// the manifest; a bare value passes through unchanged.
 func ResolveSecret(s string) string {
 	if s == "" {
 		return s

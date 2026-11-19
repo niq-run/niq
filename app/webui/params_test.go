@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
@@ -25,6 +26,7 @@ type lifecycleRig struct {
 	server   *Server
 	addr     string
 	hostReqs chan map[string]any
+	bus      corebus.Control
 }
 
 // fakeHost is a minimal host worker: it receives lifecycle events and answers
@@ -41,11 +43,16 @@ func newLifecycleRig(t *testing.T) *lifecycleRig {
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}
+	identityStore, err := busctl.NewFileStore(filepath.Join(dir, "bus-identities.json"))
+	if err != nil {
+		t.Fatalf("identity store: %v", err)
+	}
+	bus := busctl.New(identityStore, registry)
 	for _, id := range []corebus.Identity{
 		{WorkerID: "webui", Type: "interface", PublishAllow: []event.PublishPattern{event.NewPublishPattern("*")}},
 		{WorkerID: "host", Type: "host", PublishAllow: []event.PublishPattern{event.NewPublishPattern("request.*")}},
 	} {
-		if err := registry.Register(id); err != nil {
+		if err := bus.Register(id); err != nil {
 			t.Fatalf("register %s: %v", id.WorkerID, err)
 		}
 	}
@@ -71,6 +78,7 @@ func newLifecycleRig(t *testing.T) *lifecycleRig {
 	// The app-hosted interface worker: the app IS its backend, and receives the
 	// bus handler through SetHandler just as in production.
 	uiApp := New(log, engine, &stubCatalog{}, registry, ":0", false)
+	uiApp.SetBusControl(bus)
 	uiCh := inprocess.NewWorkerSide("webui", listener)
 	if err := uiCh.Connect(ctx, "inproc://test"); err != nil {
 		t.Fatalf("connect webui: %v", err)
@@ -129,7 +137,7 @@ func newLifecycleRig(t *testing.T) *lifecycleRig {
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
-	return &lifecycleRig{server: s, addr: addr, hostReqs: host.reqs}
+	return &lifecycleRig{server: s, addr: addr, hostReqs: host.reqs, bus: bus}
 }
 
 // TestLifecycleEndpointsGoThroughHost verifies the WebUI has no privileged

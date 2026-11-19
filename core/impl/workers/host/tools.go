@@ -25,10 +25,6 @@ const (
 	// TypeArchive moves a worker in or out of the archived set: one operation,
 	// because "stop it, hide its declaration, drop its identity" is one intent.
 	TypeArchive event.EventType = "archive"
-	// TypeUpdateACL edits a worker's bus identity: its publish/subscribe grants.
-	// It is a separate tool from `update` because it is a different domain —
-	// identity data owned by the bus control plane, not a worker's declaration.
-	TypeUpdateACL event.EventType = "acl.update"
 )
 
 // registerExtensions declares the host tools: each is an extension served by
@@ -226,47 +222,6 @@ func (w *HostWorker) registerExtensions() {
 		w.reply(evt, result, err)
 	})
 
-	if w.acl != nil {
-		w.Register(baseworker.Extension{
-			Event:       TypeUpdateACL,
-			Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"updated"}}}),
-			Description: "Edit a worker's bus identity: what it may publish and what it subscribes to. Both lists are replaced wholesale. This is identity data, not lifecycle: it takes effect immediately for routing, it is persisted into the worker's declaration (the durable source), and it does not restart anything. A worker that is not declared or registered is an error.",
-			Parameters: obj(map[string]any{
-				"worker_id": map[string]any{
-					"type":        "string",
-					"description": "ID of the worker whose grants change.",
-				},
-				"publish_allow": map[string]any{
-					"type":        "array",
-					"description": "Grants to publish. Each entry is {type, target?}: the event type (supports \"*\" and \"Prefix.*\") and, optionally, the only target a directed send may reach. Replaces the whole list.",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"type":   map[string]any{"type": "string"},
-							"target": map[string]any{"type": "string"},
-						},
-						"required": []string{"type"},
-					},
-				},
-				"subscribe_allow": map[string]any{
-					"type":        "array",
-					"description": "Grants to subscribe. Each entry is {type, source?}: the event pattern and, optionally, the only worker whose broadcasts it accepts (omitted means any). Replaces the whole list.",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"type":   map[string]any{"type": "string"},
-							"source": map[string]any{"type": "string"},
-						},
-						"required": []string{"type"},
-					},
-				},
-			}),
-		}, func(evt event.Event) {
-			tc := baseworker.ParseToolCall(evt)
-			result, err := w.handleUpdateACL(tc)
-			w.reply(evt, result, err)
-		})
-	}
 }
 
 // reply answers a tool invocation with request.completed / request.failed.
@@ -280,8 +235,8 @@ func (w *HostWorker) reply(evt event.Event, result any, err error) {
 
 // liftDisplayMeta strips the display-only spawn arguments (label / tags /
 // description) out of the construction params and returns them, so builders
-// never see them. They travel on typed fields and land in the project
-// declaration for the WebUI selector/filter; the params map is mutated in place
+// never see them. They travel on typed fields and land in the project manifest
+// for the WebUI selector/filter; the params map is mutated in place
 // and keeps every type-specific key.
 func liftDisplayMeta(args map[string]any) (label string, tags []string, desc string) {
 	label = strings.TrimSpace(baseworker.ArgString(args, "label"))
@@ -316,23 +271,6 @@ func liftACL(args map[string]any) (pub []event.PublishPattern, sub []event.Event
 	return pub, sub
 }
 
-// liftTokenTTL pulls the optional credential lifetime out of the spawn args. It
-// only applies to a persisted (unmanaged-process) credential: a managed-process
-// credential's lifetime is its child process.
-func liftTokenTTL(args map[string]any) *int64 {
-	raw, ok := args["token_ttl_seconds"]
-	if !ok {
-		return nil
-	}
-	delete(args, "token_ttl_seconds")
-	f, ok := raw.(float64)
-	if !ok || f <= 0 {
-		return nil
-	}
-	ttl := int64(f)
-	return &ttl
-}
-
 func liftPlacement(args map[string]any) (placement worker.Placement, command []string, cwd string) {
 	placement = worker.Placement(strings.TrimSpace(baseworker.ArgString(args, "placement")))
 	command = baseworker.ArgStrings(args, "command")
@@ -358,7 +296,7 @@ func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 		return "", fmt.Errorf("type is required")
 	}
 	id := baseworker.ArgString(tc.Args, "id")
-	// type/id are identity fields, not construction params. The declaration
+	// type/id are identity fields, not construction params. The manifest
 	// carries them; a builder must not see them inside params (and a
 	// managed-process child must not receive them as env).
 	delete(tc.Args, "type")
@@ -367,12 +305,10 @@ func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 	label, tags, desc := liftDisplayMeta(tc.Args)
 	placement, command, cwd := liftPlacement(tc.Args)
 	publish, subscribe := liftACL(tc.Args)
-	ttl := liftTokenTTL(tc.Args)
 	spec := worker.WorkerSpec{
-		Placement:       placement,
-		Command:         command,
-		Cwd:             cwd,
-		TokenTTLSeconds: ttl,
+		Placement: placement,
+		Command:   command,
+		Cwd:       cwd,
 	}
 	spec.ID = id
 	spec.Type = typ
@@ -479,7 +415,7 @@ func (w *HostWorker) handleUpdate(tc baseworker.ToolCall) (any, error) {
 		return "", err
 	}
 	// A patch field counts as "given" only when the caller actually sent it:
-	// an omitted key leaves that part of the declaration alone, while an empty
+	// an omitted key leaves that part of the manifest alone, while an empty
 	// string / list / object clears it.
 	patch := worker.WorkerPatch{}
 	if v, ok := tc.Args["label"]; ok {
@@ -522,46 +458,4 @@ func (w *HostWorker) handleArchive(tc baseworker.ToolCall) (any, error) {
 		return "", err
 	}
 	return map[string]any{"worker_id": id, "archived": archived}, nil
-}
-
-func (w *HostWorker) handleUpdateACL(tc baseworker.ToolCall) (any, error) {
-	id, err := workerIDArg(tc)
-	if err != nil {
-		return "", err
-	}
-	publish, subscribe, err := liftACLLists(tc.Args)
-	if err != nil {
-		return "", err
-	}
-	if err := w.acl.UpdateACL(id, publish, subscribe); err != nil {
-		return "", err
-	}
-	return map[string]any{"worker_id": id, "status": "updated"}, nil
-}
-
-// liftACLLists decodes the two grant lists from a tool call. A missing list is an
-// empty grant set, not "keep the old one": this tool replaces both wholesale, so
-// the caller always says what the worker may do.
-func liftACLLists(args map[string]any) ([]event.PublishPattern, []event.EventPattern, error) {
-	var publish []event.PublishPattern
-	if raw, ok := args["publish_allow"]; ok {
-		b, err := json.Marshal(raw)
-		if err != nil {
-			return nil, nil, fmt.Errorf("publish_allow: %w", err)
-		}
-		if err := json.Unmarshal(b, &publish); err != nil {
-			return nil, nil, fmt.Errorf("publish_allow: %w", err)
-		}
-	}
-	var subscribe []event.EventPattern
-	if raw, ok := args["subscribe_allow"]; ok {
-		b, err := json.Marshal(raw)
-		if err != nil {
-			return nil, nil, fmt.Errorf("subscribe_allow: %w", err)
-		}
-		if err := json.Unmarshal(b, &subscribe); err != nil {
-			return nil, nil, fmt.Errorf("subscribe_allow: %w", err)
-		}
-	}
-	return publish, subscribe, nil
 }

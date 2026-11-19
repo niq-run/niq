@@ -129,7 +129,11 @@ type Server struct {
 	eventLog *eventbusapi.EventLog
 	engine   *eventbus.Engine
 	registry corebus.IdentityRegistry
-	catalog  worker.Catalog
+	catalog  worker.Manifest
+	// busControl is the durable identity control plane. ACL edits are a direct
+	// control-plane write (identity is not lifecycle, and it does not belong in
+	// the bus event world), so the WebUI calls it instead of the host worker.
+	busControl corebus.Control
 
 	ctxMu   sync.RWMutex
 	context ContextInfo
@@ -155,7 +159,7 @@ type Server struct {
 
 // New creates a WebUI Server.
 // devMode enables Vite-proxy mode (frontend runs on :5173, APIs stay on addr).
-func New(el *eventbusapi.EventLog, engine *eventbus.Engine, catalog worker.Catalog, registry corebus.IdentityRegistry, addr string, devMode bool) *Server {
+func New(el *eventbusapi.EventLog, engine *eventbus.Engine, catalog worker.Manifest, registry corebus.IdentityRegistry, addr string, devMode bool) *Server {
 	s := &Server{eventLog: el, engine: engine, catalog: catalog, registry: registry, devMode: devMode}
 	mux := http.NewServeMux()
 
@@ -315,12 +319,10 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-// SetWorkerCatalog attaches the lifecycle read model: which workers are
-// declared, where each one runs, and what state its owner reports. Every write
-// still goes to the host worker — the catalog is display and decision input
-// only.
-func (s *Server) SetWorkerCatalog(c worker.Catalog) {
-	s.catalog = c
+// SetBusControl attaches the durable identity control plane, which ACL edits go
+// through. Nil disables PUT /api/workers/{id}/allow.
+func (s *Server) SetBusControl(c corebus.Control) {
+	s.busControl = c
 }
 
 // SetContext records the mode context the single SPA should render in. Safe to
@@ -673,11 +675,20 @@ func (s *Server) handleDeleteProgram(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetArchived(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(s.archivedIDs())
+}
+
+// archivedIDs returns the ids in the archived set, sorted by id.
+func (s *Server) archivedIDs() []string {
+	out := []string{}
 	if s.catalog == nil {
-		json.NewEncoder(w).Encode([]string{})
-		return
+		return out
 	}
-	json.NewEncoder(w).Encode(s.catalog.Archived())
+	for _, info := range s.catalog.List(true) {
+		out = append(out, info.ID)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // handleSetArchived toggles whether a worker is archived. The whole move is one
@@ -700,11 +711,7 @@ func (s *Server) handleSetArchived(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	out := []string{}
-	if s.catalog != nil {
-		out = s.catalog.Archived()
-	}
-	json.NewEncoder(w).Encode(map[string]any{"archived": out})
+	json.NewEncoder(w).Encode(map[string]any{"archived": s.archivedIDs()})
 }
 
 // handleContext reports the SPA mode context.
@@ -981,21 +988,13 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		online[id] = true
 	}
 
-	// Declarations (labels, tags, params) come from the same catalog, read live
-	// so the view reflects edits, creates and destroys immediately.
-	var decls map[string]worker.Decl
-	if s.catalog != nil {
-		decls = s.catalog.Declarations()
-	}
-
-	// The lifecycle catalog is the authority on who is declared, where each
-	// worker runs and what state its owner reports. Registry entries supply the
-	// identity details (credential, ACL, online); the catalog supplies the
-	// declaration view, including never-started workers.
+	// The manifest catalog is the authority on who is declared, where each
+	// worker runs, what state its owner reports, and the display metadata.
+	// Registry entries supply the identity details (credential, ACL, online).
 	catalog := map[string]worker.WorkerInfo{}
 	var infos []worker.WorkerInfo
 	if s.catalog != nil {
-		infos = s.catalog.List()
+		infos = s.catalog.List(false)
 		for _, info := range infos {
 			catalog[info.ID] = info
 		}
@@ -1006,11 +1005,9 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if d, ok := decls[v.ID]; ok {
-			v.Label, v.Tags, v.Description = d.Label, d.Tags, d.Description
-			if v.Params == nil {
-				v.Params = d.Params
-			}
+		v.Label, v.Tags, v.Description = info.Label, info.Tags, info.Description
+		if v.Params == nil {
+			v.Params = info.Params
 		}
 		v.Placement = string(info.Placement)
 		switch info.Placement {
@@ -1063,7 +1060,7 @@ func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
 // declaredIn reports whether the catalog knows the worker, so an offline but
 // declared worker can still have its grants edited (the next start registers the
 // identity and picks the persisted grant up).
-func declaredIn(c worker.Catalog, id string) bool {
+func declaredIn(c worker.Manifest, id string) bool {
 	_, ok, err := c.Get(id)
 	return err == nil && ok
 }
@@ -1114,14 +1111,35 @@ func (s *Server) handleUpdateAllow(w http.ResponseWriter, r *http.Request) {
 		subAllow = out
 	}
 
-	// One bus call, one owner: the host routes it to the identity administrator,
-	// which persists the grant into the declaration (the durable source) and then
-	// applies it to the runtime registry.
-	if _, err := s.callHost(r.Context(), "acl.update", map[string]any{
-		"worker_id":       id,
-		"publish_allow":   pubAllow,
-		"subscribe_allow": subAllow,
-	}); err != nil {
+	// One write, one owner: the bus control plane persists the grant and
+	// projects it onto the runtime registry in that order.
+	if s.busControl == nil {
+		http.Error(w, "ACL editing is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// A declared worker that never started has no identity record yet. Materialize
+	// it here — the manifest knows its type and placement — so the grant can be
+	// written before the worker's first start.
+	if _, ok := s.busControl.Lookup(id); !ok {
+		info, ok, err := s.catalog.Get(id)
+		if err != nil {
+			http.Error(w, "read worker: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.Error(w, "worker not found", http.StatusNotFound)
+			return
+		}
+		if err := s.busControl.Register(corebus.Identity{
+			WorkerID: id,
+			Type:     info.Type,
+			Remote:   info.Placement != worker.PlacementInProcess,
+		}); err != nil {
+			http.Error(w, "create identity: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+	}
+	if err := s.busControl.UpdateACL(id, pubAllow, subAllow); err != nil {
 		http.Error(w, "update allow: "+err.Error(), http.StatusBadGateway)
 		return
 	}

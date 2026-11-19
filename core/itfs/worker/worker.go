@@ -7,9 +7,9 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
-// Worker is the contract for built-in Go workers running inside
-// WorkerService. External workers connect to the bus via UDS/WS
-// and are not constrained by this interface.
+// Worker is the contract for built-in Go workers running inside the
+// workerlife manager. External workers connect to the bus via UDS/WS and are
+// not constrained by this interface.
 type Worker interface {
 	// ID returns the unique identifier of this Worker.
 	ID() string
@@ -70,10 +70,10 @@ type WorkerConfig struct {
 	// of the id. Display metadata only — the id stays the identity on the bus.
 	Label string `json:"label,omitempty"`
 
-	// PublishAllow / SubscribeAllow are the worker's bus ACL. They are part of
-	// the declaration (workers.json) and are handed to the builder so it can
-	// register the identity without consulting a second store. Empty means
-	// "use the type's default".
+	// PublishAllow / SubscribeAllow are a SEED for the worker's bus identity,
+	// handed to the builder when it first registers. The durable grants belong
+	// to the bus control plane; an identity that already exists keeps them.
+	// Empty means "use the type's default".
 	PublishAllow   []event.PublishPattern `json:"publish_allow,omitempty"`
 	SubscribeAllow []event.EventPattern   `json:"subscribe_allow,omitempty"`
 }

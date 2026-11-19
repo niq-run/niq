@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,12 +9,12 @@ import (
 	"testing"
 
 	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
+	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/iface"
-	"github.com/niq-run/niq/core/impl/workersvc"
+	"github.com/niq-run/niq/core/impl/workerlife"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
-	"github.com/niq-run/niq/core/itfs/event"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
@@ -126,63 +125,65 @@ func TestBuildNIQSpecReadsParams(t *testing.T) {
 }
 
 // TestSpawnParamsCoverEveryBuilder is the invariant behind per-type validation:
-// a type the service can build must also declare what its spawn accepts,
-// otherwise a new builder would quietly ship without a check.
+// a type that can be built must also declare what its spawn accepts, otherwise
+// a new builder would quietly ship without a check.
 func TestSpawnParamsCoverEveryBuilder(t *testing.T) {
-	svc := workersvc.New()
-	RegisterBuilders(BuildContext{}, svc)
+	te := newTestEngine(t)
 
-	for _, typ := range svc.RegisteredTypes() {
+	for _, typ := range te.types.Types() {
 		if _, ok := SpawnParamsByType[typ]; !ok {
 			t.Errorf("builder type %q has no spawn-parameter contract in SpawnParamsByType", typ)
 		}
 	}
 	for typ := range SpawnParamsByType {
-		if !slices.Contains(svc.RegisteredTypes(), typ) {
+		if !slices.Contains(te.types.Types(), typ) {
 			t.Errorf("SpawnParamsByType declares %q, but no builder is registered for it", typ)
 		}
 	}
 }
 
-// TestSpawnRejectsUnknownParamsEndToEnd drives the real registration path: the
-// host's CreateWorker call must fail on the check and never reach the builder.
-func TestSpawnRejectsUnknownParamsEndToEnd(t *testing.T) {
-	svc := workersvc.New()
-	RegisterBuilders(BuildContext{}, svc)
+// TestSpawnRejectsUnknownParams verifies the type's spawn contract guards the
+// boundary before a builder runs.
+func TestSpawnRejectsUnknownParams(t *testing.T) {
+	te := newTestEngine(t)
 
-	_, err := svc.CreateWorker(context.Background(), coreworker.WorkerConfig{
+	err := te.types.Validate(coreworker.WorkerConfig{
 		ID: "analyst", Type: "reason",
 		Params: map[string]any{"type": "reason", "id": "analyst", "prompt": "Triage issues."},
 	})
 	if err == nil {
-		t.Fatal("CreateWorker accepted an unread spawn parameter")
+		t.Fatal("Validate accepted an unread spawn parameter")
 	}
 	if !strings.Contains(err.Error(), `"prompt"`) || !strings.Contains(err.Error(), "reason accepts") {
 		t.Fatalf("err = %q, want the unknown-parameter error with the accepted list", err)
 	}
-	if svc.HasWorker("analyst") {
+	if te.mgr.Has("analyst") {
 		t.Fatal("the rejected spawn still registered a worker")
 	}
 }
 
 // ── harness: a project assembly without the network ──
-//
+
+// testEngine is the type registry, the manager it feeds, and the build context
+// both need.
+type testEngine struct {
+	types *typeRegistry
+	bc    BuildContext
+	mgr   *workerlife.Manager
+}
+
 // newTestEngine wires up a registry, engine and in-process listener exactly as
-// runAssembly does, returning the build context, worker service and the store dir.
-func newTestEngine(t *testing.T) (BuildContext, *workersvc.WorkerService) {
+// runAssembly does.
+func newTestEngine(t *testing.T) *testEngine {
 	t.Helper()
 	dir := t.TempDir()
-
-	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(dir, "id", "identities.json"))
-	if err != nil {
-		t.Fatalf("registry: %v", err)
-	}
+	registry := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
 	return newTestEngineWith(t, dir, registry)
 }
 
 // newTestEngineWith is newTestEngine over a caller-supplied registry, so a test
 // can pre-seed persisted identities (an upgrade from an older contract).
-func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegistry) (BuildContext, *workersvc.WorkerService) {
+func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegistry) *testEngine {
 	t.Helper()
 
 	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
@@ -200,58 +201,69 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 		}
 	}()
 
-	svc := workersvc.New()
-	bc := BuildContext{
-		Registry:  registry,
-		Listener:  listener,
-		Engine:    engine,
-		WorkerSvc: svc,
+	store, err := busctl.NewFileStore(filepath.Join(dir, "identities.json"))
+	if err != nil {
+		t.Fatalf("identity store: %v", err)
 	}
-	RegisterBuilders(bc, svc)
-	return bc, svc
+	bus := busctl.New(store, registry)
+	types := newTypeRegistry()
+	mgr := workerlife.New(workerlife.Config{Build: types.Build})
+	bc := BuildContext{
+		Registry: registry,
+		Bus:      bus,
+		Listener: listener,
+		Engine:   engine,
+		Manager:  mgr,
+	}
+	registerBuilders(bc, types)
+	return &testEngine{types: types, bc: bc, mgr: mgr}
 }
 
 // ── lifecycle over the real builders ──
 //
 // build.go constructs a worker; these drive what it then does through the
-// worker service: suspend/resume, recovery from the state store, and the ACL
-// grants its identity carries.
+// manager: suspend/resume and the identity its connect path ensures.
 
 func TestWorkspaceSuspendResume(t *testing.T) {
-	_, svc := newTestEngine(t)
+	te := newTestEngine(t)
 	ctx := context.Background()
 
-	if _, err := svc.CreateWorker(ctx, coreworker.WorkerConfig{
+	if err := te.types.Validate(coreworker.WorkerConfig{
+		Type: "workspace", Params: map[string]any{"mounts": []string{t.TempDir()}},
+	}); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if _, err := te.mgr.Create(ctx, coreworker.WorkerConfig{
 		Type: "workspace", Params: map[string]any{"mounts": []string{t.TempDir()}},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	wsID := firstWorkerOfType(svc, "workspace")
+	wsID := firstWorkerOfType(te.mgr, "workspace")
 	if wsID == "" {
 		t.Fatal("no workspace worker created")
 	}
 
-	if info := workerStatus(svc, wsID); info.State != coreworker.StateRunning {
+	if info := workerStatus(te.mgr, wsID); info.State != string(coreworker.StateRunning) {
 		t.Fatalf("expected running, got %s", info.State)
 	}
 
-	if err := svc.SuspendWorker(wsID); err != nil {
+	if err := te.mgr.Suspend(wsID); err != nil {
 		t.Fatalf("suspend: %v", err)
 	}
-	if info := workerStatus(svc, wsID); info.State != coreworker.StateSuspended {
+	if info := workerStatus(te.mgr, wsID); info.State != string(coreworker.StateSuspended) {
 		t.Fatalf("expected suspended, got %s", info.State)
 	}
 
-	if err := svc.ResumeWorker(ctx, wsID); err != nil {
+	if err := te.mgr.Resume(ctx, wsID); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if info := workerStatus(svc, wsID); info.State != coreworker.StateRunning {
+	if info := workerStatus(te.mgr, wsID); info.State != string(coreworker.StateRunning) {
 		t.Fatalf("expected running after resume, got %s", info.State)
 	}
 }
 
-func firstWorkerOfType(svc *workersvc.WorkerService, typ string) string {
-	for _, wi := range svc.ListWorkers("") {
+func firstWorkerOfType(mgr *workerlife.Manager, typ string) string {
+	for _, wi := range mgr.List("") {
 		if wi.Type == typ {
 			return wi.ID
 		}
@@ -259,13 +271,13 @@ func firstWorkerOfType(svc *workersvc.WorkerService, typ string) string {
 	return ""
 }
 
-func workerStatus(svc *workersvc.WorkerService, id string) workersvc.WorkerInfo {
-	for _, wi := range svc.ListWorkers("") {
+func workerStatus(mgr *workerlife.Manager, id string) coreworker.WorkerInfo {
+	for _, wi := range mgr.List("") {
 		if wi.ID == id {
 			return wi
 		}
 	}
-	return workersvc.WorkerInfo{}
+	return coreworker.WorkerInfo{}
 }
 
 // TestReasonFamilyRejectsUnknownProvider verifies a reason worker must name a
@@ -299,103 +311,4 @@ func TestReasonFamilyRejectsUnknownProvider(t *testing.T) {
 	if in.pname != "known" || in.pmodel != "m1" {
 		t.Fatalf("resolved %s/%s, want known/m1", in.pname, in.pmodel)
 	}
-}
-
-// TestSubscriptionSpecParsing verifies a subscription entry accepts both the
-// bare type string and the {"type","source"} object form.
-func TestSubscriptionSpecParsing(t *testing.T) {
-	raw := `{"workers":[{"type":"reason","id":"r","subscriptions":[
-		"worker.discover",
-		{"type":"request.completed","source":"timer"}
-	]}]}`
-	ws := parseDeclarations(t, raw)
-	subs := ws[0].Subscriptions
-	if len(subs) != 2 {
-		t.Fatalf("subscriptions = %+v, want 2 entries", subs)
-	}
-	if subs[0].Type != "worker.discover" || subs[0].Source != "" {
-		t.Fatalf("string entry = %+v, want type-only worker.discover", subs[0])
-	}
-	if subs[1].Type != "request.completed" || subs[1].Source != "timer" {
-		t.Fatalf("object entry = %+v, want request.completed from timer", subs[1])
-	}
-
-	// The declaration's subscription specs lower to the identity ACL.
-	patterns := SpawnConfig(ws[0]).SubscribeAllow
-	if len(patterns) != 2 {
-		t.Fatalf("patterns = %+v, want 2", patterns)
-	}
-	if patterns[0].Type != "worker.discover" || !patterns[0].UnrestrictedSource() {
-		t.Fatalf("pattern[0] = %+v, want worker.discover from any source", patterns[0])
-	}
-	if patterns[0].SourceID != "*" {
-		t.Fatalf("pattern[0].SourceID = %q, want the canonical %q", patterns[0].SourceID, "*")
-	}
-	if patterns[1].Type != "request.completed" || patterns[1].SourceID != "timer" {
-		t.Fatalf("pattern[1] = %+v, want request.completed/timer", patterns[1])
-	}
-	if !patterns[1].Matches(event.New("request.completed", "timer", nil)) {
-		t.Fatal("pattern[1] should match request.completed from timer")
-	}
-	if patterns[1].Matches(event.New("request.completed", "niq", nil)) {
-		t.Fatal("pattern[1] must reject request.completed from another source")
-	}
-}
-
-// TestSubAllowFromParams verifies the template-first / hardcoded-default rule.
-func TestSubAllowFromParams(t *testing.T) {
-	// Configured subscriptions win, source preserved.
-	ws := parseDeclarations(t, `{"workers":[{"type":"reason","id":"r","subscriptions":["worker.ready",{"type":"request.completed","source":"niq"}]}]}`)
-	_, got := aclFor(SpawnConfig(ws[0]), nil, []event.EventPattern{event.NewPattern("worker.discover")})
-	if len(got) != 2 || got[0].Type != "worker.ready" || got[1].SourceID != "niq" {
-		t.Fatalf("configured subs not honored: %+v", got)
-	}
-
-	// No config → hardcoded defaults.
-	empty := parseDeclarations(t, `{"workers":[{"type":"reason","id":"r"}]}`)
-	_, got = aclFor(SpawnConfig(empty[0]), nil, []event.EventPattern{event.NewPattern("worker.discover")})
-	if len(got) != 1 || got[0].Type != "worker.discover" {
-		t.Fatalf("defaults not used: %+v", got)
-	}
-}
-
-// TestPublishSpecs verifies publish config entries parse and normalize: a bare
-// string grant is unrestricted (target "*"), and an object may add a target
-// restriction.
-func TestPublishSpecs(t *testing.T) {
-	ws := parseDeclarations(t, `{"workers":[{"type":"reason","id":"r","publish":["request.completed",{"type":"worker.discover","target":"ws-1"}]}]}`)
-	specs := ws[0].Publish
-	if len(specs) != 2 {
-		t.Fatalf("publish = %+v, want 2", specs)
-	}
-	if specs[0].Type != "request.completed" || !specs[0].ToPublishPattern().BroadcastAllowed("request.completed") {
-		t.Fatalf("bare publish spec not unrestricted: %+v", specs[0])
-	}
-	if specs[1].Type != "worker.discover" || specs[1].Target != "ws-1" {
-		t.Fatalf("targeted publish spec wrong: %+v", specs[1])
-	}
-	if specs[1].ToPublishPattern().BroadcastAllowed("worker.discover") {
-		t.Fatalf("targeted publish spec must not broadcast: %+v", specs[1])
-	}
-
-	// The declaration's publish specs lower to the identity ACL.
-	got := SpawnConfig(ws[0]).PublishAllow
-	if len(got) != 2 || got[0].Target != "*" || got[1].Target != "ws-1" {
-		t.Fatalf("publish patterns = %+v, want [* @ws-1]", got)
-	}
-}
-
-// parseDeclarations decodes the worker list of a template/config body. It is
-// deliberately not the template package's parser: these tests are about how a
-// DECLARATION's ACL fields lower into bus patterns, and depending on the layer
-// above would invert the dependency for nothing.
-func parseDeclarations(t *testing.T, raw string) []Declaration {
-	t.Helper()
-	var cfg struct {
-		Workers []Declaration `json:"workers"`
-	}
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatalf("parse declarations: %v", err)
-	}
-	return cfg.Workers
 }

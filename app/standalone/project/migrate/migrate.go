@@ -21,6 +21,8 @@ import (
 	"strings"
 
 	projworker "github.com/niq-run/niq/app/standalone/worker"
+	"github.com/niq-run/niq/core/impl/busctl"
+	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
@@ -50,7 +52,12 @@ func EnsureProject(dir string) error {
 			// vocabulary is still being settled: bring a project written against an
 			// older spelling up to date in place. This is a NAME normalization, not
 			// a format change, so the schema version stays 2.
-			return normalizeNames(dir)
+			if err := normalizeNames(dir); err != nil {
+				return err
+			}
+			// Identity data used to live inline in workers.json. Move it to the
+			// bus identity store, which is now its single owner.
+			return migrateInlineIdentities(dir)
 		}
 		// Metadata is already schema 2 but the active file is missing: create
 		// an empty one rather than re-running the legacy conversion.
@@ -62,8 +69,9 @@ func EnsureProject(dir string) error {
 	archivedMap, _ := meta["archived"].(map[string]any)
 	identities, _ := readIdentities(filepath.Join(dir, "id", "identities.json"))
 
-	active := make([]*projworker.Declaration, 0, len(legacyWorkers))
-	archived := make([]*projworker.Declaration, 0)
+	active := make([]*projworker.Manifest, 0, len(legacyWorkers))
+	archived := make([]*projworker.Manifest, 0)
+	var identitiesOut []corebus.Identity
 	var orphans []string
 	known := map[string]bool{}
 
@@ -72,11 +80,18 @@ func EnsureProject(dir string) error {
 		if !ok {
 			continue
 		}
-		d, err := convertWorker(wm, identities)
+		var legacy *legacyIdentity
+		if ident, ok := identities[stringValue(wm["id"])]; ok {
+			legacy = &ident
+		}
+		d, idt, err := convertWorker(wm, legacy)
 		if err != nil {
 			return err
 		}
 		known[d.ID] = true
+		if idt != nil {
+			identitiesOut = append(identitiesOut, *idt)
+		}
 		isArchived := boolValue(wm["archived"]) || boolValue(archivedMap[d.ID])
 		if isArchived {
 			archived = append(archived, &d)
@@ -114,6 +129,9 @@ func EnsureProject(dir string) error {
 	}
 	if err := writeJSON(filepath.Join(dir, "workers.archived.json"), map[string]any{"schema_version": schemaVersion, "workers": archived}); err != nil {
 		return err
+	}
+	if err := busctl.WriteFile(filepath.Join(dir, "identities.json"), identitiesOut); err != nil {
+		return fmt.Errorf("migrate: write identities: %w", err)
 	}
 
 	// root_secret moves from id/ to the project root. The bytes are unchanged,
@@ -175,18 +193,17 @@ func EnsureTemplates(dir string) error {
 			continue
 		}
 		legacyWorkers, _ := tmpl["workers"].([]any)
-		workers := make([]*projworker.Declaration, 0, len(legacyWorkers))
+		workers := make([]*projworker.Manifest, 0, len(legacyWorkers))
 		for _, rawWorker := range legacyWorkers {
 			wm, ok := rawWorker.(map[string]any)
 			if !ok {
 				continue
 			}
-			d, err := convertWorker(wm, nil)
+			d, _, err := convertWorker(wm, nil)
 			if err != nil {
 				log.Printf("[migrate] template %s: %v", path, err)
 				continue
 			}
-			d.Credential = ""
 			workers = append(workers, &d)
 		}
 		if err := backup(path); err != nil {
@@ -203,67 +220,21 @@ func EnsureTemplates(dir string) error {
 	return nil
 }
 
-// convertWorker turns one legacy worker map into a schema-2 declaration.
-func convertWorker(wm map[string]any, identities map[string]legacyIdentity) (projworker.Declaration, error) {
-	d := projworker.Declaration{}
+// convertWorker turns one legacy worker map into a schema-2 manifest, plus the
+// bus identity the worker carried inline (nil when it carried none: its
+// identity is then seeded from the type default at first connect).
+func convertWorker(wm map[string]any, legacy *legacyIdentity) (projworker.Manifest, *corebus.Identity, error) {
+	d := projworker.Manifest{}
 	d.ID = stringValue(wm["id"])
 	d.Type = stringValue(wm["type"])
 	if d.ID == "" || d.Type == "" {
-		return d, fmt.Errorf("worker missing id/type: %v", wm)
+		return d, nil, fmt.Errorf("worker missing id/type: %v", wm)
 	}
 	d.Label = stringValue(wm["label"])
 	d.Tags = stringSlice(wm["tags"])
 	d.Description = stringValue(wm["description"])
-
-	// Placement: explicit field wins, otherwise the legacy pair.
-	switch p := stringValue(wm["placement"]); p {
-	case "in-process", "managed-process", "unmanaged-process":
-		d.Placement = projworker.Placement(p)
-	default:
-		managed := true
-		if raw, ok := wm["managed"]; ok && raw != nil {
-			managed = boolValue(raw)
-		}
-		remote := boolValue(wm["remote"])
-		switch {
-		case managed:
-			d.Placement = projworker.PlacementInProcess
-		case remote:
-			d.Placement = projworker.PlacementUnmanagedProcess
-		default:
-			d.Placement = projworker.PlacementManagedProcess
-		}
-	}
-
-	// Identity data: declaration first, then the old registry record.
-	ident, hasIdent := identities[d.ID]
-	if raw, ok := wm["publish"]; ok {
-		_ = jsonRoundTrip(raw, &d.Publish)
-	} else if hasIdent {
-		d.Publish = publishSpecs(ident.PublishAllow)
-	}
-	if raw, ok := wm["subscriptions"]; ok {
-		_ = jsonRoundTrip(raw, &d.Subscriptions)
-	} else if hasIdent {
-		d.Subscriptions = subscriptionSpecs(ident.SubscribeAllow)
-	}
-	d.Credential = stringValue(wm["credential"])
-	if d.Credential == "" && hasIdent {
-		d.Credential = ident.Credential
-	}
-	if ttl, ok := number(wm["token_ttl_seconds"]); ok {
-		v := int64(ttl)
-		d.TokenTTLSeconds = &v
-	}
-
-	// A local process credential is never persisted; managed/in-process drop it.
-	if d.Placement != projworker.PlacementUnmanagedProcess {
-		d.Credential = ""
-	}
-	// TTL is only meaningful for a persisted remote credential.
-	if d.Placement != projworker.PlacementUnmanagedProcess {
-		d.TokenTTLSeconds = nil
-	}
+	d.Placement = placementFromMap(wm)
+	idt := identityFromLegacy(d.ID, d.Type, d.Placement, wm, legacy)
 
 	d.Command = stringSlice(wm["command"])
 	d.Cwd = stringValue(wm["cwd"])
@@ -290,7 +261,7 @@ func convertWorker(wm map[string]any, identities map[string]legacyIdentity) (pro
 	if env, ok := wm["env"].(map[string]any); ok {
 		for k, v := range env {
 			if existing, dup := params[k]; dup && !sameJSON(existing, v) {
-				return d, fmt.Errorf("worker %s: env key %q conflicts with params", d.ID, k)
+				return d, nil, fmt.Errorf("worker %s: env key %q conflicts with params", d.ID, k)
 			}
 			params[k] = v
 		}
@@ -300,7 +271,7 @@ func convertWorker(wm map[string]any, identities map[string]legacyIdentity) (pro
 			continue
 		}
 		if existing, dup := params[k]; dup && !sameJSON(existing, v) {
-			return d, fmt.Errorf("worker %s: top-level %q conflicts with params", d.ID, k)
+			return d, nil, fmt.Errorf("worker %s: top-level %q conflicts with params", d.ID, k)
 		}
 		params[k] = v
 	}
@@ -311,7 +282,7 @@ func convertWorker(wm map[string]any, identities map[string]legacyIdentity) (pro
 		log.Printf("[migrate] worker %s: unmanaged-process cannot carry params; dropping %d", d.ID, len(d.Params))
 		d.Params = nil
 	}
-	return d, nil
+	return d, idt, nil
 }
 
 type legacyIdentity struct {
@@ -338,20 +309,118 @@ func readIdentities(path string) (map[string]legacyIdentity, error) {
 	return out, nil
 }
 
-func publishSpecs(ps []event.PublishPattern) []projworker.PublishSpec {
-	out := make([]projworker.PublishSpec, 0, len(ps))
-	for _, p := range ps {
-		out = append(out, projworker.PublishSpec{Type: p.Type, Target: p.Target})
+// placementFromMap resolves a legacy worker's placement: an explicit field
+// wins, otherwise the managed/remote pair.
+func placementFromMap(wm map[string]any) projworker.Placement {
+	switch p := stringValue(wm["placement"]); p {
+	case "in-process", "managed-process", "unmanaged-process":
+		return projworker.Placement(p)
 	}
-	return out
+	managed := true
+	if raw, ok := wm["managed"]; ok && raw != nil {
+		managed = boolValue(raw)
+	}
+	switch {
+	case managed:
+		return projworker.PlacementInProcess
+	case boolValue(wm["remote"]):
+		return projworker.PlacementUnmanagedProcess
+	default:
+		return projworker.PlacementManagedProcess
+	}
 }
 
-func subscriptionSpecs(ps []event.EventPattern) []projworker.SubscriptionSpec {
-	out := make([]projworker.SubscriptionSpec, 0, len(ps))
-	for _, p := range ps {
-		out = append(out, projworker.SubscriptionSpec{Type: p.Type, Source: p.SourceID})
+// identityFromLegacy lifts the inline identity data of a legacy worker into the
+// bus identity record. It returns nil when the worker carried no explicit grant
+// and no credential — such an identity is seeded from the type default when the
+// worker first connects, which is what happened before this split too.
+func identityFromLegacy(id, typ string, placement projworker.Placement, wm map[string]any, legacy *legacyIdentity) *corebus.Identity {
+	idt := corebus.Identity{
+		WorkerID: id,
+		Type:     typ,
+		Remote:   placement != projworker.PlacementInProcess,
 	}
-	return out
+	seeded := false
+	if raw, ok := wm["publish"]; ok {
+		_ = jsonRoundTrip(raw, &idt.PublishAllow)
+		seeded = true
+	} else if legacy != nil && len(legacy.PublishAllow) > 0 {
+		idt.PublishAllow = legacy.PublishAllow
+		seeded = true
+	}
+	if raw, ok := wm["subscriptions"]; ok {
+		_ = jsonRoundTrip(raw, &idt.SubscribeAllow)
+		seeded = true
+	} else if legacy != nil && len(legacy.SubscribeAllow) > 0 {
+		idt.SubscribeAllow = legacy.SubscribeAllow
+		seeded = true
+	}
+	// Only a self-started worker keeps a durable credential; a host-launched
+	// child's credential lives and dies with the child.
+	if placement == projworker.PlacementUnmanagedProcess {
+		idt.Credential = stringValue(wm["credential"])
+		if idt.Credential == "" && legacy != nil {
+			idt.Credential = legacy.Credential
+		}
+	}
+	if !seeded && idt.Credential == "" {
+		return nil
+	}
+	return &idt
+}
+
+// migrateInlineIdentities moves inline publish/subscriptions/credential fields
+// out of a schema-2 project's worker files and into identities.json. It is
+// idempotent: the identity file's presence marks the migration done, so the
+// per-call cost after the first run is one stat.
+func migrateInlineIdentities(dir string) error {
+	identityPath := filepath.Join(dir, "identities.json")
+	if fileExists(identityPath) {
+		return nil
+	}
+	var ids []corebus.Identity
+	for _, name := range []string{"workers.json", "workers.archived.json"} {
+		path := filepath.Join(dir, name)
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("migrate: read %s: %w", name, err)
+		}
+		var file struct {
+			SchemaVersion int              `json:"schema_version"`
+			Workers       []map[string]any `json:"workers"`
+		}
+		if err := json.Unmarshal(raw, &file); err != nil {
+			return fmt.Errorf("migrate: parse %s: %w", name, err)
+		}
+		changed := false
+		for _, wm := range file.Workers {
+			id, typ := stringValue(wm["id"]), stringValue(wm["type"])
+			if id == "" || typ == "" {
+				continue
+			}
+			if idt := identityFromLegacy(id, typ, placementFromMap(wm), wm, nil); idt != nil {
+				ids = append(ids, *idt)
+			}
+			for _, k := range []string{"publish", "subscriptions", "credential", "token_ttl_seconds"} {
+				if _, ok := wm[k]; ok {
+					delete(wm, k)
+					changed = true
+				}
+			}
+		}
+		if changed {
+			if err := writeJSON(path, file); err != nil {
+				return err
+			}
+		}
+	}
+	if err := busctl.WriteFile(identityPath, ids); err != nil {
+		return fmt.Errorf("migrate: write identities: %w", err)
+	}
+	return nil
 }
 
 func writeJSON(path string, v any) error {

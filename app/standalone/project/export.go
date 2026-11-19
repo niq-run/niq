@@ -1,8 +1,8 @@
 // Project → template export: build a Template from a project's active worker
-// declarations, so a project can serve as a clone source just like another
-// template. Declarations carry their params and identity config; runtime state
-// stays behind. Secrets (a remote worker's bus credential) never enter a
-// template.
+// manifests, so a project can serve as a clone source just like another
+// template. Manifests carry their definition and placement; runtime state and
+// bus identity (grants, credential) stay behind — a template is a starting
+// point, not a copy of who-may-say-what.
 package project
 
 import (
@@ -24,11 +24,8 @@ func ExportProjectTemplate(projectID string, withProgram bool) (*TemplateConfig,
 	if err != nil {
 		return nil, err
 	}
-	workers := make([]projworker.Declaration, 0, len(set.Workers))
-	for _, d := range set.Workers {
-		d.Credential = "" // never export a bus credential
-		workers = append(workers, d)
-	}
+	workers := make([]projworker.Manifest, 0, len(set.Workers))
+	workers = append(workers, set.Workers...)
 	if len(workers) == 0 {
 		return nil, fmt.Errorf("project: %q has no exportable workers", projectID)
 	}

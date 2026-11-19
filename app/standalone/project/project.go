@@ -23,7 +23,6 @@ import (
 	"github.com/niq-run/niq/app/standalone/project/migrate"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
-	"github.com/niq-run/niq/core/itfs/event"
 )
 
 // SchemaVersion is the on-disk format this package reads and writes. Legacy
@@ -50,8 +49,8 @@ type Project struct {
 // WorkerSet is the on-disk shape of both workers.json and
 // workers.archived.json: the filename is the only difference.
 type WorkerSet struct {
-	SchemaVersion int                      `json:"schema_version"`
-	Workers       []projworker.Declaration `json:"workers"`
+	SchemaVersion int                   `json:"schema_version"`
+	Workers       []projworker.Manifest `json:"workers"`
 }
 
 // ProjectsRoot returns <niq root>/projects (created lazily on write).
@@ -117,16 +116,16 @@ func CreateProject(id, templateName string, template *TemplateConfig) (*Project,
 }
 
 // FindWorker returns a declaration from a worker set by id.
-func FindWorker(set *WorkerSet, id string) (projworker.Declaration, bool) {
+func FindWorker(set *WorkerSet, id string) (projworker.Manifest, bool) {
 	if set == nil {
-		return projworker.Declaration{}, false
+		return projworker.Manifest{}, false
 	}
 	for _, d := range set.Workers {
 		if d.ID == id {
 			return d, true
 		}
 	}
-	return projworker.Declaration{}, false
+	return projworker.Manifest{}, false
 }
 
 // declWrites serializes read-modify-write cycles on a project's declaration
@@ -136,8 +135,8 @@ func FindWorker(set *WorkerSet, id string) (projworker.Declaration, bool) {
 // take no lock: they need a consistent file, which the atomic rename gives them.
 var declWrites sync.Mutex
 
-// withDeclWrite runs fn under the declaration write lock.
-func withDeclWrite(fn func() error) error {
+// withManifestWrite runs fn under the declaration write lock.
+func withManifestWrite(fn func() error) error {
 	declWrites.Lock()
 	defer declWrites.Unlock()
 	return fn()
@@ -151,14 +150,14 @@ func withDeclWrite(fn func() error) error {
 // declaration is preserved verbatim so unarchiving restores the worker as it
 // was.
 func SetWorkerArchived(projectID, id string, archived bool) error {
-	return withDeclWrite(func() error {
+	return withManifestWrite(func() error {
 		// Archiving moves active → archived; unarchiving moves archived → active.
 		srcArchived, dstArchived := !archived, archived
 		src, err := loadSetFor(projectID, srcArchived)
 		if err != nil {
 			return err
 		}
-		var moved *projworker.Declaration
+		var moved *projworker.Manifest
 		kept := src.Workers[:0]
 		for i := range src.Workers {
 			if src.Workers[i].ID == id {
@@ -203,26 +202,9 @@ func ArchivedWorkerIDs(projectID string) ([]string, error) {
 	return out, nil
 }
 
-// UpdateWorkerACL persists a worker's bus ACL into its declaration (active or
-// archived). The runtime registry is a projection; workers.json is the source.
-func UpdateWorkerACL(projectID, id string, publish []event.PublishPattern, subscribe []event.EventPattern) error {
-	pubs := make([]projworker.PublishSpec, 0, len(publish))
-	for _, p := range publish {
-		pubs = append(pubs, projworker.PublishSpec{Type: p.Type, Target: p.Target})
-	}
-	subs := make([]projworker.SubscriptionSpec, 0, len(subscribe))
-	for _, p := range subscribe {
-		subs = append(subs, projworker.SubscriptionSpec{Type: p.Type, Source: p.SourceID})
-	}
-	return updateDecl(projectID, id, func(d *projworker.Declaration) {
-		d.Publish = pubs
-		d.Subscriptions = subs
-	})
-}
-
-// updateDecl applies fn to a declaration in whichever worker file holds it.
-func updateDecl(projectID, id string, fn func(*projworker.Declaration)) error {
-	return withDeclWrite(func() error {
+// updateDecl applies fn to a manifest in whichever worker file holds it.
+func updateDecl(projectID, id string, fn func(*projworker.Manifest)) error {
+	return withManifestWrite(func() error {
 		for _, archived := range []bool{false, true} {
 			set, err := loadSetFor(projectID, archived)
 			if err != nil {
@@ -252,7 +234,7 @@ func loadSetFor(projectID string, archived bool) (*WorkerSet, error) {
 
 // RemoveWorkerDecl removes a declaration from both worker files.
 func RemoveWorkerDecl(projectID, id string) error {
-	return withDeclWrite(func() error {
+	return withManifestWrite(func() error {
 		for _, archived := range []bool{false, true} {
 			set, err := loadSetFor(projectID, archived)
 			if err != nil {
@@ -317,7 +299,7 @@ func loadSet(path string) (*WorkerSet, error) {
 		set.SchemaVersion = SchemaVersion
 	}
 	if set.Workers == nil {
-		set.Workers = []projworker.Declaration{}
+		set.Workers = []projworker.Manifest{}
 	}
 	return set, nil
 }
@@ -327,7 +309,7 @@ func saveSet(projectID string, set *WorkerSet, archived bool) error {
 		set.SchemaVersion = SchemaVersion
 	}
 	if set.Workers == nil {
-		set.Workers = []projworker.Declaration{}
+		set.Workers = []projworker.Manifest{}
 	}
 	path := WorkersPath(projectID)
 	if archived {

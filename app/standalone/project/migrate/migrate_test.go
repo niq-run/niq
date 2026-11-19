@@ -21,6 +21,27 @@ func write(t *testing.T, path string, v any) {
 	}
 }
 
+// identityOf returns one identity record from the bus store at dir, or nil.
+func identityOf(t *testing.T, dir, id string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, "identities.json"))
+	if err != nil {
+		t.Fatalf("read identities.json: %v", err)
+	}
+	var file struct {
+		Identities []map[string]any `json:"identities"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatalf("parse identities.json: %v", err)
+	}
+	for _, idt := range file.Identities {
+		if idt["worker_id"] == id {
+			return idt
+		}
+	}
+	return nil
+}
+
 func readMap(t *testing.T, path string) map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -92,8 +113,11 @@ func TestEnsureProjectLegacy(t *testing.T) {
 	if len(niq["params"].(map[string]any)) != 3 { // instruction/provider/goal
 		t.Fatalf("niq params = %+v", niq["params"])
 	}
-	if len(niq["subscriptions"].([]any)) != 1 {
-		t.Fatalf("niq subscriptions = %+v", niq["subscriptions"])
+	if _, ok := niq["subscriptions"]; ok {
+		t.Fatalf("subscriptions still inline in workers.json: %+v", niq)
+	}
+	if got := identityOf(t, dir, "niq"); len(got["subscribe_allow"].([]any)) != 1 {
+		t.Fatalf("niq identity = %+v, want the inline subscription moved to identities.json", got)
 	}
 
 	proc := byID["proc"]
@@ -108,8 +132,15 @@ func TestEnsureProjectLegacy(t *testing.T) {
 	}
 
 	remote := byID["remote"]
-	if remote["placement"] != "unmanaged-process" || remote["credential"] != "tok-secret" {
+	if remote["placement"] != "unmanaged-process" {
 		t.Fatalf("remote = %+v", remote)
+	}
+	if _, ok := remote["credential"]; ok {
+		t.Fatalf("credential still inline in workers.json: %+v", remote)
+	}
+	remoteIDT := identityOf(t, dir, "remote")
+	if remoteIDT["credential"] != "tok-secret" || remoteIDT["remote"] != true {
+		t.Fatalf("remote identity = %+v, want the durable credential", remoteIDT)
 	}
 
 	arch := readMap(t, filepath.Join(dir, "workers.archived.json"))
@@ -122,7 +153,10 @@ func TestEnsureProjectLegacy(t *testing.T) {
 		t.Fatalf("root_secret not at project root: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "id", "identities.json")); err == nil {
-		t.Fatal("identities.json still present")
+		t.Fatal("id/identities.json still present")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "identities.json")); err != nil {
+		t.Fatal("bus identity store was not written")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "id")); err == nil {
 		t.Fatal("empty id dir not removed")
@@ -234,11 +268,17 @@ func TestNormalizeNamesRewritesRetiredVocabulary(t *testing.T) {
 		if w.Params.Approver != "webui" {
 			t.Errorf("approver = %q, want webui", w.Params.Approver)
 		}
-		if len(w.Publish) != 1 || w.Publish[0].Target != "webui" {
-			t.Errorf("publish target = %+v, want webui", w.Publish)
+		if len(w.Publish) != 0 || len(w.Subscriptions) != 0 {
+			t.Errorf("inline ACL survived: publish=%+v subscriptions=%+v", w.Publish, w.Subscriptions)
 		}
-		if len(w.Subscriptions) != 1 || w.Subscriptions[0].Source != "webui" {
-			t.Errorf("subscription source = %+v, want webui", w.Subscriptions)
+	}
+
+	if idt := identityOf(t, dir, "ws"); idt != nil {
+		if pub := idt["publish_allow"].([]any); len(pub) != 1 {
+			t.Errorf("ws publish_allow = %+v, want 1 entry", pub)
+		}
+		if sub := idt["subscribe_allow"].([]any); len(sub) != 1 {
+			t.Errorf("ws subscribe_allow = %+v, want 1 entry", sub)
 		}
 	}
 

@@ -1,7 +1,7 @@
-// Project storage for the worker lifecycle: declarations (workers.json) and
-// in-process runtime state (workers/<id>/state.json). The lifecycle package sees
-// only the DeclStore and workersvc.WorkerStore interfaces; this file owns the
-// concrete project layout.
+// Project storage for the worker control plane: manifests (workers.json /
+// workers.archived.json) and runtime state (workers/<id>/state.json). The
+// control plane sees only the ManifestStore and workerlife.WorkerStore
+// interfaces; this file owns the concrete project layout.
 package project
 
 import (
@@ -11,95 +11,77 @@ import (
 	"path/filepath"
 
 	projworker "github.com/niq-run/niq/app/standalone/worker"
-	"github.com/niq-run/niq/core/impl/workersvc"
+	"github.com/niq-run/niq/core/impl/workerlife"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
-// projectDeclStore implements worker.DeclStore over one project's active
-// workers.json. Every call re-reads the file: declarations are edited by the
-// WebUI, by a runtime spawn and by this store, and a cached copy would let one
-// writer silently revert another.
-type projectDeclStore struct {
+// manifestStore implements worker.ManifestStore over one project's worker
+// files. Every call re-reads the file: manifests are edited by the WebUI, by a
+// runtime spawn and by this store, and a cached copy would let one writer
+// silently revert another.
+type manifestStore struct {
 	projectID string
 }
 
-var _ projworker.DeclStore = projectDeclStore{}
+var _ projworker.ManifestStore = manifestStore{}
 
-func (s projectDeclStore) Get(id string) (*projworker.Declaration, bool, error) {
+func (s manifestStore) Get(id string) (*projworker.Manifest, bool, error) {
 	set, err := LoadWorkers(s.projectID)
 	if err != nil {
 		return nil, false, err
 	}
-	d, ok := FindWorker(set, id)
+	m, ok := FindWorker(set, id)
 	if !ok {
 		return nil, false, nil
 	}
-	return &d, true, nil
+	return &m, true, nil
 }
 
-func (s projectDeclStore) List() ([]*projworker.Declaration, error) {
-	set, err := LoadWorkers(s.projectID)
+func (s manifestStore) List(archived bool) ([]*projworker.Manifest, error) {
+	set, err := loadSetFor(s.projectID, archived)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*projworker.Declaration, 0, len(set.Workers))
+	out := make([]*projworker.Manifest, 0, len(set.Workers))
 	for i := range set.Workers {
-		d := set.Workers[i]
-		out = append(out, &d)
+		m := set.Workers[i]
+		out = append(out, &m)
 	}
 	return out, nil
 }
 
-func (s projectDeclStore) Add(d *projworker.Declaration) error {
+func (s manifestStore) Add(m *projworker.Manifest) error {
 	set, err := LoadWorkers(s.projectID)
 	if err != nil {
 		return err
 	}
-	if _, ok := FindWorker(set, d.ID); ok {
-		return fmt.Errorf("worker %s already exists", d.ID)
+	if _, ok := FindWorker(set, m.ID); ok {
+		return fmt.Errorf("worker %s already exists", m.ID)
 	}
-	set.Workers = append(set.Workers, *d)
+	set.Workers = append(set.Workers, *m)
 	return SaveWorkers(s.projectID, set)
 }
 
-func (s projectDeclStore) Update(d *projworker.Declaration) error {
+func (s manifestStore) Update(m *projworker.Manifest) error {
 	set, err := LoadWorkers(s.projectID)
 	if err != nil {
 		return err
 	}
 	for i := range set.Workers {
-		if set.Workers[i].ID == d.ID {
-			set.Workers[i] = *d
+		if set.Workers[i].ID == m.ID {
+			set.Workers[i] = *m
 			return SaveWorkers(s.projectID, set)
 		}
 	}
-	return fmt.Errorf("worker %s is not declared", d.ID)
+	return fmt.Errorf("worker %s is not declared", m.ID)
 }
 
-func (s projectDeclStore) Delete(id string) error {
+func (s manifestStore) Delete(id string) error {
 	return RemoveWorkerDecl(s.projectID, id)
 }
 
-func (s projectDeclStore) SetCredential(id, cred string) error {
-	set, err := LoadWorkers(s.projectID)
-	if err != nil {
-		return err
-	}
-	for i := range set.Workers {
-		if set.Workers[i].ID == id {
-			set.Workers[i].Credential = cred
-			return SaveWorkers(s.projectID, set)
-		}
-	}
-	return fmt.Errorf("worker %s is not declared", id)
-}
-
-func (s projectDeclStore) Archive(id string, archived bool) error {
+func (s manifestStore) Archive(id string, archived bool) error {
 	return SetWorkerArchived(s.projectID, id, archived)
-}
-
-func (s projectDeclStore) Archived() ([]string, error) {
-	return ArchivedWorkerIDs(s.projectID)
 }
 
 // StateStore persists in-process workers' runtime state under a root
@@ -108,13 +90,13 @@ func (s projectDeclStore) Archived() ([]string, error) {
 //	<root>/<workerID>/state.json   — {"state": "...", "snapshot": {…}}
 //
 // The worker's definition (id/type/params) is not stored here: it lives in the
-// declaration store, which hands it back on recovery. The root is the project's
+// manifest store, which hands it back on recovery. The root is the project's
 // workers/ dir.
 type StateStore struct {
 	root string
 }
 
-var _ workersvc.WorkerStore = (*StateStore)(nil)
+var _ workerlife.WorkerStore = (*StateStore)(nil)
 
 // NewStateStore creates a store rooted at root (created if missing).
 func NewStateStore(root string) (*StateStore, error) {
@@ -128,7 +110,7 @@ func (s *StateStore) dir(id string) string {
 	return filepath.Join(s.root, sanitizeID(id))
 }
 
-// SaveState implements workersvc.WorkerStore.
+// SaveState implements workerlife.WorkerStore.
 func (s *StateStore) SaveState(id string, state coreworker.WorkerState, snapshot []byte) error {
 	dir := s.dir(id)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -151,13 +133,13 @@ func (s *StateStore) SaveState(id string, state coreworker.WorkerState, snapshot
 	return nil
 }
 
-// LoadAll implements workersvc.WorkerStore.
-func (s *StateStore) LoadAll() ([]workersvc.StateRecord, error) {
+// LoadAll implements workerlife.WorkerStore.
+func (s *StateStore) LoadAll() ([]workerlife.StateRecord, error) {
 	entries, err := os.ReadDir(s.root)
 	if err != nil {
 		return nil, fmt.Errorf("project: read store root: %w", err)
 	}
-	var recs []workersvc.StateRecord
+	var recs []workerlife.StateRecord
 	for _, de := range entries {
 		if !de.IsDir() {
 			continue
@@ -167,7 +149,7 @@ func (s *StateStore) LoadAll() ([]workersvc.StateRecord, error) {
 		if err != nil {
 			continue
 		}
-		recs = append(recs, workersvc.StateRecord{
+		recs = append(recs, workerlife.StateRecord{
 			ID:       id,
 			State:    state,
 			Snapshot: snapshot,
@@ -176,7 +158,7 @@ func (s *StateStore) LoadAll() ([]workersvc.StateRecord, error) {
 	return recs, nil
 }
 
-// Delete implements workersvc.WorkerStore.
+// Delete implements workerlife.WorkerStore.
 func (s *StateStore) Delete(id string) error {
 	return os.RemoveAll(s.dir(id))
 }

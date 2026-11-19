@@ -1,7 +1,7 @@
-// Process supervision for third-party worker processes the host launches
-// (placement managed-process): launch, crash-restart with backoff, manual
-// stop/restart, reap on shutdown. It knows nothing about declarations or
-// credentials — the caller provisions first and hands a ready Spec to Start.
+// Supervision for third-party OS processes the host launches: launch,
+// crash-restart with backoff, manual stop/restart, reap on shutdown. It knows
+// nothing about manifests, placements or credentials — the caller provisions
+// first and hands a ready Spec to Start.
 package process
 
 import (
@@ -32,12 +32,12 @@ const (
 	stableWindow = 30 * time.Second
 )
 
-// ProcessSupervisor launches and supervises third-party worker processes: it
-// starts them, restarts them with exponential backoff on unexpected exit,
-// stops them on request, and reaps them on shutdown. It does not own
-// credential provisioning or bus registration — the backend provisions a
-// worker first and hands a ready declaration to Start.
-type ProcessSupervisor struct {
+// Supervisor launches and supervises OS child processes: it starts them,
+// restarts them with exponential backoff on unexpected exit, stops them on
+// request, and reaps them on shutdown. It does not own credential provisioning
+// or bus registration — the control plane provisions a worker first and hands a
+// ready Spec to Start.
+type Supervisor struct {
 	busURL       string
 	workersRoot  string // per-worker stdout logs live under <root>/<id>/stdout.log
 	logf         func(format string, args ...any)
@@ -62,15 +62,15 @@ type procState struct {
 	mu  sync.Mutex
 }
 
-// NewProcessSupervisor creates a supervisor that launches worker processes
+// NewSupervisor creates a supervisor that launches worker processes
 // against the given bus URL. workersRoot is the project's workers/ directory;
 // each worker's stdout is logged to <workersRoot>/<id>/stdout.log (empty to
 // fall back to the supervisor's own stdout/stderr).
-func NewProcessSupervisor(busURL, workersRoot string, logf func(string, ...any)) *ProcessSupervisor {
+func NewSupervisor(busURL, workersRoot string, logf func(string, ...any)) *Supervisor {
 	if logf == nil {
 		logf = log.Printf
 	}
-	return &ProcessSupervisor{
+	return &Supervisor{
 		busURL:       busURL,
 		workersRoot:  workersRoot,
 		logf:         logf,
@@ -86,7 +86,7 @@ func NewProcessSupervisor(busURL, workersRoot string, logf func(string, ...any))
 // kills any existing (possibly stale) child for that id, then launches fresh.
 // The process is supervised: an unexpected exit restarts it with exponential
 // backoff.
-func (s *ProcessSupervisor) Start(spec Spec) error {
+func (s *Supervisor) Start(spec Spec) error {
 	if len(spec.Command) == 0 {
 		return fmt.Errorf("worker %s: command is required", spec.ID)
 	}
@@ -119,7 +119,7 @@ func (s *ProcessSupervisor) Start(spec Spec) error {
 // call with st.mu held or not; it takes the lock internally. The child is left
 // for the owning supervise goroutine to reap (it is already blocked on Wait and
 // will return once the process dies). Callers should cancel st.ctx first.
-func (s *ProcessSupervisor) killCurrent(st *procState) {
+func (s *Supervisor) killCurrent(st *procState) {
 	st.mu.Lock()
 	cmd := st.cmd
 	st.cmd = nil
@@ -133,7 +133,7 @@ func (s *ProcessSupervisor) killCurrent(st *procState) {
 // Stop stops a supervised worker: cancels its supervision context (which kills
 // the child process) and marks it stopped so it is not restarted. A later Start
 // or Restart relaunches it.
-func (s *ProcessSupervisor) Stop(id string) error {
+func (s *Supervisor) Stop(id string) error {
 	s.mu.Lock()
 	st, ok := s.procs[id]
 	s.mu.Unlock()
@@ -150,7 +150,7 @@ func (s *ProcessSupervisor) Stop(id string) error {
 // Remove stops a supervised worker and waits for its supervision loop to exit,
 // so the process is gone (and reaped) before the caller deletes anything else.
 // A worker that was never supervised is a no-op.
-func (s *ProcessSupervisor) Remove(id string) error {
+func (s *Supervisor) Remove(id string) error {
 	s.mu.Lock()
 	st, ok := s.procs[id]
 	if ok && !st.isStopped() {
@@ -186,7 +186,7 @@ func (s *ProcessSupervisor) Remove(id string) error {
 // Destroy stops a supervised worker and removes its per-worker directory
 // (stdout log and any third-party state). Restart uses Remove, so logs survive
 // a restart; only an explicit destroy deletes them.
-func (s *ProcessSupervisor) Destroy(id string) error {
+func (s *Supervisor) Destroy(id string) error {
 	if err := s.Remove(id); err != nil {
 		return err
 	}
@@ -198,7 +198,7 @@ func (s *ProcessSupervisor) Destroy(id string) error {
 
 // Restart stops a supervised worker (if running) and starts it again. The
 // stored declaration is reused — credential/registration are untouched.
-func (s *ProcessSupervisor) Restart(id string) error {
+func (s *Supervisor) Restart(id string) error {
 	s.mu.Lock()
 	st, ok := s.procs[id]
 	s.mu.Unlock()
@@ -223,7 +223,7 @@ type ProcessStatus struct {
 }
 
 // Get returns one supervised worker's status.
-func (s *ProcessSupervisor) Get(id string) (ProcessStatus, bool) {
+func (s *Supervisor) Get(id string) (ProcessStatus, bool) {
 	s.mu.Lock()
 	st, ok := s.procs[id]
 	s.mu.Unlock()
@@ -240,7 +240,7 @@ func (s *ProcessSupervisor) Get(id string) (ProcessStatus, bool) {
 }
 
 // List returns the supervised workers, sorted by id.
-func (s *ProcessSupervisor) List() []ProcessStatus {
+func (s *Supervisor) List() []ProcessStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]ProcessStatus, 0, len(s.procs))
@@ -261,7 +261,7 @@ func (s *ProcessSupervisor) List() []ProcessStatus {
 
 // Shutdown stops every supervised worker and waits for the supervision loops
 // to exit. Called on project shutdown.
-func (s *ProcessSupervisor) Shutdown() {
+func (s *Supervisor) Shutdown() {
 	s.mu.Lock()
 	ids := make([]string, 0, len(s.procs))
 	for id := range s.procs {
@@ -274,7 +274,7 @@ func (s *ProcessSupervisor) Shutdown() {
 	s.wg.Wait()
 }
 
-func (s *ProcessSupervisor) supervise(st *procState) {
+func (s *Supervisor) supervise(st *procState) {
 	defer s.wg.Done()
 	delay := s.initialDelay
 	for {
@@ -345,7 +345,7 @@ func (s *ProcessSupervisor) supervise(st *procState) {
 // logOutput opens (creating if needed) an append-only log file for a worker's
 // stdout/stderr at <workersRoot>/<id>/stdout.log. Returns nil when no root is
 // configured, so callers fall back to the supervisor's own stdout/stderr.
-func (s *ProcessSupervisor) logOutput(id string) *os.File {
+func (s *Supervisor) logOutput(id string) *os.File {
 	if s.workersRoot == "" {
 		return nil
 	}
@@ -362,7 +362,7 @@ func (s *ProcessSupervisor) logOutput(id string) *os.File {
 	return w
 }
 
-func (s *ProcessSupervisor) buildEnv(spec Spec) []string {
+func (s *Supervisor) buildEnv(spec Spec) []string {
 	env := append([]string{}, os.Environ()...)
 	env = append(env,
 		EnvBusURL+"="+s.busURL,

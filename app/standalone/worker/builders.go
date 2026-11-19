@@ -25,6 +25,7 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/iface"
 	reasonbase "github.com/niq-run/niq/core/impl/reason"
+	"github.com/niq-run/niq/core/impl/workerlife"
 	"github.com/niq-run/niq/core/impl/workers/coding"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/impl/workers/history"
@@ -37,7 +38,6 @@ import (
 	"github.com/niq-run/niq/core/impl/workers/reason"
 	"github.com/niq-run/niq/core/impl/workers/timer"
 	"github.com/niq-run/niq/core/impl/workers/workspace"
-	"github.com/niq-run/niq/core/impl/workersvc"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/llm"
@@ -63,63 +63,60 @@ const (
 // BuildContext holds shared dependencies that worker builders need.
 type BuildContext struct {
 	Registry     corebus.IdentityRegistry
+	Bus          corebus.Control
 	Listener     *inprocess.InProcListener
 	Engine       *eventbus.Engine
-	WorkerSvc    *workersvc.WorkerService
+	Manager      *workerlife.Manager
 	EventLog     *eventbusapi.EventLog
 	EventStore   event.EventStore
 	ProgramsRoot string
 	// StateDir is the per-project workers state directory (`<proj>/workers`);
 	// built-in workers persist their own state here (one dir per id).
 	StateDir string
-	// WorkerBackend is the backend the host worker drives: the same instance the
-	// assembly uses for recovery and shutdown. It is the full lifecycle +
-	// declaration-editing surface, because the host's tools expose both.
+	// WorkerBackend is the control plane the host worker drives: the same
+	// instance the assembly uses for recovery and shutdown.
 	WorkerBackend coreworker.Backend
-	// ACLAdmin is the bus identity administrator the host exposes as acl.update.
-	// It is a separate capability from WorkerBackend: grants are identity data,
-	// not lifecycle state.
-	ACLAdmin coreworker.ACLAdmin
 }
 
-// RegisterBuilders registers a Builder for every known worker type onto service.
-func RegisterBuilders(ctx BuildContext, svc *workersvc.WorkerService) {
+// registerBuilders registers one builder per known worker type, each with its
+// spawn-parameter check.
+func registerBuilders(ctx BuildContext, types *typeRegistry) {
 	// Each type's spawn-parameter check is registered with its builder: the
 	// builder is where the valid parameter set lives, so drift between the two
 	// is a visible edit rather than a silent gap.
-	for typ, params := range SpawnParamsByType {
-		svc.RegisterParamCheck(typ, CheckSpawnParams(typ, params))
+	check := func(typ string) func(map[string]any) error {
+		return CheckSpawnParams(typ, SpawnParamsByType[typ])
 	}
-	svc.RegisterBuilder("reason", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	types.register("reason", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildReasonSpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("coding", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	}, check("reason"))
+	types.register("coding", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildCodingSpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("workspace", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	}, check("coding"))
+	types.register("workspace", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildWorkspaceSpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("host", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	}, check("workspace"))
+	types.register("host", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildHostSpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("timer", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	}, check("host"))
+	types.register("timer", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildTimerSpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("niq", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	}, check("timer"))
+	types.register("niq", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildNIQSpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("program", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	}, check("niq"))
+	types.register("program", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildProgramSpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("history", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	}, check("program"))
+	types.register("history", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildHistorySpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("directory", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	}, check("history"))
+	types.register("directory", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildDirectorySpec(ctx, cfg)
-	})
-	svc.RegisterBuilder("mcp", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	}, check("directory"))
+	types.register("mcp", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return buildMCPSpec(ctx, cfg)
-	})
+	}, check("mcp"))
 }
 
 // aclFor resolves a worker's bus ACL: the declaration's explicit grant when it
@@ -140,7 +137,10 @@ func aclFor(cfg coreworker.WorkerConfig, defPub []event.PublishPattern, defSub [
 func specConnect(ctx BuildContext, id, typ string, cfg coreworker.WorkerConfig, defPub []event.PublishPattern, defSub []event.EventPattern) func() (corebus.WorkerSideChannel, error) {
 	pubAllow, subAllow := aclFor(cfg, defPub, defSub)
 	return func() (corebus.WorkerSideChannel, error) {
-		if err := projprocess.RegisterIdentity(ctx.Registry, corebus.Identity{
+		// The durable identity is the bus control plane's record. The type's
+		// default grant seeds it on first registration; an edited grant already
+		// on disk is never overwritten here.
+		if err := ensureIdentity(ctx.Bus, corebus.Identity{
 			WorkerID:       id,
 			Type:           typ,
 			PublishAllow:   pubAllow,
@@ -304,7 +304,7 @@ func buildReasonSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.
 			// A runtime provider switch must outlive this process, so the
 			// worker signals it and the assembly checkpoints it.
 			OnDurableChange: func() {
-				if err := ctx.WorkerSvc.Checkpoint(in.id); err != nil {
+				if err := ctx.Manager.Checkpoint(in.id); err != nil {
 					log.Printf("[project] checkpoint %s: %v", in.id, err)
 				}
 			},
@@ -347,7 +347,7 @@ func buildCodingSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.
 			SeedMessages:     in.seedBrief,
 			ToolMode:         toolMode,
 			OnDurableChange: func() {
-				if err := ctx.WorkerSvc.Checkpoint(in.id); err != nil {
+				if err := ctx.Manager.Checkpoint(in.id); err != nil {
 					log.Printf("[project] checkpoint %s: %v", in.id, err)
 				}
 			},
@@ -432,7 +432,7 @@ func buildWorkspaceSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (corework
 			// signals it and the assembly layer checkpoints it — the same
 			// arrangement as the reason worker's provider switch.
 			OnDurableChange: func() {
-				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+				if err := ctx.Manager.Checkpoint(id); err != nil {
 					log.Printf("[project] checkpoint %s: %v", id, err)
 				}
 			},
@@ -469,7 +469,7 @@ func buildHostSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Sp
 		},
 		[]event.EventPattern{event.NewPattern("worker.discover")})
 	build := func(ch corebus.WorkerSideChannel) coreworker.ManagedWorker {
-		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerBackend, ACL: ctx.ACLAdmin, Params: p})
+		return host.New(host.Config{ID: id, Bus: ch, Engine: ctx.WorkerBackend, Params: p})
 	}
 	cfg.ID = id
 	cfg.Type = "host"
@@ -505,7 +505,7 @@ func buildTimerSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.S
 			// signals it and the assembly layer checkpoints it — the same
 			// arrangement as the reason worker's provider switch.
 			OnDurableChange: func() {
-				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+				if err := ctx.Manager.Checkpoint(id); err != nil {
 					log.Printf("[project] checkpoint %s: %v", id, err)
 				}
 			},
@@ -554,7 +554,7 @@ func buildMCPSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Spa
 			// worker signals it and the assembly layer checkpoints it — the
 			// same arrangement as the timer/workspace runtime changes.
 			OnDurableChange: func() {
-				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+				if err := ctx.Manager.Checkpoint(id); err != nil {
 					log.Printf("[project] checkpoint %s: %v", id, err)
 				}
 			},
@@ -621,7 +621,7 @@ func buildNIQSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Spa
 			RemoteWorkerID:   remoteWorkerID,
 			RemoteCredential: remoteCred,
 			OnDurableChange: func() {
-				if err := ctx.WorkerSvc.Checkpoint(id); err != nil {
+				if err := ctx.Manager.Checkpoint(id); err != nil {
 					log.Printf("[project] checkpoint %s: %v", id, err)
 				}
 			},

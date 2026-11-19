@@ -51,15 +51,13 @@ func TestBindDynamicWebUIPort(t *testing.T) {
 // TestHandleUpdateAllow verifies PUT /api/workers/{id}/allow edits the bus
 // registry: subscribe_allow is replaced wholesale (source restriction kept),
 // a missing publish_allow keeps the current value, and unknown workers 404.
-// TestHandleUpdateAllowGoesThroughHost verifies an ACL edit is one bus call to the
-// host's acl.update tool. The WebUI no longer touches the registry or any file:
-// it only normalizes the request (an absent list keeps the current value, an
-// omitted subscription source becomes the any-source wildcard).
-func TestHandleUpdateAllowGoesThroughHost(t *testing.T) {
+// TestHandleUpdateAllowGoesThroughBusControl verifies an ACL edit is one direct
+// call to the bus identity control plane: durable store plus runtime projection,
+// never a bus event to the host. The WebUI only normalizes the request (an
+// absent list keeps the current value, an omitted source becomes the any-source
+// wildcard).
+func TestHandleUpdateAllowGoesThroughBusControl(t *testing.T) {
 	rig := newLifecycleRig(t)
-	// The rig's registry holds webui and host; add the worker being edited so
-	// the "keep the other list" path has a current value to keep.
-	t.Cleanup(func() {})
 
 	put := func(id, body string) (*http.Response, error) {
 		req, err := http.NewRequest("PUT", "http://"+rig.addr+"/api/workers/"+id+"/allow", strings.NewReader(body))
@@ -77,28 +75,38 @@ func TestHandleUpdateAllowGoesThroughHost(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PUT allow status = %d, want 200", resp.StatusCode)
 	}
-	payload := expectHostCall(t, rig, "webui")
-	if payload["worker_id"] != "webui" {
-		t.Fatalf("payload = %v", payload)
+
+	idt, ok := rig.bus.Lookup("webui")
+	if !ok {
+		t.Fatal("identity missing from the bus store")
 	}
-	// publish_allow was omitted, so the current grants travel unchanged.
-	if pubs, ok := payload["publish_allow"].([]any); !ok || len(pubs) == 0 {
-		t.Fatalf("publish_allow = %v, want the current list", payload["publish_allow"])
+	// publish_allow was omitted, so the current grants are kept.
+	if len(idt.PublishAllow) == 0 {
+		t.Fatalf("publish_allow = %+v, want the current list", idt.PublishAllow)
 	}
-	subs, ok := payload["subscribe_allow"].([]any)
-	if !ok || len(subs) != 2 {
-		t.Fatalf("subscribe_allow = %v", payload["subscribe_allow"])
+	if len(idt.SubscribeAllow) != 2 {
+		t.Fatalf("subscribe_allow = %+v", idt.SubscribeAllow)
 	}
-	first, _ := subs[0].(map[string]any)
-	if first["type"] != "request.completed" || first["source"] != "timer" {
-		t.Fatalf("first grant = %v", first)
+	if idt.SubscribeAllow[0].Type != "request.completed" || idt.SubscribeAllow[0].SourceID != "timer" {
+		t.Fatalf("first grant = %+v", idt.SubscribeAllow[0])
 	}
-	second, _ := subs[1].(map[string]any)
-	if second["type"] != "worker.ready" || second["source"] != "*" {
-		t.Fatalf("an omitted source must be stored as the any-source wildcard: %v", second)
+	if idt.SubscribeAllow[1].Type != "worker.ready" || idt.SubscribeAllow[1].SourceID != "*" {
+		t.Fatalf("an omitted source must be stored as the any-source wildcard: %+v", idt.SubscribeAllow[1])
+	}
+	// The change reached the runtime registry in the same call.
+	runtime, ok := rig.server.registry.Lookup("webui")
+	if !ok || len(runtime.SubscribeAllow) != 2 {
+		t.Fatalf("runtime identity = %+v (ok=%v)", runtime, ok)
 	}
 
-	// Unknown worker: refused before any bus call.
+	// No bus event was sent to the host.
+	select {
+	case p := <-rig.hostReqs:
+		t.Fatalf("ACL edit went through the host: %v", p)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// Unknown worker: refused before any write.
 	resp, err = put("nope", `{"subscribe_allow":[]}`)
 	if err != nil {
 		t.Fatalf("PUT unknown: %v", err)
@@ -106,11 +114,6 @@ func TestHandleUpdateAllowGoesThroughHost(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown worker status = %d, want 404", resp.StatusCode)
-	}
-	select {
-	case p := <-rig.hostReqs:
-		t.Fatalf("unknown worker reached the host: %v", p)
-	case <-time.After(150 * time.Millisecond):
 	}
 }
 
@@ -378,12 +381,11 @@ func fakeBuilderSpec(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 	return worker.SpawnSpec{Config: cfg}, nil
 }
 
-// stubCatalog is an in-memory worker.Catalog: the read model the workers view
+// stubCatalog is an in-memory worker.Manifest: the read model the workers view
 // is rendered from.
 type stubCatalog struct {
 	infos    []worker.WorkerInfo
-	archived []string
-	decls    map[string]worker.Decl
+	archived []worker.WorkerInfo
 }
 
 func (c *stubCatalog) Get(id string) (worker.WorkerInfo, bool, error) {
@@ -395,14 +397,16 @@ func (c *stubCatalog) Get(id string) (worker.WorkerInfo, bool, error) {
 	return worker.WorkerInfo{}, false, nil
 }
 
-func (c *stubCatalog) List() []worker.WorkerInfo { return c.infos }
+func (c *stubCatalog) List(archived bool) []worker.WorkerInfo {
+	if archived {
+		return c.archived
+	}
+	return c.infos
+}
 
-func (c *stubCatalog) Archived() []string { return c.archived }
-
-func (c *stubCatalog) Declarations() map[string]worker.Decl { return c.decls }
-
-// archived is the archived-id set the archive panel renders.
-type stubCatalogArchived = []string
+func (c *stubCatalog) Update(context.Context, string, worker.WorkerPatch) (worker.WorkerInfo, error) {
+	return worker.WorkerInfo{}, nil
+}
 
 // TestHandleWorkersDeclaredMerge verifies how declarations merge into
 // GET /api/workers: a never-started managed-process worker carries the

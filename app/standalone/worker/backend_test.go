@@ -12,22 +12,23 @@ import (
 
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/baseworker"
+	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workersvc"
+	"github.com/niq-run/niq/core/impl/workerlife"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
-// memDecls is an in-memory DeclStore: the lifecycle is tested without a project
-// file, which is the point of the interface.
-type memDecls struct {
+// memManifests is an in-memory ManifestStore: the control plane is tested
+// without a project file, which is the point of the interface.
+type memManifests struct {
 	mu       sync.Mutex
-	list     []*Declaration
-	archived []Declaration
+	list     []*Manifest
+	archived []Manifest
 }
 
-func (m *memDecls) Get(id string) (*Declaration, bool, error) {
+func (m *memManifests) Get(id string) (*Manifest, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, d := range m.list {
@@ -39,10 +40,18 @@ func (m *memDecls) Get(id string) (*Declaration, bool, error) {
 	return nil, false, nil
 }
 
-func (m *memDecls) List() ([]*Declaration, error) {
+func (m *memManifests) List(archived bool) ([]*Manifest, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]*Declaration, 0, len(m.list))
+	if archived {
+		out := make([]*Manifest, 0, len(m.archived))
+		for i := range m.archived {
+			c := m.archived[i]
+			out = append(out, &c)
+		}
+		return out, nil
+	}
+	out := make([]*Manifest, 0, len(m.list))
 	for _, d := range m.list {
 		c := *d
 		out = append(out, &c)
@@ -50,7 +59,7 @@ func (m *memDecls) List() ([]*Declaration, error) {
 	return out, nil
 }
 
-func (m *memDecls) Add(d *Declaration) error {
+func (m *memManifests) Add(d *Manifest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, x := range m.list {
@@ -63,7 +72,7 @@ func (m *memDecls) Add(d *Declaration) error {
 	return nil
 }
 
-func (m *memDecls) Update(d *Declaration) error {
+func (m *memManifests) Update(d *Manifest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, x := range m.list {
@@ -76,7 +85,7 @@ func (m *memDecls) Update(d *Declaration) error {
 	return fmt.Errorf("worker %s is not declared", d.ID)
 }
 
-func (m *memDecls) Archive(id string, archived bool) error {
+func (m *memManifests) Archive(id string, archived bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if archived {
@@ -100,17 +109,7 @@ func (m *memDecls) Archive(id string, archived bool) error {
 	return nil
 }
 
-func (m *memDecls) Archived() ([]string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]string, 0, len(m.archived))
-	for _, d := range m.archived {
-		out = append(out, d.ID)
-	}
-	return out, nil
-}
-
-func (m *memDecls) Delete(id string) error {
+func (m *memManifests) Delete(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i, x := range m.list {
@@ -119,19 +118,13 @@ func (m *memDecls) Delete(id string) error {
 			return nil
 		}
 	}
-	return nil
-}
-
-func (m *memDecls) SetCredential(id, cred string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, x := range m.list {
-		if x.ID == id {
-			x.Credential = cred
+	for i := range m.archived {
+		if m.archived[i].ID == id {
+			m.archived = append(m.archived[:i], m.archived[i+1:]...)
 			return nil
 		}
 	}
-	return fmt.Errorf("worker %s is not declared", id)
+	return nil
 }
 
 // fakeWorker is the minimal managed worker a test builder produces.
@@ -146,27 +139,25 @@ func (w *fakeWorker) Snapshot() ([]byte, error)   { return []byte(`{"started":tr
 func (w *fakeWorker) Restore([]byte) error        { return nil }
 
 type testRig struct {
+	cp         *ControlPlane
 	backend    *workerHostBackend
-	service    *workersvc.WorkerService
-	supervisor *projprocess.ProcessSupervisor
-	decls      *memDecls
+	manager    *workerlife.Manager
+	supervisor *projprocess.Supervisor
+	manifests  *memManifests
 	registry   corebus.IdentityRegistry
+	bus        corebus.Control
 }
 
-// newTestRig wires the backend exactly as the assembly does, over a real bus
-// (in-process listener) and a real identity registry, with a fake worker type
-// whose builder derives its id — which is what makes the "declared id is the
-// resolved id" invariant testable.
-func newTestRig(t *testing.T) *testRig {
+// newTestRig wires the control plane exactly as the assembly does, over a real
+// bus (in-process listener), a real identity registry and the bus control
+// plane, with a fake worker type whose builder derives its id — which is what
+// makes the "declared id is the resolved id" invariant testable.
+func newTestRig(t *testing.T, protect ...string) *testRig {
 	t.Helper()
 	dir := t.TempDir()
 
-	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(dir, "id", "identities.json"))
-	if err != nil {
-		t.Fatalf("registry: %v", err)
-	}
-	layered := eventbus.NewLayeredRegistry(registry)
-	engine := eventbus.NewEngine(layered, eventbus.NewMemoryEventStore())
+	registry := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
+	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
 	listener := inprocess.NewInProcListener()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -180,18 +171,37 @@ func newTestRig(t *testing.T) *testRig {
 		}
 	}()
 
-	svc := workersvc.New()
+	identityStore, err := busctl.NewFileStore(filepath.Join(dir, "identities.json"))
+	if err != nil {
+		t.Fatalf("identity store: %v", err)
+	}
+	bus := busctl.New(identityStore, registry)
+	manifests := &memManifests{}
+	sup := projprocess.NewSupervisor("http://127.0.0.1:1", filepath.Join(dir, "workers"), func(string, ...any) {})
+	t.Cleanup(sup.Shutdown)
+
+	cp := New(Config{
+		ProjectID:  "test",
+		Manifests:  manifests,
+		Registry:   registry,
+		Bus:        bus,
+		Signer:     eventbus.NewTokenSigner([]byte("test-secret")),
+		Engine:     engine,
+		Supervisor: sup,
+		Protect:    protect,
+		Logf:       func(string, ...any) {},
+	})
 
 	// A worker type whose builder derives the id from params.name, mirroring
 	// how workspace derives an id from its path.
-	svc.RegisterBuilder("fake", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+	cp.RegisterBuilder("fake", func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		if cfg.ID == "" {
 			name, _ := cfg.Params["name"].(string)
 			cfg.ID = "derived-" + name
 		}
 		id := cfg.ID
 		connect := func() (corebus.WorkerSideChannel, error) {
-			if err := projprocess.RegisterIdentity(layered, corebus.Identity{WorkerID: id, Type: "fake"}); err != nil {
+			if err := ensureIdentity(bus, corebus.Identity{WorkerID: id, Type: "fake"}); err != nil {
 				return nil, err
 			}
 			ch := inprocess.NewWorkerSide(id, listener)
@@ -204,24 +214,9 @@ func newTestRig(t *testing.T) *testRig {
 			return &fakeWorker{BaseWorker: baseworker.NewBaseWorker(id, ch)}
 		}
 		return coreworker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
-	})
-	svc.RegisterParamCheck("fake", CheckSpawnParams("fake", []string{"name"}))
+	}, CheckSpawnParams("fake", []string{"name"}))
 
-	decls := &memDecls{}
-	sup := projprocess.NewProcessSupervisor("http://127.0.0.1:1", filepath.Join(dir, "workers"), func(string, ...any) {})
-	t.Cleanup(sup.Shutdown)
-
-	backend := NewBackend(BackendConfig{
-		ProjectID:  "test",
-		Service:    svc,
-		Supervisor: sup,
-		Registry:   layered,
-		Signer:     eventbus.NewTokenSigner([]byte("test-secret")),
-		Engine:     engine,
-		Decls:      decls,
-		Logf:       func(string, ...any) {},
-	})
-	return &testRig{backend: backend, service: svc, supervisor: sup, decls: decls, registry: layered}
+	return &testRig{cp: cp, backend: cp.backend, manager: cp.Manager(), supervisor: sup, manifests: manifests, registry: registry, bus: bus}
 }
 
 // TestCreateInProcessDeclaresResolvedID is the regression behind the old
@@ -241,7 +236,7 @@ func TestCreateInProcessDeclaresResolvedID(t *testing.T) {
 	if info.Placement != coreworker.PlacementInProcess || info.State != "running" {
 		t.Fatalf("info = %+v", info)
 	}
-	d, ok, err := rig.decls.Get("derived-alpha")
+	d, ok, err := rig.manifests.Get("derived-alpha")
 	if err != nil || !ok {
 		t.Fatalf("declaration missing: %v %v", ok, err)
 	}
@@ -260,10 +255,10 @@ func TestCreateRejectsUnreadParams(t *testing.T) {
 	if err == nil {
 		t.Fatal("Create accepted a parameter the type does not read")
 	}
-	if rig.service.HasWorker("w1") {
+	if rig.manager.Has("w1") {
 		t.Fatal("the rejected create still registered a worker")
 	}
-	if _, ok, _ := rig.decls.Get("w1"); ok {
+	if _, ok, _ := rig.manifests.Get("w1"); ok {
 		t.Fatal("the rejected create still persisted a declaration")
 	}
 }
@@ -314,10 +309,8 @@ func TestLifecycleInProcess(t *testing.T) {
 
 // TestDestroyRefusesProtected verifies the host itself cannot be removed.
 func TestDestroyRefusesProtected(t *testing.T) {
-	rig := newTestRig(t)
-	if err := rig.backend.Recover(context.Background(), coreworker.RecoverOptions{
-		Protect: []string{"host"},
-	}); err != nil {
+	rig := newTestRig(t, "host")
+	if err := rig.cp.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 	if err := rig.backend.Destroy(context.Background(), "host"); err == nil {
@@ -347,16 +340,18 @@ func TestCreateManagedProcess(t *testing.T) {
 		t.Fatalf("info = %+v", info)
 	}
 
-	d, ok, _ := rig.decls.Get("proc")
+	d, ok, _ := rig.manifests.Get("proc")
 	if !ok || PlacementOf(*d) != coreworker.PlacementManagedProcess || len(d.Command) == 0 {
 		t.Fatalf("declaration = %+v", d)
 	}
-	// A launched child carries a TEMP credential: it must not be persisted.
-	if d.Credential != "" {
-		t.Fatalf("temp credential persisted: %q", d.Credential)
+	// A launched child carries a TEMP credential: the durable identity keeps
+	// the grants but no credential.
+	durable, ok := rig.bus.Lookup("proc")
+	if !ok || durable.Credential != "" {
+		t.Fatalf("durable identity = %+v (ok=%v): temp credential must not be persisted", durable, ok)
 	}
-	if _, ok := rig.registry.Lookup("proc"); !ok {
-		t.Fatal("identity not registered")
+	if id, ok := rig.registry.Lookup("proc"); !ok || id.Credential == "" {
+		t.Fatalf("runtime identity = %+v (ok=%v): the child needs its temp credential", id, ok)
 	}
 
 	waitForFile(t, marker)
@@ -373,7 +368,7 @@ func TestCreateManagedProcess(t *testing.T) {
 	if err := rig.backend.Destroy(ctx, "proc"); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
-	if _, ok, _ := rig.decls.Get("proc"); ok {
+	if _, ok, _ := rig.manifests.Get("proc"); ok {
 		t.Fatal("declaration survived destroy")
 	}
 	if _, ok := rig.registry.Lookup("proc"); ok {
@@ -395,15 +390,16 @@ func TestCreateUnmanagedProcess(t *testing.T) {
 	if info.Placement != coreworker.PlacementUnmanagedProcess {
 		t.Fatalf("info = %+v", info)
 	}
-	d, ok, _ := rig.decls.Get("remote")
+	d, ok, _ := rig.manifests.Get("remote")
 	if !ok || PlacementOf(*d) != coreworker.PlacementUnmanagedProcess {
 		t.Fatalf("declaration = %+v", d)
 	}
-	if d.Credential == "" {
-		t.Fatal("credential not persisted onto the declaration")
+	durable, ok := rig.bus.Lookup("remote")
+	if !ok || durable.Credential == "" || !durable.Remote {
+		t.Fatalf("durable identity = %+v (ok=%v)", durable, ok)
 	}
 	id, ok := rig.registry.Lookup("remote")
-	if !ok || id.Credential != d.Credential || !id.Remote {
+	if !ok || id.Credential != durable.Credential || !id.Remote {
 		t.Fatalf("registry identity = %+v (ok=%v)", id, ok)
 	}
 	if sts := rig.supervisor.List(); len(sts) != 0 {
@@ -429,16 +425,16 @@ func TestCreateRequiresCommandForProcess(t *testing.T) {
 	if err == nil {
 		t.Fatal("managed-process create accepted an empty command")
 	}
-	if _, ok, _ := rig.decls.Get("p"); ok {
+	if _, ok, _ := rig.manifests.Get("p"); ok {
 		t.Fatal("rejected create still persisted a declaration")
 	}
 }
 
-// TestCatalogReportsStoppedAndRunning verifies List() covers declared-but-idle
+// TestListReportsStoppedAndRunning verifies List() covers declared-but-idle
 // workers, which is what the start button is rendered from.
-func TestCatalogReportsStoppedAndRunning(t *testing.T) {
+func TestListReportsStoppedAndRunning(t *testing.T) {
 	rig := newTestRig(t)
-	if err := rig.decls.Add(&Declaration{Config: Config{ID: "idle", Type: "fake"}}); err != nil {
+	if err := rig.manifests.Add(&Manifest{Definition: Definition{ID: "idle", Type: "fake"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := rig.backend.Create(context.Background(), coreworker.WorkerSpec{
@@ -448,7 +444,7 @@ func TestCatalogReportsStoppedAndRunning(t *testing.T) {
 	}
 
 	states := map[string]string{}
-	for _, info := range rig.backend.List() {
+	for _, info := range rig.backend.List(false) {
 		states[info.ID] = info.State
 	}
 	if states["idle"] != "stopped" {
@@ -482,7 +478,7 @@ func TestCreateUnmanagedProcessRejectsParams(t *testing.T) {
 	if err == nil {
 		t.Fatal("unmanaged-process create accepted params")
 	}
-	if _, ok, _ := rig.decls.Get("remote"); ok {
+	if _, ok, _ := rig.manifests.Get("remote"); ok {
 		t.Fatal("rejected create persisted a declaration")
 	}
 }
@@ -490,10 +486,10 @@ func TestCreateUnmanagedProcessRejectsParams(t *testing.T) {
 // TestManagedProcessParamsBecomeEnv verifies a managed-process spec's params are
 // lowered into the child environment (and secret references are resolved).
 func TestManagedProcessParamsBecomeEnv(t *testing.T) {
-	d := Declaration{
-		Config:    Config{ID: "p", Type: "probe", Params: map[string]any{"TOKEN": "env:SEP5_TOKEN", "ROOT": "/data"}},
-		Placement: coreworker.PlacementManagedProcess,
-		Command:   []string{"x"},
+	d := Manifest{
+		Definition: Definition{ID: "p", Type: "probe", Params: map[string]any{"TOKEN": "env:SEP5_TOKEN", "ROOT": "/data"}},
+		Placement:  coreworker.PlacementManagedProcess,
+		Command:    []string{"x"},
 	}
 	t.Setenv("SEP5_TOKEN", "resolved")
 	env := launchSpec(d, "cred").Env
@@ -560,7 +556,7 @@ func TestUpdateEditsDeclarationOnly(t *testing.T) {
 	if info.State != before.State {
 		t.Fatalf("state changed by an edit: %s → %s", before.State, info.State)
 	}
-	d, ok, _ := rig.decls.Get("w1")
+	d, ok, _ := rig.manifests.Get("w1")
 	if !ok || d.Label != "值班" || len(d.Tags) != 1 || d.Params["name"] != "b" {
 		t.Fatalf("declaration = %+v", d)
 	}
@@ -570,14 +566,14 @@ func TestUpdateEditsDeclarationOnly(t *testing.T) {
 	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Description: &desc}); err != nil {
 		t.Fatalf("Update description: %v", err)
 	}
-	d, _, _ = rig.decls.Get("w1")
+	d, _, _ = rig.manifests.Get("w1")
 	if d.Label != "值班" || d.Description != "note" || d.Params["name"] != "b" {
 		t.Fatalf("partial edit lost a field: %+v", d)
 	}
 	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Params: map[string]any{}}); err != nil {
 		t.Fatalf("Update clear params: %v", err)
 	}
-	if d, _, _ = rig.decls.Get("w1"); d.Params != nil {
+	if d, _, _ = rig.manifests.Get("w1"); d.Params != nil {
 		t.Fatalf("params = %+v, want nil", d.Params)
 	}
 
@@ -587,7 +583,7 @@ func TestUpdateEditsDeclarationOnly(t *testing.T) {
 	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Label: &bad}); err == nil {
 		t.Fatal("invalid label accepted")
 	}
-	if d, _, _ = rig.decls.Get("w1"); d.Label != "值班" {
+	if d, _, _ = rig.manifests.Get("w1"); d.Label != "值班" {
 		t.Fatalf("rejected edit changed the declaration: %+v", d)
 	}
 
@@ -630,13 +626,13 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if err := rig.backend.Archive(ctx, "w1", true); err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
-	if _, ok, _ := rig.decls.Get("w1"); ok {
+	if _, ok, _ := rig.manifests.Get("w1"); ok {
 		t.Fatal("declaration still active after archive")
 	}
-	if got, _ := rig.decls.Archived(); len(got) != 1 || got[0] != "w1" {
+	if got, _ := rig.manifests.List(true); len(got) != 1 || got[0].ID != "w1" {
 		t.Fatalf("archived = %v", got)
 	}
-	if got := rig.backend.Archived(); len(got) != 1 || got[0] != "w1" {
+	if got := rig.backend.List(true); len(got) != 1 || got[0].ID != "w1" {
 		t.Fatalf("catalog archived = %v", got)
 	}
 	if _, ok := rig.registry.Lookup("w1"); ok {
@@ -647,7 +643,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 	// Catalog.List must not leak it either: archiving keeps a suspended entry (so a
 	// restore can resume its snapshot), and that entry must stay invisible.
-	for _, info := range rig.backend.List() {
+	for _, info := range rig.backend.List(false) {
 		if info.ID == "w1" {
 			t.Fatalf("archived worker still listed: %+v", info)
 		}
@@ -656,7 +652,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if err := rig.backend.Archive(ctx, "w1", false); err != nil {
 		t.Fatalf("Unarchive: %v", err)
 	}
-	if _, ok, _ := rig.decls.Get("w1"); !ok {
+	if _, ok, _ := rig.manifests.Get("w1"); !ok {
 		t.Fatal("declaration not restored")
 	}
 	if info, ok, _ := rig.backend.Get("w1"); !ok || info.State != "running" {
@@ -667,10 +663,8 @@ func TestArchiveRoundTrip(t *testing.T) {
 // TestArchiveRefusesProtected verifies the protection that stops the host or the
 // WebUI's HIW from being hidden.
 func TestArchiveRefusesProtected(t *testing.T) {
-	rig := newTestRig(t)
-	if err := rig.backend.Recover(context.Background(), coreworker.RecoverOptions{
-		Protect: []string{"w1"},
-	}); err != nil {
+	rig := newTestRig(t, "w1")
+	if err := rig.cp.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 	if err := rig.backend.Archive(context.Background(), "w1", true); err == nil {
@@ -718,8 +712,52 @@ func TestCreateResolvesProjectPlaceholder(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	d, _, _ := rig.decls.Get("w1")
+	d, _, _ := rig.manifests.Get("w1")
 	if d.Params["name"] != "test-ws" {
 		t.Fatalf("params = %+v, want the project id substituted", d.Params)
+	}
+}
+
+// TestListSplitsActiveAndArchived verifies the single read view carries the
+// display metadata for the active set, and that the archived set is a separate
+// List(true) with Archived=true — no second declaration view.
+func TestListSplitsActiveAndArchived(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	if _, err := rig.backend.Create(ctx, coreworker.WorkerSpec{
+		WorkerConfig: coreworker.WorkerConfig{ID: "w1", Type: "fake", Params: map[string]any{"name": "a"}, Label: "值班"},
+	}); err != nil {
+		t.Fatalf("Create w1: %v", err)
+	}
+	if _, err := rig.backend.Create(ctx, coreworker.WorkerSpec{
+		WorkerConfig: coreworker.WorkerConfig{ID: "w2", Type: "fake"},
+	}); err != nil {
+		t.Fatalf("Create w2: %v", err)
+	}
+	active := rig.backend.List(false)
+	if len(active) != 2 {
+		t.Fatalf("active = %+v", active)
+	}
+	for _, info := range active {
+		if info.Archived {
+			t.Fatalf("active entry marked archived: %+v", info)
+		}
+		if info.ID == "w1" && (info.Label != "值班" || info.Params["name"] != "a") {
+			t.Fatalf("w1 view = %+v", info)
+		}
+	}
+
+	if err := rig.backend.Archive(ctx, "w2", true); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	if got := rig.backend.List(false); len(got) != 1 || got[0].ID != "w1" {
+		t.Fatalf("active after archive = %+v", got)
+	}
+	archived := rig.backend.List(true)
+	if len(archived) != 1 || archived[0].ID != "w2" || !archived[0].Archived {
+		t.Fatalf("archived = %+v", archived)
+	}
+	if _, ok, _ := rig.backend.Get("w2"); ok {
+		t.Fatal("an archived worker must not appear in the active Get")
 	}
 }
