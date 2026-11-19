@@ -34,12 +34,13 @@ niq/
 │   │   ├── control/              #   多 project 编排、聚合 UI、代理
 │   │   ├── project/              #   单 project 装配根
 │   │   │   ├── run.go            #     启动编排（持有信号 ctx）
-│   │   │   ├── project.go        #     project.json 元信息 + 创建/链接
+│   │   │   ├── project.go        #     项目路径 + 创建/列出/链接（IO 在 store）
 │   │   │   ├── store/            #     全部存储实现（路径驱动，不知道 project id）
+│   │   │   │   ├── project.go    #       project.json
 │   │   │   │   ├── manifest.go   #       workers.json + worker.ManifestStore
 │   │   │   │   ├── state.go      #       state.json + workerlife.WorkerStore
 │   │   │   │   ├── identity/     #       identities.json 的 bus.Store（运行时 + 迁移共用）
-│   │   │   │   └── sqlite/       #       事件存储
+│   │   │   │   └── event/        #       事件存储（SQLite 实现）
 │   │   │   ├── migrate/          #     旧格式 → 当前 schema（唯一读旧格式的地方）
 │   │   │   ├── template/         #     模板与 preset
 │   │   │   └── provider/         #     provider.json 读取与启动门控
