@@ -65,21 +65,21 @@ niq --version
 **Upgrading.** `niq update` installs the npm package, so it is the way to update
 an npm install. A script install is updated by re-running the `curl` line, and a
 source install by `git pull && make install` — both replace the binary in place.
-The running control plane and projects keep the binary they started with, so
+The running gateway and projects keep the binary they started with, so
 finish with `niq restart -p`.
 
 ## Quick start
 
 With `niq` on your PATH, one command starts everything. niq has two layers: a
-**control plane**, and **projects** — each project is an isolated agent instance
+**gateway**, and **projects** — each project is an isolated agent instance
 with its own event bus, worker set and WebUI on its own ports.
 
 ```sh
-# start the control plane (default :9527) in the background
+# start the gateway (default :9527) in the background
 niq
 ```
 
-`niq` starts the control plane detached from the terminal, prints where it is
+`niq` starts the gateway detached from the terminal, prints where it is
 reachable, and returns to the prompt — closing the shell (or losing an SSH
 session) no longer stops it. Running `niq` again reports on the service instead
 (it is exactly `niq status`), so one command covers both "start it" and "is it
@@ -88,18 +88,18 @@ up?".
 ```
  - niq -  version: 0.14.0 · build: 2026-11-01T23:55:12Z
 
-[control] running  pid 4711 · since 2026-11-01 23:57
+[gateway] running  pid 4711 · since 2026-11-01 23:57
 webui    http://localhost:9527
 log      ~/.niq/niq.log
 stop     niq stop
 restart  niq restart
 
-[projects]  niq project to start, stop or restart one
+[projects]  niq i to start, stop or restart one
 ● pin   running  webui 57609  bus 57608  http://localhost:9527/p/pin/
 ○ notes stopped  webui 57621  bus 57620  http://localhost:9527/p/notes/
 ```
 
-`niq status` reports the process, address and log, plus each project's run
+`niq status` reports the gateway process, its address and log, plus each project's run
 state and URL (a refused port means that instance is not running); `niq stop`
 shuts it down — projects are their own processes, so they keep serving unless
 you add `-p`;
@@ -109,43 +109,38 @@ recorded address). To keep it attached to the terminal — systemd, a container,
 `docker run`, or just to watch it — pass `--foreground` (or `-f`):
 
 ```sh
-niq control --foreground
+niq w --foreground
 ```
 
-Open **http://localhost:9527** — the control plane's WebUI lists your projects and can create and start one from a template, no terminal needed.
+Open **http://localhost:9527** — the gateway's WebUI lists your projects and can create and start one from a template, no terminal needed.
 
-Prefer the CLI? Both steps can also be done manually:
-
-```sh
-niq project create my-project
-niq project run my-project
-```
-
-`niq project` on its own (or `niq project list`) is an arrow-key picker over
+Prefer the terminal? `niq i` opens the same thing as an arrow-key picker over
 every project — state, ports and directory per row: `↑`/`↓`, `⌃n`/`⌃p` or `j`/`k`
-to move, `enter` to pick, then start (if stopped) or stop / restart (if running). An instance is
-identified by its ports, so the CLI, the WebUI and a project started by hand in
-a terminal all act on the same thing — the control plane keeps no list of what
-it launched. Without a terminal the picker prints the same table; `--ids` prints
-just the ids.
+to move, `enter` to pick, then start (if stopped) or stop / restart (if running).
+An instance is identified by its ports, so the WebUI, the picker and a project
+started by hand all act on the same thing — the gateway keeps no list of what it
+launched. Without a terminal the picker prints the same table; `niq status --ids`
+prints just the ids.
+
+Both interfaces are clients of the same HTTP API, so anything the WebUI can do
+is available to the terminal and to scripts; there are no project commands to
+keep in sync.
 
 | command | |
 | --- | --- |
-| `niq` | start the control plane in the background, or report on it when it is already running |
-| `niq -f`, `niq --foreground` | run the control plane in this terminal |
-| `niq status [--json]` | the control plane and every project instance (`--json` for tools) |
-| `niq stop [-p]` | stop the control plane (`-p` also stops the running projects) |
+| `niq` | ensure the gateway is running in the background, then print the status table |
+| `niq w [-f]` | ensure the gateway, open the browser, and print the address as a fallback |
+| `niq i` | ensure the gateway and open the interactive terminal picker |
+| `niq status [--json\|--ids]` | the gateway and every project instance; reads the local snapshot without starting a daemon |
+| `niq stop [-p]` | stop the gateway (`-p` also stops the running projects) |
 | `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
-| `niq project`, `niq p` | pick a project: start, stop or restart it |
 | `niq update` | install the latest release with npm |
-| `niq project start\|stop\|restart <id>` | act on one instance, without the picker |
-| `niq project create` / `niq project run` | create a project / run one in this terminal |
 | `niq completion install` | put completion where your shell already looks |
 | `niq completion <shell>` | print a script for bash, zsh or fish |
 
 `niq update` asks npm for the published version, installs it with
 `npm install -g @niq.run/niq@latest`, and points at `niq restart -p` — the
-control plane and the projects are separate processes still running the old
+gateway and the projects are separate processes still running the old
 binary. A bare `niq` asks the registry at most once a day and mentions a newer
 release every time it starts (from the cached answer) until you install it;
 `NIQ_NO_UPDATE_CHECK=1` turns the check off.
@@ -173,19 +168,18 @@ Output is colored when it goes to a terminal and plain otherwise (or with
 `NO_COLOR` set), so piping and logging stay readable.
 
 Each project serves its own WebUI on a loopback-only port, so it is never
-exposed by accident: open it through the control plane at
+exposed by accident: open it through the gateway at
 **http://localhost:9527/p/&lt;id&gt;/**, which proxies to that project. That address
 works whether or not the instance is running — opening a stopped project's
 address lands on the projects list with a start prompt instead of an error
 page. Ports are
 assigned dynamically on first run and then persisted per project, so they stay
-stable across restarts (`--bus` / `--webui` override). `niq project list` shows
-each project's `webui` and `bus` ports.
+stable across restarts. `niq status` shows each project's `webui` and `bus` ports.
 
 ### Server deployment
 
-The control plane is the only port a deployment needs to expose: it serves the
-SPA, the project-management API and every project's WebUI (at `/p/<id>/`).
+The gateway is the only port a deployment needs to expose: it serves the SPA,
+the project-management API and every project's WebUI (at `/p/<id>/`).
 Each project's WebUI binds loopback only, so it stays unreachable from outside
 even on a public machine; the event bus listens on all interfaces but
 authenticates every connection with a signed worker token.
@@ -197,12 +191,11 @@ niq --addr :9527 --auth alice:s3cret
 A non-loopback bind is not required to have credentials — auth is opt-in. With
 basic auth configured, requests from any non-loopback address are answered with
 a 401 until they authenticate, while requests from the machine itself stay
-password-free. `--auth` (control plane) and `--webui-auth` (a project started by
-hand) persist to and read from the same `~/.niq/common/auth.json`, so one pair
-of credentials covers everything.
+password-free. `--auth` persists to and reads from `~/.niq/common/auth.json`, so
+one pair of credentials covers the gateway and everything it proxies.
 
 With no credentials configured the server enforces nothing: every caller that
-can reach it is served. That is why the control plane listens on loopback by
+can reach it is served. That is why the gateway listens on loopback by
 default — pass an explicit `--addr` (and, ideally, `--auth`) to accept remote
 connections.
 
@@ -210,7 +203,7 @@ Basic auth sends the credentials on every request, so terminate TLS in front (or
 tunnel through SSH/WireGuard) before exposing niq to the open internet — niq
 itself speaks plain HTTP.
 
-After upgrading the binary, `niq restart` the control plane and restart the
+After upgrading the binary, `niq restart` the gateway and restart the
 running projects: every process serves the page and assets it was built with
 (asset URLs are relative, so a project page loads its own bundle through
 `/p/<id>/`), which means an older project keeps rendering the older UI until it
@@ -238,7 +231,7 @@ menu bar and black on a light one, so the icon follows the appearance without
 any artwork to keep in sync.
 
 The menu is the actions, nothing else: **Open WebUI** and **Stop** (**Start**
-when the control plane is down), then one entry per project — `pin · running` —
+when the gateway is down), then one entry per project — `pin · running` —
 each a submenu of **Open WebUI / Start / Stop / Restart**, with the entries that
 instance cannot perform greyed out. **Open GitHub** and **Quit** close it.
 
@@ -247,9 +240,9 @@ Releases ship a universal build as `niq_menubar_darwin_universal.zip`, holding
 needs right-click → Open (or `xattr -d com.apple.quarantine niq.app`).
 
 It refreshes itself when the menu opens, so there is no Refresh item to
-remember. It is a front end, not a second implementation: the status comes from
-`niq status --json`, every action is a `niq` command (`niq project restart <id>`,
-`niq restart -p`, …), so the app cannot drift from the CLI. `miq` is a shell
+remember. It is a front end, not a second implementation: status comes from
+`niq status --json`, and each project action is an HTTP POST to the gateway's
+`/api/projects/{id}/start|stop|restart` — the same API the WebUI uses. `miq` is a shell
 script that finds the bundle beside itself first — the one this build produced —
 then `NIQ_APP`, `~/Applications` and `/Applications`, and hands the app the `niq`
 next to it (`--niq <path>`), since a GUI launch does not inherit the shell's
@@ -258,11 +251,14 @@ PATH.
 ## Project layout
 
 ```
-core/itfs/ interfaces & types (contracts, not implementations)
-core/impl/ implementations (workers, bus, transports, providers, hosts)
-app/       the niq product: control plane, project runtime, WebUI
-app/publish/cmd  CLI entry point (package main)
-app/publish/npm  npm distribution (launcher shim + package template)
+core/itfs/        interfaces & types (contracts, not implementations)
+core/impl/        implementations (workers, bus, transports, providers, hosts)
+app/contract/     shapes + HTTP client shared by every interface (stdlib only)
+app/standalone/   the single-machine form: gateway, launcher, project, store, cli
+app/ui/           interfaces: webui (assets) and tui (both gateway clients)
+app/publish/cmd   CLI entry point (package main)
+app/publish/mac   macOS distribution (menu bar app + bundled niq)
+app/publish/npm   npm distribution (launcher shim + package template)
 ext/       external worker implementations (HTTP)
 ```
 
@@ -298,11 +294,11 @@ an install cannot quietly turn into a long npm/vite run.
 
 ### Frontend development
 
-With the control plane running, the Vite dev server (`npm run dev` in
+With the gateway running, the Vite dev server (`npm run dev` in
 `app/webui/assets`, port 5173) proxies API traffic to :9527, so both pages
 work with HMR:
 
-- control plane UI: http://localhost:5173/
+- gateway UI: http://localhost:5173/
 - a project's UI: http://localhost:5173/p/&lt;id&gt;/ (that project must be running)
 
 ## Data directory

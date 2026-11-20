@@ -30,45 +30,48 @@ niq/
 │       └── embedws/              #   workspace 的文件系统后端
 │
 ├── app/
+│   ├── contract/                 # 共享形状（Project/View/Instance）+ HTTP client；仅 stdlib
 │   ├── standalone/               # 部署形态：本地单机 niq
-│   │   ├── launcher/             #   项目实例：List/Start/Stop/Restart + 私有子进程入口
-│   │   ├── project/              #   单 project 运行时
+│   │   ├── run.go                #   组合根入口：standalone.Spec{Version, BuildTime, UI} + Main
+│   │   ├── cli/                  #   `niq` 命令树：路由、网关守护、update/completion
+│   │   ├── gateway/              #   唯一 HTTP 端点：auth、/api/*、/p/{id} 代理、UIMount 挂载
+│   │   ├── launcher/             #   实例：List/Start/Stop/Restart + 私有子进程入口
+│   │   ├── project/              #   项目定义 + 单 project 运行时
 │   │   │   ├── run.go            #     启动编排（持有信号 ctx）
 │   │   │   ├── api/              #     项目 HTTP API：JSON/SSE + 人类入口
 │   │   │   ├── project.go        #     创建/列出/链接（读写经 store）
-│   │   │   ├── export.go         #     项目 → 模板导出
-│   │   │   └── template/         #     模板与 preset
+│   │   │   └── export.go         #     项目 → 模板导出
+│   │   ├── template/             #   模板与 preset（共享领域）
 │   │   ├── store/                #   落盘与路径的唯一主人
-│   │   │   ├── root.go           #     NIQ_HOME / 项目目录 / 文件名 / auth 与 provider 路径
-│   │   │   ├── project.go        #     project.json
+│   │   │   ├── root.go           #     NIQ_HOME / 项目目录 / 文件名 / auth 与 provider 路径 / 地址渲染
+│   │   │   ├── project.go        #     project.json（形状由 contract 提供）
 │   │   │   ├── manifest.go       #     workers.json + worker.ManifestStore
 │   │   │   ├── state.go          #     state.json + workerlife.WorkerStore
 │   │   │   ├── provider.go       #     provider.json 的读写
 │   │   │   ├── migrate/          #     旧格式 → 当前 schema（唯一读旧格式的地方）
-│   │   │   ├── identity/         #     identities.json 的 bus.Store（运行时 + 迁移共用）
+│   │   │   ├── identity/         #     identities.json 的 bus.Store
 │   │   │   └── event/            #     事件存储（SQLite 实现）
 │   │   ├── provider/             #   共享配置领域：provider 定义、模型解析、LLM 构造
-│   │   ├── worker/               #   worker 控制面（自闭环）
-│   │   │   ├── controlplane.go   #     New / Recover / Stop / HostBackend / Manifest
-│   │   │   ├── backend.go        #     worker.Backend：placement 路由 + 生命周期
-│   │   │   ├── builders.go       #     每类型一个构造器
-│   │   │   ├── registry.go       #     type → builder + 参数契约
-│   │   │   ├── declaration.go    #     Manifest 模型
-│   │   │   ├── identity.go       #     首次连接的身份播种
-│   │   │   ├── store.go          #     ManifestStore 契约
-│   │   │   └── process/          #     OS 子进程：provision + supervisor
-│   │   ├── shell/
-│   │   │   ├── tui/              #   终端 shell：picker、状态表、实例动作
-│   │   │   ├── webui/            #   浏览器 shell：SPA + auth + /p/{id} 代理 + launcher 路由
-│   │   │   │   └── assets/       #     前端源码与构建产物（dist 是 go:embed 的）
-│   │   │   └── menubar/          #   macOS 菜单栏壳（Swift，驱动 CLI，不在 Go import 图）
+│   │   └── worker/               #   worker 控制面（自闭环）
+│   │       ├── controlplane.go   #     New / Recover / Stop / HostBackend / Manifest
+│   │       ├── backend.go        #     worker.Backend：placement 路由 + 生命周期
+│   │       ├── builders.go       #     每类型一个构造器
+│   │       ├── registry.go       #     type → builder + 参数契约
+│   │       ├── declaration.go    #     Manifest 模型
+│   │       ├── identity.go       #     首次连接的身份播种
+│   │       ├── store.go          #     ManifestStore 契约
+│   │       └── process/          #     OS 子进程：provision + supervisor
 │   │
-│   │   ├── cli/                  #   `niq` 命令树：路由、webui 守护、update/completion
-│   │   ├── cluster/              # 部署形态：分布式（占位，与 standalone 平级）
+│   ├── ui/                       # 界面：全部是 gateway 的客户端
+│   │   ├── webui/                #   浏览器界面：assets/ + Assets()（没有服务器）
+│   │   └── tui/                  #   终端界面：picker、状态表
+│   │
+│   ├── cluster/                  # 部署形态：分布式（占位，与 standalone 平级）
 │   │   └── README.md
 │   │
-│   └── publish/                  # 产品入口 + 发行物
-│       ├── cmd/                  #   niq CLI（组合根：装配 standalone）
+│   └── publish/                  # 分发：决定带哪些 UI、是否打包二进制
+│       ├── cmd/                  #   niq CLI：薄 main，声明 build 身份与 UI 挂载
+│       ├── mac/                  #   macOS 分发：菜单栏 app + 打包的 niq 二进制
 │       ├── npm/                  #   npm 包与发布脚本
 │       └── release-notes/
 │
@@ -88,9 +91,9 @@ niq/
 | **部署形态** | 知道 placement、项目文件布局、进程模型、存储适配 | `app/<form>/`（`standalone`、`cluster`） |
 | **产品入口** | 负责把某个形态装起来（`publish`） | `app/` 顶层 |
 
-`app/standalone/store/root.go` 是形态内的路径知识（`NIQ_HOME`、`~/.niq`、项目目录、auth 与 provider 路径）。别的包只调 `store.*`，不自己拼路径；`shell/webui` 的 auth 文件路径也由调用方传入。
+`app/standalone/store/root.go` 是形态内的路径知识（`NIQ_HOME`、`~/.niq`、项目目录、auth 与 provider 路径、地址渲染）。别的包只调 `store.*`，不自己拼路径；`gateway` 的 auth 文件路径也由调用方传入。
 
-shell（`shell/webui`、未来的 `shell/tui`）属于形态内部，不是跨形态共享件。cluster 的 UI 单独实现；等它出现后，再从 `shell/webui/assets` 抽公共前端组件。
+`app/ui/*` 是界面实现，本身不含形态知识：`webui` 只有资产，`tui` 只有终端渲染与 `contract.Client`。它们不 import `app/standalone` 的任何包。cluster 的界面单独实现；等它出现后，再从 `app/ui/webui/assets` 抽公共前端组件。
 
 ## 3. 为什么 `busctl` 和 `workerlife` 都在 core
 
@@ -105,18 +108,22 @@ worker 的**控制面**不在这里，因为 placement 集合、builder 表、�
 
 ```
 app/publish ──▶ app/standalone ──▶ core
+     │                │
+     └──▶ app/ui ──▶ app/contract
 app/cluster ──▶ core
 ```
 
 - `app/standalone/*` 与 `app/cluster/*` **互不 import**；
-- `app/standalone/shell/webui` 只依赖 core 句柄，不 import `standalone/control`、`standalone/project`、`cluster`；
-- 今天 `standalone/project` 反向 import `shell/webui`（项目进程还宿主着 HTTP API）；`project/api` 拆分后这条边消失；
-- `app/publish` 是组合根，可以依赖形态；**形态不反向 import 它**。
+- `app/ui/*` 不 import `app/standalone/*`，只 import `app/contract`；
+- `app/contract` 只 import stdlib，所以任何界面（包括未来的远程客户端）都能安全使用；
+- `app/standalone/gateway` 不认识具体 UI，只认 `UIMount`；
+- `app/publish` 是分发层，可以依赖形态与界面；**形态不反向 import 它**。
 
 可执行校验：
 
 ```sh
-go list -deps ./app/standalone/shell/webui | grep -E 'standalone/(control|project)|app/cluster'  # 应为空
+go list -deps ./app/ui/... | grep 'app/standalone'          # 应为空
+go list -deps ./app/contract | grep '^github.com/niq-run/niq'  # 应为空
 go list -deps ./app/standalone/... | grep 'app/cluster'               # 应为空
 go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为空
 ```
@@ -133,7 +140,7 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为�
 | 新的形态内存储 | 该形态的 `store/` 子包（例如 `store/identity`） |
 | 新的上层界面 | 实现 `iface.Backend`，由形态装配一个 interface worker（不需要 manifest） |
 | 新的 CLI 命令 / 发行配置 | `app/publish` |
-| 浏览器外壳与前端 | `app/standalone/shell/webui`（含 `assets/`）；cluster 自带 UI，公共组件等它出现后再从 assets 抽 |
+| 浏览器界面与前端 | `app/ui/webui`（含 `assets/`）；cluster 自带 UI，公共组件等它出现后再从 assets 抽 |
 
 ## 6. 容易放错的三个位置
 
