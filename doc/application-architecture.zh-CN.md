@@ -292,10 +292,42 @@ grep -rn 'standalone/home' --include=*.go .                        # 空
 
 ### 第 2 步：launcher 抽离
 
-- 从 `control/projects.go` 与 `cmd/pick.go` 收拢：list/create/link/start/stop/restart、端口分配、日志定位、模板、provider
-- 删除两份重复实现（`launchProject` 与 `startProjectDetached`）
+目标：两个 shell 都只调 `launcher`，起停逻辑只有一份。
 
-**验收**：`launcher` 之外不再出现 `os.Executable()` + `project run` 的拼装；CLI 与 WebUI 的起停行为一致（同一份等待与错误文案）。
+```go
+// app/standalone/launcher
+type Instance struct {
+    ID        string
+    WebUIAddr string
+    BusAddr   string
+    Already   bool // 启动前就在跑
+}
+
+func List() ([]View, error)                      // store 扫描 + 端口探测
+func Start(ctx context.Context, id string) (Instance, error)   // 幂等
+func Stop(ctx context.Context, id string) error                // 幂等
+func Restart(ctx context.Context, id string) (Instance, error)
+```
+
+`Start` 的序列（这就是今天 `launchProject` 与 `startProjectDetached` 两份实现的合并）：
+
+1. 从 `store` 读 `project.json`，拿到已分配端口；
+2. 端口已在服务 → 返回 `Already`；
+3. `exec.Command(self, "project", "run", id)`，起进程并起一个 reaper goroutine；
+4. 等 WebUI 端口真正 accept（有超时，也监听子进程退出）；
+5. 失败时读 `store.LogPath(id)` 的尾部，把可读原因带回。
+
+`Stop`：端口不在服务 → 空操作；否则按端口发 SIGINT（`InterruptPortHolders` 从 `project/run.go` 移到 launcher），等端口释放。
+
+**边界**：`launcher` 不 import `project`。它启动的是**进程**（`niq project run`），`project.RunProject` 在子进程里执行。若 launcher 直接调 `project.RunProject`，项目就会跑在 shell 进程里——`niq project start` 永不返回、webui shell 变成 N 个项目的宿主，进程模型就破了。
+
+依赖：`launcher → store`；`project` 只被 `shell/cli` 的 `project run` 动词引用。
+
+**验收**：
+```sh
+grep -rn 'os.Executable\|InterruptPortHolders' app/standalone/shell app/standalone/control  # 空
+```
+CLI 与 WebUI 的起停行为一致（同一份等待超时、日志尾部、错误文案）。
 
 ### 第 3 步：project/api 拆分
 
