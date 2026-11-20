@@ -28,6 +28,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/template"
+	"github.com/niq-run/niq/app/standalone/shell/tui"
 	"github.com/niq-run/niq/app/standalone/store"
 )
 
@@ -44,6 +45,7 @@ var version = "dev"
 var buildTime = ""
 
 func main() {
+	tui.Version = version
 	// The launcher's private child entry: this process is a project runtime,
 	// not the CLI. Dispatch before anything else so the CLI never sees it.
 	if launcher.IsChild(os.Args) {
@@ -71,7 +73,7 @@ func main() {
 	var err error
 	switch {
 	case len(os.Args) > 1 && os.Args[1] == "i":
-		err = runProjectPicker()
+		err = tui.RunPicker()
 	case len(os.Args) > 1 && (os.Args[1] == "project" || os.Args[1] == "p"):
 		err = runProject(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "stop":
@@ -183,7 +185,7 @@ func helpOrErr(err error) error {
 
 func runProject(args []string) error {
 	if len(args) == 0 {
-		return runProjectPicker()
+		return tui.RunPicker()
 	}
 	fs := flag.NewFlagSet("niq project", flag.ContinueOnError)
 	switch {
@@ -204,7 +206,7 @@ func runProject(args []string) error {
 			}
 			return nil
 		}
-		return runProjectPicker()
+		return tui.RunPicker()
 
 	case len(args) >= 2 && args[0] == "create":
 		id := args[1]
@@ -266,11 +268,11 @@ func runProject(args []string) error {
 		var line string
 		switch args[0] {
 		case "start":
-			line, err = startProjectInstance(*p)
+			line, err = tui.StartProject(*p)
 		case "stop":
-			line, err = stopProjectInstance(*p)
+			line, err = tui.StopProject(*p)
 		default:
-			line, err = restartProjectInstance(*p)
+			line, err = tui.RestartProject(*p)
 		}
 		if line != "" {
 			fmt.Println(line)

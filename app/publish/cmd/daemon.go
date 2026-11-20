@@ -23,6 +23,7 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
+	"github.com/niq-run/niq/app/standalone/shell/tui"
 	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/app/standalone/store"
 )
@@ -410,7 +411,7 @@ func restartProjectInstances(ids []string) {
 			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
 			continue
 		}
-		line, err := restartProjectInstance(*p)
+		line, err := tui.RestartProject(*p)
 		if err != nil {
 			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
 			continue
@@ -489,7 +490,7 @@ func printProjectStatus(controlURL string) {
 	fmt.Println()
 	// The list reports state; acting on it is the picker's job, so the heading
 	// says where that is.
-	printProjectTable(projects, url, bold("niq project")+dim(" to start, stop or restart one"))
+	tui.PrintTable(projects, url, bold("niq project")+dim(" to start, stop or restart one"))
 }
 
 func printControlStarted(st *controlState) {

@@ -5,7 +5,7 @@
 //
 // The menu is a few dozen lines of escape codes rather than a TUI dependency:
 // two short blocks, redrawn in place.
-package main
+package tui
 
 import (
 	"bufio"
@@ -207,7 +207,7 @@ func readKey(in *bufio.Reader) key {
 // runProjectPicker is what `niq project` (and `niq project list`) does: pick an
 // instance, then an action. Without a terminal it degrades to the plain table,
 // so piping the command still means something.
-func runProjectPicker() error {
+func RunPicker() error {
 	// The list stays up after an action: acting on one project is rarely the
 	// whole errand. The block is redrawn in place each round — states reloaded,
 	// cursor kept on the project just acted on — and the result of the last
@@ -237,7 +237,7 @@ func runProjectPicker() error {
 		chosen, err := list.run()
 		if errors.Is(err, errNotTerminal) {
 			// Nothing to interact with: the table is the whole answer.
-			printProjectTable(projects, projectDirCell, "")
+			PrintTable(projects, projectDirCell, "")
 			return nil
 		}
 		if err != nil {
@@ -337,11 +337,11 @@ func cursorDot(selected bool) string {
 func runAction(p project.Project, action string) (string, error) {
 	switch action {
 	case "start":
-		return startProjectInstance(p)
+		return StartProject(p)
 	case "stop":
-		return stopProjectInstance(p)
+		return StopProject(p)
 	default:
-		return restartProjectInstance(p)
+		return RestartProject(p)
 	}
 }
 
@@ -399,7 +399,7 @@ func projectDirCell(p project.Project) string { return dim(shortPath(store.Proje
 // terminal, and the list under `niq status`. note, when set, is printed after
 // the heading — the status report uses it to say where the list can be acted on,
 // which the picker itself does not need to explain.
-func printProjectTable(projects []project.Project, trailing func(project.Project) string, note string) {
+func PrintTable(projects []project.Project, trailing func(project.Project) string, note string) {
 	head := bracketed("projects")
 	if note != "" {
 		head += "  " + note
@@ -410,10 +410,10 @@ func printProjectTable(projects []project.Project, trailing func(project.Project
 	}
 }
 
-// stopProjectInstance interrupts the instance and waits for the port to be
+// StopProject interrupts the instance and waits for the port to be
 // released. Working through the port rather than a child table keeps it valid
 // for instances started by hand, too.
-func stopProjectInstance(p project.Project) (string, error) {
+func StopProject(p project.Project) (string, error) {
 	if err := launcher.Stop(p.ID); err != nil {
 		if errors.Is(err, launcher.ErrNotRunning) {
 			return fmt.Sprintf("%s is %s", bold(p.ID), dim("not running")), nil
@@ -426,9 +426,9 @@ func stopProjectInstance(p project.Project) (string, error) {
 	return fmt.Sprintf("%s %s", bold(p.ID), green("stopped")), nil
 }
 
-// startProjectInstance brings a stopped project up. An instance is identified
+// StartProject brings a stopped project up. An instance is identified
 // by its ports, so this is the same operation whether the shell is running.
-func startProjectInstance(p project.Project) (string, error) {
+func StartProject(p project.Project) (string, error) {
 	inst, err := launcher.Start(p.ID)
 	if err != nil {
 		return "", err
@@ -441,9 +441,9 @@ func startProjectInstance(p project.Project) (string, error) {
 		brand(fmt.Sprintf("http://localhost:%d", inst.WebUIPort))), nil
 }
 
-// restartProjectInstance stops the instance through its port and starts a new
+// RestartProject stops the instance through its port and starts a new
 // one on the same addresses.
-func restartProjectInstance(p project.Project) (string, error) {
+func RestartProject(p project.Project) (string, error) {
 	inst, err := launcher.Restart(p.ID)
 	if err != nil {
 		return "", err
