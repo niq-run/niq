@@ -27,8 +27,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/niq-run/niq/app/standalone/project"
-	"github.com/niq-run/niq/app/standalone/project/template"
+	"github.com/niq-run/niq/app/standalone/template"
 	"github.com/niq-run/niq/app/standalone/store"
 )
 
@@ -178,7 +177,7 @@ func (c *Shell) Start(ctx context.Context) error {
 		c.server.Shutdown(shutdownCtx)
 	}()
 	log.Printf("[control] listening on %s", c.bound)
-	fmt.Printf("niq control listening at %s\n", project.LocalhostURL(c.bound))
+	fmt.Printf("niq gateway listening at %s\n", store.LocalhostURL(c.bound))
 	if err := c.server.Serve(c.listener); err != nil && err != stdhttp.ErrServerClosed {
 		return fmt.Errorf("control: %w", err)
 	}

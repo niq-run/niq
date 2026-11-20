@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/niq-run/niq/app/standalone/launcher"
-	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 )
 
@@ -58,7 +57,7 @@ func runStatus(args []string) error {
 		return nil
 	}
 	if !*asJSON {
-		return statusControl()
+		return printStatus()
 	}
 	out, err := json.MarshalIndent(takeStatus(), "", "  ")
 	if err != nil {
@@ -73,12 +72,12 @@ func runStatus(args []string) error {
 func takeStatus() statusSnapshot {
 	snap := statusSnapshot{
 		Version:  versionNumber(),
-		Control:  controlSnapshot{Log: controlLogPath()},
+		Control:  controlSnapshot{Log: shellLogPath()},
 		Projects: []projectSnapshot{}, // [] not null: the app decodes a list
 	}
 	controlURL := ""
-	if st, ok := readControlState(); ok && isRunning(st) {
-		controlURL = project.LocalhostURL(st.Bound)
+	if st, ok := readShellState(); ok && isRunning(st) {
+		controlURL = store.LocalhostURL(st.Bound)
 		snap.Control.Running = true
 		snap.Control.PID = st.PID
 		snap.Control.Addr = st.Addr
@@ -102,7 +101,7 @@ func takeStatus() statusSnapshot {
 		case controlURL != "" && p.Ports.WebUI != 0:
 			ps.URL = strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/"
 		case p.Ports.WebUI != 0:
-			ps.URL = project.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
+			ps.URL = store.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
 		}
 		snap.Projects = append(snap.Projects, ps)
 	}

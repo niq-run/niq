@@ -22,8 +22,8 @@ import (
 	"strings"
 
 	"github.com/niq-run/niq/app/standalone/launcher"
-	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/shell/tui"
+	"github.com/niq-run/niq/app/standalone/store"
 )
 
 // version is injected at build time via -ldflags:
@@ -69,7 +69,7 @@ func Main() {
 	case len(os.Args) > 1 && os.Args[1] == "i":
 		err = tui.RunPicker()
 	case len(os.Args) > 1 && os.Args[1] == "w":
-		err = runControl(os.Args[2:], true)
+		err = runShell(os.Args[2:], true)
 	case len(os.Args) > 1 && os.Args[1] == "stop":
 		err = runStop(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "restart":
@@ -81,7 +81,7 @@ func Main() {
 	case len(os.Args) > 1 && (os.Args[1] == "completion" || os.Args[1] == "complete"):
 		err = runCompletion(os.Args[2:])
 	case len(os.Args) > 1:
-		err = runControl(os.Args[1:], false)
+		err = runShell(os.Args[1:], false)
 	default:
 		err = runDefault()
 	}
@@ -96,8 +96,8 @@ func Main() {
 // it is. Repeating the command is therefore how you check on the service, and
 // no flags means "the default address", never "a second instance".
 func runDefault() error {
-	if st, ok := readControlState(); ok && isRunning(st) {
-		err := statusControl()
+	if st, ok := readShellState(); ok && isRunning(st) {
+		err := printStatus()
 		checkForUpdate()
 		return err
 	}
@@ -106,13 +106,13 @@ func runDefault() error {
 		return err
 	}
 	if st != nil {
-		printControlStarted(st)
+		printShellStarted(st)
 	}
 	checkForUpdate()
 	return nil
 }
 
-func runControl(args []string, openBrowser bool) error {
+func runShell(args []string, openBrowser bool) error {
 	// Accept the explicit "control" / "start" word, which for historical
 	// reasons can precede the flags; flag.Parse would otherwise stop there and
 	// silently ignore --addr/--auth.
@@ -131,16 +131,16 @@ func runControl(args []string, openBrowser bool) error {
 		return fmt.Errorf("unknown command %q (try: niq --help)", fs.Arg(0))
 	}
 	if *foreground {
-		return runControlForeground(*addr, *auth)
+		return runShellForeground(*addr, *auth)
 	}
 	st, err := startBackground(*addr, *auth)
 	if err != nil {
 		return err
 	}
 	if st != nil {
-		printControlStarted(st)
+		printShellStarted(st)
 		if openBrowser {
-			openInBrowser(project.LocalhostURL(st.Bound))
+			openInBrowser(store.LocalhostURL(st.Bound))
 		}
 	}
 	return nil
@@ -168,7 +168,7 @@ func runStop(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return helpOrErr(err)
 	}
-	return stopControl(projects)
+	return stopShell(projects)
 }
 
 // helpOrErr keeps --help from being reported as a failure: flag has already

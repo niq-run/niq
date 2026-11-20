@@ -132,11 +132,11 @@ func RunProject(opts ProjectRunOptions) error {
 	}
 
 	onResolved := func(bus, webui string) {
-		newBus := PortOf(bus)
+		newBus := store.PortOf(bus)
 		if newBus == 0 {
 			newBus = resolvePort(busAddr)
 		}
-		newWeb := PortOf(webui)
+		newWeb := store.PortOf(webui)
 		if newWeb == 0 {
 			newWeb = resolvePort(webUIAddr)
 		}
@@ -172,7 +172,7 @@ func RunProject(opts ProjectRunOptions) error {
 		ContextInfo: api.ContextInfo{
 			Mode:    "project",
 			Project: opts.ProjectID,
-			BusPort: PortOf(busAddr),
+			BusPort: store.PortOf(busAddr),
 		},
 	})
 }
@@ -311,7 +311,7 @@ func runAssembly(opts assemblyOptions) error {
 	// agents start process workers through it at runtime, not just at boot.
 	var supervisor *projprocess.Supervisor
 	if busAddr != "" {
-		supervisor = projprocess.NewSupervisor(LocalhostURL(busAddr), opts.StateDir, log.Printf)
+		supervisor = projprocess.NewSupervisor(store.LocalhostURL(busAddr), opts.StateDir, log.Printf)
 	}
 
 	// The worker control plane: ONE owner of every placement and of the
@@ -404,7 +404,7 @@ func runAssembly(opts assemblyOptions) error {
 			if err != nil {
 				return "", err
 			}
-			url := LocalhostURL(b)
+			url := store.LocalhostURL(b)
 			log.Printf("[%s] WebUI: %s", opts.Banner, url)
 			fmt.Printf("%s WebUI listening at %s\n", opts.Banner, url)
 			go func() {
@@ -540,33 +540,10 @@ func ephemeralAddr(reqAddr string) string {
 	return net.JoinHostPort(host, "0")
 }
 
-// LocalhostURL turns a resolved listen address (e.g. "[::]:19763") into a
-// clickable localhost URL. Exported for the control package, which renders
-// project WebUI URLs from resolved addresses.
-func LocalhostURL(resolved string) string {
-	if resolved == "" {
-		return ""
-	}
-	if _, port, err := net.SplitHostPort(resolved); err == nil {
-		return "http://localhost:" + port
-	}
-	return "http://" + resolved
-}
-
-// PortOf parses the numeric port from a host:port address, 0 on failure.
-func PortOf(addr string) int {
-	if _, port, err := net.SplitHostPort(addr); err == nil {
-		if n, err := strconv.Atoi(port); err == nil {
-			return n
-		}
-	}
-	return 0
-}
-
 // resolvePort reads the numeric port of a flat ":N" or "host:N" address
 // without actually binding (used only as a fallback sync for known ports).
 func resolvePort(addr string) int {
-	if n := PortOf(addr); n != 0 {
+	if n := store.PortOf(addr); n != 0 {
 		return n
 	}
 	trimmed := strings.TrimPrefix(addr, ":")

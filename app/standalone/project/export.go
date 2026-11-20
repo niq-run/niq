@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
+	projtemplate "github.com/niq-run/niq/app/standalone/template"
 	"github.com/niq-run/niq/app/standalone/store"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )

@@ -9,7 +9,7 @@ import (
 	"sort"
 
 	"github.com/niq-run/niq/app/standalone/launcher"
-	"github.com/niq-run/niq/app/standalone/project/template"
+	"github.com/niq-run/niq/app/standalone/template"
 	"github.com/niq-run/niq/app/standalone/store"
 )
 

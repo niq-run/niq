@@ -23,14 +23,13 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/standalone/launcher"
-	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/shell/tui"
 	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/app/standalone/store"
 )
 
-// controlState is the on-disk record of a running control plane.
-type controlState struct {
+// shellState is the on-disk record of a running control plane.
+type shellState struct {
 	PID     int    `json:"pid"`
 	Addr    string `json:"addr"`    // address as requested; reused by restart
 	Bound   string `json:"bound"`   // address actually bound; dialed for liveness
@@ -42,11 +41,11 @@ type controlState struct {
 // choice that also requires basic auth.
 const defaultAddr = "127.0.0.1:9527"
 
-func controlStatePath() string { return filepath.Join(store.Root(), "shell.json") }
+func shellStatePath() string { return filepath.Join(store.Root(), "shell.json") }
 
 // setupLogging sends the shell daemon's output to <root>/niq.log.
 func setupLogging() {
-	path := controlLogPath()
+	path := shellLogPath()
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
@@ -56,53 +55,53 @@ func setupLogging() {
 	log.SetOutput(f)
 }
 
-func controlLogPath() string { return filepath.Join(store.Root(), "niq.log") }
+func shellLogPath() string { return filepath.Join(store.Root(), "niq.log") }
 
-func readControlState() (*controlState, bool) {
-	b, err := os.ReadFile(controlStatePath())
+func readShellState() (*shellState, bool) {
+	b, err := os.ReadFile(shellStatePath())
 	if err != nil {
 		return nil, false
 	}
-	var st controlState
+	var st shellState
 	if json.Unmarshal(b, &st) != nil || st.PID <= 0 {
 		return nil, false
 	}
 	return &st, true
 }
 
-// writeControlState records the running control plane. The write goes through
+// writeShellState records the running control plane. The write goes through
 // a temp file and a rename so a reader (the starting parent, `niq status`)
 // never sees a half-written record.
-func writeControlState(st *controlState) {
+func writeShellState(st *shellState) {
 	if err := os.MkdirAll(store.Root(), 0755); err != nil {
-		log.Printf("[control] record pid file: %v", err)
+		log.Printf("[shell] record pid file: %v", err)
 		return
 	}
 	b, err := json.Marshal(st)
 	if err != nil {
-		log.Printf("[control] record pid file: %v", err)
+		log.Printf("[shell] record pid file: %v", err)
 		return
 	}
-	path := controlStatePath()
+	path := shellStatePath()
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, append(b, '\n'), 0644); err != nil {
-		log.Printf("[control] record pid file: %v", err)
+		log.Printf("[shell] record pid file: %v", err)
 		return
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		log.Printf("[control] record pid file: %v", err)
+		log.Printf("[shell] record pid file: %v", err)
 		_ = os.Remove(tmp)
 	}
 }
 
-// clearControlState removes the record, but only if it still names pid — a
+// clearShellState removes the record, but only if it still names pid — a
 // losing instance (bind failed because another was already up) must not wipe
 // the winner's record.
-func clearControlState(pid int) {
-	if st, ok := readControlState(); ok && st.PID != pid {
+func clearShellState(pid int) {
+	if st, ok := readShellState(); ok && st.PID != pid {
 		return
 	}
-	_ = os.Remove(controlStatePath())
+	_ = os.Remove(shellStatePath())
 }
 
 // probeAddr maps a listen address to something dialable from this machine:
@@ -136,7 +135,7 @@ func isServing(addr string) bool {
 // answering. The pid check keeps a stale record — or a foreign process that
 // grabbed the port after a crash — from reading as "running"; the dial check
 // keeps a recycled pid from doing the same.
-func isRunning(st *controlState) bool {
+func isRunning(st *shellState) bool {
 	return st != nil && processAlive(st.PID) && isServing(st.Bound)
 }
 
@@ -144,15 +143,15 @@ func isRunning(st *controlState) bool {
 // startBackground starts the detached control plane and returns once it is
 // serving. Printing is the caller's job: a start reports the whole service, a
 // restart reports only the plane (its project table would be about to change).
-func startBackground(addr, auth string) (*controlState, error) {
-	if st, ok := readControlState(); ok && isRunning(st) {
+func startBackground(addr, auth string) (*shellState, error) {
+	if st, ok := readShellState(); ok && isRunning(st) {
 		return nil, reportAlreadyRunning(st, addr)
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("resolve executable: %w", err)
 	}
-	args := []string{"control", "--foreground", "--addr", addr}
+	args := []string{"w", "--foreground", "--addr", addr}
 	if auth != "" {
 		args = append(args, "--auth", auth)
 	}
@@ -168,15 +167,15 @@ func startBackground(addr, auth string) (*controlState, error) {
 	go func() { exited <- cmd.Wait() }()
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		if st, ok := readControlState(); ok && st.PID == cmd.Process.Pid && isServing(st.Bound) {
+		if st, ok := readShellState(); ok && st.PID == cmd.Process.Pid && isServing(st.Bound) {
 			return st, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("control plane did not start within 20s; see %s:\n%s", controlLogPath(), logTail(10))
+			return nil, fmt.Errorf("control plane did not start within 20s; see %s:\n%s", shellLogPath(), logTail(10))
 		}
 		select {
 		case err := <-exited:
-			return nil, fmt.Errorf("control plane exited during startup: %v; see %s:\n%s", err, controlLogPath(), logTail(10))
+			return nil, fmt.Errorf("control plane exited during startup: %v; see %s:\n%s", err, shellLogPath(), logTail(10))
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -186,27 +185,27 @@ func startBackground(addr, auth string) (*controlState, error) {
 // up: same address is a no-op that reports instead, a different one is a
 // conflict the user must resolve (two planes would fight over the single
 // exposed port anyway).
-func reportAlreadyRunning(st *controlState, addr string) error {
-	if project.PortOf(st.Bound) != project.PortOf(addr) {
-		return fmt.Errorf("niq control is already running (pid %d) at %s; stop it with `niq stop` before starting on %s",
-			st.PID, brand(project.LocalhostURL(st.Bound)), addr)
+func reportAlreadyRunning(st *shellState, addr string) error {
+	if store.PortOf(st.Bound) != store.PortOf(addr) {
+		return fmt.Errorf("niq gateway is already running (pid %d) at %s; stop it with `niq stop` before starting on %s",
+			st.PID, brand(store.LocalhostURL(st.Bound)), addr)
 	}
-	return statusControl()
+	return printStatus()
 }
 
-// runControlForeground runs the control plane attached to this terminal (the
+// runShellForeground runs the control plane attached to this terminal (the
 // mode the background starter re-executes itself into).
-func runControlForeground(addr, auth string) error {
-	if st, ok := readControlState(); ok && isRunning(st) {
-		return fmt.Errorf("niq control is already running (pid %d) at %s; restart it with `niq restart`",
-			st.PID, project.LocalhostURL(st.Bound))
+func runShellForeground(addr, auth string) error {
+	if st, ok := readShellState(); ok && isRunning(st) {
+		return fmt.Errorf("niq gateway is already running (pid %d) at %s; restart it with `niq restart`",
+			st.PID, store.LocalhostURL(st.Bound))
 	}
 	setupLogging()
 	err := webui.Run(webui.Options{
 		Addr: addr,
 		Auth: auth,
 		OnReady: func(bound string) {
-			writeControlState(&controlState{
+			writeShellState(&shellState{
 				PID:     os.Getpid(),
 				Addr:    addr,
 				Bound:   bound,
@@ -214,23 +213,23 @@ func runControlForeground(addr, auth string) error {
 			})
 		},
 	})
-	clearControlState(os.Getpid())
+	clearShellState(os.Getpid())
 	if err == nil {
-		fmt.Printf("%s %s\n", bold("niq control"), green("stopped"))
+		fmt.Printf("%s %s\n", bold("niq gateway"), green("stopped"))
 	} else {
 		// The background starter's only channel back to the user is this log
 		// (its stderr is the null device), so a startup failure — a taken port,
 		// most often — has to land here to be reportable.
-		log.Printf("[control] %v", err)
+		log.Printf("[shell] %v", err)
 	}
 	return err
 }
 
-// stopControl stops the control plane and, when all is set, every project
+// stopShell stops the control plane and, when all is set, every project
 // instance too. Projects are their own processes: they outlive the plane that
 // proxied them, so a plain stop leaves them serving on their loopback ports.
-func stopControl(all bool) error {
-	if err := stopControlPlane(); err != nil {
+func stopShell(all bool) error {
+	if err := stopShellProcess(); err != nil {
 		return err
 	}
 	if all {
@@ -240,16 +239,16 @@ func stopControl(all bool) error {
 	return nil
 }
 
-// stopControlPlane stops the recorded control plane, if there is one.
-func stopControlPlane() error {
-	st, ok := readControlState()
+// stopShellProcess stops the recorded control plane, if there is one.
+func stopShellProcess() error {
+	st, ok := readShellState()
 	if !ok {
-		fmt.Printf("%s %s\n", bold("niq control"), dim("not running"))
+		fmt.Printf("%s %s\n", bold("niq gateway"), dim("not running"))
 		return nil
 	}
 	if !isRunning(st) {
-		clearControlState(st.PID)
-		fmt.Printf("%s %s\n", bold("niq control"), dim("not running (cleared a stale record)"))
+		clearShellState(st.PID)
+		fmt.Printf("%s %s\n", bold("niq gateway"), dim("not running (cleared a stale record)"))
 		return nil
 	}
 	if err := terminateProcess(st.PID); err != nil {
@@ -264,8 +263,8 @@ func stopControlPlane() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	clearControlState(st.PID)
-	fmt.Printf("%s %s %s\n", bold("niq control"), green("stopped"), dim(fmt.Sprintf("pid %d", st.PID)))
+	clearShellState(st.PID)
+	fmt.Printf("%s %s %s\n", bold("niq gateway"), green("stopped"), dim(fmt.Sprintf("pid %d", st.PID)))
 	return nil
 }
 
@@ -366,16 +365,16 @@ func restartControl(withProjects bool) error {
 	}
 
 	addr := defaultAddr
-	if st, ok := readControlState(); ok {
+	if st, ok := readShellState(); ok {
 		addr = st.Addr // keep the port the user originally chose
 		if isRunning(st) {
-			// Not stopControl: it reports the projects it left running, which
+			// Not stopShell: it reports the projects it left running, which
 			// this command is about to restart.
-			if err := stopControlPlane(); err != nil {
+			if err := stopShellProcess(); err != nil {
 				return err
 			}
 		} else {
-			clearControlState(st.PID)
+			clearShellState(st.PID)
 		}
 	}
 	// Credentials survive in ~/.niq/common/auth.json, so a restart needs no
@@ -390,7 +389,7 @@ func restartControl(withProjects bool) error {
 		if withProjects {
 			printControlRunning(st)
 		} else {
-			printControlStarted(st)
+			printShellStarted(st)
 		}
 	}
 	if !withProjects {
@@ -433,15 +432,15 @@ func restartProjectInstances(ids []string) {
 	}
 }
 
-func statusControl() error {
-	st, ok := readControlState()
+func printStatus() error {
+	st, ok := readShellState()
 	if !ok || !isRunning(st) {
 		printControlStopped()
 		printProjectStatus("")
 		return nil
 	}
 	printControlRunning(st)
-	printProjectStatus(project.LocalhostURL(st.Bound))
+	printProjectStatus(store.LocalhostURL(st.Bound))
 	return nil
 }
 
@@ -449,20 +448,20 @@ func statusControl() error {
 // state, address and the commands that act on it. Started/status/already-running
 // all print it, so the service always looks the same no matter which command
 // you used to ask.
-func printControlRunning(st *controlState) {
+func printControlRunning(st *shellState) {
 	printBanner(banner{
-		state: bracketed("control") + " " + stateWord(true) +
+		state: bracketed("gateway") + " " + stateWord(true) +
 			dim(fmt.Sprintf("  pid %d · since %s", st.PID, shortTime(st.Started))),
 	})
-	fmt.Printf("%s %s\n", label("webui", 8), brand(project.LocalhostURL(st.Bound)))
-	fmt.Printf("%s %s\n", label("log", 8), shortPath(controlLogPath()))
+	fmt.Printf("%s %s\n", label("webui", 8), brand(store.LocalhostURL(st.Bound)))
+	fmt.Printf("%s %s\n", label("log", 8), shortPath(shellLogPath()))
 	fmt.Printf("%s %s\n", label("stop", 8), "niq stop")
 	fmt.Printf("%s %s\n", label("restart", 8), "niq restart")
 }
 
 func printControlStopped() {
 	printBanner(banner{
-		state: bracketed("control") + " " + stateWord(false),
+		state: bracketed("gateway") + " " + stateWord(false),
 	})
 	fmt.Printf("%s %s  %s\n", label("start", 8), "niq", dim("background"))
 	fmt.Printf("%s %s  %s\n", label("", 8), "niq -f", dim("this terminal"))
@@ -490,7 +489,7 @@ func printProjectStatus(controlURL string) {
 		case controlURL != "":
 			target = strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/"
 		case p.Ports.WebUI != 0:
-			target = project.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
+			target = store.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
 		}
 		if target == "" {
 			return ""
@@ -516,9 +515,9 @@ func openInBrowser(url string) {
 	_ = exec.Command(opener, url).Start()
 }
 
-func printControlStarted(st *controlState) {
+func printShellStarted(st *shellState) {
 	printControlRunning(st)
-	printProjectStatus(project.LocalhostURL(st.Bound))
+	printProjectStatus(store.LocalhostURL(st.Bound))
 	fmt.Printf("\n%s\n", dim("`niq -f` runs it in this terminal instead"))
 }
 
@@ -526,7 +525,7 @@ func printControlStarted(st *controlState) {
 // can show the actual reason (typically "address already in use") instead of
 // just "exited".
 func logTail(n int) string {
-	b, err := os.ReadFile(controlLogPath())
+	b, err := os.ReadFile(shellLogPath())
 	if err != nil {
 		return "(no log)"
 	}

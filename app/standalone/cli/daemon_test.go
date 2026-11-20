@@ -28,17 +28,17 @@ func TestProbeAddr(t *testing.T) {
 func TestControlStateRoundTrip(t *testing.T) {
 	t.Setenv(store.Env, t.TempDir())
 
-	if _, ok := readControlState(); ok {
+	if _, ok := readShellState(); ok {
 		t.Fatal("empty root reported a running control plane")
 	}
-	st := &controlState{
+	st := &shellState{
 		PID:     os.Getpid(),
 		Addr:    ":9527",
 		Bound:   "[::]:9527",
 		Started: "2026-01-01T00:00:00Z",
 	}
-	writeControlState(st)
-	got, ok := readControlState()
+	writeShellState(st)
+	got, ok := readShellState()
 	if !ok {
 		t.Fatal("state not readable after write")
 	}
@@ -46,12 +46,12 @@ func TestControlStateRoundTrip(t *testing.T) {
 		t.Fatalf("state round-trip = %+v, want %+v", got, st)
 	}
 
-	clearControlState(st.PID + 1) // a losing instance must not clear it
-	if _, ok := readControlState(); !ok {
+	clearShellState(st.PID + 1) // a losing instance must not clear it
+	if _, ok := readShellState(); !ok {
 		t.Fatal("cleared by a process that does not own the record")
 	}
-	clearControlState(st.PID)
-	if _, ok := readControlState(); ok {
+	clearShellState(st.PID)
+	if _, ok := readShellState(); ok {
 		t.Fatal("owner did not clear the record")
 	}
 }

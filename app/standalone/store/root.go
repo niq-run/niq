@@ -1,8 +1,10 @@
 package store
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -99,4 +101,27 @@ func SanitizeID(id string) string {
 		}
 	}
 	return string(out)
+}
+
+// LocalhostURL turns a resolved listen address (e.g. "[::]:19763") into a
+// clickable localhost URL. Exported for the control package, which renders
+// project WebUI URLs from resolved addresses.
+func LocalhostURL(resolved string) string {
+	if resolved == "" {
+		return ""
+	}
+	if _, port, err := net.SplitHostPort(resolved); err == nil {
+		return "http://localhost:" + port
+	}
+	return "http://" + resolved
+}
+
+// PortOf parses the numeric port from a host:port address, 0 on failure.
+func PortOf(addr string) int {
+	if _, port, err := net.SplitHostPort(addr); err == nil {
+		if n, err := strconv.Atoi(port); err == nil {
+			return n
+		}
+	}
+	return 0
 }

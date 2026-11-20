@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/niq-run/niq/app/standalone/project"
-	"github.com/niq-run/niq/app/standalone/project/template"
+	"github.com/niq-run/niq/app/standalone/template"
 )
 
 // handleListTemplates returns the available project template names for the

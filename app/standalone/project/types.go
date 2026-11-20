@@ -14,7 +14,7 @@
 package project
 
 import (
-	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
+	projtemplate "github.com/niq-run/niq/app/standalone/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
