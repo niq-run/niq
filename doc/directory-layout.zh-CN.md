@@ -32,6 +32,7 @@ niq/
 ├── app/
 │   ├── standalone/               # 部署形态：本地单机 niq
 │   │   ├── control/              #   多 project 编排、聚合 UI、代理
+│   │   ├── launcher/             #   项目实例：List/Start/Stop/Restart + 私有子进程入口
 │   │   ├── project/              #   单 project 运行时
 │   │   │   ├── run.go            #     启动编排（持有信号 ctx）
 │   │   │   ├── project.go        #     创建/列出/链接（读写经 store）
