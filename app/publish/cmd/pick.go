@@ -14,12 +14,12 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"golang.org/x/term"
 
+	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 )
@@ -282,7 +282,7 @@ func pickerTitle() string {
 // are dimmed and the cursor steps over them, so the menu reads the same
 // wherever you are. An empty action means the user cancelled.
 func pickAction(p project.Project) (string, error) {
-	running := projectRunning(p)
+	running := launcher.IsRunning(p)
 	options := []string{"Start", "Stop", "Restart"}
 	actions := []string{"start", "stop", "restart"}
 	disabled := []bool{false, !running, !running}
@@ -354,7 +354,7 @@ func runAction(p project.Project, action string) (string, error) {
 // colour on the selected row, a dim ring on the others. A listing has no
 // cursor, so it has no dot either — the state is the word after the name.
 func projectRow(p project.Project, idWidth int, trailing string, cursor int, selected bool) string {
-	running := projectRunning(p)
+	running := launcher.IsRunning(p)
 	dot := ""
 	if cursor >= 0 {
 		dot = cursorDot(selected)
@@ -410,87 +410,44 @@ func printProjectTable(projects []project.Project, trailing func(project.Project
 	}
 }
 
-// stopProjectInstance interrupts the instance (SIGINT: it snapshots on the way
-// out) and waits for the port to be released. Working through the port rather
-// than the control plane's child table keeps it valid for instances started by
-// hand, too.
+// stopProjectInstance interrupts the instance and waits for the port to be
+// released. Working through the port rather than a child table keeps it valid
+// for instances started by hand, too.
 func stopProjectInstance(p project.Project) (string, error) {
-	if !projectRunning(p) {
-		return fmt.Sprintf("%s is %s", bold(p.ID), dim("not running")), nil
+	if err := launcher.Stop(p.ID); err != nil {
+		if errors.Is(err, launcher.ErrNotRunning) {
+			return fmt.Sprintf("%s is %s", bold(p.ID), dim("not running")), nil
+		}
+		return "", err
 	}
-	if project.InterruptPortHolders(p.Ports.WebUI) == 0 {
-		return "", fmt.Errorf("%s: nothing is listening on port %d", p.ID, p.Ports.WebUI)
-	}
-	if err := waitPortClosed(p.Ports.WebUI, 15*time.Second); err != nil {
-		return "", fmt.Errorf("%s: %w", p.ID, err)
+	if err := launcher.WaitStopped(p.ID, 15*time.Second); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("%s %s", bold(p.ID), green("stopped")), nil
 }
 
-// startProjectInstance brings a stopped project up. It does not go through the
-// control plane: an instance is identified by its ports, so starting one is the
-// same operation whether the plane is running or not — and the plane picks it
-// up on the next probe.
+// startProjectInstance brings a stopped project up. An instance is identified
+// by its ports, so this is the same operation whether the shell is running.
 func startProjectInstance(p project.Project) (string, error) {
-	if projectRunning(p) {
-		return fmt.Sprintf("%s is %s %s", bold(p.ID), green("already running"),
-			brand(fmt.Sprintf("http://localhost:%d", p.Ports.WebUI))), nil
+	inst, err := launcher.Start(p.ID)
+	if err != nil {
+		return "", err
 	}
-	return startProjectDetached(p, "started")
+	if inst.Already {
+		return fmt.Sprintf("%s is %s %s", bold(p.ID), green("already running"),
+			brand(fmt.Sprintf("http://localhost:%d", inst.WebUIPort))), nil
+	}
+	return fmt.Sprintf("%s %s %s", bold(p.ID), green("started"),
+		brand(fmt.Sprintf("http://localhost:%d", inst.WebUIPort))), nil
 }
 
 // restartProjectInstance stops the instance through its port and starts a new
-// one on the same addresses — exactly what the WebUI's restart does.
+// one on the same addresses.
 func restartProjectInstance(p project.Project) (string, error) {
-	if projectRunning(p) {
-		if _, err := stopProjectInstance(p); err != nil {
-			return "", err
-		}
-	}
-	return startProjectDetached(p, "restarted")
-}
-
-// startProjectDetached starts an instance of its own (the control plane picks
-// it up on its next probe) and waits for its WebUI to answer. verb is what the
-// resulting line calls it — "started" or "restarted".
-func startProjectDetached(p project.Project, verb string) (string, error) {
-	exe, err := os.Executable()
+	inst, err := launcher.Restart(p.ID)
 	if err != nil {
-		return "", fmt.Errorf("resolve executable: %w", err)
+		return "", err
 	}
-	cmd := exec.Command(exe, "project", "run", p.ID)
-	cmd.SysProcAttr = detachedProcAttr()
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("start %s: %w", p.ID, err)
-	}
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
-
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		if cur, err := project.LoadProject(p.ID); err == nil && cur.Ports.WebUI != 0 &&
-			isServing(fmt.Sprintf("127.0.0.1:%d", cur.Ports.WebUI)) {
-			return fmt.Sprintf("%s %s %s", bold(p.ID), green(verb),
-				brand(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI))), nil
-		}
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("%s did not start within 20s; see %s", p.ID, shortPath(store.LogPath(p.ID)))
-		}
-		select {
-		case err := <-exited:
-			return "", fmt.Errorf("%s exited during startup: %v; see %s", p.ID, err, shortPath(store.LogPath(p.ID)))
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-}
-
-func waitPortClosed(port int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !isServing(fmt.Sprintf("127.0.0.1:%d", port)) {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("port %d is still in use after %s", port, timeout)
+	return fmt.Sprintf("%s %s %s", bold(p.ID), green("restarted"),
+		brand(fmt.Sprintf("http://localhost:%d", inst.WebUIPort))), nil
 }

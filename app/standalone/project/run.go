@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -41,6 +42,21 @@ type ProjectRunOptions struct {
 	BusAddr   string // httptrans bus listen address (":0" = dynamic)
 	WebUIAddr string // webui listen address (":0" = dynamic)
 	WebUIAuth string // optional user:pass basic-auth spec for the WebUI (empty = disabled)
+}
+
+// SetupLogging directs the standard logger to the project's daily log file.
+// Every way of running a project (the CLI verb, the launcher's child entry)
+// calls this, so a startup failure is always readable at store.LogPath.
+func SetupLogging(id string) {
+	path := store.LogPath(id)
+	_ = os.MkdirAll(filepath.Dir(path), 0755)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.SetOutput(io.Discard)
+		return
+	}
+	log.SetOutput(f)
+	log.SetPrefix("[niq] ")
 }
 
 // RunProject loads a project's authoritative project.json and runs it as its

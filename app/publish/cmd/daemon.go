@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/standalone/control"
+	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 )
@@ -263,15 +264,11 @@ func runningProjectIDs() []string {
 	}
 	var ids []string
 	for _, p := range projects {
-		if projectRunning(p) {
+		if launcher.IsRunning(p) {
 			ids = append(ids, p.ID)
 		}
 	}
 	return ids
-}
-
-func projectRunning(p project.Project) bool {
-	return p.Ports.WebUI != 0 && isServing(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
 }
 
 // reportRunningProjects keeps a plain `niq stop` honest: the plane is down but
@@ -303,7 +300,7 @@ func stopProjects() error {
 	}
 	var running []project.Project
 	for _, p := range projects {
-		if projectRunning(p) {
+		if launcher.IsRunning(p) {
 			running = append(running, p)
 		}
 	}
@@ -313,7 +310,7 @@ func stopProjects() error {
 	}
 	var ids []string
 	for _, p := range running {
-		if project.InterruptPortHolders(p.Ports.WebUI) > 0 {
+		if err := launcher.Stop(p.ID); err == nil {
 			ids = append(ids, p.ID)
 		}
 	}
@@ -323,7 +320,7 @@ func stopProjects() error {
 	for {
 		var left []string
 		for _, p := range running {
-			if projectRunning(p) {
+			if launcher.IsRunning(p) {
 				left = append(left, p.ID)
 			}
 		}
@@ -484,7 +481,7 @@ func printProjectStatus(controlURL string) {
 		if target == "" {
 			return ""
 		}
-		if !projectRunning(p) {
+		if !launcher.IsRunning(p) {
 			return dim(target)
 		}
 		return brand(target)

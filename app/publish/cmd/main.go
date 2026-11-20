@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/template"
 	"github.com/niq-run/niq/app/standalone/store"
@@ -43,6 +44,16 @@ var version = "dev"
 var buildTime = ""
 
 func main() {
+	// The launcher's private child entry: this process is a project runtime,
+	// not the CLI. Dispatch before anything else so the CLI never sees it.
+	if launcher.IsChild(os.Args) {
+		if err := launcher.ChildMain(os.Args[2:]); err != nil {
+			log.Printf("[niq] %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Handle --version / -v / version before anything else.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -222,7 +233,7 @@ func runProject(args []string) error {
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
-		setupProjectLogging(id)
+		project.SetupLogging(id)
 		err := project.RunProject(project.ProjectRunOptions{
 			ProjectID: id,
 			BusAddr:   *busAddr,
@@ -289,17 +300,6 @@ func setupLogging() {
 // setupProjectLogging sends this project process's logs to
 // ~/.niq/projects/<id>/logs/niq-YYYY-MM-DD.log. The date in the filename gives
 // free daily rotation: a new day starts a new file, same-day restarts append.
-func setupProjectLogging(id string) {
-	path := store.LogPath(id)
-	_ = os.MkdirAll(filepath.Dir(path), 0755)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		log.SetOutput(io.Discard)
-		return
-	}
-	log.SetOutput(f)
-	log.SetPrefix("[niq] ")
-}
 
 func printUsage() {
 	printBanner(banner{tagline: dim("neural interface quantum")})

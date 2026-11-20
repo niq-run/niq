@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 )
@@ -85,7 +86,7 @@ func takeStatus() statusSnapshot {
 	for _, p := range projects {
 		ps := projectSnapshot{
 			ID:      p.ID,
-			Running: projectRunning(p),
+			Running: launcher.IsRunning(p),
 			WebUI:   p.Ports.WebUI,
 			Bus:     p.Ports.Bus,
 			Log:     store.LogPath(p.ID),
