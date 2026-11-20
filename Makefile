@@ -82,14 +82,14 @@ miq:
 	@echo "app: building $(APP) (swiftc)…"
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS" bin
-	swiftc -O -swift-version 5 -framework AppKit app/standalone/menubar/main.swift \
+	swiftc -O -swift-version 5 -framework AppKit app/standalone/shell/menubar/main.swift \
 		-o "$(APP)/Contents/MacOS/niq-menubar"
-	cp app/standalone/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	cp app/standalone/shell/menubar/Info.plist "$(APP)/Contents/Info.plist"
 	mkdir -p "$(APP)/Contents/Resources"
-	cp app/standalone/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
+	cp app/standalone/shell/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@echo "app: installing ./bin/miq (launcher)…"
-	cp app/standalone/menubar/miq ./bin/miq
+	cp app/standalone/shell/menubar/miq ./bin/miq
 	chmod +x ./bin/miq
 	@echo "app: built — run: ./bin/miq"
 
@@ -104,20 +104,20 @@ miq-universal:
 	rm -rf "$(APP)" build/niq-menubar-*
 	mkdir -p "$(APP)/Contents/MacOS" build bin
 	swiftc -O -swift-version 5 -target arm64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
-		app/standalone/menubar/main.swift -o build/niq-menubar-arm64
+		app/standalone/shell/menubar/main.swift -o build/niq-menubar-arm64
 	swiftc -O -swift-version 5 -target x86_64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
-		app/standalone/menubar/main.swift -o build/niq-menubar-x86_64
+		app/standalone/shell/menubar/main.swift -o build/niq-menubar-x86_64
 	lipo -create -output "$(APP)/Contents/MacOS/niq-menubar" build/niq-menubar-arm64 build/niq-menubar-x86_64
-	cp app/standalone/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	cp app/standalone/shell/menubar/Info.plist "$(APP)/Contents/Info.plist"
 	mkdir -p "$(APP)/Contents/Resources"
-	cp app/standalone/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
+	cp app/standalone/shell/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@# miq is a shell script and has no architectures; only the bundle needs
 	@# signing. lipo invalidates the linker's ad-hoc signature, and an unsigned
 	@# arm64 binary will not run at all — re-sign the bundle.
 	codesign --force --sign - --timestamp=none "$(APP)"
 	@echo "app: installing ./bin/miq (launcher)…"
-	cp app/standalone/menubar/miq ./bin/miq
+	cp app/standalone/shell/menubar/miq ./bin/miq
 	chmod +x ./bin/miq
 	@echo "app: built (universal)"
 

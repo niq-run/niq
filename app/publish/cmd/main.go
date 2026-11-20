@@ -4,7 +4,7 @@
 //
 //	niq                     — start the control plane in the background (127.0.0.1:9527),
 //	                          or show its status when it is already running
-//	niq control [-f]        — start it in the foreground instead
+//	niq w [-f]        — start it in the foreground instead
 //	niq status              — report whether it is running and where
 //	niq stop [-p]           — stop the background control plane (-p: the projects too)
 //	niq restart [-p]        — stop and start it again (-p: the projects too)
@@ -70,6 +70,8 @@ func main() {
 	// "control" word) is a control-plane start.
 	var err error
 	switch {
+	case len(os.Args) > 1 && os.Args[1] == "i":
+		err = runProjectPicker()
 	case len(os.Args) > 1 && (os.Args[1] == "project" || os.Args[1] == "p"):
 		err = runProject(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "stop":
@@ -118,7 +120,7 @@ func runControl(args []string) error {
 	// Accept the explicit "control" / "start" word, which for historical
 	// reasons can precede the flags; flag.Parse would otherwise stop there and
 	// silently ignore --addr/--auth.
-	if len(args) > 0 && (args[0] == "control" || args[0] == "start") {
+	if len(args) > 0 && (args[0] == "w" || args[0] == "start") {
 		args = args[1:]
 	}
 	fs := flag.NewFlagSet("niq", flag.ContinueOnError)
@@ -307,7 +309,7 @@ func printUsage() {
 	fmt.Printf("%s\n", bracketed("usage"))
 	printUsageRows([][2]string{
 		{"niq", "start the control plane in the background, or report on it when it is already running"},
-		{"niq -f, --foreground", "run the control plane in this terminal"},
+		{"niq w [-f]", "start the browser shell (foreground with -f) and open it"},
 		{"niq status", "the control plane and every project instance"},
 		{"niq stop [-p]", "stop the control plane; -p also stops the running projects"},
 		{"niq restart [-p]", "restart the control plane; -p also restarts the running projects"},
@@ -316,7 +318,7 @@ func printUsage() {
 		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
 		{"niq project start|stop|restart <id>", "act on one instance, without the picker"},
 		{"niq project create <id> [--template <name>]", "create a project from a template"},
-		{"niq project run <id> [--bus :0] [--webui 127.0.0.1:0]", "run an instance in this terminal"},
+		{"niq i", "open the interactive terminal shell"},
 		{"niq completion <shell>", "print a completion script: bash, zsh or fish"},
 		{"niq --version", "print the version"},
 	})

@@ -3,7 +3,7 @@
 // terminal (or the shell sending SIGHUP) no longer takes the service down.
 // `niq status` / `niq stop` / `niq restart` operate on the recorded process.
 //
-// The record lives at <niq root>/control.json: the child writes it as soon as
+// The record lives at <niq root>/shell.json: the child writes it as soon as
 // its listen socket is bound, and the parent waits for it (and for the port to
 // answer) before printing the banner, so both agree on the resolved address
 // even when the user passed ":0".
@@ -40,7 +40,7 @@ type controlState struct {
 // choice that also requires basic auth.
 const defaultAddr = "127.0.0.1:9527"
 
-func controlStatePath() string { return filepath.Join(store.Root(), "control.json") }
+func controlStatePath() string { return filepath.Join(store.Root(), "shell.json") }
 
 func controlLogPath() string { return filepath.Join(store.Root(), "niq.log") }
 
