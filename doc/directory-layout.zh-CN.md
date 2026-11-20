@@ -123,7 +123,7 @@ app/cluster ──▶ core
 
 ```sh
 go list -deps ./app/ui/... | grep 'app/standalone'          # 应为空
-go list -deps ./app/contract | grep '^github.com/niq-run/niq'  # 应为空
+go list -f '{{join .Imports " "}}' ./app/contract | grep 'niq-run/niq'  # 应为空
 go list -deps ./app/standalone/... | grep 'app/cluster'               # 应为空
 go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为空
 ```
