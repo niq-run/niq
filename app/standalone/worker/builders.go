@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 
 	"github.com/niq-run/niq/app/standalone/home"
-	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
+	providerpkg "github.com/niq-run/niq/app/standalone/provider"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	wsbackend "github.com/niq-run/niq/core/impl/embedws"
 	"github.com/niq-run/niq/core/impl/eventbus"

@@ -10,7 +10,7 @@ import (
 	stdhttp "net/http"
 	"os"
 
-	"github.com/niq-run/niq/app/standalone/project/provider"
+	"github.com/niq-run/niq/app/standalone/provider"
 )
 
 // handleGetProviders returns the provider config verbatim (including api_key

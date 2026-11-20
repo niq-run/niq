@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
+	providerpkg "github.com/niq-run/niq/app/standalone/provider"
 	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"

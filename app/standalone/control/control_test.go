@@ -18,7 +18,7 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/project"
-	"github.com/niq-run/niq/app/standalone/project/provider"
+	"github.com/niq-run/niq/app/standalone/provider"
 	"github.com/niq-run/niq/app/standalone/project/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"github.com/niq-run/niq/app/standalone/shell/webui"

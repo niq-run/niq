@@ -17,7 +17,7 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/store/migrate"
-	providerpkg "github.com/niq-run/niq/app/standalone/project/provider"
+	providerpkg "github.com/niq-run/niq/app/standalone/provider"
 	"github.com/niq-run/niq/app/standalone/store"
 	"github.com/niq-run/niq/app/standalone/store/event"
 	"github.com/niq-run/niq/app/standalone/store/identity"
