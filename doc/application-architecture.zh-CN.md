@@ -55,6 +55,8 @@ standalone 有**四类进程**，不是"一个主进程 + 子模块"：
   终端   ──exec──► [ cli ] ──┴──► [ shell/tui ]（同进程）
 ```
 
+`launcher.Start` 的 exec 目标永远是**自己**：新进程回到 `main`，走 `ChildMain` 分支，再到 `project.RunProject`。它不会去调 cli，也不会在 shell 进程里直接跑项目。
+
 ---
 
 ## 3. 包与职责
@@ -108,19 +110,31 @@ app/
 
 ## 4. 依赖规则
 
+**编译期（import）**
+
 ```
-store            → store/migrate, store/program, worker（仅 Manifest 等类型）
-provider         → store（取配置路径）
-launcher         → store, provider, project（子进程入口）
-project          → store, worker, provider
-project/api      → store, worker 契约, core（不 import project 内部）
-worker           → core + 注入（program.Store / provider handles）
+main             → cli, launcher（只为分派子进程入口）
 cli              → shell/webui, shell/tui
 shell/webui      → launcher, store（读端口）, 前端产物
 shell/tui        → launcher, store（读端口）
+launcher         → store, provider, project（仅 ChildMain 调 RunProject）
+project          → store, worker, provider
+project/api      → store, worker 契约, core（不 import project 内部）
+worker           → core + 注入（program.Store / provider handles）
+provider         → store（取配置路径）
+store            → store/migrate, store/program, worker（仅 Manifest 等类型）
 ```
 
-读法：`worker` 不再 import `store` / `provider`，所以 `provider → store → worker` 不会成环。`launcher` 是唯一拥有 project 子进程协议的包：私有 verb + 子进程入口 + Start/Wait/reap。`cli` 不认识 launcher，也不认识 project，只调 shell 的入口。`main` 只多做一件事：先问 launcher 这是不是子进程调用，否则交给 cli。
+**运行期（进程边界）**
+
+```
+前端进程：  main → cli → shell/{webui,tui} → launcher.Start(id)
+                                                    │ exec(self, ChildVerb, id)
+                                                    ▼
+子进程：                                       main → launcher.ChildMain → project.RunProject
+```
+
+读法：两张图不能混。编译期的 `launcher → project` 只给 `ChildMain` 用；运行期的 `Start` 与 `ChildMain` **从不在同一个进程里**——Start 只负责 exec，ChildMain 只在新进程里被调用。所以既没有包环，也没有"shell 在自己进程里跑项目"。`cli` 不认识 launcher，也不认识 project；`main` 只分一次。
 
 硬规则，可用命令校验：
 
