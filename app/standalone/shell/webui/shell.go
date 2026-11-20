@@ -27,8 +27,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/niq-run/niq/app/standalone/template"
 	"github.com/niq-run/niq/app/standalone/store"
+	"github.com/niq-run/niq/app/standalone/template"
 )
 
 // Options configures the control-plane service.

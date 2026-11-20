@@ -19,6 +19,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/niq-run/niq/app/contract"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/store"
 )
@@ -280,7 +281,7 @@ func pickerTitle() string {
 // listed in the same order; on a project that is not running, Stop and Restart
 // are dimmed and the cursor steps over them, so the menu reads the same
 // wherever you are. An empty action means the user cancelled.
-func pickAction(p launcher.Project) (string, error) {
+func pickAction(p contract.Project) (string, error) {
 	running := launcher.IsRunning(p)
 	options := []string{"Start", "Stop", "Restart"}
 	actions := []string{"start", "stop", "restart"}
@@ -333,7 +334,7 @@ func cursorDot(selected bool) string {
 }
 
 // runAction performs one action and returns the line the picker shows for it.
-func runAction(p launcher.Project, action string) (string, error) {
+func runAction(p contract.Project, action string) (string, error) {
 	switch action {
 	case "start":
 		return StartProject(p)
@@ -352,7 +353,7 @@ func runAction(p launcher.Project, action string) (string, error) {
 // leading dot is the cursor itself, not the run state: filled in the theme
 // colour on the selected row, a dim ring on the others. A listing has no
 // cursor, so it has no dot either — the state is the word after the name.
-func projectRow(p launcher.Project, idWidth int, trailing string, cursor int, selected bool) string {
+func projectRow(p contract.Project, idWidth int, trailing string, cursor int, selected bool) string {
 	running := launcher.IsRunning(p)
 	dot := ""
 	if cursor >= 0 {
@@ -378,7 +379,7 @@ func projectRow(p launcher.Project, idWidth int, trailing string, cursor int, se
 
 // projectRows builds the table. cursor is the row under the picker's cursor;
 // printProjectTable passes -1, which draws no cursor column at all.
-func projectRows(projects []launcher.Project, trailing func(launcher.Project) string, cursor int) []string {
+func projectRows(projects []contract.Project, trailing func(contract.Project) string, cursor int) []string {
 	idWidth := 2
 	for _, p := range projects {
 		if len(p.ID) > idWidth {
@@ -392,13 +393,13 @@ func projectRows(projects []launcher.Project, trailing func(launcher.Project) st
 	return rows
 }
 
-func projectDirCell(p launcher.Project) string { return dim(shortPath(store.ProjectDir(p.ID))) }
+func projectDirCell(p contract.Project) string { return dim(shortPath(store.ProjectDir(p.ID))) }
 
 // printProjectTable is the non-interactive view: `niq project` without a
 // terminal, and the list under `niq status`. note, when set, is printed after
 // the heading — the status report uses it to say where the list can be acted on,
 // which the picker itself does not need to explain.
-func PrintTable(projects []launcher.Project, trailing func(launcher.Project) string, note string) {
+func PrintTable(projects []contract.Project, trailing func(contract.Project) string, note string) {
 	head := bracketed("projects")
 	if note != "" {
 		head += "  " + note
@@ -412,7 +413,7 @@ func PrintTable(projects []launcher.Project, trailing func(launcher.Project) str
 // StopProject interrupts the instance and waits for the port to be
 // released. Working through the port rather than a child table keeps it valid
 // for instances started by hand, too.
-func StopProject(p launcher.Project) (string, error) {
+func StopProject(p contract.Project) (string, error) {
 	if err := launcher.Stop(p.ID); err != nil {
 		if errors.Is(err, launcher.ErrNotRunning) {
 			return fmt.Sprintf("%s is %s", bold(p.ID), dim("not running")), nil
@@ -427,7 +428,7 @@ func StopProject(p launcher.Project) (string, error) {
 
 // StartProject brings a stopped project up. An instance is identified
 // by its ports, so this is the same operation whether the shell is running.
-func StartProject(p launcher.Project) (string, error) {
+func StartProject(p contract.Project) (string, error) {
 	inst, err := launcher.Start(p.ID)
 	if err != nil {
 		return "", err
@@ -442,7 +443,7 @@ func StartProject(p launcher.Project) (string, error) {
 
 // RestartProject stops the instance through its port and starts a new
 // one on the same addresses.
-func RestartProject(p launcher.Project) (string, error) {
+func RestartProject(p contract.Project) (string, error) {
 	inst, err := launcher.Restart(p.ID)
 	if err != nil {
 		return "", err

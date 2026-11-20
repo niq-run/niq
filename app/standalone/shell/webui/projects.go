@@ -8,13 +8,14 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/niq-run/niq/app/contract"
 	"github.com/niq-run/niq/app/standalone/launcher"
-	"github.com/niq-run/niq/app/standalone/template"
 	"github.com/niq-run/niq/app/standalone/store"
+	"github.com/niq-run/niq/app/standalone/template"
 )
 
 // projectView augments a project definition with its live run state.
-type projectView = launcher.View
+type projectView = contract.View
 
 // handleListProjects returns the project definitions plus live run state.
 func (c *Shell) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {

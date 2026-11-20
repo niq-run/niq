@@ -5,24 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/niq-run/niq/app/contract"
 )
 
-// ProjectPorts records the ports assigned to a project instance: its event-bus
-// (HTTP transport) port and its WebUI port. Zero means "not allocated".
-type ProjectPorts struct {
-	Bus   int `json:"bus,omitempty"`
-	WebUI int `json:"webui,omitempty"`
-}
-
-// Project is the project-level metadata. Worker manifests live in
-// workers.json / workers.archived.json, bus identities in identities.json.
-type Project struct {
-	SchemaVersion int          `json:"schema_version,omitempty"`
-	ID            string       `json:"id"`
-	CreatedAt     string       `json:"created_at,omitempty"`
-	Ports         ProjectPorts `json:"ports,omitempty"`
-	UploadDir     string       `json:"upload_dir,omitempty"`
-}
+// The project shapes are shared with every client, so they live in contract;
+// this package owns only how project.json is read and written.
+type (
+	ProjectPorts = contract.Ports
+	Project      = contract.Project
+)
 
 // ProjectFile returns the project.json file in dir.
 func ProjectFile(dir string) string { return filepath.Join(dir, "project.json") }

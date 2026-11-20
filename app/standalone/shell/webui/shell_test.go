@@ -17,8 +17,8 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
-	"github.com/niq-run/niq/app/standalone/template"
 	"github.com/niq-run/niq/app/standalone/store"
+	"github.com/niq-run/niq/app/standalone/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 

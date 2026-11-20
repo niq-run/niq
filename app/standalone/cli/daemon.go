@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/niq-run/niq/app/contract"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/shell/tui"
 	"github.com/niq-run/niq/app/standalone/shell/webui"
@@ -311,7 +312,7 @@ func stopProjects() error {
 	if err != nil {
 		return err
 	}
-	var running []launcher.Project
+	var running []contract.Project
 	for _, p := range projects {
 		if launcher.IsRunning(p) {
 			running = append(running, p)
@@ -483,7 +484,7 @@ func printProjectStatus(controlURL string) {
 	}
 	// Every project gets an address, running or not: /p/<id>/ renders a start
 	// page when the instance is down, so the link is worth clicking either way.
-	url := func(p launcher.Project) string {
+	url := func(p contract.Project) string {
 		target := ""
 		switch {
 		case controlURL != "":

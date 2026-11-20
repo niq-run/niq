@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/niq-run/niq/app/contract"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 )
@@ -30,91 +31,68 @@ const ChildVerb = "__project-run"
 // ErrNotRunning is returned by Stop when nothing answers on the project port.
 var ErrNotRunning = fmt.Errorf("project is not running")
 
-// Instance is one running (or just started) project.
-type Instance struct {
-	ID        string `json:"project"`
-	WebUIAddr string `json:"-"`
-	WebUIPort int    `json:"webui_port"`
-	BusPort   int    `json:"bus_port,omitempty"`
-	Already   bool   `json:"already,omitempty"`
-}
-
-// Project and its metadata are the launcher's domain vocabulary. They are
-// aliases today because the catalog implementation still lives in project;
-// the shells depend on launcher, never on project.
-type (
-	Project      = project.Project
-	ProjectPorts = project.ProjectPorts
-)
-
 // ListProjects returns the catalog without run state.
-func ListProjects() ([]Project, error) { return project.ListProjects() }
+func ListProjects() ([]contract.Project, error) { return project.ListProjects() }
 
 // LoadProject reads one project definition.
-func LoadProject(id string) (Project, error) {
+func LoadProject(id string) (contract.Project, error) {
 	p, err := project.LoadProject(id)
 	if err != nil {
-		return Project{}, err
+		return contract.Project{}, err
 	}
 	return *p, nil
 }
 
 // CreateProject creates a project from a template.
-func CreateProject(id, templateName string, tmpl *project.TemplateConfig) (Project, error) {
+func CreateProject(id, templateName string, tmpl *project.TemplateConfig) (contract.Project, error) {
 	p, err := project.CreateProject(id, templateName, tmpl)
 	if err != nil {
-		return Project{}, err
+		return contract.Project{}, err
 	}
 	return *p, nil
 }
 
 // LinkProject opens an external project directory.
-func LinkProject(path string) (Project, error) {
+func LinkProject(path string) (contract.Project, error) {
 	p, err := project.LinkProject(path)
 	if err != nil {
-		return Project{}, err
+		return contract.Project{}, err
 	}
 	return *p, nil
 }
 
-// View is a project definition plus its live run state, for the project list.
-type View struct {
-	project.Project
-	Running bool `json:"running"`
-}
-
 // List returns every project with its running state.
-func List() ([]View, error) {
+func List() ([]contract.View, error) {
 	projects, err := project.ListProjects()
 	if err != nil {
 		return nil, err
 	}
-	views := make([]View, 0, len(projects))
+	views := make([]contract.View, 0, len(projects))
 	for _, p := range projects {
-		views = append(views, View{Project: p, Running: IsRunning(p)})
+		views = append(views, contract.View{Project: p, Running: IsRunning(p)})
 	}
 	return views, nil
 }
 
 // IsRunning reports whether the project's persisted WebUI port answers.
-func IsRunning(p project.Project) bool {
+func IsRunning(p contract.Project) bool {
 	return p.Ports.WebUI != 0 && probePort(p.Ports.WebUI)
 }
 
 // Start brings a project up on its persisted ports and waits until its WebUI
 // answers. Starting an already-running project is not an error: the same
 // instance is returned with Already set.
-func Start(id string) (Instance, error) {
+func Start(id string) (contract.Instance, error) {
 	p, err := project.LoadProject(id)
 	if err != nil {
-		return Instance{}, err
+		return contract.Instance{}, err
 	}
 	if IsRunning(*p) {
 		return instanceOf(*p, true), nil
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return Instance{}, fmt.Errorf("launcher: resolve executable: %w", err)
+		return contract.Instance{}, fmt.Errorf("launcher: resolve executable: %w", err)
 	}
 	// No --bus/--webui: reuse the persisted ports so a restart lands on the
 	// same addresses instead of jumping.
@@ -123,7 +101,7 @@ func Start(id string) (Instance, error) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return Instance{}, fmt.Errorf("launcher: start %s: %w", id, err)
+		return contract.Instance{}, fmt.Errorf("launcher: start %s: %w", id, err)
 	}
 	// Keep the exit result: a project killed by a panic exits with code 2 and
 	// no shutdown sequence, and discarding Wait hid exactly that in the field.
@@ -140,13 +118,13 @@ func Start(id string) (Instance, error) {
 
 	addr, err := waitStart(id, exited)
 	if err != nil {
-		return Instance{}, err
+		return contract.Instance{}, err
 	}
 	p, err = project.LoadProject(id)
 	if err != nil {
-		return Instance{}, err
+		return contract.Instance{}, err
 	}
-	return Instance{ID: id, WebUIAddr: addr, WebUIPort: p.Ports.WebUI, BusPort: p.Ports.Bus}, nil
+	return contract.Instance{ID: id, WebUIAddr: addr, WebUIPort: p.Ports.WebUI, BusPort: p.Ports.Bus}, nil
 }
 
 // Stop interrupts whoever listens on the project's WebUI port. It returns
@@ -163,10 +141,10 @@ func Stop(id string) error {
 }
 
 // Restart stops a running instance and starts a new one on the same ports.
-func Restart(id string) (Instance, error) {
+func Restart(id string) (contract.Instance, error) {
 	p, err := project.LoadProject(id)
 	if err != nil {
-		return Instance{}, err
+		return contract.Instance{}, err
 	}
 	if IsRunning(*p) {
 		project.InterruptPortHolders(p.Ports.WebUI)
@@ -218,12 +196,12 @@ func ChildMain(args []string) error {
 	return project.RunProject(project.ProjectRunOptions{ProjectID: args[0]})
 }
 
-func instanceOf(p project.Project, already bool) Instance {
+func instanceOf(p contract.Project, already bool) contract.Instance {
 	addr := ""
 	if p.Ports.WebUI != 0 {
 		addr = "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI)
 	}
-	return Instance{ID: p.ID, WebUIAddr: addr, WebUIPort: p.Ports.WebUI, BusPort: p.Ports.Bus, Already: already}
+	return contract.Instance{ID: p.ID, WebUIAddr: addr, WebUIPort: p.Ports.WebUI, BusPort: p.Ports.Bus, Already: already}
 }
 
 // startTimeout bounds how long Start waits for the new WebUI to accept.
