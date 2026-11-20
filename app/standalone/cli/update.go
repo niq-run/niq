@@ -8,7 +8,7 @@
 // never reports its own failures. A package manager is the authority on what is
 // published, but a missing network is not the user's problem to solve right
 // now.
-package main
+package cli
 
 import (
 	"encoding/json"
@@ -48,7 +48,7 @@ type updateCache struct {
 
 func updateCachePath() string { return filepath.Join(store.Root(), "update-check.json") }
 
-// latestRelease asks the registry which version is published.
+// latestRelease asks the registry which Version is published.
 func latestRelease(timeout time.Duration) (string, error) {
 	client := &http.Client{Timeout: timeout}
 	resp, err := client.Get(npmLatestURL)
@@ -60,18 +60,18 @@ func latestRelease(timeout time.Duration) (string, error) {
 		return "", fmt.Errorf("registry answered %s", resp.Status)
 	}
 	var doc struct {
-		Version string `json:"version"`
+		Version string `json:"Version"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
 		return "", err
 	}
 	if _, ok := semverParts(doc.Version); !ok {
-		return "", fmt.Errorf("registry returned an unusable version %q", doc.Version)
+		return "", fmt.Errorf("registry returned an unusable Version %q", doc.Version)
 	}
 	return doc.Version, nil
 }
 
-// semverParts reads the numeric prefix of a version: "v0.14.1-18-gabc" →
+// semverParts reads the numeric prefix of a Version: "v0.14.1-18-gabc" →
 // [0 14 1]. The git-describe suffix is not comparable across builds and is
 // dropped — only the release number decides whether an update exists.
 func semverParts(v string) ([3]int, bool) {
@@ -136,7 +136,7 @@ func writeUpdateCache(latest string) {
 	_ = os.WriteFile(updateCachePath(), append(b, '\n'), 0644)
 }
 
-// cachedLatest returns the newest known published version, asking the registry
+// cachedLatest returns the newest known published Version, asking the registry
 // only when the cache is older than a day. Failures are returned so `niq
 // update` can report them; the passive path ignores them.
 func cachedLatest(timeout time.Duration) (string, error) {
@@ -163,14 +163,14 @@ func checkForUpdate() {
 	}
 	// Nothing to compare a dev build against, and nobody to read a hint in a
 	// pipe.
-	if _, ok := semverParts(version); !ok {
+	if _, ok := semverParts(Version); !ok {
 		return
 	}
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
 		return
 	}
 	latest, err := cachedLatest(passiveCheckTimeout)
-	if err != nil || !newerRelease(latest, version) {
+	if err != nil || !newerRelease(latest, Version) {
 		return
 	}
 	// Every start mentions it: the check is what is rationed (once a day), not
@@ -195,16 +195,16 @@ func runUpdate(args []string) error {
 		return fmt.Errorf("could not reach the npm registry: %w", err)
 	}
 	current := versionNumber()
-	// A dev build ("dev", or a version without a release number) is never the
+	// A dev build ("dev", or a Version without a release number) is never the
 	// latest release, so it is offered the install like an older one.
-	if _, ok := semverParts(version); ok && !newerRelease(latest, version) {
+	if _, ok := semverParts(Version); ok && !newerRelease(latest, Version) {
 		fmt.Printf("%s %s %s\n", bold("niq"), brand(current), dim("is the latest release"))
 		return nil
 	}
 
 	// A dev build has no release number to show on the left; the install line
-	// below carries the version it is moving to either way.
-	if _, ok := semverParts(version); ok {
+	// below carries the Version it is moving to either way.
+	if _, ok := semverParts(Version); ok {
 		fmt.Printf("%s %s %s %s\n\n", bold("niq"), brand(current), dim("→"), brand(latest))
 	} else {
 		fmt.Printf("%s %s\n\n", dim("installing"), brand(latest))

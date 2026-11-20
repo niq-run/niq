@@ -7,7 +7,7 @@
 // its listen socket is bound, and the parent waits for it (and for the port to
 // answer) before printing the banner, so both agree on the resolved address
 // even when the user passed ":0".
-package main
+package cli
 
 import (
 	"encoding/json"

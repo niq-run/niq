@@ -8,7 +8,7 @@
 //	bash   bash-completion's user drop-in directory
 //
 // It is idempotent: re-running after an upgrade replaces the file.
-package main
+package cli
 
 import (
 	"errors"

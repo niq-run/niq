@@ -3,7 +3,7 @@
 //
 // Colors are emitted only when stdout is a terminal and the environment has not
 // opted out, so piped output, completion scripts and logs stay plain.
-package main
+package cli
 
 import (
 	"fmt"
@@ -70,7 +70,7 @@ func brandBold(s string) string {
 
 // logoChip is the niq mark on one line: the wordmark knocked out of the
 // product's blue, the same mark the web UI ships, sized to sit inline with the
-// version. Empty when colour is off — a banner made of spaces helps nobody.
+// Version. Empty when colour is off — a banner made of spaces helps nobody.
 func logoChip() string {
 	if !ansi {
 		return ""
@@ -85,9 +85,9 @@ func logoChip() string {
 	return bg + rule + " - " + fg + "niq" + rule + " - " + "\x1b[0m"
 }
 
-// versionNumber is the build version without git describe's leading "v", so the
-// banner can read "version: 0.13.0-…" instead of "version: v0.13.0-…".
-func versionNumber() string { return strings.TrimPrefix(version, "v") }
+// versionNumber is the build Version without git describe's leading "v", so the
+// banner can read "Version: 0.13.0-…" instead of "Version: v0.13.0-…".
+func versionNumber() string { return strings.TrimPrefix(Version, "v") }
 
 // banner is the identity block printed under the mark: an optional one-liner
 // and the state. The mark already carries the product name, so the text does
@@ -97,7 +97,7 @@ type banner struct {
 	state   string
 }
 
-// printBanner prints the mark with the version, then the tagline and the state
+// printBanner prints the mark with the Version, then the tagline and the state
 // on their own lines.
 func printBanner(b banner) {
 	fmt.Println(versionTag())
@@ -163,13 +163,13 @@ func portCell(n int) string {
 }
 
 // versionTag is the one place the CLI prints its identity: `niq status`, the
-// start banner, --version, --help and the picker all lead with it. It is the
-// mark followed by the version (and the build time when the build injected
+// start banner, --Version, --help and the picker all lead with it. It is the
+// mark followed by the Version (and the build time when the build injected
 // one), and without colour (no mark) the name stands in for the mark.
 func versionTag() string {
-	tag := dim("version: ") + brand(versionNumber())
-	if buildTime != "" {
-		tag += dim(" · build: ") + bold(buildTime)
+	tag := dim("Version: ") + brand(versionNumber())
+	if BuildTime != "" {
+		tag += dim(" · build: ") + bold(BuildTime)
 	}
 	if chip := logoChip(); chip != "" {
 		return chip + " " + tag

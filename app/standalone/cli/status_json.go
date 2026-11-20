@@ -2,7 +2,7 @@
 // render their own UI — the macOS menu bar app needs the control plane's state,
 // the address that actually reaches it, and one entry per project with the
 // things that can be done to it.
-package main
+package cli
 
 import (
 	"encoding/json"

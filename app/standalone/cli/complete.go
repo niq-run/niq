@@ -4,7 +4,7 @@
 //
 // The generated scripts call `niq project list --ids`, so completion always
 // reflects the projects on this machine without a separate cache to keep fresh.
-package main
+package cli
 
 import (
 	"fmt"
