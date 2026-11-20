@@ -58,11 +58,13 @@ niq/
 │   │   │   ├── store.go          #     ManifestStore 契约
 │   │   │   └── process/          #     OS 子进程：provision + supervisor
 │   │   ├── shell/
+│   │   │   ├── tui/              #   终端 shell：picker、状态表、实例动作
 │   │   │   ├── webui/            #   浏览器 shell：SPA + auth + /p/{id} 代理 + launcher 路由
 │   │   │   │   └── assets/       #     前端源码与构建产物（dist 是 go:embed 的）
 │   │   │   └── menubar/          #   macOS 菜单栏壳（Swift，驱动 CLI，不在 Go import 图）
 │   │
-│   ├── cluster/                  # 部署形态：分布式（占位，与 standalone 平级）
+│   │   ├── cli/                  #   `niq` 命令树：路由、webui 守护、update/completion
+│   │   ├── cluster/              # 部署形态：分布式（占位，与 standalone 平级）
 │   │   └── README.md
 │   │
 │   └── publish/                  # 产品入口 + 发行物
