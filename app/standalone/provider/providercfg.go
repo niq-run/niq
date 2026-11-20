@@ -174,6 +174,10 @@ type Config struct {
 	Providers []Entry `json:"providers"`
 }
 
+// Loader reads the provider configuration. It is injected so this package
+// never decides where the file lives; the standalone form supplies its store.
+type Loader func() (*Config, error)
+
 // Path returns the provider config path. NIQ_PROVIDER_CONFIG overrides the
 // location wholesale; otherwise it derives from the niq config root:
 // <root>/common/providers/provider.json (default root ~/.niq).
@@ -260,11 +264,7 @@ func EnsureExample() error {
 // Configured reports whether a usable provider is configured: at least one
 // provider with a non-empty api_key. The example skeleton (empty api_key) does
 // not count.
-func Configured() bool {
-	cfg, err := Load()
-	if err != nil {
-		return false
-	}
+func Configured(cfg *Config) bool {
 	for _, p := range cfg.Providers {
 		if p.APIKey != "" {
 			return true
@@ -275,9 +275,8 @@ func Configured() bool {
 
 // Default returns the active provider, or the first configured provider when
 // active is empty or stale.
-func Default() (Entry, bool) {
-	cfg, err := Load()
-	if err != nil || len(cfg.Providers) == 0 {
+func Default(cfg *Config) (Entry, bool) {
+	if cfg == nil || len(cfg.Providers) == 0 {
 		return Entry{}, false
 	}
 	if cfg.Active != "" {
@@ -289,11 +288,7 @@ func Default() (Entry, bool) {
 }
 
 // Find returns a provider by name.
-func Find(name string) (Entry, bool) {
-	cfg, err := Load()
-	if err != nil {
-		return Entry{}, false
-	}
+func Find(cfg *Config, name string) (Entry, bool) {
 	return findByName(cfg, name)
 }
 

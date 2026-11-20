@@ -30,7 +30,11 @@ func EnsureLLMConfigured(cfgs []worker.WorkerConfig) error {
 	if !needsLLM {
 		return nil
 	}
-	if Configured() {
+	cfg, err := Load()
+	if err != nil {
+		return fmt.Errorf("provider: %w", err)
+	}
+	if Configured(cfg) {
 		return nil
 	}
 	if err := EnsureExample(); err != nil {
@@ -44,26 +48,29 @@ func EnsureLLMConfigured(cfgs []worker.WorkerConfig) error {
 // from that file plus one of its models — never a bare endpoint or key: the
 // entry owns the credentials, so rotating them is one edit in one place.
 type providerSources struct {
+	// load reads the current config. Reading through it on every call keeps
+	// edits to provider.json visible to a running worker.
+	load func() (*Config, error)
 	// name is the spawn-time provider selection ("" = the config default).
 	name string
 	// model is the spawn-time model selection ("" = the provider's default).
 	model string
 }
 
-// NewProviderSources returns a reason.ProviderSources backed by provider.json.
-// An empty name picks the config default (active/first); an empty model picks
-// the resolved provider's default model.
-func NewProviderSources(name, model string) reason.ProviderSources {
-	return &providerSources{name: name, model: model}
+// NewProviderSources returns a reason.ProviderSources backed by the injected
+// loader. An empty name picks the config default (active/first); an empty
+// model picks the resolved provider's default model.
+func NewProviderSources(load Loader, name, model string) reason.ProviderSources {
+	return &providerSources{load: load, name: name, model: model}
 }
 
 // InitialProviderInfo resolves the initially active provider's name and model,
 // mirroring NewProviderSources' selection, so the reason worker can report its
 // current choice via worker.status. An unknown name resolves to ("", "") —
 // the builder rejects it before a worker is ever constructed.
-func InitialProviderInfo(name, model string) (string, string) {
+func InitialProviderInfo(cfg *Config, name, model string) (string, string) {
 	if name != "" {
-		p, ok := Find(name)
+		p, ok := Find(cfg, name)
 		if !ok {
 			return "", ""
 		}
@@ -72,7 +79,7 @@ func InitialProviderInfo(name, model string) (string, string) {
 		}
 		return p.Name, model
 	}
-	p, ok := Default()
+	p, ok := Default(cfg)
 	if !ok {
 		return "", ""
 	}
@@ -85,7 +92,12 @@ func InitialProviderInfo(name, model string) (string, string) {
 // Default returns the initially active provider: the spawn-time selection when
 // given, otherwise the config's active (or first) provider.
 func (s *providerSources) Default() llm.LLMProvider {
-	p, ok := s.initial()
+	cfg, err := s.load()
+	if err != nil {
+		log.Printf("[project] provider sources: %v", err)
+		return nil
+	}
+	p, ok := s.initial(cfg)
 	if !ok {
 		log.Printf("[project] provider sources: no provider %q (provider.json missing or empty)", s.name)
 		return nil
@@ -99,11 +111,11 @@ func (s *providerSources) Default() llm.LLMProvider {
 }
 
 // initial returns the configured entry the worker starts on.
-func (s *providerSources) initial() (Entry, bool) {
+func (s *providerSources) initial(cfg *Config) (Entry, bool) {
 	if s.name != "" {
-		return Find(s.name)
+		return Find(cfg, s.name)
 	}
-	return Default()
+	return Default(cfg)
 }
 
 // Build constructs a provider bound to name and an explicit model (empty uses
@@ -112,7 +124,11 @@ func (s *providerSources) initial() (Entry, bool) {
 // rejected by the provider's API call itself, which lets models discovered only
 // via the provider API (see List) be selected at runtime.
 func (s *providerSources) Build(name, model string) (llm.LLMProvider, error) {
-	p, ok := Find(name)
+	cfg, err := s.load()
+	if err != nil {
+		return nil, fmt.Errorf("provider: %w", err)
+	}
+	p, ok := Find(cfg, name)
 	if !ok {
 		log.Printf("[project] provider switch failed: unknown provider %q", name)
 		return nil, fmt.Errorf("provider: unknown provider %q", name)
@@ -133,7 +149,7 @@ func (s *providerSources) Build(name, model string) (llm.LLMProvider, error) {
 // yields an empty list. ModelDetails carries per-model metadata (e.g.
 // ContextWindow) when available.
 func (s *providerSources) List() []reason.ProviderInfo {
-	cfg, err := Load()
+	cfg, err := s.load()
 	if err != nil {
 		return nil
 	}

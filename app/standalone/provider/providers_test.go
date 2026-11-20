@@ -156,6 +156,10 @@ func TestInitialProviderInfoNamesOnly(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct{ provider, model, wantName, wantModel string }{
 		{"b", "m2", "b", "m2"}, // explicit pair
@@ -165,7 +169,7 @@ func TestInitialProviderInfoNamesOnly(t *testing.T) {
 		{"gone", "m1", "", ""}, // unknown name resolves to nothing
 	}
 	for _, c := range cases {
-		gotName, gotModel := InitialProviderInfo(c.provider, c.model)
+		gotName, gotModel := InitialProviderInfo(cfg, c.provider, c.model)
 		if gotName != c.wantName || gotModel != c.wantModel {
 			t.Fatalf("InitialProviderInfo(%q,%q) = %q/%q, want %q/%q",
 				c.provider, c.model, gotName, gotModel, c.wantName, c.wantModel)

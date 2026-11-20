@@ -205,11 +205,12 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 	types := newTypeRegistry()
 	mgr := workerlife.New(workerlife.Config{Build: types.Build})
 	bc := BuildContext{
-		Registry: registry,
-		Bus:      bus,
-		Listener: listener,
-		Engine:   engine,
-		Manager:  mgr,
+		Registry:     registry,
+		Bus:          bus,
+		Listener:     listener,
+		Engine:       engine,
+		Manager:      mgr,
+		ProviderLoad: providerpkg.Load,
 	}
 	registerBuilders(bc, types)
 	return &testEngine{types: types, bc: bc, mgr: mgr}
@@ -289,7 +290,8 @@ func TestReasonFamilyRejectsUnknownProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := resolveReasonFamily(coreworker.WorkerConfig{
+	bc := BuildContext{ProviderLoad: providerpkg.Load}
+	_, err := resolveReasonFamily(bc, coreworker.WorkerConfig{
 		ID:     "r1",
 		Params: map[string]any{"provider": "typo-name", "model": "m1"},
 	}, "reason")
@@ -297,7 +299,7 @@ func TestReasonFamilyRejectsUnknownProvider(t *testing.T) {
 		t.Fatalf("unknown provider: err = %v, want a 'not configured' error", err)
 	}
 
-	in, err := resolveReasonFamily(coreworker.WorkerConfig{
+	in, err := resolveReasonFamily(bc, coreworker.WorkerConfig{
 		ID:     "r2",
 		Params: map[string]any{"provider": "known", "model": "m1"},
 	}, "reason")

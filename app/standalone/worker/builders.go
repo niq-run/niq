@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/niq-run/niq/app/standalone/home"
 	providerpkg "github.com/niq-run/niq/app/standalone/provider"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	wsbackend "github.com/niq-run/niq/core/impl/embedws"
@@ -69,6 +68,9 @@ type BuildContext struct {
 	Manager      *workerlife.Manager
 	EventLog     *eventbusapi.EventLog
 	EventStore   event.EventStore
+	// ProviderLoad reads provider.json. It is injected (store.LoadProvider in
+	// production) so builders never resolve the config path or read the file.
+	ProviderLoad providerpkg.Loader
 	ProgramsRoot string
 	// StateDir is the per-project workers state directory (`<proj>/workers`);
 	// built-in workers persist their own state here (one dir per id).
@@ -183,10 +185,17 @@ type reasonFamilyIn struct {
 
 // resolveReasonFamily computes the shared inputs from a worker config. typ is
 // the worker type label used for validation messages and the bus identity.
-func resolveReasonFamily(cfg coreworker.WorkerConfig, typ string) (*reasonFamilyIn, error) {
+func resolveReasonFamily(ctx BuildContext, cfg coreworker.WorkerConfig, typ string) (*reasonFamilyIn, error) {
 	id := cfg.ID
 	if id == "" {
 		return nil, fmt.Errorf("%s: id is required", typ)
+	}
+	if ctx.ProviderLoad == nil {
+		return nil, fmt.Errorf("%s: provider config is not wired", typ)
+	}
+	providerCfg, err := ctx.ProviderLoad()
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", typ, err)
 	}
 	p := cfg.Params
 
@@ -195,7 +204,7 @@ func resolveReasonFamily(cfg coreworker.WorkerConfig, typ string) (*reasonFamily
 	provider, _ := p["provider"].(string)
 	model, _ := p["model"].(string)
 	if provider != "" {
-		if _, ok := providerpkg.Find(provider); !ok {
+		if _, ok := providerpkg.Find(providerCfg, provider); !ok {
 			return nil, fmt.Errorf("%s: provider %q is not configured in provider.json", typ, provider)
 		}
 	}
@@ -252,8 +261,8 @@ func resolveReasonFamily(cfg coreworker.WorkerConfig, typ string) (*reasonFamily
 	// collaborators: absent = unrestricted; present (even []) = whitelist.
 	collaborators := pStrings(p, "collaborators")
 
-	providerSources := providerpkg.NewProviderSources(provider, model)
-	pname, pmodel := providerpkg.InitialProviderInfo(provider, model)
+	providerSources := providerpkg.NewProviderSources(ctx.ProviderLoad, provider, model)
+	pname, pmodel := providerpkg.InitialProviderInfo(providerCfg, provider, model)
 
 	return &reasonFamilyIn{
 		id:               id,
@@ -277,7 +286,7 @@ func resolveReasonFamily(cfg coreworker.WorkerConfig, typ string) (*reasonFamily
 // ── reason worker ──
 
 func buildReasonSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
-	in, err := resolveReasonFamily(cfg, "reason")
+	in, err := resolveReasonFamily(ctx, cfg, "reason")
 	if err != nil {
 		return coreworker.SpawnSpec{}, err
 	}
@@ -317,7 +326,7 @@ func buildReasonSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.
 // ── coding reason worker ──
 
 func buildCodingSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
-	in, err := resolveReasonFamily(cfg, "coding")
+	in, err := resolveReasonFamily(ctx, cfg, "coding")
 	if err != nil {
 		return coreworker.SpawnSpec{}, err
 	}
@@ -663,7 +672,7 @@ func buildProgramSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker
 		root = mounts[0]
 	}
 	if root == "" {
-		root = filepath.Join(home.Root(), "programs")
+		return coreworker.SpawnSpec{}, fmt.Errorf("program: programs root is not configured")
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {

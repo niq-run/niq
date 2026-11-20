@@ -322,6 +322,7 @@ func runAssembly(opts assemblyOptions) error {
 		WorkerBackend: cp.HostBackend(),
 		EventLog:      eventLog,
 		EventStore:    evtStore,
+		ProviderLoad:  providerpkg.Load,
 		ProgramsRoot:  opts.ProgramsRoot,
 		StateDir:      opts.StateDir,
 	}

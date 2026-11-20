@@ -26,12 +26,12 @@ func TestProviderConfigDefaultAndFind(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	def, ok := Default()
+	def, ok := Default(cfg)
 	if !ok || def.Name != "deepseek-responses" {
 		t.Fatalf("Default = %+v, %v", def, ok)
 	}
 
-	claude, ok := Find("deepseek-claude")
+	claude, ok := Find(cfg, "deepseek-claude")
 	if !ok || claude.Type != "claude" {
 		t.Fatalf("Find = %+v, %v", claude, ok)
 	}
@@ -39,7 +39,11 @@ func TestProviderConfigDefaultAndFind(t *testing.T) {
 
 func TestProviderConfigMissingFile(t *testing.T) {
 	t.Setenv("NIQ_PROVIDER_CONFIG", filepath.Join(t.TempDir(), "missing.json"))
-	if _, ok := Default(); ok {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := Default(cfg); ok {
 		t.Fatal("Default should be false when file is missing")
 	}
 }
@@ -60,7 +64,7 @@ func TestProviderConfigActiveFallsBackToFirst(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	def, ok := Default()
+	def, ok := Default(cfg)
 	if !ok || def.Name != "first" {
 		t.Fatalf("Default = %+v, %v", def, ok)
 	}
@@ -108,11 +112,20 @@ func TestExampleTemplate(t *testing.T) {
 // TestEnsureExampleAndConfigured verifies the example skeleton is seeded only
 // when missing (never overwriting a user config) and that Configured stays
 // false for the empty example but true once a provider has an api_key.
+func configuredNow(t *testing.T) bool {
+	t.Helper()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return Configured(cfg)
+}
+
 func TestEnsureExampleAndConfigured(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "provider.json")
 	t.Setenv("NIQ_PROVIDER_CONFIG", path)
 
-	if Configured() {
+	if configuredNow(t) {
 		t.Fatal("Configured should be false before EnsureExample")
 	}
 	if err := EnsureExample(); err != nil {
@@ -125,7 +138,7 @@ func TestEnsureExampleAndConfigured(t *testing.T) {
 	if !strings.Contains(string(raw), "api_key") {
 		t.Fatalf("example file lacks provider skeleton: %s", raw)
 	}
-	if Configured() {
+	if configuredNow(t) {
 		t.Fatal("Configured should be false for the empty example")
 	}
 
@@ -136,7 +149,7 @@ func TestEnsureExampleAndConfigured(t *testing.T) {
 	if err := EnsureExample(); err != nil {
 		t.Fatalf("EnsureExample on existing: %v", err)
 	}
-	if !Configured() {
+	if !configuredNow(t) {
 		t.Fatal("Configured should be true with a real api_key")
 	}
 	raw2, _ := os.ReadFile(path)
