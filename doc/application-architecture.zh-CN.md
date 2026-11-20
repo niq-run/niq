@@ -39,7 +39,7 @@ standalone 有**四类进程**，不是"一个主进程 + 子模块"：
 
 关键事实：
 
-- **一个二进制，四种身份**。`niq`（入口）、`niq webui`（浏览器 shell）、`niq project`（终端 shell）、`niq project run <id>`（项目 runtime）是同一个可执行文件。入口与 shell 之间靠 `exec` 自己切换，和 `docker` 拉起容器进程同构。
+- **一个二进制，四种身份**。`niq`（入口）、`niq webui`（浏览器 shell）、`niq project`（终端 shell）、以及 launcher 以私有 verb 拉起的 project 进程是同一个可执行文件。入口与 shell 之间靠 `exec` 自己切换，和 `docker` 拉起容器进程同构。
 - **launcher 不是守护进程**。项目实例由端口识别，不由父子关系识别；`niq project stop` 在 shell 没跑时同样有效。shell 重启不影响任何运行中的项目。
 - **人类身份在项目里**。interface worker（`webui` 这个总线身份）运行在 project 进程内，它的 backend 是项目 API。浏览器和未来的 TUI 都是这个 API 的客户端，**不持有总线凭证**（见 §6）。
 - **`niq` 是入口，不是 shell**。它只做路由与托管：`niq webui` 起浏览器 shell；`niq project` 进入终端 shell（无子命令交互，带子命令一次性）。资源管理（模板/provider）与项目视图都不在 cli 里——前者只在 webui，后者在 webui 与未来的 tui。
@@ -52,8 +52,6 @@ standalone 有**四类进程**，不是"一个主进程 + 子模块"：
                         [ launcher ] ──exec──► [ project 进程 ]
                             ▲
   终端   ──exec──► [ cli ] ──┴──► [ shell/tui ]（同进程）
-                     │
-                     └──► [ project/entry ] ──exec──► [ project 进程 ]
 ```
 
 ---
@@ -69,9 +67,9 @@ app/
 │   │   ├── tui/          终端外壳：交互式 picker + 非交互式状态渲染
 │   │   └── menubar/      macOS 菜单栏壳（Swift，驱动 CLI，不持有状态）
 │   ├── launcher/         领域：项目目录、模板、provider、端口、日志、起停/链接
+│   │   └── child.go       project 子进程协议：私有 verb、ChildMain、exec/wait/reap
 │   ├── project/          运行时：总线和 worker 的装配与恢复
-│   │   ├── api/          项目 HTTP API：项目数据查询/操作、SSE、人类入口（iface.Backend）
-│   │   └── entry/        进程入口：argv 契约（Command）+ 子进程侧参数解析（Run）
+│   │   └── api/          项目 HTTP API：项目数据查询/操作、SSE、人类入口（iface.Backend）
 │   ├── store/            落盘、路径与本地后端的唯一主人
 │   │   ├── root.go         NIQ_HOME / 项目目录 / 文件名 / auth 与 provider 路径
 │   │   ├── project.go      project.json
@@ -93,13 +91,12 @@ app/
 
 | 包 | 负责 | **不负责**（硬性） |
 |---|---|---|
-| `cli` | 极薄入口：argv 路由、flag、webui 守护（pid/日志）；起 webui shell 或把其余命令交给 tui；把 `project run` 路由到 `project/entry` | 不实现领域能力；不写界面；不直接调 launcher；不 import shell 的内部（只调其入口） |
+| `cli` | 极薄入口：argv 路由、flag、webui 守护（pid/日志）；起 webui shell 或把其余命令交给 tui | 不实现领域能力；不写界面；不认识 launcher 与 project；不 import shell 的内部（只调其入口） |
 | `shell/webui` | HTTP 入口、SPA、auth、`/p/{id}` 代理、把 launcher 请求转成 HTTP | 不 import `project` / `shell/tui` / `cli`；不碰总线；不持有项目状态 |
 | `shell/tui` | 终端外壳的**全部功能**：交互式 picker；非交互式状态表 / `--json` / `--ids`；一次性 verbs（list/create/start/stop/restart）；未来项目详情与对话 | 不实现起停（调 launcher）；不托管 SPA；不 import `shell/webui` |
 | `shell/menubar` | 菜单栏交互 | 不持有状态：每次 `niq status --json`，每个动作一次 `niq` 调用 |
-| `launcher` | 项目目录视图、create/link/start/stop/restart、模板、provider、端口分配、日志定位；**通过 `project/entry.Command` 拉起独立进程** | 不监听端口；不渲染；不 import `shell/*`；不直接调 `RunProject`（那会把项目跑在自己进程里） |
+| `launcher` | 项目目录视图、create/link/start/stop/restart、模板、provider、端口分配、日志定位；**持有 project 子进程协议（私有 verb、子进程入口、exec/wait/reap）** | 不监听端口；不渲染；不 import `shell/*` / `cli`；除显式 `--foreground` 外不在自己进程里跑 `RunProject` |
 | `project` | 单项目 runtime：装配总线、恢复 worker、收尾、快照 | 不认识其他项目；不 import `launcher` / `shell/*` |
-| `project/entry` | 项目进程的 argv 约定与构造（`Command`）、子进程侧参数解析并调用 `RunProject`（`Run`） | 不做端口等待、不管理实例、不认识其他项目 |
 | `project/api` | 项目数据的 JSON/SSE 契约、人类入口、审批 inbox | 不托管 SPA；不做 auth；不认识 launcher |
 | `store` | 根与路径解析、每种落盘形状的读写、原子写、迁移入口 | 不 import `project` / `launcher` / `shell/*` |
 | `store/program` | program 文件的路径约定与 `program.Store` 适配 | `pgbackend` 仍是 core 机制（core 测试要用），这里只封装路径 |
@@ -113,17 +110,16 @@ app/
 ```
 store            → store/migrate, store/program, worker（仅 Manifest 等类型）
 provider         → store（取配置路径）
-launcher         → store, provider, project/entry
+launcher         → store, provider, project（子进程入口）
 project          → store, worker, provider
 project/api      → store, worker 契约, core（不 import project 内部）
-project/entry    → project
 worker           → core + 注入（program.Store / provider handles）
-cli              → shell/webui, shell/tui, project/entry（仅 `project run` 的路由）
+cli              → shell/webui, shell/tui
 shell/webui      → launcher, store（读端口）, 前端产物
 shell/tui        → launcher, store（读端口）
 ```
 
-读法：`worker` 不再 import `store` / `provider`，所以 `provider → store → worker` 不会成环。`launcher` 不 import `project` 的内部：它只经 `project/entry.Command` 拿到"怎么起一个项目进程"，**自己负责 Start/Wait/reap**。`cli` 在 shell 之上，只做路由与 webui 进程托管，不碰 launcher。唯一的例外是 `project run`：它是运行时入口，不是 shell，必须由持有 argv 的 `cli` 直接路由到 `project/entry`。
+读法：`worker` 不再 import `store` / `provider`，所以 `provider → store → worker` 不会成环。`launcher` 是唯一拥有 project 子进程协议的包：私有 verb + 子进程入口 + Start/Wait/reap。`cli` 不认识 launcher，也不认识 project，只调 shell 的入口。`main` 只多做一件事：先问 launcher 这是不是子进程调用，否则交给 cli。
 
 硬规则，可用命令校验：
 
@@ -132,7 +128,7 @@ shell/tui        → launcher, store（读端口）
    go list -deps ./app/standalone/shell/webui | grep 'standalone/project$'   # 必须为空
    ```
 2. **`shell/*` 不实现领域能力，也不管理进程**：起停、端口、模板只在 `launcher`；把 webui 放到后台是 `cli` 的事（它 exec 自己）。
-3. **`launcher` 不直接调用 `project.RunProject`**：起进程只经 `project/entry.Command`，参数解析与 `RunProject` 的调用在子进程侧的 `project/entry.Run`。进程边界不变，但 argv 契约有了唯一的家。
+3. **`launcher` 独占 project 子进程协议**：私有 verb、子进程入口（内部调 `project.RunProject`）、exec/wait/reap 都在 launcher。`project` 不知道 launcher，`cli` 不知道这个 verb。因此不存在 "launcher 让 cli 起进程" 的回路。
 4. **`project` 不 import `launcher` / `shell/*`**。
 5. **`store` 不 import `project` / `launcher` / `shell/*`**。
 6. **`core` 不 import `app`**；`app/standalone` 与 `app/cluster` 互不 import。
@@ -180,13 +176,14 @@ worker   ctx.Providers.Find / ctx.ProviderSources
 | 2 | `niq project list/create/start/stop/restart` | `shell/tui`（非交互）→ launcher | 同进程 | launcher + `store` |
 | 3 | `niq status [--json]` | `shell/tui` 的非交互快照 | 同进程 | launcher + `store` |
 | 4 | `niq` / `niq webui` → 浏览器 `/`、`/api/projects`、`/api/templates`、`/api/providers` | webui shell；`niq` 另调 `shell/tui` 打印状态表 | 同进程 / HTTP | webui 进程 |
-| 5 | `niq project run <id>` | project runtime | **就是该进程** | `store` + bus |
-| 6 | 浏览器 `/p/{id}/api/*` | project api | HTTP 代理（loopback） | project 进程 |
-| 7 | tui 的项目视图（未来） | project api | HTTP + SSE | project 进程 |
+| 5 | 浏览器 `/p/{id}/api/*` | project api | HTTP 代理（loopback） | project 进程 |
+| 6 | tui 的项目视图（未来） | project api | HTTP + SSE | project 进程 |
 
 第 4 条里的 webui 进程**不代理自己**：launcher 的接口由它直接实现（同一个进程），只有项目数据才经过代理。这是"一个 origin、两个 server、一个代理"的全部内容。
 
 `niq`、`niq status`、`niq status --json`（menubar 用）共用 `shell/tui` 的同一份快照与非交互渲染；tui 的交互与非交互只是同一套视图的两种呈现。`niq stop` / `niq restart` 是 cli 对 webui 进程的生命周期操作，不是 tui 的功能。
+
+项目进程没有公开的 `run` 命令：launcher 以私有 verb 拉起。需要前台调试时用 `niq project start --foreground`——launcher 在当前进程显式调 `project.RunProject`，这是唯一允许 in-process 的路径。
 
 ---
 
@@ -323,15 +320,15 @@ func Restart(ctx context.Context, id string) (Instance, error)
 
 1. 从 `store` 读 `project.json`，拿到已分配端口；
 2. 端口已在服务 → 返回 `Already`；
-3. `entry.Command(self, id)`，起进程并起一个 reaper goroutine；
+3. `exec.Command(self, ChildVerb, id)`，起进程并起一个 reaper goroutine；
 4. 等 WebUI 端口真正 accept（有超时，也监听子进程退出）；
 5. 失败时读 `store.LogPath(id)` 的尾部，把可读原因带回。
 
 `Stop`：端口不在服务 → 空操作；否则按端口发 SIGINT（`InterruptPortHolders` 从 `project/run.go` 移到 launcher），等端口释放。
 
-**边界**：`launcher` 启动的是**进程**，`project.RunProject` 在子进程里执行，进程模型不变。argv 契约只在 `project/entry` 一处：`launcher` 用 `Command` 造命令，`cli` 用 `Run` 处理 `project run` 子命令。于是 webui 与 cli 之间连"命令行长什么样"都不必知道。
+**边界**：launcher 持有完整的子进程协议——`ChildVerb`、`ChildMain`、`Start/Wait/reap`。`ChildMain` 里调 `project.RunProject`，所以在子进程里跑；launcher 自己绝不 in-process 调它（除非显式 `--foreground`）。cli 完全不参与：它不知道 verb，也不 import launcher。
 
-依赖：`launcher → store, project/entry`；`cli → launcher, project/entry`；两个 shell 互不依赖。
+依赖：`launcher → store, provider, project`；`shell/* → launcher`；`cli → shell/*`。两个 shell 互不依赖，cli 不认识 launcher。
 
 **验收**：
 ```sh
@@ -385,7 +382,7 @@ CLI 与 WebUI 的起停行为一致（同一份等待超时、日志尾部、错
 | WebUI（项目内） | **project api** | 项目数据的 HTTP 契约，tui 也消费 |
 | CLI | **cli**（入口）+ **shell/tui**（终端 shell） | 入口负责拉起 shell；tui 与 webui 并列 |
 | home | **store**（root.go） | 根与路径解析并入 store |
-| `project run`（CLI 动词的实现） | **project/entry** | 进程入口独立成包，cli 只做 argv 路由 |
+| `project run`（子进程入口） | **launcher 私有 verb** | 不再是公开命令；由 launcher 自己 exec 并分派 |
 | declaration | **manifest** | 已落地 |
 | worker service | **workerlife.Manager** | 已落地 |
 
