@@ -2,7 +2,7 @@
 // outside world, so a project's WebUI is reached through it at /p/<id>/ rather
 // than on the project's own (loopback-only) port. One origin for the whole
 // product also means one basic-auth prompt and no CORS.
-package control
+package webui
 
 import (
 	"context"
@@ -35,7 +35,7 @@ type proxyTargetKey struct{}
 // own WebUI. The upstream is taken from the request (see handleProjectProxy)
 // instead of being baked in, so a project that restarted on another port is
 // picked up immediately and a stopped one never hits a stale address.
-func (c *Control) newProjectProxy() *httputil.ReverseProxy {
+func (c *Shell) newProjectProxy() *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		// The project's /api/stream is SSE: flush every write so events reach
 		// the browser as they happen instead of sitting in a copy buffer.
@@ -77,7 +77,7 @@ func wantsHTML(r *stdhttp.Request) bool {
 // while the project's API calls keep failing, so the UI can say the project is
 // stopped and offer to start it. Returns false when the path is not a bundle
 // file (any API call), leaving the caller to answer with its own error.
-func (c *Control) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix string) bool {
+func (c *Shell) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix string) bool {
 	if c.assets == nil {
 		return false
 	}
@@ -102,7 +102,7 @@ func (c *Control) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix 
 // handleProjectProxy serves /p/{id}/* from the project's own WebUI. The target
 // port comes from the project's persisted ports, so it works for a project
 // started by this control plane and for one started by hand.
-func (c *Control) handleProjectProxy(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Shell) handleProjectProxy(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
 	p, err := project.LoadProject(id)
 	if err != nil {

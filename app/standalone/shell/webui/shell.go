@@ -1,4 +1,4 @@
-// Control-plane HTTP service: the fixed-port (default 127.0.0.1:9527) control
+// Shell-plane HTTP service: the fixed-port (default 127.0.0.1:9527) control
 // plane a user opens when no project is attached. It serves the same SPA in
 // "control" mode — project management only — and can start a project, which
 // runs as its own process on its own dynamically-assigned bus/WebUI ports; the
@@ -11,7 +11,7 @@
 //
 // File layout: the service shell + routing live here; project lifecycle
 // handlers are in projects.go and template CRUD is in templates.go.
-package control
+package webui
 
 import (
 	"context"
@@ -29,12 +29,11 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/template"
-	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/app/standalone/store"
 )
 
-// ControlOptions configures the control-plane service.
-type ControlOptions struct {
+// Options configures the control-plane service.
+type Options struct {
 	Addr string // default "127.0.0.1:9527"; pass an explicit addr to accept remote connections
 	Auth string // optional user:pass basic-auth spec (protects non-localhost access; empty disables auth)
 	// OnReady, when set, runs once the listen socket is bound and before
@@ -44,8 +43,8 @@ type ControlOptions struct {
 	OnReady func(resolved string)
 }
 
-// RunControl runs the control-plane service until ctx is cancelled (e.g. Ctrl+C).
-func RunControl(opts ControlOptions) error {
+// Run runs the control-plane service until ctx is cancelled (e.g. Ctrl+C).
+func Run(opts Options) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	// Make sure the built-in project templates are on disk so the new-project
@@ -53,8 +52,8 @@ func RunControl(opts ControlOptions) error {
 	if err := template.Seed(template.TemplatesDir()); err != nil {
 		log.Printf("[control] seed templates: %v", err)
 	}
-	c := NewControl(opts.Addr)
-	if user, pass, enabled, warning := webui.StartupAuth(opts.Addr, opts.Auth, store.AuthConfigPath()); enabled {
+	c := New(opts.Addr)
+	if user, pass, enabled, warning := StartupAuth(opts.Addr, opts.Auth, store.AuthConfigPath()); enabled {
 		c.SetBasicAuth(user, pass)
 		log.Printf("[control] WebUI remote access protected with basic auth (localhost stays open)")
 	} else if warning != "" {
@@ -74,8 +73,8 @@ func RunControl(opts ControlOptions) error {
 	return c.Start(ctx)
 }
 
-// Control is the control-plane HTTP service.
-type Control struct {
+// Shell is the control-plane HTTP service.
+type Shell struct {
 	addr     string
 	server   *stdhttp.Server
 	listener net.Listener
@@ -93,14 +92,14 @@ type Control struct {
 	authPass string
 }
 
-// NewControl creates a control-plane service bound to addr ("127.0.0.1:9527"
+// New creates a control-plane service bound to addr ("127.0.0.1:9527"
 // when empty). The default is loopback so a credential-less server stays on this
 // machine; passing an explicit addr is what exposes it.
-func NewControl(addr string) *Control {
+func New(addr string) *Shell {
 	if addr == "" {
 		addr = "127.0.0.1:9527"
 	}
-	c := &Control{addr: addr}
+	c := &Shell{addr: addr}
 	c.proxy = c.newProjectProxy()
 	return c
 }
@@ -108,12 +107,12 @@ func NewControl(addr string) *Control {
 // SetBasicAuth enables HTTP basic auth for requests from non-loopback peers
 // (local machine access stays password-free). Cleared when either user or pass
 // is empty.
-func (c *Control) SetBasicAuth(user, pass string) {
+func (c *Shell) SetBasicAuth(user, pass string) {
 	c.authUser, c.authPass = user, pass
 }
 
 // Bind binds the listen socket and returns the resolved host:port.
-func (c *Control) Bind() (string, error) {
+func (c *Shell) Bind() (string, error) {
 	if c.listener != nil {
 		return c.bound, nil
 	}
@@ -127,10 +126,10 @@ func (c *Control) Bind() (string, error) {
 }
 
 // ResolvedAddr returns the bound address (empty until Bind).
-func (c *Control) ResolvedAddr() string { return c.bound }
+func (c *Shell) ResolvedAddr() string { return c.bound }
 
 // Start binds (if needed) and serves, blocking until ctx is cancelled.
-func (c *Control) Start(ctx context.Context) error {
+func (c *Shell) Start(ctx context.Context) error {
 	if c.listener == nil {
 		if _, err := c.Bind(); err != nil {
 			return err
@@ -138,7 +137,7 @@ func (c *Control) Start(ctx context.Context) error {
 	}
 	mux := stdhttp.NewServeMux()
 	mux.HandleFunc("GET /api/context", func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-		json.NewEncoder(w).Encode(webui.ContextInfo{Mode: "control"})
+		json.NewEncoder(w).Encode(ContextInfo{Mode: "control"})
 	})
 	mux.HandleFunc("GET /api/templates", c.handleListTemplates)
 	mux.HandleFunc("GET /api/templates/{name}", c.handleTemplateDetail)
@@ -161,7 +160,7 @@ func (c *Control) Start(ctx context.Context) error {
 	// port): /p/<id>/... is served from that project's own loopback WebUI.
 	mux.HandleFunc(projectPrefix+"{id}/", c.handleProjectProxy)
 
-	assets, err := webui.AssetsFS()
+	assets, err := AssetsFS()
 	if err != nil {
 		return fmt.Errorf("control: assets: %w", err)
 	}
@@ -171,7 +170,7 @@ func (c *Control) Start(ctx context.Context) error {
 	// narrower method but a wider path).
 	mux.Handle("/", stdhttp.FileServer(stdhttp.FS(assets)))
 
-	c.server = &stdhttp.Server{Handler: corsControl(webui.BasicAuth(c.authUser, c.authPass, mux))}
+	c.server = &stdhttp.Server{Handler: cors(BasicAuth(c.authUser, c.authPass, mux))}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -186,13 +185,13 @@ func (c *Control) Start(ctx context.Context) error {
 	return nil
 }
 
-// corsControl allows a project WebUI (cross-origin, on its own port) to call the
+// cors allows a project WebUI (cross-origin, on its own port) to call the
 // control plane's projects/start APIs.
-func corsControl(next stdhttp.Handler) stdhttp.Handler {
+func cors(next stdhttp.Handler) stdhttp.Handler {
 	return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Shell-Allow-Origin", "*")
+		w.Header().Set("Access-Shell-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Shell-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(stdhttp.StatusNoContent)
 			return

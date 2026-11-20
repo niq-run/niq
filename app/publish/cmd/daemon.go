@@ -21,9 +21,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/niq-run/niq/app/standalone/control"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
+	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/app/standalone/store"
 )
 
@@ -188,7 +188,7 @@ func runControlForeground(addr, auth string) error {
 			st.PID, project.LocalhostURL(st.Bound))
 	}
 	setupLogging()
-	err := control.RunControl(control.ControlOptions{
+	err := webui.Run(webui.Options{
 		Addr: addr,
 		Auth: auth,
 		OnReady: func(bound string) {

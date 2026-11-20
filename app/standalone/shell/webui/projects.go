@@ -1,4 +1,4 @@
-package control
+package webui
 
 import (
 	"encoding/json"
@@ -18,7 +18,7 @@ import (
 type projectView = launcher.View
 
 // handleListProjects returns the project definitions plus live run state.
-func (c *Control) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Shell) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	views, err := launcher.List()
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 500)
@@ -39,7 +39,7 @@ type dirItem struct {
 // filesystem and the UI navigates folders instead — this works locally and
 // remotely alike. It only lists directory names, never file contents. An empty
 // path starts at the niq projects root.
-func (c *Control) handleListDirs(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Shell) handleListDirs(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	root := r.URL.Query().Get("path")
 	if root == "" {
 		root = store.ProjectsRoot()
@@ -76,7 +76,7 @@ func (c *Control) handleListDirs(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 // handleLinkProject opens an external project directory by symlinking it into
 // the niq root (see project.LinkProject). The webui posts the directory the
 // user chose; it may already be a niq project and resume as-is.
-func (c *Control) handleLinkProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Shell) handleLinkProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	var body struct {
 		Path string `json:"path"`
 	}
@@ -95,7 +95,7 @@ func (c *Control) handleLinkProject(w stdhttp.ResponseWriter, r *stdhttp.Request
 // handleRestartProject stops the running instance and relaunches it on its
 // reused ports. The instance is found through the port it holds, so one the
 // shell spawned and one started elsewhere take exactly this path.
-func (c *Control) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Shell) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
 	if _, err := project.LoadProject(id); err != nil {
 		stdhttp.Error(w, "project not found", 404)
@@ -111,7 +111,7 @@ func (c *Control) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Requ
 
 // handleStopProject terminates a running project by interrupting whoever
 // listens on its persisted WebUI port.
-func (c *Control) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Shell) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
 	if _, err := project.LoadProject(id); err != nil {
 		stdhttp.Error(w, "project not found", 404)
@@ -130,7 +130,7 @@ func (c *Control) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request
 
 // handleCreateProject creates a project from a named template and immediately
 // starts it, returning the resolved instance.
-func (c *Control) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Shell) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	var body struct {
 		ID       string `json:"id"`
 		Template string `json:"template"`
@@ -156,7 +156,7 @@ func (c *Control) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Reque
 
 // handleStartProject launches a project as its own process on its persisted
 // ports and returns the resolved instance.
-func (c *Control) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Shell) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
 	if _, err := project.LoadProject(id); err != nil {
 		stdhttp.Error(w, "project not found", 404)
@@ -165,7 +165,7 @@ func (c *Control) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Reques
 	c.respondStart(w, id)
 }
 
-func (c *Control) respondStart(w stdhttp.ResponseWriter, id string) {
+func (c *Shell) respondStart(w stdhttp.ResponseWriter, id string) {
 	inst, err := launcher.Start(id)
 	if err != nil {
 		stdhttp.Error(w, err.Error(), stdhttp.StatusBadGateway)

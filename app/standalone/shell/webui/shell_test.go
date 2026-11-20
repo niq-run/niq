@@ -1,4 +1,4 @@
-package control
+package webui
 
 import (
 	"archive/zip"
@@ -17,7 +17,6 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/template"
-	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/app/standalone/store"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
@@ -57,9 +56,9 @@ func fakeTemplate() *project.TemplateConfig {
 // TestControlBasicAuthLoopbackOpen asserts a control plane with basic auth
 // enabled still serves loopback (same-machine) requests without credentials;
 // the non-loopback credential gating itself is covered by the webui tests for
-// webui.BasicAuth.
+// BasicAuth.
 func TestControlBasicAuthLoopbackOpen(t *testing.T) {
-	c := NewControl("127.0.0.1:0")
+	c := New("127.0.0.1:0")
 	c.SetBasicAuth("alice", "s3cret")
 	addr, err := c.Bind()
 	if err != nil {
@@ -81,7 +80,7 @@ func TestControlContextAndList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := NewControl("127.0.0.1:0")
+	c := New("127.0.0.1:0")
 	addr, err := c.Bind()
 	if err != nil {
 		t.Fatalf("bind: %v", err)
@@ -96,7 +95,7 @@ func TestControlContextAndList(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("context status=%d", code)
 	}
-	var ci webui.ContextInfo
+	var ci ContextInfo
 	if err := json.Unmarshal([]byte(body), &ci); err != nil {
 		t.Fatalf("context parse: %v (%s)", err, body)
 	}
@@ -114,10 +113,10 @@ func TestControlContextAndList(t *testing.T) {
 	}
 }
 
-// newControl starts a Control on an ephemeral port and returns the base URL.
+// newControl starts a Shell on an ephemeral port and returns the base URL.
 func newControl(t *testing.T) string {
 	t.Helper()
-	c := NewControl("127.0.0.1:0")
+	c := New("127.0.0.1:0")
 	addr, err := c.Bind()
 	if err != nil {
 		t.Fatal(err)
