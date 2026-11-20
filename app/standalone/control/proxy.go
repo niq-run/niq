@@ -87,7 +87,13 @@ func (c *Control) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix 
 		rel = "index.html"
 	}
 	if _, err := fs.Stat(c.assets, rel); err != nil {
-		return false
+		// SPA client routes (/p/{id}/chat, ...) have no file of their own;
+		// a browser navigation gets index.html. Anything else (a missing
+		// asset, an API call) is not the SPA's to answer.
+		if !wantsHTML(r) {
+			return false
+		}
+		rel = "index.html"
 	}
 	stdhttp.ServeFileFS(w, r, c.assets, rel)
 	return true
@@ -103,19 +109,25 @@ func (c *Control) handleProjectProxy(w stdhttp.ResponseWriter, r *stdhttp.Reques
 		stdhttp.Error(w, "project not found: "+id, stdhttp.StatusNotFound)
 		return
 	}
-	if p.Ports.WebUI == 0 {
-		// Never started, so there is no address to proxy to. Same shell as a
-		// stopped project: the page says so and offers the start button.
-		if wantsHTML(r) && c.serveSPA(w, r, projectPrefix+id) {
+	prefix := projectPrefix + id
+	// The shell is the only SPA host: every non-API path under /p/{id}/ is
+	// served from the embedded bundle, whether the project is running or not.
+	// Only its JSON/SSE API is proxied.
+	if rel := strings.TrimPrefix(r.URL.Path, prefix); !strings.HasPrefix(rel, "/api/") {
+		if c.serveSPA(w, r, prefix) {
 			return
 		}
+		stdhttp.NotFound(w, r)
+		return
+	}
+	if p.Ports.WebUI == 0 {
 		stdhttp.Error(w, "project "+id+" is not running: no WebUI port assigned yet", stdhttp.StatusBadGateway)
 		return
 	}
 	t := proxyTarget{
 		id:     id,
 		addr:   "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI),
-		prefix: projectPrefix + id,
+		prefix: prefix,
 	}
 	c.proxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), proxyTargetKey{}, t)))
 }

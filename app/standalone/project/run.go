@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/niq-run/niq/app/standalone/project/api"
 	providerpkg "github.com/niq-run/niq/app/standalone/provider"
-	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/app/standalone/store"
 	"github.com/niq-run/niq/app/standalone/store/event"
 	"github.com/niq-run/niq/app/standalone/store/identity"
@@ -42,6 +42,19 @@ type ProjectRunOptions struct {
 	BusAddr   string // httptrans bus listen address (":0" = dynamic)
 	WebUIAddr string // webui listen address (":0" = dynamic)
 	WebUIAuth string // optional user:pass basic-auth spec for the WebUI (empty = disabled)
+}
+
+// loopbackBind keeps the project's HTTP API on loopback: the shell is the only
+// remote entry, and it proxies project data.
+func loopbackBind(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return net.JoinHostPort("127.0.0.1", port)
 }
 
 // SetupLogging directs the standard logger to the project's daily log file.
@@ -107,7 +120,9 @@ func RunProject(opts ProjectRunOptions) error {
 			busAddr = ":0"
 		}
 	}
-	webUIAddr := opts.WebUIAddr
+	// The browser shell is the only remote entry; a project API listens on
+	// loopback so the shell can proxy it without a second auth gate.
+	webUIAddr := loopbackBind(opts.WebUIAddr)
 	if webUIAddr == "" {
 		if p.Ports.WebUI != 0 {
 			webUIAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
@@ -154,7 +169,7 @@ func RunProject(opts ProjectRunOptions) error {
 		EventsDB:     filepath.Join(projDir, "events", "events.db"),
 		Banner:       "project " + opts.ProjectID,
 		OnResolved:   onResolved,
-		ContextInfo: webui.ContextInfo{
+		ContextInfo: api.ContextInfo{
 			Mode:    "project",
 			Project: opts.ProjectID,
 			BusPort: PortOf(busAddr),
@@ -175,7 +190,7 @@ type assemblyOptions struct {
 	WebUIAuth    string         // optional user:pass basic-auth spec for the WebUI ("" = disabled)
 	Banner       string
 	OnResolved   func(bus, webui string)
-	ContextInfo  webui.ContextInfo
+	ContextInfo  api.ContextInfo
 	EventsDB     string // SQLite event store path (empty = in-memory)
 }
 
@@ -194,16 +209,6 @@ func runAssembly(opts assemblyOptions) error {
 	// and warning when a remote-reachable bind has no auth configured. Auth is
 	// opt-in: a loopback bind needs none, and an exposed bind without credentials
 	// is the operator's explicit choice.
-	var webUIAuthUser, webUIAuthPass string
-	var webUIAuthEnabled bool
-	if opts.WebUIAddr != "" {
-		user, pass, enabled, warning := webui.StartupAuth(opts.WebUIAddr, opts.WebUIAuth, store.AuthConfigPath())
-		webUIAuthUser, webUIAuthPass, webUIAuthEnabled = user, pass, enabled
-		if warning != "" {
-			fmt.Fprintln(os.Stderr, warning)
-		}
-	}
-
 	// Identity registry: two tiers behind one IdentityRegistry. The durable tier
 	// is projected from the bus identity store at startup; the temporary tier
 	// holds identities of the third-party processes the host itself launches,
@@ -381,14 +386,10 @@ func runAssembly(opts assemblyOptions) error {
 	// through SetHandler before the worker starts.
 	var webUIAddr string
 	if opts.WebUIAddr != "" {
-		app := webui.New(eventLog, engine, cp.Manifest(), registry, opts.WebUIAddr, false)
+		app := api.New(eventLog, engine, cp.Manifest(), registry, opts.WebUIAddr, false)
 		app.SetContext(opts.ContextInfo)
 		app.SetProjectDir(opts.ProjDir)
 		app.SetBusControl(busControl)
-		if webUIAuthEnabled {
-			app.SetBasicAuth(webUIAuthUser, webUIAuthPass)
-			log.Printf("[project] WebUI remote access protected with basic auth (localhost stays open)")
-		}
 		if opts.UploadDir != "" {
 			app.SetUploadDir(opts.UploadDir)
 		}
@@ -612,7 +613,7 @@ func loadOrCreateRootSecret(dir string) ([]byte, error) {
 // ACL editing: there is no user-editable grant to persist.
 func joinWebUIWorker(
 	ctx context.Context,
-	app *webui.Server,
+	app *api.Server,
 	bus corebus.Control,
 	listener *inprocess.InProcListener,
 	cp *projworker.ControlPlane,

@@ -5,18 +5,14 @@
 // approvals, programs) because the project runtime hosts it today; that half
 // moves to project/api when the shell is split from the runtime. The shell's
 // own assets live in ./assets.
-package webui
+package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -40,9 +36,6 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 	"github.com/niq-run/niq/core/itfs/worker"
 )
-
-//go:embed assets/dist/*
-var embeddedAssets embed.FS
 
 // ContextInfo tells the single SPA which mode it is in: control (no project
 // attached — only project management is available) or project (a specific
@@ -111,11 +104,6 @@ type WorkerSpawnArgs interface {
 	SpawnArgs(body json.RawMessage) (map[string]any, error)
 }
 
-// AssetsFS exposes the embedded SPA static assets for reuse by the control server.
-func AssetsFS() (fs.FS, error) {
-	return fs.Sub(embeddedAssets, "assets/dist")
-}
-
 // Server is the WebUI HTTP server.
 type Server struct {
 	// bus is the interface worker's handler, injected through iface.Backend's
@@ -152,8 +140,6 @@ type Server struct {
 
 	// Optional basic auth: required for requests coming from non-loopback peers.
 	// Localhost (same machine) access stays open. Both must be set to enable.
-	authUser string
-	authPass string
 }
 
 // New creates a WebUI Server.
@@ -244,17 +230,6 @@ func New(el *eventbusapi.EventLog, engine *eventbus.Engine, catalog worker.Manif
 	mux.HandleFunc("GET /api/approvals", s.handleApprovals)
 	mux.HandleFunc("POST /api/approvals/{id}/decision", s.handleApprovalDecision)
 
-	// ── Static assets ──
-	if devMode {
-		log.Println("[webui] dev mode: static assets served by Vite on :5173")
-	} else {
-		sub, err := AssetsFS()
-		if err != nil {
-			log.Fatalf("[webui] embed fs: %v", err)
-		}
-		mux.Handle("GET /", http.FileServer(http.FS(sub)))
-	}
-
 	// Mode context: tells the single SPA whether this WebUI is a control plane
 	// or a project instance, and where the control plane lives.
 	mux.HandleFunc("GET /api/context", s.handleContext)
@@ -272,7 +247,7 @@ func New(el *eventbusapi.EventLog, engine *eventbus.Engine, catalog worker.Manif
 	mux.HandleFunc("GET /api/archived", s.handleGetArchived)
 	mux.HandleFunc("POST /api/workers/{id}/archived", s.handleSetArchived)
 
-	s.server = &http.Server{Addr: addr, Handler: cors(s.basicAuth(mux))}
+	s.server = &http.Server{Addr: addr, Handler: cors(mux)}
 	return s
 }
 
@@ -344,33 +319,6 @@ func (s *Server) SetProjectDir(dir string) {
 // Relative paths resolve against the project directory.
 func (s *Server) SetUploadDir(dir string) {
 	s.uploadDirCfg = dir
-}
-
-// SetBasicAuth enables HTTP basic auth for requests from non-loopback peers
-// (local machine access stays password-free). Cleared when either user or pass
-// is empty.
-func (s *Server) SetBasicAuth(user, pass string) {
-	s.authUser, s.authPass = user, pass
-}
-
-// ParseAuthSpec parses a "user:password" spec into separate parts. A value
-// without a colon is treated as the password with a default user of "niq".
-// Returns ok=false for an empty/blank spec or when parts would be empty (auth
-// stays disabled).
-func ParseAuthSpec(spec string) (user, pass string, ok bool) {
-	spec = strings.TrimSpace(spec)
-	if spec == "" {
-		return "", "", false
-	}
-	user = "niq"
-	pass = spec
-	if i := strings.Index(spec, ":"); i >= 0 {
-		user, pass = spec[:i], spec[i+1:]
-	}
-	if user == "" || pass == "" {
-		return "", "", false
-	}
-	return user, pass, true
 }
 
 // uploadDir resolves the directory uploaded files are written to: the config
@@ -1853,74 +1801,4 @@ func cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// basicAuth protects the WebUI behind HTTP basic auth, but only for clients
-// that are not on the loopback interface: same-machine access (e.g. someone
-// with a shell on the box) stays open, while remote peers must authenticate.
-// Credentials are read per request — the handler is built by New(), while
-// SetBasicAuth runs afterwards (the assembly calls it once the WebUI is
-// constructed), so capturing them here would silently disable auth.
-func (s *Server) basicAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !authGate(w, r, s.authUser, s.authPass) {
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// BasicAuth wraps a handler with HTTP basic auth that applies only to
-// non-loopback clients: same-machine (loopback) access stays open, while
-// remote peers must present valid credentials. Auth is opt-in: with no
-// user/pass configured the handler is a straight pass-through. Works for both
-// the project WebUI and the control-plane SPA.
-func BasicAuth(user, pass string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !authGate(w, r, user, pass) {
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// authGate reports whether the request may proceed; when it may not it has
-// already answered 401 with a challenge. Auth is opt-in: with no credentials
-// configured the handler is a pass-through (the operator chose not to
-// authenticate), and loopback peers are always let through.
-func authGate(w http.ResponseWriter, r *http.Request, user, pass string) bool {
-	if !authEnabled(user, pass) || isLoopbackRemote(r.RemoteAddr) {
-		return true
-	}
-	gotUser, gotPass, ok := r.BasicAuth()
-	if !ok || !secureEqual(gotUser, user) || !secureEqual(gotPass, pass) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="niq"`)
-		w.WriteHeader(http.StatusUnauthorized)
-		return false
-	}
-	return true
-}
-
-// isLoopbackRemote reports whether the peer address is a loopback IP
-// (127.0.0.0/8 or ::1), i.e. the request originated on this machine.
-func isLoopbackRemote(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-// authEnabled reports whether basic auth has been configured (both a user and a
-// password must be present). Unconfigured means auth is disabled by choice.
-func authEnabled(user, pass string) bool {
-	return user != "" && pass != ""
-}
-
-// secureEqual compares two strings in constant time (via their SHA-256 digests)
-// so a password guess cannot be accelerated by measuring comparison time.
-func secureEqual(a, b string) bool {
-	ha, hb := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
-	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1
 }

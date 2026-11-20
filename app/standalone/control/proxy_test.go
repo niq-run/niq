@@ -45,8 +45,9 @@ func TestProjectProxyUnknownProject(t *testing.T) {
 	}
 }
 
-// TestProjectProxyNotRunning asserts a project with no assigned WebUI port (i.e.
-// not running yet) answers 502 with an explanatory message.
+// TestProjectProxyNotRunning asserts a project with no assigned WebUI port
+// still serves the SPA shell for a navigation, while its API answers 502 with
+// an explanatory message.
 func TestProjectProxyNotRunning(t *testing.T) {
 	setupProjectsRoot(t)
 	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
@@ -54,9 +55,12 @@ func TestProjectProxyNotRunning(t *testing.T) {
 	}
 	base := newControl(t)
 
-	code, body := doGet(t, base+"/p/alpha/")
+	if code, body := doGet(t, base+"/p/alpha/"); code != http.StatusOK {
+		t.Fatalf("shell status=%d (%s), want 200", code, body)
+	}
+	code, body := doGet(t, base+"/p/alpha/api/workers")
 	if code != http.StatusBadGateway {
-		t.Fatalf("status=%d (%s), want 502", code, body)
+		t.Fatalf("api status=%d (%s), want 502", code, body)
 	}
 	if !strings.Contains(body, "not running") {
 		t.Fatalf("body should explain the project is not running: %s", body)

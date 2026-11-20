@@ -1,10 +1,13 @@
 package webui
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,4 +99,79 @@ func StartupAuth(addr, spec, path string) (user, pass string, enabled bool, warn
 		addr, path,
 	)
 	return user, pass, enabled, warning
+}
+
+// ParseAuthSpec parses a "user:password" spec into separate parts. A value
+// without a colon is treated as the password with a default user of "niq".
+// Returns ok=false for an empty/blank spec or when parts would be empty (auth
+// stays disabled).
+func ParseAuthSpec(spec string) (user, pass string, ok bool) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return "", "", false
+	}
+	user = "niq"
+	pass = spec
+	if i := strings.Index(spec, ":"); i >= 0 {
+		user, pass = spec[:i], spec[i+1:]
+	}
+	if user == "" || pass == "" {
+		return "", "", false
+	}
+	return user, pass, true
+}
+
+// BasicAuth wraps a handler with HTTP basic auth that applies only to
+// non-loopback clients: same-machine (loopback) access stays open, while
+// remote peers must present valid credentials. Auth is opt-in: with no
+// user/pass configured the handler is a straight pass-through. Works for both
+// the project WebUI and the control-plane SPA.
+func BasicAuth(user, pass string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authGate(w, r, user, pass) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authGate reports whether the request may proceed; when it may not it has
+// already answered 401 with a challenge. Auth is opt-in: with no credentials
+// configured the handler is a pass-through (the operator chose not to
+// authenticate), and loopback peers are always let through.
+func authGate(w http.ResponseWriter, r *http.Request, user, pass string) bool {
+	if !authEnabled(user, pass) || isLoopbackRemote(r.RemoteAddr) {
+		return true
+	}
+	gotUser, gotPass, ok := r.BasicAuth()
+	if !ok || !secureEqual(gotUser, user) || !secureEqual(gotPass, pass) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="niq"`)
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+// isLoopbackRemote reports whether the peer address is a loopback IP
+// (127.0.0.0/8 or ::1), i.e. the request originated on this machine.
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// authEnabled reports whether basic auth has been configured (both a user and a
+// password must be present). Unconfigured means auth is disabled by choice.
+func authEnabled(user, pass string) bool {
+	return user != "" && pass != ""
+}
+
+// secureEqual compares two strings in constant time (via their SHA-256 digests)
+// so a password guess cannot be accelerated by measuring comparison time.
+func secureEqual(a, b string) bool {
+	ha, hb := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1
 }

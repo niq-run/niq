@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,5 +130,70 @@ func TestStartupAuthInvalidSpecDisabled(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("invalid spec should not write auth file (stat err=%v)", err)
+	}
+}
+
+// TestBasicAuthNonLoopback verifies the gate: loopback peers pass without
+// credentials, remote peers get a challenge, and correct credentials pass.
+func TestBasicAuthNonLoopback(t *testing.T) {
+	hit := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true })
+	h := BasicAuth("alice", "s3cret", next)
+
+	call := func(remote string, creds bool) *httptest.ResponseRecorder {
+		hit = false
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = remote
+		if creds {
+			req.SetBasicAuth("alice", "s3cret")
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := call("127.0.0.1:5555", false); !hit || rr.Code != http.StatusOK {
+		t.Fatalf("loopback: hit=%v code=%d, want hit with 200", hit, rr.Code)
+	}
+	if rr := call("203.0.113.7:5555", false); hit || rr.Code != http.StatusUnauthorized {
+		t.Fatalf("no-cred: hit=%v code=%d, want reject with 401", hit, rr.Code)
+	} else if rr.Header().Get("WWW-Authenticate") == "" {
+		t.Fatal("no-cred: missing WWW-Authenticate header")
+	}
+	if rr := call("203.0.113.7:5555", true); !hit || rr.Code != http.StatusOK {
+		t.Fatalf("good-cred: hit=%v code=%d, want hit with 200", hit, rr.Code)
+	}
+}
+
+// TestBasicAuthUnconfigured asserts auth is opt-in: with no credentials the
+// gate lets every caller through.
+func TestBasicAuthUnconfigured(t *testing.T) {
+	hit := false
+	h := BasicAuth("", "", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "203.0.113.7:5555"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if !hit || rr.Code != http.StatusOK {
+		t.Fatalf("hit=%v code=%d, want pass-through 200", hit, rr.Code)
+	}
+}
+
+func TestParseAuthSpec(t *testing.T) {
+	for _, tc := range []struct {
+		spec, wantUser, wantPass string
+		wantOK                   bool
+	}{
+		{"", "", "", false},
+		{"  ", "", "", false},
+		{"s3cret", "niq", "s3cret", true},
+		{"alice:s3cret", "alice", "s3cret", true},
+		{":s3cret", "", "", false},
+		{"alice:", "", "", false},
+	} {
+		u, p, ok := ParseAuthSpec(tc.spec)
+		if u != tc.wantUser || p != tc.wantPass || ok != tc.wantOK {
+			t.Fatalf("ParseAuthSpec(%q) = (%q,%q,%v), want (%q,%q,%v)", tc.spec, u, p, ok, tc.wantUser, tc.wantPass, tc.wantOK)
+		}
 	}
 }
