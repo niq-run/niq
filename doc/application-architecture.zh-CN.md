@@ -1,4 +1,4 @@
-# niq 架构与职责分层（standalone 形态）
+# niq 应用架构（standalone 形态）
 
 > 状态：**target（2026-11-20）**。本文描述优化后的目标形态，不是当前代码的 as-built 快照。
 > 当前目录见 [directory-layout.zh-CN.md](./directory-layout.zh-CN.md)；本文与它的差异集中在 §9 映射表。
@@ -154,6 +154,8 @@ worker   ctx.Providers.Find / ctx.ProviderSources
 ```
 
 统一规则：**`store` import 领域值类型（`Manifest`、`provider.Config`）做序列化；领域包不 import `store`**，只接收 store 读出来的值。这样 `store → worker(Manifest)` 与 `worker → provider` 不会成环，`home` 也就能真正并入 `store`。
+
+注意这不是新增一层"providerStore"：它只是 `store` 里的**又一个文件适配器**，与 `project.go` / `manifest.go` / `state.go` / `identity/` / `event/` / `program/` 并列。`provider` 包本身不消失，只是从"既管文件又管语义"收缩为"只管语义"。
 
 调用方的变化：
 
