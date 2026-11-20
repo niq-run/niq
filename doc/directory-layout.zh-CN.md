@@ -31,10 +31,10 @@ niq/
 │
 ├── app/
 │   ├── standalone/               # 部署形态：本地单机 niq
-│   │   ├── control/              #   多 project 编排、聚合 UI、代理
 │   │   ├── launcher/             #   项目实例：List/Start/Stop/Restart + 私有子进程入口
 │   │   ├── project/              #   单 project 运行时
 │   │   │   ├── run.go            #     启动编排（持有信号 ctx）
+│   │   │   ├── api/              #     项目 HTTP API：JSON/SSE + 人类入口
 │   │   │   ├── project.go        #     创建/列出/链接（读写经 store）
 │   │   │   ├── export.go         #     项目 → 模板导出
 │   │   │   └── template/         #     模板与 preset
@@ -58,9 +58,9 @@ niq/
 │   │   │   ├── store.go          #     ManifestStore 契约
 │   │   │   └── process/          #     OS 子进程：provision + supervisor
 │   │   ├── shell/
-│   │   │   └── webui/            #   浏览器 shell：HTTP/SSE + SPA
-│   │   │       └── assets/       #     前端源码与构建产物（dist 是 go:embed 的）
-│   │   └── menubar/              #   macOS 菜单栏壳（Swift，驱动 CLI，不在 Go import 图）
+│   │   │   ├── webui/            #   浏览器 shell：SPA + auth + /p/{id} 代理 + launcher 路由
+│   │   │   │   └── assets/       #     前端源码与构建产物（dist 是 go:embed 的）
+│   │   │   └── menubar/          #   macOS 菜单栏壳（Swift，驱动 CLI，不在 Go import 图）
 │   │
 │   ├── cluster/                  # 部署形态：分布式（占位，与 standalone 平级）
 │   │   └── README.md
