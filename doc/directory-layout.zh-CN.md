@@ -31,20 +31,22 @@ niq/
 │
 ├── app/
 │   ├── standalone/               # 部署形态：本地单机 niq
-│   │   ├── home/                 #   host 根解析：NIQ_HOME / ~/.niq / auth 路径
 │   │   ├── control/              #   多 project 编排、聚合 UI、代理
-│   │   ├── project/              #   单 project 装配根
+│   │   ├── project/              #   单 project 运行时
 │   │   │   ├── run.go            #     启动编排（持有信号 ctx）
-│   │   │   ├── project.go        #     项目路径 + 创建/列出/链接（IO 在 store）
-│   │   │   ├── store/            #     全部存储实现（路径驱动，不知道 project id）
-│   │   │   │   ├── project.go    #       project.json
-│   │   │   │   ├── manifest.go   #       workers.json + worker.ManifestStore
-│   │   │   │   ├── state.go      #       state.json + workerlife.WorkerStore
-│   │   │   │   ├── identity/     #       identities.json 的 bus.Store（运行时 + 迁移共用）
-│   │   │   │   └── event/        #       事件存储（SQLite 实现）
+│   │   │   ├── project.go        #     创建/列出/链接（读写经 store）
+│   │   │   ├── export.go         #     项目 → 模板导出
+│   │   │   └── template/         #     模板与 preset
+│   │   ├── store/                #   落盘与路径的唯一主人
+│   │   │   ├── root.go           #     NIQ_HOME / 项目目录 / 文件名 / auth 与 provider 路径
+│   │   │   ├── project.go        #     project.json
+│   │   │   ├── manifest.go       #     workers.json + worker.ManifestStore
+│   │   │   ├── state.go          #     state.json + workerlife.WorkerStore
+│   │   │   ├── provider.go       #     provider.json 的读写
 │   │   │   ├── migrate/          #     旧格式 → 当前 schema（唯一读旧格式的地方）
-│   │   │   ├── template/         #     模板与 preset
-│   │   │   └── provider/         #     provider.json 读取与启动门控
+│   │   │   ├── identity/         #     identities.json 的 bus.Store（运行时 + 迁移共用）
+│   │   │   └── event/            #     事件存储（SQLite 实现）
+│   │   ├── provider/             #   共享配置领域：provider 定义、模型解析、LLM 构造
 │   │   ├── worker/               #   worker 控制面（自闭环）
 │   │   │   ├── controlplane.go   #     New / Recover / Stop / HostBackend / Manifest
 │   │   │   ├── backend.go        #     worker.Backend：placement 路由 + 生命周期
@@ -83,7 +85,7 @@ niq/
 | **部署形态** | 知道 placement、项目文件布局、进程模型、存储适配 | `app/<form>/`（`standalone`、`cluster`） |
 | **产品入口** | 负责把某个形态装起来（`publish`） | `app/` 顶层 |
 
-`app/standalone/home` 是形态内的“host 环境”知识（`NIQ_HOME`、`~/.niq`、auth 路径）：`app/standalone/shell/webui` 不 import 它，auth 文件路径由调用方传入。
+`app/standalone/store/root.go` 是形态内的路径知识（`NIQ_HOME`、`~/.niq`、项目目录、auth 与 provider 路径）。别的包只调 `store.*`，不自己拼路径；`shell/webui` 的 auth 文件路径也由调用方传入。
 
 shell（`shell/webui`、未来的 `shell/tui`）属于形态内部，不是跨形态共享件。cluster 的 UI 单独实现；等它出现后，再从 `shell/webui/assets` 抽公共前端组件。
 
@@ -91,7 +93,7 @@ shell（`shell/webui`、未来的 `shell/tui`）属于形态内部，不是跨�
 
 它们都是**与形态无关**的：
 
-- `busctl.ControlPlane` 只认 `bus.Identity` + 注入的 `bus.Store`，不碰文件系统（`go list` 的 import 只有 `fmt/sort/sync` + 契约）；standalone 注入 `project/store/identity`，cluster 换成 KV 即可复用。
+- `busctl.ControlPlane` 只认 `bus.Identity` + 注入的 `bus.Store`，不碰文件系统（`go list` 的 import 只有 `fmt/sort/sync` + 契约）；standalone 注入 `store/identity`，cluster 换成 KV 即可复用。
 - `workerlife.Manager` 只认 `WorkerConfig` / `SpawnSpec` / `ManagedWorker`，不管 placement、总线语义、类型注册。
 
 worker 的**控制面**不在这里，因为 placement 集合、builder 表、进程托管是形态知识，所以它在 `app/standalone/worker`。cluster 会带自己的控制面，但可以复用这两个库。
@@ -125,10 +127,10 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为�
 | 新增总线身份规则 | `core/itfs/bus` 契约 + `core/impl/busctl` |
 | 新增实例生命周期能力 | `core/impl/workerlife` |
 | 新增部署形态 | `app/<form>/`，实现 `worker.Backend` 与自己的一套存储/placement |
-| 新的形态内存储 | 该形态的 `store/` 子包（例如 `project/store/identity`） |
+| 新的形态内存储 | 该形态的 `store/` 子包（例如 `store/identity`） |
 | 新的上层界面 | 实现 `iface.Backend`，由形态装配一个 interface worker（不需要 manifest） |
 | 新的 CLI 命令 / 发行配置 | `app/publish` |
-| 跨形态共享的 UI / HTTP | `app/webui`（或 `app/` 下新的共享包，且不得 import 形态） |
+| 浏览器外壳与前端 | `app/standalone/shell/webui`（含 `assets/`）；cluster 自带 UI，公共组件等它出现后再从 assets 抽 |
 
 ## 6. 容易放错的三个位置
 

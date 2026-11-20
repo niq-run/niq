@@ -306,6 +306,11 @@ func writeJSONAtomic(path string, v any) error {
 		return fmt.Errorf("store: marshal %s: %w", path, err)
 	}
 	raw = append(raw, '\n')
+	return writeRawAtomic(path, raw)
+}
+
+// writeRawAtomic writes bytes through a temp file + rename.
+func writeRawAtomic(path string, raw []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0644); err != nil {
 		return fmt.Errorf("store: write %s: %w", path, err)

@@ -24,24 +24,24 @@ type Project struct {
 	UploadDir     string       `json:"upload_dir,omitempty"`
 }
 
-// ProjectPath returns the project.json file in dir.
-func ProjectPath(dir string) string { return filepath.Join(dir, "project.json") }
+// ProjectFile returns the project.json file in dir.
+func ProjectFile(dir string) string { return filepath.Join(dir, "project.json") }
 
 // LoadProject reads dir/project.json, running the one-time conversion first.
 func LoadProject(dir string) (*Project, error) {
 	if err := ensureProject(dir); err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(ProjectPath(dir))
+	raw, err := os.ReadFile(ProjectFile(dir))
 	if os.IsNotExist(err) {
 		return nil, fmt.Errorf("store: project not found in %s", dir)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("store: read %s: %w", ProjectPath(dir), err)
+		return nil, fmt.Errorf("store: read %s: %w", ProjectFile(dir), err)
 	}
 	var p Project
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, fmt.Errorf("store: parse %s: %w", ProjectPath(dir), err)
+		return nil, fmt.Errorf("store: parse %s: %w", ProjectFile(dir), err)
 	}
 	return &p, nil
 }
@@ -57,5 +57,5 @@ func SaveProject(dir string, p *Project) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("store: mkdir: %w", err)
 	}
-	return writeJSONAtomic(ProjectPath(dir), p)
+	return writeJSONAtomic(ProjectFile(dir), p)
 }

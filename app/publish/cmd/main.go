@@ -27,6 +27,7 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/template"
+	"github.com/niq-run/niq/app/standalone/store"
 )
 
 // version is injected at build time via -ldflags:
@@ -198,7 +199,7 @@ func runProject(args []string) error {
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
 		}
-		path := project.ProjectPath(id)
+		path := store.ProjectPath(id)
 		if _, err := project.LoadProject(id); err == nil {
 			return fmt.Errorf("project %q already exists at %s", id, path)
 		}
@@ -289,7 +290,7 @@ func setupLogging() {
 // ~/.niq/projects/<id>/logs/niq-YYYY-MM-DD.log. The date in the filename gives
 // free daily rotation: a new day starts a new file, same-day restarts append.
 func setupProjectLogging(id string) {
-	path := project.LogPath(id)
+	path := store.LogPath(id)
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {

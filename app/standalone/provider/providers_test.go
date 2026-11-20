@@ -3,8 +3,6 @@ package provider
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,34 +11,29 @@ import (
 )
 
 func TestEnsureLLMConfigured(t *testing.T) {
-	cfgPath := filepath.Join(t.TempDir(), "provider.json")
-	t.Setenv("NIQ_PROVIDER_CONFIG", cfgPath)
+	const cfgPath = "/tmp/provider.json"
+	empty := &Config{}
 
 	// No declared workers → passes without any provider.
-	if err := EnsureLLMConfigured(nil); err != nil {
+	if err := EnsureLLMConfigured(empty, nil, cfgPath); err != nil {
 		t.Fatalf("empty worker set should pass: %v", err)
 	}
 
 	reason := []worker.WorkerConfig{{ID: "niq", Type: "reason"}}
 
-	// Reason worker declared, no provider → error + example seeded.
-	if err := EnsureLLMConfigured(reason); err == nil {
+	// Reason worker declared, no provider → error naming the config file.
+	if err := EnsureLLMConfigured(empty, reason, cfgPath); err == nil {
 		t.Fatal("expected error when reason worker exists without a provider")
 	}
-	if _, err := os.Stat(cfgPath); err != nil {
-		t.Fatalf("example provider.json not seeded: %v", err)
-	}
-	if !strings.Contains(mustErrString(EnsureLLMConfigured(reason)), cfgPath) {
+	if !strings.Contains(mustErrString(EnsureLLMConfigured(empty, reason, cfgPath)), cfgPath) {
 		t.Fatalf("error should mention the provider config path")
 	}
 
 	// Provider configured → passes.
-	if err := Write(&Config{Providers: []Entry{
+	configured := &Config{Providers: []Entry{
 		{Name: "deepseek", Type: "deepseek", APIKey: "sk-x"},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := EnsureLLMConfigured(reason); err != nil {
+	}}
+	if err := EnsureLLMConfigured(configured, reason, cfgPath); err != nil {
 		t.Fatalf("configured should pass: %v", err)
 	}
 }
@@ -148,18 +141,10 @@ func TestModelsForPropagatesInputTypes(t *testing.T) {
 // model falls back to the entry's default, and an unknown name resolves to
 // nothing (the builder rejects it before a worker exists).
 func TestInitialProviderInfoNamesOnly(t *testing.T) {
-	cfgPath := filepath.Join(t.TempDir(), "provider.json")
-	t.Setenv("NIQ_PROVIDER_CONFIG", cfgPath)
-	if err := Write(&Config{Active: "a", Providers: []Entry{
+	cfg := &Config{Active: "a", Providers: []Entry{
 		{Name: "a", Type: "deepseek", APIKey: "k1", Model: "m1"},
 		{Name: "b", Type: "openai-compatible", BaseURL: "https://b.example", APIKey: "k2", Model: "m2"},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
+	}}
 
 	cases := []struct{ provider, model, wantName, wantModel string }{
 		{"b", "m2", "b", "m2"}, // explicit pair

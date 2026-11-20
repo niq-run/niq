@@ -16,6 +16,7 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/template"
+	"github.com/niq-run/niq/app/standalone/store"
 )
 
 // projectView augments a project definition with its live run state.
@@ -53,7 +54,7 @@ type dirItem struct {
 func (c *Control) handleListDirs(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	root := r.URL.Query().Get("path")
 	if root == "" {
-		root = project.ProjectsRoot()
+		root = store.ProjectsRoot()
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -316,7 +317,7 @@ func waitProjectStart(id string, exited <-chan error) (string, error) {
 // project refused to start (no usable provider, a port already in use) reaches
 // the UI instead of sitting in a file the user has to go find.
 func logHint(id string) string {
-	path := project.LogPath(id)
+	path := store.LogPath(id)
 	hint := "; see " + path
 	if tail := logTail(path, 4); tail != "" {
 		return hint + ":\n" + tail

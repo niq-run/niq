@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/niq-run/niq/app/standalone/home"
+	"github.com/niq-run/niq/app/standalone/store"
 )
 
 // makeZip builds a zip archive in memory from a map of name -> content.
@@ -153,6 +153,6 @@ func setupHome(t *testing.T) string {
 	t.Helper()
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
-	_ = os.Unsetenv(home.Env)
+	_ = os.Unsetenv(store.Env)
 	return filepath.Join(tmpHome, ".niq")
 }

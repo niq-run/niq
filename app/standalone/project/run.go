@@ -15,15 +15,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/niq-run/niq/app/standalone/home"
-	"github.com/niq-run/niq/app/standalone/store/migrate"
 	providerpkg "github.com/niq-run/niq/app/standalone/provider"
+	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/app/standalone/store"
 	"github.com/niq-run/niq/app/standalone/store/event"
 	"github.com/niq-run/niq/app/standalone/store/identity"
+	"github.com/niq-run/niq/app/standalone/store/migrate"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
-	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
@@ -52,14 +51,14 @@ type ProjectRunOptions struct {
 func RunProject(opts ProjectRunOptions) error {
 	// One-time conversion of legacy project files; the runtime below reads
 	// schema 2 only.
-	if err := migrate.EnsureProject(ProjectDir(opts.ProjectID)); err != nil {
+	if err := migrate.EnsureProject(store.ProjectDir(opts.ProjectID)); err != nil {
 		return err
 	}
 	p, err := LoadProject(opts.ProjectID)
 	if err != nil {
 		return err
 	}
-	projDir := ProjectDir(opts.ProjectID)
+	projDir := store.ProjectDir(opts.ProjectID)
 	workerSet, err := store.LoadWorkers(projDir)
 	if err != nil {
 		return err
@@ -129,7 +128,7 @@ func RunProject(opts ProjectRunOptions) error {
 
 	return runAssembly(assemblyOptions{
 		StateDir:     filepath.Join(projDir, "workers"),
-		ProgramsRoot: filepath.Join(projDir, "programs"),
+		ProgramsRoot: store.ProgramsDir(projDir),
 		ProjDir:      projDir,
 		UploadDir:    p.UploadDir,
 		Workers:      workerSet.Workers,
@@ -182,7 +181,7 @@ func runAssembly(opts assemblyOptions) error {
 	var webUIAuthUser, webUIAuthPass string
 	var webUIAuthEnabled bool
 	if opts.WebUIAddr != "" {
-		user, pass, enabled, warning := webui.StartupAuth(opts.WebUIAddr, opts.WebUIAuth, home.AuthConfigPath())
+		user, pass, enabled, warning := webui.StartupAuth(opts.WebUIAddr, opts.WebUIAuth, store.AuthConfigPath())
 		webUIAuthUser, webUIAuthPass, webUIAuthEnabled = user, pass, enabled
 		if warning != "" {
 			fmt.Fprintln(os.Stderr, warning)
@@ -322,7 +321,7 @@ func runAssembly(opts assemblyOptions) error {
 		WorkerBackend: cp.HostBackend(),
 		EventLog:      eventLog,
 		EventStore:    evtStore,
-		ProviderLoad:  providerpkg.Load,
+		ProviderLoad:  store.LoadProvider,
 		ProgramsRoot:  opts.ProgramsRoot,
 		StateDir:      opts.StateDir,
 	}
@@ -341,7 +340,15 @@ func runAssembly(opts assemblyOptions) error {
 			inProc = append(inProc, projworker.SpawnConfig(*m))
 		}
 	}
-	if err := providerpkg.EnsureLLMConfigured(inProc); err != nil {
+	providerCfg, err := store.LoadProvider()
+	if err != nil {
+		return fmt.Errorf("project: load providers: %w", err)
+	}
+	if err := providerpkg.EnsureLLMConfigured(providerCfg, inProc, store.ProviderConfigPath()); err != nil {
+		// Seed the skeleton so the error points at an editable file.
+		if seedErr := store.EnsureProviderExample(); seedErr != nil {
+			log.Printf("[project] seed provider example: %v", seedErr)
+		}
 		return err
 	}
 

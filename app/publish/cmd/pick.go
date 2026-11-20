@@ -21,6 +21,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/niq-run/niq/app/standalone/project"
+	"github.com/niq-run/niq/app/standalone/store"
 )
 
 // errNotTerminal means stdin is not a TTY (piped input, cron, a script), so
@@ -392,7 +393,7 @@ func projectRows(projects []project.Project, trailing func(project.Project) stri
 	return rows
 }
 
-func projectDirCell(p project.Project) string { return dim(shortPath(project.ProjectDir(p.ID))) }
+func projectDirCell(p project.Project) string { return dim(shortPath(store.ProjectDir(p.ID))) }
 
 // printProjectTable is the non-interactive view: `niq project` without a
 // terminal, and the list under `niq status`. note, when set, is printed after
@@ -473,11 +474,11 @@ func startProjectDetached(p project.Project, verb string) (string, error) {
 				brand(fmt.Sprintf("http://localhost:%d", cur.Ports.WebUI))), nil
 		}
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("%s did not start within 20s; see %s", p.ID, shortPath(project.LogPath(p.ID)))
+			return "", fmt.Errorf("%s did not start within 20s; see %s", p.ID, shortPath(store.LogPath(p.ID)))
 		}
 		select {
 		case err := <-exited:
-			return "", fmt.Errorf("%s exited during startup: %v; see %s", p.ID, err, shortPath(project.LogPath(p.ID)))
+			return "", fmt.Errorf("%s exited during startup: %v; see %s", p.ID, err, shortPath(store.LogPath(p.ID)))
 		case <-time.After(100 * time.Millisecond):
 		}
 	}

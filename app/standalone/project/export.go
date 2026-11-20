@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/niq-run/niq/app/standalone/store"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
+	"github.com/niq-run/niq/app/standalone/store"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
@@ -21,7 +21,7 @@ import (
 // hollow template file. With withProgram kept for API compatibility, programs
 // are part of params now, so it no longer changes the payload.
 func ExportProjectTemplate(projectID string, withProgram bool) (*TemplateConfig, error) {
-	set, err := store.LoadWorkers(ProjectDir(projectID))
+	set, err := store.LoadWorkers(store.ProjectDir(projectID))
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func ExportProjectTemplate(projectID string, withProgram bool) (*TemplateConfig,
 
 // ProjectProgramsDir returns a project's programs resources directory.
 func ProjectProgramsDir(id string) string {
-	return filepath.Join(ProjectDir(id), "programs")
+	return store.ProgramsDir(store.ProjectDir(id))
 }
 
 // ExportProjectPrograms copies a project's programs resources into a template

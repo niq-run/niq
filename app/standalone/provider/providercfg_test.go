@@ -2,28 +2,17 @@ package provider
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/niq-run/niq/app/standalone/home"
 )
 
 func TestProviderConfigDefaultAndFind(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "provider.json")
-	t.Setenv("NIQ_PROVIDER_CONFIG", path)
-
 	cfg := &Config{
 		Providers: []Entry{
 			{Name: "deepseek-responses", Type: "openai-responses", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash"},
 			{Name: "deepseek-claude", Type: "claude", BaseURL: "https://api.deepseek.com/anthropic", Model: "deepseek-v4-flash"},
 		},
-	}
-	if err := Write(cfg); err != nil {
-		t.Fatalf("Write: %v", err)
 	}
 
 	def, ok := Default(cfg)
@@ -35,23 +24,18 @@ func TestProviderConfigDefaultAndFind(t *testing.T) {
 	if !ok || claude.Type != "claude" {
 		t.Fatalf("Find = %+v, %v", claude, ok)
 	}
-}
-
-func TestProviderConfigMissingFile(t *testing.T) {
-	t.Setenv("NIQ_PROVIDER_CONFIG", filepath.Join(t.TempDir(), "missing.json"))
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if _, ok := Default(cfg); ok {
-		t.Fatal("Default should be false when file is missing")
+	if _, ok := Find(cfg, "missing"); ok {
+		t.Fatal("Find returned a provider that is not configured")
 	}
 }
 
-func TestProviderConfigActiveFallsBackToFirst(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "provider.json")
-	t.Setenv("NIQ_PROVIDER_CONFIG", path)
+func TestProviderConfigEmptyAndStaleActive(t *testing.T) {
+	if _, ok := Default(&Config{}); ok {
+		t.Fatal("an empty config has no default provider")
+	}
+	if _, ok := Default(nil); ok {
+		t.Fatal("a nil config has no default provider")
+	}
 
 	cfg := &Config{
 		Active: "stale",
@@ -60,29 +44,23 @@ func TestProviderConfigActiveFallsBackToFirst(t *testing.T) {
 			{Name: "second", Type: "claude"},
 		},
 	}
-	if err := Write(cfg); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-
 	def, ok := Default(cfg)
 	if !ok || def.Name != "first" {
-		t.Fatalf("Default = %+v, %v", def, ok)
+		t.Fatalf("Default = %+v, %v; a stale active falls back to the first", def, ok)
 	}
 }
 
-func TestProviderConfigPathOverride(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "custom-provider.json")
-	t.Setenv("NIQ_PROVIDER_CONFIG", path)
-	if got := Path(); got != path {
-		t.Fatalf("Path() = %q, want %q", got, path)
+// TestConfigured verifies the gate: the example skeleton (empty api_key) does
+// not count, one provider with a key does.
+func TestConfigured(t *testing.T) {
+	if Configured(&Config{}) {
+		t.Fatal("empty config is not configured")
 	}
-
-	_ = os.Unsetenv("NIQ_PROVIDER_CONFIG")
-	_ = os.Unsetenv(home.Env)
-	userHome, _ := os.UserHomeDir()
-	want := filepath.Join(userHome, ".niq", "common", "providers", "provider.json")
-	if got := Path(); got != want {
-		t.Fatalf("Path() = %q, want %q", got, want)
+	if Configured(&Config{Providers: []Entry{{Name: "example", Type: "deepseek"}}}) {
+		t.Fatal("a provider without an api_key is not configured")
+	}
+	if !Configured(&Config{Providers: []Entry{{Name: "real", Type: "deepseek", APIKey: "sk-x"}}}) {
+		t.Fatal("a provider with an api_key is configured")
 	}
 }
 
@@ -106,55 +84,6 @@ func TestExampleTemplate(t *testing.T) {
 	}
 	if len(p.Models) != 1 || p.Models[0].Name != "deepseek-flash" || p.Models[0].ContextWindow != 1024000 {
 		t.Fatalf("models = %+v, want deepseek-flash with a 1024000 context window", p.Models)
-	}
-}
-
-// TestEnsureExampleAndConfigured verifies the example skeleton is seeded only
-// when missing (never overwriting a user config) and that Configured stays
-// false for the empty example but true once a provider has an api_key.
-func configuredNow(t *testing.T) bool {
-	t.Helper()
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	return Configured(cfg)
-}
-
-func TestEnsureExampleAndConfigured(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "provider.json")
-	t.Setenv("NIQ_PROVIDER_CONFIG", path)
-
-	if configuredNow(t) {
-		t.Fatal("Configured should be false before EnsureExample")
-	}
-	if err := EnsureExample(); err != nil {
-		t.Fatalf("EnsureExample: %v", err)
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("example file missing: %v", err)
-	}
-	if !strings.Contains(string(raw), "api_key") {
-		t.Fatalf("example file lacks provider skeleton: %s", raw)
-	}
-	if configuredNow(t) {
-		t.Fatal("Configured should be false for the empty example")
-	}
-
-	// EnsureExample must not overwrite an existing config.
-	if err := Write(&Config{Providers: []Entry{{Name: "real", Type: "deepseek", APIKey: "sk-x"}}}); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if err := EnsureExample(); err != nil {
-		t.Fatalf("EnsureExample on existing: %v", err)
-	}
-	if !configuredNow(t) {
-		t.Fatal("Configured should be true with a real api_key")
-	}
-	raw2, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw2), "sk-x") {
-		t.Fatalf("EnsureExample clobbered user config: %s", raw2)
 	}
 }
 

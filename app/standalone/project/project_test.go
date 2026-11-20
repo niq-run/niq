@@ -8,44 +8,43 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/niq-run/niq/app/standalone/home"
-	"github.com/niq-run/niq/app/standalone/store"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
+	"github.com/niq-run/niq/app/standalone/store"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 )
 
 // loadWorkers / loadArchived are the project-scoped shortcuts the tests read.
-func loadWorkers(id string) (*store.WorkerSet, error) { return store.LoadWorkers(ProjectDir(id)) }
+func loadWorkers(id string) (*store.WorkerSet, error) { return store.LoadWorkers(store.ProjectDir(id)) }
 func loadArchived(id string) (*store.WorkerSet, error) {
-	return store.LoadArchived(ProjectDir(id))
+	return store.LoadArchived(store.ProjectDir(id))
 }
-func workersPath(id string) string  { return store.WorkersPath(ProjectDir(id)) }
-func archivedPath(id string) string { return store.ArchivedPath(ProjectDir(id)) }
+func workersPath(id string) string  { return store.WorkersPath(store.ProjectDir(id)) }
+func archivedPath(id string) string { return store.ArchivedPath(store.ProjectDir(id)) }
 func setArchived(id, workerID string, archived bool) error {
-	return store.SetArchived(ProjectDir(id), workerID, archived)
+	return store.SetArchived(store.ProjectDir(id), workerID, archived)
 }
 
 func setupProjectsRoot(t *testing.T) string {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
-	_ = os.Unsetenv(home.Env)
+	_ = os.Unsetenv(store.Env)
 	return filepath.Join(tmpHome, ".niq", "projects")
 }
 
 func TestProjectsRootHonorsNIQHome(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
-	t.Setenv(home.Env, filepath.Join(t.TempDir(), "custom-root"))
+	t.Setenv(store.Env, filepath.Join(t.TempDir(), "custom-root"))
 
-	projects := ProjectsRoot()
+	projects := store.ProjectsRoot()
 	if _, err := CreateProject("beta", "", fakeTemplate()); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
 	if _, err := os.Stat(projects); err != nil {
 		t.Fatalf("ProjectsRoot not created under NIQ_HOME: %v", err)
 	}
-	if _, err := os.Stat(ProjectPath("beta")); err != nil {
+	if _, err := os.Stat(store.ProjectPath("beta")); err != nil {
 		t.Fatalf("project.json missing under NIQ_HOME: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tmpHome, ".niq")); !os.IsNotExist(err) {
@@ -64,11 +63,11 @@ func fakeTemplate() *TemplateConfig {
 
 func TestCreateLoadListProject(t *testing.T) {
 	setupProjectsRoot(t)
-	root := ProjectsRoot()
+	root := store.ProjectsRoot()
 	if _, err := CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	if _, err := os.Stat(ProjectPath("alpha")); err != nil {
+	if _, err := os.Stat(store.ProjectPath("alpha")); err != nil {
 		t.Fatalf("project.json missing: %v", err)
 	}
 	if _, err := os.Stat(workersPath("alpha")); err != nil {
@@ -99,7 +98,7 @@ func TestCreateLoadListProject(t *testing.T) {
 	if err != nil || len(projects) != 1 || projects[0].ID != "alpha" {
 		t.Fatalf("ListProjects = %+v (%v)", projects, err)
 	}
-	if got := ProjectsRoot(); got != root {
+	if got := store.ProjectsRoot(); got != root {
 		t.Fatalf("ProjectsRoot = %q, want %q", got, root)
 	}
 }
@@ -139,7 +138,7 @@ func TestArchiveMovesDeclaration(t *testing.T) {
 	if err := setArchived("beta", "niq", true); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := store.ArchivedIDs(ProjectDir("beta")); err != nil || len(got) != 1 || got[0] != "niq" {
+	if got, err := store.ArchivedIDs(store.ProjectDir("beta")); err != nil || len(got) != 1 || got[0] != "niq" {
 		t.Fatalf("ArchivedWorkerIDs() = %+v, %v", got, err)
 	}
 	active, _ := loadWorkers("beta")
@@ -153,7 +152,7 @@ func TestArchiveMovesDeclaration(t *testing.T) {
 	if err := setArchived("beta", "niq", false); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := store.ArchivedIDs(ProjectDir("beta")); err != nil || len(got) != 0 {
+	if got, err := store.ArchivedIDs(store.ProjectDir("beta")); err != nil || len(got) != 0 {
 		t.Fatalf("ArchivedWorkerIDs() = %+v, %v, want empty", got, err)
 	}
 	restored, _ := loadWorkers("beta")
@@ -230,10 +229,10 @@ func TestListProjectsEmpty(t *testing.T) {
 }
 
 func TestSanitizeID(t *testing.T) {
-	if got := sanitizeID("my proj/1"); got != "my_proj_1" {
+	if got := store.SanitizeID("my proj/1"); got != "my_proj_1" {
 		t.Fatalf("sanitize = %q", got)
 	}
-	if got := sanitizeID("ok-id_1.x"); got != "ok-id_1.x" {
+	if got := store.SanitizeID("ok-id_1.x"); got != "ok-id_1.x" {
 		t.Fatalf("sanitize = %q", got)
 	}
 }
@@ -251,7 +250,7 @@ func TestLinkProjectExisting(t *testing.T) {
 	if err != nil || p.ID != "alpha" {
 		t.Fatalf("LinkProject = %+v (%v)", p, err)
 	}
-	link := ProjectDir("alpha")
+	link := store.ProjectDir("alpha")
 	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("expected symlink at %s (%v)", link, err)
 	}
@@ -274,7 +273,7 @@ func TestLinkProjectCreatesProjectJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LinkProject: %v", err)
 	}
-	base := sanitizeID(filepath.Base(ext))
+	base := store.SanitizeID(filepath.Base(ext))
 	if p.ID != base {
 		t.Fatalf("linked id = %q, want %q", p.ID, base)
 	}

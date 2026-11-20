@@ -1,5 +1,6 @@
-// Package provider loads LLM provider configuration from the niq config root
-// (see app/standalone/home) — by default ~/.niq/common/providers/provider.json.
+// Package provider owns LLM provider configuration: the entry shape, model
+// resolution, and turning an entry into an llm.LLMProvider. Reading and writing
+// provider.json belongs to store; this package only handles values.
 //
 // The file is optional. When present, the first provider is the default unless
 // the active field names a provider explicitly:
@@ -31,11 +32,8 @@ package provider
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
-	"path/filepath"
 
-	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/core/impl/provider/anthropic"
 	"github.com/niq-run/niq/core/impl/provider/openai"
 	"github.com/niq-run/niq/core/impl/provider/openairesponses"
@@ -178,40 +176,11 @@ type Config struct {
 // never decides where the file lives; the standalone form supplies its store.
 type Loader func() (*Config, error)
 
-// Path returns the provider config path. NIQ_PROVIDER_CONFIG overrides the
-// location wholesale; otherwise it derives from the niq config root:
-// <root>/common/providers/provider.json (default root ~/.niq).
-func Path() string {
-	if p := os.Getenv("NIQ_PROVIDER_CONFIG"); p != "" {
-		return p
-	}
-	return filepath.Join(home.Root(), "common", "providers", "provider.json")
-}
-
-// Load reads the provider config. A missing file is not an error and returns
-// an empty config.
-func Load() (*Config, error) {
-	path := Path()
-	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return &Config{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("provider: read %s: %w", path, err)
-	}
-
-	var cfg Config
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("provider: parse %s: %w", path, err)
-	}
-	return &cfg, nil
-}
-
 // exampleJSON is the built-in skeleton provider config: the default template a
-// user starts from, both as the file EnsureExample seeds and as the config the
-// control plane's providers panel shows when no provider.json exists yet. The
-// api_key is intentionally empty: the user fills it in before the project
-// starts.
+// user starts from, both as the file store.EnsureProviderExample seeds and as
+// the config the control plane's providers panel shows when no provider.json
+// exists yet. The api_key is intentionally empty: the user fills it in before
+// the project starts.
 const exampleJSON = `{
   "active": "deepseek",
   "providers": [
@@ -232,6 +201,10 @@ const exampleJSON = `{
 }
 `
 
+// ExampleJSON returns the built-in skeleton exactly as seeded on disk. It
+// keeps api_key present but empty, so the file shows where to fill it in.
+func ExampleJSON() string { return exampleJSON }
+
 // Example returns the built-in skeleton config (see exampleJSON). It is the
 // default template offered to a user with no provider.json yet. The caller owns
 // the returned value and may edit it freely.
@@ -242,23 +215,6 @@ func Example() *Config {
 		panic("provider: bad example config: " + err.Error())
 	}
 	return &cfg
-}
-
-// EnsureExample writes the example provider config to Path() when the file is
-// missing. It never overwrites an existing file: once a config exists it is
-// user-maintained.
-func EnsureExample() error {
-	path := Path()
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("provider: mkdir: %w", err)
-	}
-	if err := os.WriteFile(path, []byte(exampleJSON), 0644); err != nil {
-		return fmt.Errorf("provider: write example %s: %w", path, err)
-	}
-	return nil
 }
 
 // Configured reports whether a usable provider is configured: at least one
@@ -290,23 +246,6 @@ func Default(cfg *Config) (Entry, bool) {
 // Find returns a provider by name.
 func Find(cfg *Config, name string) (Entry, bool) {
 	return findByName(cfg, name)
-}
-
-// Write persists a provider config.
-func Write(cfg *Config) error {
-	path := Path()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("provider: mkdir: %w", err)
-	}
-	raw, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("provider: marshal: %w", err)
-	}
-	raw = append(raw, '\n')
-	if err := os.WriteFile(path, raw, 0644); err != nil {
-		return fmt.Errorf("provider: write %s: %w", path, err)
-	}
-	return nil
 }
 
 // Build constructs an llm.LLMProvider from a provider Entry. The model used is

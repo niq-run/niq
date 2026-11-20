@@ -89,7 +89,7 @@ func TestStateStorePersistsAndRecovers(t *testing.T) {
 		}
 		cp := projworker.New(projworker.Config{
 			ProjectID:  "p",
-			Manifests:  store.NewManifest(ProjectDir("p")),
+			Manifests:  store.NewManifest(store.ProjectDir("p")),
 			StateStore: stateStore,
 			Registry:   registry,
 			Bus:        busctl.New(ids, registry),
@@ -147,7 +147,7 @@ func TestProjectManifestStore(t *testing.T) {
 	if _, err := CreateProject("p", "", nil); err != nil {
 		t.Fatalf("CreateProject: %v", err)
 	}
-	manifests := store.NewManifest(ProjectDir("p"))
+	manifests := store.NewManifest(store.ProjectDir("p"))
 	m := projworker.Manifest{Definition: projworker.Definition{ID: "w", Type: "timer"}}
 	if err := manifests.Add(&m); err != nil {
 		t.Fatalf("Add: %v", err)

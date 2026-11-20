@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/niq-run/niq/app/standalone/project"
+	"github.com/niq-run/niq/app/standalone/store"
 )
 
 type statusSnapshot struct {
@@ -87,7 +88,7 @@ func takeStatus() statusSnapshot {
 			Running: projectRunning(p),
 			WebUI:   p.Ports.WebUI,
 			Bus:     p.Ports.Bus,
-			Log:     project.LogPath(p.ID),
+			Log:     store.LogPath(p.ID),
 		}
 		switch {
 		case controlURL != "" && p.Ports.WebUI != 0:

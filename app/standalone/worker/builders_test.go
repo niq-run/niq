@@ -210,7 +210,7 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 		Listener:     listener,
 		Engine:       engine,
 		Manager:      mgr,
-		ProviderLoad: providerpkg.Load,
+		ProviderLoad: func() (*providerpkg.Config, error) { return &providerpkg.Config{}, nil },
 	}
 	registerBuilders(bc, types)
 	return &testEngine{types: types, bc: bc, mgr: mgr}
@@ -282,15 +282,10 @@ func workerStatus(mgr *workerlife.Manager, id string) coreworker.WorkerInfo {
 // fallback any more, so a typo fails the spawn with a clear message instead of
 // silently building a provider nobody configured.
 func TestReasonFamilyRejectsUnknownProvider(t *testing.T) {
-	cfgPath := filepath.Join(t.TempDir(), "provider.json")
-	t.Setenv("NIQ_PROVIDER_CONFIG", cfgPath)
-	if err := providerpkg.Write(&providerpkg.Config{Providers: []providerpkg.Entry{
+	providers := &providerpkg.Config{Providers: []providerpkg.Entry{
 		{Name: "known", Type: "deepseek", APIKey: "k", Model: "m1"},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-
-	bc := BuildContext{ProviderLoad: providerpkg.Load}
+	}}
+	bc := BuildContext{ProviderLoad: func() (*providerpkg.Config, error) { return providers, nil }}
 	_, err := resolveReasonFamily(bc, coreworker.WorkerConfig{
 		ID:     "r1",
 		Params: map[string]any{"provider": "typo-name", "model": "m1"},

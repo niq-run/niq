@@ -8,8 +8,8 @@
 //	root_secret             bus token signing secret
 //	workers/<id>/           runtime state (state.json / stdout.log / process state)
 //
-// The concrete store implementations live in ./store; this package owns the
-// project's identity (id → directory) and the creation/link lifecycle.
+// The concrete store implementations live in ../store; this package owns the
+// project's lifecycle (create / list / link) and the runtime entry.
 package project
 
 import (
@@ -20,15 +20,14 @@ import (
 	"sort"
 	"time"
 
-	"github.com/niq-run/niq/app/standalone/home"
-	"github.com/niq-run/niq/app/standalone/store/migrate"
-	"github.com/niq-run/niq/app/standalone/store"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
+	"github.com/niq-run/niq/app/standalone/store"
+	"github.com/niq-run/niq/app/standalone/store/migrate"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
 // SchemaVersion is the on-disk format this package reads and writes. Legacy
-// projects are converted once by app/project/migrate before they reach here.
+// projects are converted once by store/migrate before they reach here.
 const SchemaVersion = store.SchemaVersion
 
 // ProjectPorts and Project are the on-disk metadata shape; the IO lives in
@@ -38,25 +37,6 @@ type (
 	Project      = store.Project
 )
 
-// ProjectsRoot returns <niq root>/projects (created lazily on write).
-func ProjectsRoot() string { return filepath.Join(home.Root(), "projects") }
-
-// ProjectDir returns the directory for a project id.
-func ProjectDir(id string) string { return filepath.Join(ProjectsRoot(), sanitizeID(id)) }
-
-// ProjectPath returns the project.json path for a project id.
-func ProjectPath(id string) string { return filepath.Join(ProjectDir(id), "project.json") }
-
-// RootSecretPath returns the project's token-signing secret path.
-func RootSecretPath(id string) string { return filepath.Join(ProjectDir(id), "root_secret") }
-
-// LogPath is where a project process writes its log. The date in the filename
-// gives free daily rotation: a new day starts a new file, same-day restarts
-// append.
-func LogPath(id string) string {
-	return filepath.Join(ProjectDir(id), "logs", "niq-"+time.Now().Format("2006-01-02")+".log")
-}
-
 // CreateProject creates a project directory, its metadata file and its active
 // worker file, seeding the template's declarations. It fails if the project id
 // already exists.
@@ -64,10 +44,10 @@ func CreateProject(id, templateName string, template *TemplateConfig) (*Project,
 	if id == "" {
 		return nil, fmt.Errorf("project: id is required")
 	}
-	if _, err := os.Lstat(ProjectPath(id)); err == nil {
+	if _, err := os.Lstat(store.ProjectPath(id)); err == nil {
 		return nil, fmt.Errorf("project: %q already exists", id)
 	}
-	if err := os.MkdirAll(ProjectDir(id), 0755); err != nil {
+	if err := os.MkdirAll(store.ProjectDir(id), 0755); err != nil {
 		return nil, fmt.Errorf("project: mkdir: %w", err)
 	}
 	p := &Project{SchemaVersion: SchemaVersion, ID: id, CreatedAt: time.Now().Format(time.RFC3339)}
@@ -83,7 +63,7 @@ func CreateProject(id, templateName string, template *TemplateConfig) (*Project,
 			set.Workers = append(set.Workers, projworker.Instantiate(d, id))
 		}
 	}
-	if err := store.SaveWorkers(ProjectDir(id), set); err != nil {
+	if err := store.SaveWorkers(store.ProjectDir(id), set); err != nil {
 		return nil, err
 	}
 	if templateName != "" {
@@ -96,7 +76,7 @@ func CreateProject(id, templateName string, template *TemplateConfig) (*Project,
 
 // LoadProject loads a project's metadata from project.json.
 func LoadProject(id string) (*Project, error) {
-	p, err := store.LoadProject(ProjectDir(id))
+	p, err := store.LoadProject(store.ProjectDir(id))
 	if err != nil {
 		return nil, fmt.Errorf("project: %q: %w", id, err)
 	}
@@ -105,12 +85,12 @@ func LoadProject(id string) (*Project, error) {
 
 // SaveProject writes a project's metadata back to project.json.
 func SaveProject(p *Project) error {
-	return store.SaveProject(ProjectDir(p.ID), p)
+	return store.SaveProject(store.ProjectDir(p.ID), p)
 }
 
 // ListProjects returns every project's metadata, sorted by id.
 func ListProjects() ([]Project, error) {
-	entries, err := os.ReadDir(ProjectsRoot())
+	entries, err := os.ReadDir(store.ProjectsRoot())
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -119,7 +99,7 @@ func ListProjects() ([]Project, error) {
 	}
 	var out []Project
 	for _, de := range entries {
-		fi, err := os.Stat(filepath.Join(ProjectsRoot(), de.Name()))
+		fi, err := os.Stat(filepath.Join(store.ProjectsRoot(), de.Name()))
 		if err != nil || !fi.IsDir() {
 			continue
 		}
@@ -151,18 +131,18 @@ func LinkProject(dir string) (*Project, error) {
 		return nil, fmt.Errorf("project: %q is not a directory", dir)
 	}
 
-	id := sanitizeID(filepath.Base(abs))
+	id := store.SanitizeID(filepath.Base(abs))
 	if raw, err := os.ReadFile(filepath.Join(abs, "project.json")); err == nil {
 		var p Project
 		if json.Unmarshal(raw, &p) == nil && p.ID != "" {
-			id = sanitizeID(p.ID)
+			id = store.SanitizeID(p.ID)
 		}
 	}
-	link := ProjectDir(id)
+	link := store.ProjectDir(id)
 	if _, err := os.Lstat(link); err == nil {
 		return nil, fmt.Errorf("project: %q already exists at %s", id, link)
 	}
-	if err := os.MkdirAll(ProjectsRoot(), 0755); err != nil {
+	if err := os.MkdirAll(store.ProjectsRoot(), 0755); err != nil {
 		return nil, fmt.Errorf("project: mkdir: %w", err)
 	}
 	if err := os.Symlink(filepath.Clean(abs), link); err != nil {
@@ -208,19 +188,4 @@ func ensureProjectJSON(dir, id string) error {
 		p.SchemaVersion = SchemaVersion
 	}
 	return store.SaveProject(dir, &p)
-}
-
-func sanitizeID(id string) string {
-	out := make([]rune, 0, len(id))
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			out = append(out, r)
-		case r == '-' || r == '_' || r == '.':
-			out = append(out, r)
-		default:
-			out = append(out, '_')
-		}
-	}
-	return string(out)
 }

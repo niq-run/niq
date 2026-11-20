@@ -16,12 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/project"
-	"github.com/niq-run/niq/app/standalone/provider"
 	"github.com/niq-run/niq/app/standalone/project/template"
-	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"github.com/niq-run/niq/app/standalone/shell/webui"
+	"github.com/niq-run/niq/app/standalone/store"
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
 func doGet(t *testing.T, url string) (int, string) {
@@ -41,7 +40,7 @@ func setupProjectsRoot(t *testing.T) {
 	// so tests never touch a real ~/.niq/projects. Ensure a stray NIQ_HOME
 	// can't override that relocation.
 	t.Setenv("HOME", t.TempDir())
-	_ = os.Unsetenv(home.Env)
+	_ = os.Unsetenv(store.Env)
 }
 
 // fakeTemplate returns a small TemplateConfig usable as a project template.
@@ -471,7 +470,7 @@ func TestWaitProjectStartReportsExit(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "exited during startup") {
 		t.Fatalf("err = %v, want an exit report", err)
 	}
-	if !strings.Contains(err.Error(), project.LogPath("ghost")) {
+	if !strings.Contains(err.Error(), store.LogPath("ghost")) {
 		t.Fatalf("err should point at the project log: %v", err)
 	}
 }
@@ -519,7 +518,7 @@ func TestControlProviders(t *testing.T) {
 	if !strings.Contains(body, `"name":"deepseek"`) || strings.Contains(body, `"api_key":"sk`) {
 		t.Fatalf("missing-file body should be the empty-key deepseek template: %s", body)
 	}
-	if _, err := os.Stat(provider.Path()); !os.IsNotExist(err) {
+	if _, err := os.Stat(store.ProviderConfigPath()); !os.IsNotExist(err) {
 		t.Fatalf("GET must not write provider.json (stat err = %v)", err)
 	}
 

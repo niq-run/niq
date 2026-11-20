@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/niq-run/niq/app/standalone/provider"
+	"github.com/niq-run/niq/app/standalone/store"
 )
 
 // handleGetProviders returns the provider config verbatim (including api_key
@@ -21,12 +22,12 @@ import (
 // deepseek template rather than a blank page. Nothing is written: the file
 // appears only when the user saves.
 func (c *Control) handleGetProviders(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-	if _, err := os.Stat(provider.Path()); os.IsNotExist(err) {
+	if _, err := os.Stat(store.ProviderConfigPath()); os.IsNotExist(err) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(provider.Example())
 		return
 	}
-	cfg, err := provider.Load()
+	cfg, err := store.LoadProvider()
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 500)
 		return
@@ -62,7 +63,7 @@ func (c *Control) handleUpdateProviders(w stdhttp.ResponseWriter, r *stdhttp.Req
 		}
 		seen[p.Name] = true
 	}
-	if err := provider.Write(&cfg); err != nil {
+	if err := store.SaveProvider(&cfg); err != nil {
 		stdhttp.Error(w, err.Error(), 500)
 		return
 	}

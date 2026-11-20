@@ -61,13 +61,13 @@ const (
 
 // BuildContext holds shared dependencies that worker builders need.
 type BuildContext struct {
-	Registry     corebus.IdentityRegistry
-	Bus          corebus.Control
-	Listener     *inprocess.InProcListener
-	Engine       *eventbus.Engine
-	Manager      *workerlife.Manager
-	EventLog     *eventbusapi.EventLog
-	EventStore   event.EventStore
+	Registry   corebus.IdentityRegistry
+	Bus        corebus.Control
+	Listener   *inprocess.InProcListener
+	Engine     *eventbus.Engine
+	Manager    *workerlife.Manager
+	EventLog   *eventbusapi.EventLog
+	EventStore event.EventStore
 	// ProviderLoad reads provider.json. It is injected (store.LoadProvider in
 	// production) so builders never resolve the config path or read the file.
 	ProviderLoad providerpkg.Loader

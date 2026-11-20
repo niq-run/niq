@@ -15,10 +15,10 @@ import (
 )
 
 // EnsureLLMConfigured gates project startup on an LLM provider being configured
-// when the declared worker set includes a reason worker. On a missing or
-// empty config it seeds the example provider.json and returns an actionable
-// error, so the project exits before any worker starts.
-func EnsureLLMConfigured(cfgs []worker.WorkerConfig) error {
+// when the declared worker set includes a reason worker. It returns an
+// actionable error naming the config file, so the project exits before any
+// worker starts. Seeding the example file is the caller's job (store owns IO).
+func EnsureLLMConfigured(cfg *Config, cfgs []worker.WorkerConfig, path string) error {
 	needsLLM := false
 	for _, cfg := range cfgs {
 		// Reason-family workers (reason / coding) both need an LLM.
@@ -30,17 +30,10 @@ func EnsureLLMConfigured(cfgs []worker.WorkerConfig) error {
 	if !needsLLM {
 		return nil
 	}
-	cfg, err := Load()
-	if err != nil {
-		return fmt.Errorf("provider: %w", err)
-	}
 	if Configured(cfg) {
 		return nil
 	}
-	if err := EnsureExample(); err != nil {
-		return fmt.Errorf("provider: seed provider example: %w", err)
-	}
-	return fmt.Errorf("no LLM provider configured: edit %s and re-run", Path())
+	return fmt.Errorf("no LLM provider configured: edit %s and re-run", path)
 }
 
 // providerSources exposes every provider configured in provider.json and
