@@ -22,7 +22,7 @@ niq 是**一个总线内核 + 两种部署形态**。standalone 形态由五部�
 | **领域（domain）** | 系统知道什么、能做什么 | 与"谁来触发"无关；launcher 与 project 是两个领域 |
 | **形态（form）** | 这些能力由谁提供、怎么落地 | standalone 用本机进程；cluster 用调度器与远程节点 |
 | **外壳（shell）** | 人怎么持续地操作这些能力 | 有界面、有会话；webui 与 tui 并列 |
-| **入口（entry）** | 谁把 shell 或一条命令启动起来 | 唯一 `main`；只做 argv 路由与进程托管，不做界面、不实现能力 |
+| **入口（entry）** | 谁把 shell 或一条命令启动起来 | 唯一 `main`（分派一次）+ `cli`（命令行与 webui 守护）；不做界面、不实现能力 |
 
 ---
 
@@ -39,7 +39,8 @@ standalone 有**四类进程**，不是"一个主进程 + 子模块"：
 
 关键事实：
 
-- **一个二进制，四种身份**。`niq`（入口）、`niq webui`（浏览器 shell）、`niq project`（终端 shell）、以及 launcher 以私有 verb 拉起的 project 进程是同一个可执行文件。入口与 shell 之间靠 `exec` 自己切换，和 `docker` 拉起容器进程同构。
+- **一个二进制，两个顶层身份，两层分派**。`main` 只看一件事：argv 是不是 launcher 的私有 verb。是 → 子进程入口（`launcher.ChildMain` → `project.RunProject`）；不是 → `cli`，再由它路由到 webui / tui / 一次性命令。所以运行形态有四种（入口、webui、tui、project 子进程），但 `main` 只分一次，剩下的分派在 `cli` 里。
+- **`main` 是分派器，不是实现者**。两个身份的代码都在别处：前端在 `cli` + `shell/*`，子进程入口在 `launcher`（再调 `project`）。`main` 只有十几行，它拥有的唯一知识是"这个 OS 进程这次是谁"。
 - **launcher 不是守护进程**。项目实例由端口识别，不由父子关系识别；`niq project stop` 在 shell 没跑时同样有效。shell 重启不影响任何运行中的项目。
 - **人类身份在项目里**。interface worker（`webui` 这个总线身份）运行在 project 进程内，它的 backend 是项目 API。浏览器和未来的 TUI 都是这个 API 的客户端，**不持有总线凭证**（见 §6）。
 - **`niq` 是入口，不是 shell**。它只做路由与托管：`niq webui` 起浏览器 shell；`niq project` 进入终端 shell（无子命令交互，带子命令一次性）。资源管理（模板/provider）与项目视图都不在 cli 里——前者只在 webui，后者在 webui 与未来的 tui。
