@@ -137,6 +137,30 @@ shell/webui      → launcher, store（读端口）, 前端产物
    grep -rn 'standalone/home\|project/provider\|standalone/store' app/standalone/worker  # 必须为空
    ```
 
+### provider 与 store 的配合（依赖倒置）
+
+`provider.json` 的 **IO 与路径**归 `store`，**语义**归 `provider`：
+
+```
+store/provider.go    ProviderPath / LoadProvider / SaveProvider / EnsureProviderExample
+                     NIQ_PROVIDER_CONFIG 覆盖与 <root>/common/providers/provider.json 都在这里
+        │  *provider.Config（值）
+        ▼
+provider（纯语义，不 import store）
+        Find(cfg, name) / Default(cfg) / Build(entry) / NewProviderSources(cfg, ...)
+        Loader func() (*Config, error)   ← 函数类型定义在 provider，由装配层用 store 实现
+        ▼  由装配层注入 BuildContext
+worker   ctx.Providers.Find / ctx.ProviderSources
+```
+
+统一规则：**`store` import 领域值类型（`Manifest`、`provider.Config`）做序列化；领域包不 import `store`**，只接收 store 读出来的值。这样 `store → worker(Manifest)` 与 `worker → provider` 不会成环，`home` 也就能真正并入 `store`。
+
+调用方的变化：
+
+- shell 的 `/api/providers`：`store.LoadProvider` 读、`store.SaveProvider` 写，`provider` 只做校验与 Build。
+- 启动门控：`provider.EnsureLLMConfigured(cfg, workers)`，`cfg` 由 store 读出。
+- worker builder：删掉 `providerpkg.Find` / `NewProviderSources` 的全局读取，改用注入的 handles；运行时切换 provider 时，通过注入的 `Loader` 重新读盘（今天的 lazy `Load()` 行为不丢）。
+
 ---
 
 ## 5. 请求路径（含未来 TUI）
