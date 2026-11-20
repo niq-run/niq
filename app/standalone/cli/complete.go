@@ -89,22 +89,15 @@ complete -F _niq niq
 const zshCompletion = `#compdef niq
 # niq completion for zsh — niq completion zsh > "${fpath[1]}/_niq"
 
-_niq_projects() {
-	local -a ids
-	ids=(${(f)"$(niq status --ids 2>/dev/null)"})
-	_describe -t projects 'project' ids
-}
-
 _niq() {
 	local -a commands
 	commands=(
-		'start:start the control plane in the background'
-		'stop:stop the control plane'
-		'restart:restart the control plane'
-		'status:show the control plane and its projects'
+		'w:open the browser UI, starting the gateway if needed'
+		'i:open the interactive terminal UI'
+		'stop:stop the gateway'
+		'restart:restart the gateway'
+		'status:show the gateway and its projects'
 		'update:install the latest release with npm'
-		'project:pick a project, or create/run one'
-		'p:same as niq project'
 		'completion:print a completion script'
 		'help:print usage'
 		'version:print the version'
@@ -115,35 +108,15 @@ _niq() {
 	fi
 
 	case $words[2] in
-	project)
-		if (( CURRENT == 3 )); then
-			local -a sub
-			sub=(
-				'list:pick or list projects'
-				'create:create a project from a template'
-				'run:run an instance in this terminal'
-			)
-			_describe -t commands 'niq project' sub
-			return
-		fi
-		case $words[3] in
-		run)
-			if [[ $PREFIX == -* ]]; then
-				_values 'option' '--bus[event bus address]' '--webui[WebUI address]' '--webui-auth[basic auth user:pass]'
-			else
-				_niq_projects
-			fi
-			;;
-		list)
-			_values 'option' '--ids[print project ids only]'
-			;;
-		create)
-			_values 'option' '--template[template name]'
-			;;
-		esac
-		;;
 	stop|restart)
 		_values 'option' '-p[also act on the running projects]' '--projects[also act on the running projects]'
+		;;
+	status)
+		_values 'option' '--json[machine-readable snapshot]' '--ids[print project ids only]'
+		;;
+	w)
+		_values 'option' '--addr[listen address]' '--auth[basic auth user:pass]' '--foreground[run attached to this terminal]'
+		;;
 		;;
 	completion|complete)
 		_values 'shell' bash zsh fish
@@ -160,13 +133,12 @@ _niq "$@"
 const fishCompletion = `# niq completion for fish — niq completion fish | source
 complete -c niq -f
 
-complete -c niq -n '__fish_use_subcommand' -a start -d 'start the control plane in the background'
-complete -c niq -n '__fish_use_subcommand' -a stop -d 'stop the control plane'
-complete -c niq -n '__fish_use_subcommand' -a restart -d 'restart the control plane'
-complete -c niq -n '__fish_use_subcommand' -a status -d 'show the control plane and its projects'
+complete -c niq -n '__fish_use_subcommand' -a w -d 'open the browser UI, starting the gateway if needed'
+complete -c niq -n '__fish_use_subcommand' -a i -d 'open the interactive terminal UI'
+complete -c niq -n '__fish_use_subcommand' -a stop -d 'stop the gateway'
+complete -c niq -n '__fish_use_subcommand' -a restart -d 'restart the gateway'
+complete -c niq -n '__fish_use_subcommand' -a status -d 'show the gateway and its projects'
 complete -c niq -n '__fish_use_subcommand' -a update -d 'install the latest release with npm'
-complete -c niq -n '__fish_use_subcommand' -a project -d 'pick a project, or create/run one'
-complete -c niq -n '__fish_use_subcommand' -a p -d 'same as niq project'
 complete -c niq -n '__fish_use_subcommand' -a completion -d 'print a completion script'
 complete -c niq -n '__fish_use_subcommand' -a help -d 'print usage'
 complete -c niq -n '__fish_use_subcommand' -a version -d 'print the version'

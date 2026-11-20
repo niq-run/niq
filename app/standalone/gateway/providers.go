@@ -1,4 +1,4 @@
-package webui
+package gateway
 
 // Provider config management: the control plane serves ~/.niq/common/providers/
 // provider.json (the same common layer as templates) so the WebUI can view and
@@ -21,7 +21,7 @@ import (
 // instead of an empty list, so the providers panel opens on an editable
 // deepseek template rather than a blank page. Nothing is written: the file
 // appears only when the user saves.
-func (c *Shell) handleGetProviders(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleGetProviders(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	if _, err := os.Stat(store.ProviderConfigPath()); os.IsNotExist(err) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(provider.Example())
@@ -40,7 +40,7 @@ func (c *Shell) handleGetProviders(w stdhttp.ResponseWriter, r *stdhttp.Request)
 // Validation is structural: every entry needs a name, and names must be
 // unique — the config's entries are referenced by name (the active field and
 // runtime provider switches).
-func (c *Shell) handleUpdateProviders(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleUpdateProviders(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 400)

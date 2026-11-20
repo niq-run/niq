@@ -1,7 +1,7 @@
 PREFIX ?= $(HOME)/.local/bin
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo 0.0.0-dev)
 BUILDTIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-WEBUI := app/standalone/shell/webui/assets
+WEBUI := app/ui/webui/assets
 # Every step announces itself and npm logs each fetch, so a slow or stuck build
 # says which stage and which host it is waiting on instead of looking frozen.
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
@@ -66,30 +66,30 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 
 GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
 
-# The CLI. It embeds whatever bundle is in app/standalone/shell/webui/assets/dist, so this does
+# The CLI. It embeds whatever bundle is in app/ui/webui/assets/dist, so this does
 # not rebuild the SPA — `make build webui` (or plain `make build`) is that step.
 niq:
 	@echo "go: building ./bin/niq…"
 	$(GO_BUILD)
 
-# The menu bar app is a thin front end: it runs `niq status --json` and the
-# per-project commands, so nothing here duplicates the CLI's logic. Built with
-# the system Swift compiler into a .app bundle (LSUIElement: no Dock icon),
-# plus ./bin/miq, the launcher that opens it.
+# The macOS distribution (app/publish/mac): a menu bar UI bundled with the niq
+# binary, so the .app is a complete instance — gateway, projects and UI — with
+# no terminal involved. Built with the system Swift compiler into a .app bundle
+# (LSUIElement: no Dock icon), plus ./bin/miq, the launcher that opens it.
 APP := dist/niq.app
 
 miq:
 	@echo "app: building $(APP) (swiftc)…"
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS" bin
-	swiftc -O -swift-version 5 -framework AppKit app/standalone/shell/menubar/main.swift \
+	swiftc -O -swift-version 5 -framework AppKit app/publish/mac/main.swift \
 		-o "$(APP)/Contents/MacOS/niq-menubar"
-	cp app/standalone/shell/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	cp app/publish/mac/Info.plist "$(APP)/Contents/Info.plist"
 	mkdir -p "$(APP)/Contents/Resources"
-	cp app/standalone/shell/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
+	cp app/publish/mac/AppIcon.icns "$(APP)/Contents/Resources/"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@echo "app: installing ./bin/miq (launcher)…"
-	cp app/standalone/shell/menubar/miq ./bin/miq
+	cp app/publish/mac/miq ./bin/miq
 	chmod +x ./bin/miq
 	@echo "app: built — run: ./bin/miq"
 
@@ -104,20 +104,20 @@ miq-universal:
 	rm -rf "$(APP)" build/niq-menubar-*
 	mkdir -p "$(APP)/Contents/MacOS" build bin
 	swiftc -O -swift-version 5 -target arm64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
-		app/standalone/shell/menubar/main.swift -o build/niq-menubar-arm64
+		app/publish/mac/main.swift -o build/niq-menubar-arm64
 	swiftc -O -swift-version 5 -target x86_64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
-		app/standalone/shell/menubar/main.swift -o build/niq-menubar-x86_64
+		app/publish/mac/main.swift -o build/niq-menubar-x86_64
 	lipo -create -output "$(APP)/Contents/MacOS/niq-menubar" build/niq-menubar-arm64 build/niq-menubar-x86_64
-	cp app/standalone/shell/menubar/Info.plist "$(APP)/Contents/Info.plist"
+	cp app/publish/mac/Info.plist "$(APP)/Contents/Info.plist"
 	mkdir -p "$(APP)/Contents/Resources"
-	cp app/standalone/shell/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
+	cp app/publish/mac/AppIcon.icns "$(APP)/Contents/Resources/"
 	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
 	@# miq is a shell script and has no architectures; only the bundle needs
 	@# signing. lipo invalidates the linker's ad-hoc signature, and an unsigned
 	@# arm64 binary will not run at all — re-sign the bundle.
 	codesign --force --sign - --timestamp=none "$(APP)"
 	@echo "app: installing ./bin/miq (launcher)…"
-	cp app/standalone/shell/menubar/miq ./bin/miq
+	cp app/publish/mac/miq ./bin/miq
 	chmod +x ./bin/miq
 	@echo "app: built (universal)"
 

@@ -1,5 +1,5 @@
 // `niq status --json` is the same snapshot the report draws, for callers that
-// render their own UI — the macOS menu bar app needs the control plane's state,
+// render their own UI — the macOS app needs the gateway's state,
 // the address that actually reaches it, and one entry per project with the
 // things that can be done to it.
 package cli
@@ -16,11 +16,11 @@ import (
 
 type statusSnapshot struct {
 	Version  string            `json:"version"`
-	Control  controlSnapshot   `json:"control"`
+	Gateway  gatewaySnapshot   `json:"gateway"`
 	Projects []projectSnapshot `json:"projects"`
 }
 
-type controlSnapshot struct {
+type gatewaySnapshot struct {
 	Running bool   `json:"running"`
 	PID     int    `json:"pid,omitempty"`
 	Addr    string `json:"addr,omitempty"` // as configured, e.g. ":9527"
@@ -43,7 +43,7 @@ func runStatus(args []string) error {
 	asJSON := fs.Bool("json", false, "Print the status as JSON")
 	asIDs := fs.Bool("ids", false, "Print project ids, one per line")
 	fs.Usage = func() {
-		fmt.Println(bold("niq status") + dim(" — the control plane and every project instance"))
+		fmt.Println(bold("niq status") + dim(" — the gateway and every project instance"))
 		fmt.Println()
 		fmt.Println(bold("  --json") + dim("  the same facts, machine-readable"))
 	}
@@ -67,39 +67,40 @@ func runStatus(args []string) error {
 	return nil
 }
 
-// takeStatus collects the snapshot. A stopped control plane is not an error:
+// takeStatus collects the snapshot. A stopped gateway is not an error:
 // the projects keep their ports and can be started from here.
 func takeStatus() statusSnapshot {
 	snap := statusSnapshot{
 		Version:  versionNumber(),
-		Control:  controlSnapshot{Log: shellLogPath()},
+		Gateway:  gatewaySnapshot{Log: shellLogPath()},
 		Projects: []projectSnapshot{}, // [] not null: the app decodes a list
 	}
-	controlURL := ""
+	gatewayURL := ""
 	if st, ok := readShellState(); ok && isRunning(st) {
-		controlURL = store.LocalhostURL(st.Bound)
-		snap.Control.Running = true
-		snap.Control.PID = st.PID
-		snap.Control.Addr = st.Addr
-		snap.Control.URL = controlURL
-		snap.Control.Started = st.Started
+		gatewayURL = store.LocalhostURL(st.Bound)
+		snap.Gateway.Running = true
+		snap.Gateway.PID = st.PID
+		snap.Gateway.Addr = st.Addr
+		snap.Gateway.URL = gatewayURL
+		snap.Gateway.Started = st.Started
 	}
 
-	projects, err := launcher.ListProjects()
+	views, err := launcher.List()
 	if err != nil {
 		return snap
 	}
-	for _, p := range projects {
+	for _, v := range views {
+		p := v.Project
 		ps := projectSnapshot{
 			ID:      p.ID,
-			Running: launcher.IsRunning(p),
+			Running: v.Running,
 			WebUI:   p.Ports.WebUI,
 			Bus:     p.Ports.Bus,
 			Log:     store.LogPath(p.ID),
 		}
 		switch {
-		case controlURL != "" && p.Ports.WebUI != 0:
-			ps.URL = strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/"
+		case gatewayURL != "" && p.Ports.WebUI != 0:
+			ps.URL = strings.TrimSuffix(gatewayURL, "/") + "/p/" + p.ID + "/"
 		case p.Ports.WebUI != 0:
 			ps.URL = store.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
 		}

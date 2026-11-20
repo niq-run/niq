@@ -21,9 +21,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/niq-run/niq/app/standalone/gateway"
 	"github.com/niq-run/niq/app/standalone/launcher"
-	"github.com/niq-run/niq/app/standalone/shell/tui"
 	"github.com/niq-run/niq/app/standalone/store"
+	"github.com/niq-run/niq/app/ui/tui"
 )
 
 // version is injected at build time via -ldflags:
@@ -37,6 +38,10 @@ var Version = "dev"
 //
 // Empty for a plain `go build`, in which case the version line omits it.
 var BuildTime = ""
+
+// UI is the mount table this distribution ships, set by standalone.Main before
+// Main runs. Empty means the binary serves no static UI (a headless build).
+var UI []gateway.UIMount
 
 func Main() {
 	tui.Version = Version
@@ -67,7 +72,7 @@ func Main() {
 	var err error
 	switch {
 	case len(os.Args) > 1 && os.Args[1] == "i":
-		err = tui.RunPicker()
+		err = runInteractive()
 	case len(os.Args) > 1 && os.Args[1] == "w":
 		err = runShell(os.Args[2:], true)
 	case len(os.Args) > 1 && os.Args[1] == "stop":
@@ -95,6 +100,28 @@ func Main() {
 // nothing is running, and reports on it (exactly what `niq status` prints) when
 // it is. Repeating the command is therefore how you check on the service, and
 // no flags means "the default address", never "a second instance".
+// runInteractive opens the terminal shell. Like every other face it needs the
+// gateway: the picker is a client, not a second control path.
+func runInteractive() error {
+	st, ok := readShellState()
+	if !ok || !isRunning(st) {
+		var err error
+		st, err = startBackground(defaultAddr, "")
+		if err != nil {
+			return err
+		}
+	}
+	if st == nil {
+		if again, ok := readShellState(); ok {
+			st = again
+		}
+	}
+	if st == nil {
+		return fmt.Errorf("the gateway did not report an address")
+	}
+	return tui.RunPicker(store.LocalhostURL(st.Bound))
+}
+
 func runDefault() error {
 	if st, ok := readShellState(); ok && isRunning(st) {
 		err := printStatus()

@@ -1,8 +1,8 @@
-// Project WebUI proxying: the control plane is the only port exposed to the
+// Project WebUI proxying: the gateway is the only port exposed to the
 // outside world, so a project's WebUI is reached through it at /p/<id>/ rather
 // than on the project's own (loopback-only) port. One origin for the whole
 // product also means one basic-auth prompt and no CORS.
-package webui
+package gateway
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/niq-run/niq/app/standalone/launcher"
+	"github.com/niq-run/niq/app/standalone/project"
 )
 
 // projectPrefix is where a project's WebUI is mounted on the control plane:
@@ -35,7 +35,7 @@ type proxyTargetKey struct{}
 // own WebUI. The upstream is taken from the request (see handleProjectProxy)
 // instead of being baked in, so a project that restarted on another port is
 // picked up immediately and a stopped one never hits a stale address.
-func (c *Shell) newProjectProxy() *httputil.ReverseProxy {
+func (c *Gateway) newProjectProxy() *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		// The project's /api/stream is SSE: flush every write so events reach
 		// the browser as they happen instead of sitting in a copy buffer.
@@ -59,7 +59,7 @@ func (c *Shell) newProjectProxy() *httputil.ReverseProxy {
 			if c.serveSPA(w, r, t.prefix) {
 				return
 			}
-			log.Printf("[control] proxy %s p=%s %s: %v", t.addr, t.id, r.URL.RequestURI(), err)
+			log.Printf("[gateway] proxy %s p=%s %s: %v", t.addr, t.id, r.URL.RequestURI(), err)
 			stdhttp.Error(w, fmt.Sprintf("project WebUI at %s is unreachable: %v", t.addr, err), stdhttp.StatusBadGateway)
 		},
 	}
@@ -77,8 +77,9 @@ func wantsHTML(r *stdhttp.Request) bool {
 // while the project's API calls keep failing, so the UI can say the project is
 // stopped and offer to start it. Returns false when the path is not a bundle
 // file (any API call), leaving the caller to answer with its own error.
-func (c *Shell) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix string) bool {
-	if c.assets == nil {
+func (c *Gateway) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix string) bool {
+	assets, ok := c.rootUI()
+	if !ok {
 		return false
 	}
 	rel := strings.TrimPrefix(r.URL.Path, prefix)
@@ -86,7 +87,7 @@ func (c *Shell) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix st
 	if rel == "" {
 		rel = "index.html"
 	}
-	if _, err := fs.Stat(c.assets, rel); err != nil {
+	if _, err := fs.Stat(assets, rel); err != nil {
 		// SPA client routes (/p/{id}/chat, ...) have no file of their own;
 		// a browser navigation gets index.html. Anything else (a missing
 		// asset, an API call) is not the SPA's to answer.
@@ -95,16 +96,16 @@ func (c *Shell) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix st
 		}
 		rel = "index.html"
 	}
-	stdhttp.ServeFileFS(w, r, c.assets, rel)
+	stdhttp.ServeFileFS(w, r, assets, rel)
 	return true
 }
 
 // handleProjectProxy serves /p/{id}/* from the project's own WebUI. The target
 // port comes from the project's persisted ports, so it works for a project
 // started by this control plane and for one started by hand.
-func (c *Shell) handleProjectProxy(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleProjectProxy(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
-	p, err := launcher.LoadProject(id)
+	p, err := project.LoadProject(id)
 	if err != nil {
 		stdhttp.Error(w, "project not found: "+id, stdhttp.StatusNotFound)
 		return

@@ -1,4 +1,4 @@
-package webui
+package gateway
 
 // ContextInfo tells the SPA which mode the shell is serving. In control mode
 // no project is attached; the project/bus fields are filled only when the

@@ -1,11 +1,11 @@
-// niq menu bar — the `niq` report in a menu, with the project actions one
-// level down.
+// The macOS distribution of niq. Today it is a menu bar UI bundled with a
+// `niq` binary; the bundle, not the UI, is the product — it is where a user
+// downloads niq and gets gateway, projects and a UI without a terminal.
 //
-// It owns no state: every refresh runs `niq status --json`, and every action is
-// a `niq …` invocation, so the app can never disagree with the CLI or the
-// control plane. The binary is looked up once at launch (NIQ_BIN, then the
-// usual install locations, then a login shell's PATH — GUI apps inherit a
-// minimal PATH).
+// It owns no state: status comes from `niq status --json`, and every project
+// action is an HTTP POST to the gateway's /api/projects/{id}/{action}. The
+// binary is looked up once at launch (NIQ_BIN, then the usual install
+// locations, then a login shell's PATH — GUI apps inherit a minimal PATH).
 
 import AppKit
 
@@ -13,10 +13,10 @@ import AppKit
 
 private struct Snapshot: Decodable {
     let version: String
-    let control: Control
+    let gateway: Gateway
     let projects: [Project]
 
-    struct Control: Decodable {
+    struct Gateway: Decodable {
         let running: Bool
         let pid: Int?
         let url: String?
@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if result.status == 0, let data = result.out.data(using: .utf8),
            let parsed = try? JSONDecoder().decode(Snapshot.self, from: data) {
             snapshot = parsed
-            shellURL = parsed.control.url.flatMap(URL.init(string:))
+            shellURL = parsed.gateway.url.flatMap(URL.init(string:))
             rebuild()
         } else {
             rebuild(error: result.err.isEmpty ? "niq status failed" : result.err)
@@ -223,7 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async {
                 if let parsed {
                     self.snapshot = parsed
-                    self.shellURL = parsed.control.url.flatMap(URL.init(string:))
+                    self.shellURL = parsed.gateway.url.flatMap(URL.init(string:))
                     self.rebuild()
                 } else {
                     self.rebuild(error: result.err.isEmpty ? "niq status failed" : result.err)
@@ -260,8 +260,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func addControlItems(_ snapshot: Snapshot) {
-        let control = snapshot.control
-        if control.running, let urlString = control.url, let url = URL(string: urlString) {
+        let gateway = snapshot.gateway
+        if gateway.running, let urlString = gateway.url, let url = URL(string: urlString) {
             menu.addItem(item("Open WebUI", #selector(openURL(_:)), represented: url))
             menu.addItem(item("Stop", #selector(runCommand(_:)), represented: ["stop"]))
         } else {

@@ -31,36 +31,6 @@ const ChildVerb = "__project-run"
 // ErrNotRunning is returned by Stop when nothing answers on the project port.
 var ErrNotRunning = fmt.Errorf("project is not running")
 
-// ListProjects returns the catalog without run state.
-func ListProjects() ([]contract.Project, error) { return project.ListProjects() }
-
-// LoadProject reads one project definition.
-func LoadProject(id string) (contract.Project, error) {
-	p, err := project.LoadProject(id)
-	if err != nil {
-		return contract.Project{}, err
-	}
-	return *p, nil
-}
-
-// CreateProject creates a project from a template.
-func CreateProject(id, templateName string, tmpl *project.TemplateConfig) (contract.Project, error) {
-	p, err := project.CreateProject(id, templateName, tmpl)
-	if err != nil {
-		return contract.Project{}, err
-	}
-	return *p, nil
-}
-
-// LinkProject opens an external project directory.
-func LinkProject(path string) (contract.Project, error) {
-	p, err := project.LinkProject(path)
-	if err != nil {
-		return contract.Project{}, err
-	}
-	return *p, nil
-}
-
 // List returns every project with its running state.
 func List() ([]contract.View, error) {
 	projects, err := project.ListProjects()
@@ -69,7 +39,7 @@ func List() ([]contract.View, error) {
 	}
 	views := make([]contract.View, 0, len(projects))
 	for _, p := range projects {
-		views = append(views, contract.View{Project: p, Running: IsRunning(p)})
+		views = append(views, contract.View{Project: p, Dir: store.ProjectDir(p.ID), Running: IsRunning(p)})
 	}
 	return views, nil
 }

@@ -23,10 +23,10 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/contract"
+	"github.com/niq-run/niq/app/standalone/gateway"
 	"github.com/niq-run/niq/app/standalone/launcher"
-	"github.com/niq-run/niq/app/standalone/shell/tui"
-	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/app/standalone/store"
+	"github.com/niq-run/niq/app/ui/tui"
 )
 
 // shellState is the on-disk record of a running control plane.
@@ -172,11 +172,11 @@ func startBackground(addr, auth string) (*shellState, error) {
 			return st, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("control plane did not start within 20s; see %s:\n%s", shellLogPath(), logTail(10))
+			return nil, fmt.Errorf("the gateway did not start within 20s; see %s:\n%s", shellLogPath(), logTail(10))
 		}
 		select {
 		case err := <-exited:
-			return nil, fmt.Errorf("control plane exited during startup: %v; see %s:\n%s", err, shellLogPath(), logTail(10))
+			return nil, fmt.Errorf("the gateway exited during startup: %v; see %s:\n%s", err, shellLogPath(), logTail(10))
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -202,9 +202,10 @@ func runShellForeground(addr, auth string) error {
 			st.PID, store.LocalhostURL(st.Bound))
 	}
 	setupLogging()
-	err := webui.Run(webui.Options{
+	err := gateway.Run(gateway.Options{
 		Addr: addr,
 		Auth: auth,
+		UI:   UI,
 		OnReady: func(bound string) {
 			writeShellState(&shellState{
 				PID:     os.Getpid(),
@@ -272,14 +273,14 @@ func stopShellProcess() error {
 // runningProjectIDs lists the projects whose persisted WebUI port answers,
 // i.e. the instances a plain `niq stop` leaves alone.
 func runningProjectIDs() []string {
-	projects, err := launcher.ListProjects()
+	views, err := launcher.List()
 	if err != nil {
 		return nil
 	}
 	var ids []string
-	for _, p := range projects {
-		if launcher.IsRunning(p) {
-			ids = append(ids, p.ID)
+	for _, v := range views {
+		if v.Running {
+			ids = append(ids, v.ID)
 		}
 	}
 	return ids
@@ -308,14 +309,14 @@ func stopProjects() error {
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(prev)
 
-	projects, err := launcher.ListProjects()
+	views, err := launcher.List()
 	if err != nil {
 		return err
 	}
-	var running []contract.Project
-	for _, p := range projects {
-		if launcher.IsRunning(p) {
-			running = append(running, p)
+	var running []contract.View
+	for _, v := range views {
+		if v.Running {
+			running = append(running, v)
 		}
 	}
 	if len(running) == 0 {
@@ -334,7 +335,7 @@ func stopProjects() error {
 	for {
 		var left []string
 		for _, p := range running {
-			if launcher.IsRunning(p) {
+			if launcher.IsRunning(p.Project) {
 				left = append(left, p.ID)
 			}
 		}
@@ -419,17 +420,13 @@ func restartProjectInstances(ids []string) {
 	defer log.SetOutput(prev)
 
 	for _, id := range ids {
-		p, err := launcher.LoadProject(id)
+		inst, err := launcher.Restart(id)
 		if err != nil {
 			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
 			continue
 		}
-		line, err := tui.RestartProject(p)
-		if err != nil {
-			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
-			continue
-		}
-		fmt.Printf("%s\n", line)
+		fmt.Printf("%s %s %s\n", bold(id), green("restarted"),
+			brand(fmt.Sprintf("http://localhost:%d", inst.WebUIPort)))
 	}
 }
 
@@ -478,24 +475,24 @@ func printControlStopped() {
 // controlURL, when the control plane is up, is the address that reaches the
 // project from outside; otherwise the loopback URL is shown.
 func printProjectStatus(controlURL string) {
-	projects, err := launcher.ListProjects()
-	if err != nil || len(projects) == 0 {
+	views, err := launcher.List()
+	if err != nil || len(views) == 0 {
 		return
 	}
 	// Every project gets an address, running or not: /p/<id>/ renders a start
 	// page when the instance is down, so the link is worth clicking either way.
-	url := func(p contract.Project) string {
+	url := func(v contract.View) string {
 		target := ""
 		switch {
 		case controlURL != "":
-			target = strings.TrimSuffix(controlURL, "/") + "/p/" + p.ID + "/"
-		case p.Ports.WebUI != 0:
-			target = store.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
+			target = strings.TrimSuffix(controlURL, "/") + "/p/" + v.ID + "/"
+		case v.Ports.WebUI != 0:
+			target = store.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", v.Ports.WebUI))
 		}
 		if target == "" {
 			return ""
 		}
-		if !launcher.IsRunning(p) {
+		if !v.Running {
 			return dim(target)
 		}
 		return brand(target)
@@ -503,7 +500,7 @@ func printProjectStatus(controlURL string) {
 	fmt.Println()
 	// The list reports state; acting on it is the picker's job, so the heading
 	// says where that is.
-	tui.PrintTable(projects, url, bold("niq project")+dim(" to start, stop or restart one"))
+	tui.PrintTable(views, url, bold("niq i")+dim(" to start, stop or restart one"))
 }
 
 // openInBrowser is best-effort: the address is always printed, so a failed

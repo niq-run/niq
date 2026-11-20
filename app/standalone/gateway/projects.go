@@ -1,4 +1,4 @@
-package webui
+package gateway
 
 import (
 	"encoding/json"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/niq-run/niq/app/contract"
 	"github.com/niq-run/niq/app/standalone/launcher"
+	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 	"github.com/niq-run/niq/app/standalone/template"
 )
@@ -18,7 +19,7 @@ import (
 type projectView = contract.View
 
 // handleListProjects returns the project definitions plus live run state.
-func (c *Shell) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	views, err := launcher.List()
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 500)
@@ -39,7 +40,7 @@ type dirItem struct {
 // filesystem and the UI navigates folders instead — this works locally and
 // remotely alike. It only lists directory names, never file contents. An empty
 // path starts at the niq projects root.
-func (c *Shell) handleListDirs(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleListDirs(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	root := r.URL.Query().Get("path")
 	if root == "" {
 		root = store.ProjectsRoot()
@@ -76,7 +77,7 @@ func (c *Shell) handleListDirs(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 // handleLinkProject opens an external project directory by symlinking it into
 // the niq root (see launcher.LinkProject). The webui posts the directory the
 // user chose; it may already be a niq project and resume as-is.
-func (c *Shell) handleLinkProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleLinkProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	var body struct {
 		Path string `json:"path"`
 	}
@@ -84,20 +85,20 @@ func (c *Shell) handleLinkProject(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 		stdhttp.Error(w, "path is required", 400)
 		return
 	}
-	p, err := launcher.LinkProject(body.Path)
+	p, err := project.LinkProject(body.Path)
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 400)
 		return
 	}
-	json.NewEncoder(w).Encode(projectView{Project: p, Running: launcher.IsRunning(p)})
+	json.NewEncoder(w).Encode(projectView{Project: *p, Running: launcher.IsRunning(*p)})
 }
 
 // handleRestartProject stops the running instance and relaunches it on its
 // reused ports. The instance is found through the port it holds, so one the
 // shell spawned and one started elsewhere take exactly this path.
-func (c *Shell) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
-	if _, err := launcher.LoadProject(id); err != nil {
+	if _, err := project.LoadProject(id); err != nil {
 		stdhttp.Error(w, "project not found", 404)
 		return
 	}
@@ -111,9 +112,9 @@ func (c *Shell) handleRestartProject(w stdhttp.ResponseWriter, r *stdhttp.Reques
 
 // handleStopProject terminates a running project by interrupting whoever
 // listens on its persisted WebUI port.
-func (c *Shell) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
-	if _, err := launcher.LoadProject(id); err != nil {
+	if _, err := project.LoadProject(id); err != nil {
 		stdhttp.Error(w, "project not found", 404)
 		return
 	}
@@ -130,7 +131,7 @@ func (c *Shell) handleStopProject(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 
 // handleCreateProject creates a project from a named template and immediately
 // starts it, returning the resolved instance.
-func (c *Shell) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	var body struct {
 		ID       string `json:"id"`
 		Template string `json:"template"`
@@ -147,7 +148,7 @@ func (c *Shell) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Request
 		stdhttp.Error(w, "unknown template: "+body.Template, 400)
 		return
 	}
-	if _, err := launcher.CreateProject(body.ID, body.Template, tmpl); err != nil {
+	if _, err := project.CreateProject(body.ID, body.Template, tmpl); err != nil {
 		stdhttp.Error(w, err.Error(), 409)
 		return
 	}
@@ -156,16 +157,16 @@ func (c *Shell) handleCreateProject(w stdhttp.ResponseWriter, r *stdhttp.Request
 
 // handleStartProject launches a project as its own process on its persisted
 // ports and returns the resolved instance.
-func (c *Shell) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleStartProject(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
-	if _, err := launcher.LoadProject(id); err != nil {
+	if _, err := project.LoadProject(id); err != nil {
 		stdhttp.Error(w, "project not found", 404)
 		return
 	}
 	c.respondStart(w, id)
 }
 
-func (c *Shell) respondStart(w stdhttp.ResponseWriter, id string) {
+func (c *Gateway) respondStart(w stdhttp.ResponseWriter, id string) {
 	inst, err := launcher.Start(id)
 	if err != nil {
 		stdhttp.Error(w, err.Error(), stdhttp.StatusBadGateway)

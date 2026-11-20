@@ -1,4 +1,4 @@
-package webui
+package gateway
 
 import (
 	"encoding/json"
@@ -13,7 +13,7 @@ import (
 
 // handleListTemplates returns the available project template names for the
 // new-project dropdown.
-func (c *Shell) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	names, err := template.List()
 	if err != nil {
 		stdhttp.Error(w, err.Error(), 500)
@@ -23,7 +23,7 @@ func (c *Shell) handleListTemplates(w stdhttp.ResponseWriter, r *stdhttp.Request
 }
 
 // handleTemplateDetail returns a template's JSON content (its workers etc.).
-func (c *Shell) handleTemplateDetail(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleTemplateDetail(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	name := r.PathValue("name")
 	raw, err := template.ReadRaw(template.TemplatesDir(), name)
 	if err != nil {
@@ -40,7 +40,7 @@ func (c *Shell) handleTemplateDetail(w stdhttp.ResponseWriter, r *stdhttp.Reques
 // from a project and the user edited) — exactly one of the two. An export may
 // additionally carry the source project's programs resources: from_project +
 // include_program copy <project>/programs into the new template dir.
-func (c *Shell) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	var body struct {
 		ID             string          `json:"id"`
 		CopyFrom       string          `json:"copy_from"`
@@ -123,7 +123,7 @@ func (c *Shell) handleCreateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Reques
 // handleUpdateTemplate overwrites an existing template with a full template
 // body (the webui's drawer editor saves through it). The name is the key: it
 // cannot be changed here.
-func (c *Shell) handleUpdateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleUpdateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	name := r.PathValue("name")
 	dest := template.Path(template.TemplatesDir(), name)
 	if _, err := os.Stat(dest); err != nil {
@@ -157,7 +157,7 @@ func (c *Shell) handleUpdateTemplate(w stdhttp.ResponseWriter, r *stdhttp.Reques
 // webui shows it as an editable draft and saves it through POST. With
 // include_program=1, a reason worker's programs param is carried too (the
 // programs/ resources are copied at save time).
-func (c *Shell) handleTemplatePreview(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleTemplatePreview(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
 	withProgram := r.URL.Query().Get("include_program") == "1"
 	tmpl, err := project.ExportProjectTemplate(id, withProgram)
@@ -174,7 +174,7 @@ func (c *Shell) handleTemplatePreview(w stdhttp.ResponseWriter, r *stdhttp.Reque
 // client sends multipart/form-data with an optional id field and a file. Without
 // an id, the zip's wrapping folder name is used; an invalid/missing id is an
 // error. Nothing is written unless the whole package validates.
-func (c *Shell) handleImportTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleImportTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	if err := r.ParseMultipartForm(template.MaxImportBytes() + 1); err != nil {
 		stdhttp.Error(w, "import template: multipart form: "+err.Error(), 400)
 		return
@@ -211,7 +211,7 @@ func writeTemplate(dest string, src []byte) error {
 }
 
 // handleDeleteTemplate removes an on-disk template directory.
-func (c *Shell) handleDeleteTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+func (c *Gateway) handleDeleteTemplate(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	name := r.PathValue("name")
 	if err := os.RemoveAll(template.Dir(template.TemplatesDir(), name)); err != nil {
 		stdhttp.Error(w, "template not found", 404)

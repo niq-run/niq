@@ -1,7 +1,11 @@
-// Project views and the interactive picker: `niq project` lists every project
-// (state, ports, directory), lets you move with the arrow keys, then offers the
-// actions that make sense for that instance — start when it is stopped, stop or
-// restart when it is running.
+// Project views and the interactive picker: `niq i` lists every project (state,
+// ports, directory), lets you move with the arrow keys, then offers the actions
+// that make sense for that instance — start when it is stopped, stop or restart
+// when it is running.
+//
+// Everything here goes through the gateway's HTTP API, so the terminal is just
+// another client: no domain package is imported, and the same client will work
+// against a remote instance.
 //
 // The menu is a few dozen lines of escape codes rather than a TUI dependency:
 // two short blocks, redrawn in place.
@@ -12,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -20,8 +23,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/niq-run/niq/app/contract"
-	"github.com/niq-run/niq/app/standalone/launcher"
-	"github.com/niq-run/niq/app/standalone/store"
 )
 
 // errNotTerminal means stdin is not a TTY (piped input, cron, a script), so
@@ -207,26 +208,23 @@ func readKey(in *bufio.Reader) key {
 // runProjectPicker is what `niq project` (and `niq project list`) does: pick an
 // instance, then an action. Without a terminal it degrades to the plain table,
 // so piping the command still means something.
-func RunPicker() error {
+func RunPicker(baseURL string) error {
 	// The list stays up after an action: acting on one project is rarely the
 	// whole errand. The block is redrawn in place each round — states reloaded,
 	// cursor kept on the project just acted on — and the result of the last
 	// action sits on the status line at the bottom, replaced rather than
 	// appended, so the screen never scrolls away from the list.
-	// The project package logs to the default logger (port reclaim, signals);
-	// inside the picker those lines would land on top of the menu, so they are
-	// dropped — the status line is the report.
-	log.SetOutput(io.Discard)
+	client := contract.New(baseURL)
 
 	list := &menu{title: pickerTitle(), keep: true, statusLine: true}
 	for {
-		projects, err := launcher.ListProjects()
+		projects, err := client.List()
 		if err != nil {
 			return err
 		}
 		if len(projects) == 0 {
 			fmt.Println(dim("(no projects)"))
-			fmt.Printf("\n%s\n", dim("create one with `niq project create <id>`"))
+			fmt.Printf("\n%s\n", dim("create one in the web UI: niq w"))
 			return nil
 		}
 		if list.cursor >= len(projects) {
@@ -260,7 +258,7 @@ func RunPicker() error {
 		if action == "" {
 			continue
 		}
-		if line, err := runAction(p, action); err != nil {
+		if line, err := runAction(client, p, action); err != nil {
 			list.status = red(err.Error())
 		} else {
 			list.status = line
@@ -281,8 +279,8 @@ func pickerTitle() string {
 // listed in the same order; on a project that is not running, Stop and Restart
 // are dimmed and the cursor steps over them, so the menu reads the same
 // wherever you are. An empty action means the user cancelled.
-func pickAction(p contract.Project) (string, error) {
-	running := launcher.IsRunning(p)
+func pickAction(p contract.View) (string, error) {
+	running := p.Running
 	options := []string{"Start", "Stop", "Restart"}
 	actions := []string{"start", "stop", "restart"}
 	disabled := []bool{false, !running, !running}
@@ -334,14 +332,14 @@ func cursorDot(selected bool) string {
 }
 
 // runAction performs one action and returns the line the picker shows for it.
-func runAction(p contract.Project, action string) (string, error) {
+func runAction(c *contract.Client, p contract.View, action string) (string, error) {
 	switch action {
 	case "start":
-		return StartProject(p)
+		return startProject(c, p)
 	case "stop":
-		return StopProject(p)
+		return stopProject(c, p)
 	default:
-		return RestartProject(p)
+		return restartProject(c, p)
 	}
 }
 
@@ -353,8 +351,8 @@ func runAction(p contract.Project, action string) (string, error) {
 // leading dot is the cursor itself, not the run state: filled in the theme
 // colour on the selected row, a dim ring on the others. A listing has no
 // cursor, so it has no dot either — the state is the word after the name.
-func projectRow(p contract.Project, idWidth int, trailing string, cursor int, selected bool) string {
-	running := launcher.IsRunning(p)
+func projectRow(p contract.View, idWidth int, trailing string, cursor int, selected bool) string {
+	running := p.Running
 	dot := ""
 	if cursor >= 0 {
 		dot = cursorDot(selected)
@@ -379,7 +377,7 @@ func projectRow(p contract.Project, idWidth int, trailing string, cursor int, se
 
 // projectRows builds the table. cursor is the row under the picker's cursor;
 // printProjectTable passes -1, which draws no cursor column at all.
-func projectRows(projects []contract.Project, trailing func(contract.Project) string, cursor int) []string {
+func projectRows(projects []contract.View, trailing func(contract.View) string, cursor int) []string {
 	idWidth := 2
 	for _, p := range projects {
 		if len(p.ID) > idWidth {
@@ -393,13 +391,13 @@ func projectRows(projects []contract.Project, trailing func(contract.Project) st
 	return rows
 }
 
-func projectDirCell(p contract.Project) string { return dim(shortPath(store.ProjectDir(p.ID))) }
+func projectDirCell(p contract.View) string { return dim(shortPath(p.Dir)) }
 
 // printProjectTable is the non-interactive view: `niq project` without a
 // terminal, and the list under `niq status`. note, when set, is printed after
 // the heading — the status report uses it to say where the list can be acted on,
 // which the picker itself does not need to explain.
-func PrintTable(projects []contract.Project, trailing func(contract.Project) string, note string) {
+func PrintTable(projects []contract.View, trailing func(contract.View) string, note string) {
 	head := bracketed("projects")
 	if note != "" {
 		head += "  " + note
@@ -410,26 +408,18 @@ func PrintTable(projects []contract.Project, trailing func(contract.Project) str
 	}
 }
 
-// StopProject interrupts the instance and waits for the port to be
-// released. Working through the port rather than a child table keeps it valid
-// for instances started by hand, too.
-func StopProject(p contract.Project) (string, error) {
-	if err := launcher.Stop(p.ID); err != nil {
-		if errors.Is(err, launcher.ErrNotRunning) {
-			return fmt.Sprintf("%s is %s", bold(p.ID), dim("not running")), nil
-		}
-		return "", err
-	}
-	if err := launcher.WaitStopped(p.ID, 15*time.Second); err != nil {
+// stopProject, startProject and restartProject print one line each. They are
+// thin over the client because the gateway already owns the lifecycle; the
+// picker only decides how the result reads.
+func stopProject(c *contract.Client, p contract.View) (string, error) {
+	if err := c.Stop(p.ID); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s %s", bold(p.ID), green("stopped")), nil
 }
 
-// StartProject brings a stopped project up. An instance is identified
-// by its ports, so this is the same operation whether the shell is running.
-func StartProject(p contract.Project) (string, error) {
-	inst, err := launcher.Start(p.ID)
+func startProject(c *contract.Client, p contract.View) (string, error) {
+	inst, err := c.Start(p.ID)
 	if err != nil {
 		return "", err
 	}
@@ -441,10 +431,8 @@ func StartProject(p contract.Project) (string, error) {
 		brand(fmt.Sprintf("http://localhost:%d", inst.WebUIPort))), nil
 }
 
-// RestartProject stops the instance through its port and starts a new
-// one on the same addresses.
-func RestartProject(p contract.Project) (string, error) {
-	inst, err := launcher.Restart(p.ID)
+func restartProject(c *contract.Client, p contract.View) (string, error) {
+	inst, err := c.Restart(p.ID)
 	if err != nil {
 		return "", err
 	}

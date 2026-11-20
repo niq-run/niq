@@ -1,4 +1,4 @@
-package webui
+package gateway
 
 import (
 	"archive/zip"
@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 	"github.com/niq-run/niq/app/standalone/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
+	"github.com/niq-run/niq/app/ui/webui"
 )
 
 func doGet(t *testing.T, url string) (int, string) {
@@ -60,6 +60,7 @@ func fakeTemplate() *project.TemplateConfig {
 // BasicAuth.
 func TestControlBasicAuthLoopbackOpen(t *testing.T) {
 	c := New("127.0.0.1:0")
+	c.Mount(UIMount{Prefix: "/", FS: webui.Assets()})
 	c.SetBasicAuth("alice", "s3cret")
 	addr, err := c.Bind()
 	if err != nil {
@@ -77,11 +78,12 @@ func TestControlBasicAuthLoopbackOpen(t *testing.T) {
 
 func TestControlContextAndList(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := launcher.CreateProject("alpha", "", fakeTemplate()); err != nil {
+	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 
 	c := New("127.0.0.1:0")
+	c.Mount(UIMount{Prefix: "/", FS: webui.Assets()})
 	addr, err := c.Bind()
 	if err != nil {
 		t.Fatalf("bind: %v", err)
@@ -114,10 +116,11 @@ func TestControlContextAndList(t *testing.T) {
 	}
 }
 
-// newControl starts a Shell on an ephemeral port and returns the base URL.
+// newControl starts a Gateway on an ephemeral port and returns the base URL.
 func newControl(t *testing.T) string {
 	t.Helper()
 	c := New("127.0.0.1:0")
+	c.Mount(UIMount{Prefix: "/", FS: webui.Assets()})
 	addr, err := c.Bind()
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +148,7 @@ func TestControlTemplates(t *testing.T) {
 // returns 409 before any subprocess is launched.
 func TestControlCreateRejectsDuplicate(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := launcher.CreateProject("taken", "", fakeTemplate()); err != nil {
+	if _, err := project.CreateProject("taken", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	base := newControl(t)
@@ -225,7 +228,7 @@ func TestControlCreateRejectsUnknownTemplate(t *testing.T) {
 	if resp.StatusCode != 400 {
 		t.Fatalf("unknown template status=%d, want 400", resp.StatusCode)
 	}
-	if _, err := launcher.LoadProject("x"); err == nil {
+	if _, err := project.LoadProject("x"); err == nil {
 		t.Fatal("project should not have been created")
 	}
 }
@@ -305,7 +308,7 @@ func TestControlStartProjectNotFound(t *testing.T) {
 // template), updating it (PUT), and the validation paths.
 func TestControlTemplateFromProject(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := launcher.CreateProject("alpha", "", fakeTemplate()); err != nil {
+	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	base := newControl(t)

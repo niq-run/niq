@@ -23,11 +23,13 @@ type Project struct {
 	UploadDir     string `json:"upload_dir,omitempty"`
 }
 
-// View is a project definition plus its live run state, as listed by the
-// gateway.
+// View is a project definition plus its live run state and its directory on
+// this instance, as listed by the gateway. Dir is resolved server-side so a
+// client never has to know how paths are laid out.
 type View struct {
 	Project
-	Running bool `json:"running"`
+	Dir     string `json:"dir,omitempty"`
+	Running bool   `json:"running"`
 }
 
 // Instance is the result of starting or restarting a project.

@@ -1,4 +1,4 @@
-// Shell-plane HTTP service: the fixed-port (default 127.0.0.1:9527) control
+// Gateway-plane HTTP service: the fixed-port (default 127.0.0.1:9527) control
 // plane a user opens when no project is attached. It serves the same SPA in
 // "control" mode — project management only — and can start a project, which
 // runs as its own process on its own dynamically-assigned bus/WebUI ports; the
@@ -11,13 +11,12 @@
 //
 // File layout: the service shell + routing live here; project lifecycle
 // handlers are in projects.go and template CRUD is in templates.go.
-package webui
+package gateway
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log"
 	"net"
 	stdhttp "net/http"
@@ -35,6 +34,10 @@ import (
 type Options struct {
 	Addr string // default "127.0.0.1:9527"; pass an explicit addr to accept remote connections
 	Auth string // optional user:pass basic-auth spec (protects non-localhost access; empty disables auth)
+	// UI lists the static interfaces this gateway serves, most specific prefix
+	// first is not required. The gateway knows nothing about them beyond the
+	// filesystem; the composition root decides what the product ships.
+	UI []UIMount
 	// OnReady, when set, runs once the listen socket is bound and before
 	// serving starts. It receives the resolved address (e.g. "[::]:9527") so a
 	// launcher can record where the daemon actually landed instead of guessing
@@ -49,16 +52,19 @@ func Run(opts Options) error {
 	// Make sure the built-in project templates are on disk so the new-project
 	// dropdown has something to offer on first run.
 	if err := template.Seed(template.TemplatesDir()); err != nil {
-		log.Printf("[control] seed templates: %v", err)
+		log.Printf("[gateway] seed templates: %v", err)
 	}
 	c := New(opts.Addr)
+	for _, m := range opts.UI {
+		c.Mount(m)
+	}
 	if user, pass, enabled, warning := StartupAuth(opts.Addr, opts.Auth, store.AuthConfigPath()); enabled {
 		c.SetBasicAuth(user, pass)
-		log.Printf("[control] WebUI remote access protected with basic auth (localhost stays open)")
+		log.Printf("[gateway] WebUI remote access protected with basic auth (localhost stays open)")
 	} else if warning != "" {
 		// Auth is opt-in. Say clearly that an exposed bind is unauthenticated, and
 		// also put it in the service log: a background start has no stderr to show.
-		log.Printf("[control] %s", warning)
+		log.Printf("[gateway] %s", warning)
 		fmt.Fprintln(os.Stderr, warning)
 	}
 	// Bind here rather than inside Start so OnReady can report the resolved
@@ -72,8 +78,8 @@ func Run(opts Options) error {
 	return c.Start(ctx)
 }
 
-// Shell is the control-plane HTTP service.
-type Shell struct {
+// Gateway is the control-plane HTTP service.
+type Gateway struct {
 	addr     string
 	server   *stdhttp.Server
 	listener net.Listener
@@ -82,10 +88,8 @@ type Shell struct {
 	// proxy serves /p/<id>/* from each project's own loopback WebUI.
 	proxy *httputil.ReverseProxy
 
-	// assets is the SPA bundle, also served as the shell for a project whose
-	// WebUI is down (see handleProjectProxy), so a stopped project's page still
-	// renders the product UI with its start banner.
-	assets fs.FS
+	// ui is the mount table filled by the composition root (see Mount).
+	ui []UIMount
 
 	authUser string // basic-auth user for non-loopback access ("" = disabled)
 	authPass string
@@ -94,11 +98,11 @@ type Shell struct {
 // New creates a control-plane service bound to addr ("127.0.0.1:9527"
 // when empty). The default is loopback so a credential-less server stays on this
 // machine; passing an explicit addr is what exposes it.
-func New(addr string) *Shell {
+func New(addr string) *Gateway {
 	if addr == "" {
 		addr = "127.0.0.1:9527"
 	}
-	c := &Shell{addr: addr}
+	c := &Gateway{addr: addr}
 	c.proxy = c.newProjectProxy()
 	return c
 }
@@ -106,18 +110,18 @@ func New(addr string) *Shell {
 // SetBasicAuth enables HTTP basic auth for requests from non-loopback peers
 // (local machine access stays password-free). Cleared when either user or pass
 // is empty.
-func (c *Shell) SetBasicAuth(user, pass string) {
+func (c *Gateway) SetBasicAuth(user, pass string) {
 	c.authUser, c.authPass = user, pass
 }
 
 // Bind binds the listen socket and returns the resolved host:port.
-func (c *Shell) Bind() (string, error) {
+func (c *Gateway) Bind() (string, error) {
 	if c.listener != nil {
 		return c.bound, nil
 	}
 	ln, err := net.Listen("tcp", c.addr)
 	if err != nil {
-		return "", fmt.Errorf("control: bind %s: %w", c.addr, err)
+		return "", fmt.Errorf("gateway: bind %s: %w", c.addr, err)
 	}
 	c.listener = ln
 	c.bound = ln.Addr().String()
@@ -125,10 +129,10 @@ func (c *Shell) Bind() (string, error) {
 }
 
 // ResolvedAddr returns the bound address (empty until Bind).
-func (c *Shell) ResolvedAddr() string { return c.bound }
+func (c *Gateway) ResolvedAddr() string { return c.bound }
 
 // Start binds (if needed) and serves, blocking until ctx is cancelled.
-func (c *Shell) Start(ctx context.Context) error {
+func (c *Gateway) Start(ctx context.Context) error {
 	if c.listener == nil {
 		if _, err := c.Bind(); err != nil {
 			return err
@@ -159,15 +163,10 @@ func (c *Shell) Start(ctx context.Context) error {
 	// port): /p/<id>/... is served from that project's own loopback WebUI.
 	mux.HandleFunc(projectPrefix+"{id}/", c.handleProjectProxy)
 
-	assets, err := AssetsFS()
-	if err != nil {
-		return fmt.Errorf("control: assets: %w", err)
-	}
-	c.assets = assets
 	// Registered without a method so it cannot conflict with the all-methods
 	// /p/{id}/ proxy below ("GET /" vs "/p/{id}/" is ambiguous: the former has a
 	// narrower method but a wider path).
-	mux.Handle("/", stdhttp.FileServer(stdhttp.FS(assets)))
+	mux.HandleFunc("/", c.handleUI)
 
 	c.server = &stdhttp.Server{Handler: cors(BasicAuth(c.authUser, c.authPass, mux))}
 	go func() {
@@ -176,10 +175,10 @@ func (c *Shell) Start(ctx context.Context) error {
 		defer cancel()
 		c.server.Shutdown(shutdownCtx)
 	}()
-	log.Printf("[control] listening on %s", c.bound)
+	log.Printf("[gateway] listening on %s", c.bound)
 	fmt.Printf("niq gateway listening at %s\n", store.LocalhostURL(c.bound))
 	if err := c.server.Serve(c.listener); err != nil && err != stdhttp.ErrServerClosed {
-		return fmt.Errorf("control: %w", err)
+		return fmt.Errorf("gateway: %w", err)
 	}
 	return nil
 }
@@ -188,9 +187,9 @@ func (c *Shell) Start(ctx context.Context) error {
 // control plane's projects/start APIs.
 func cors(next stdhttp.Handler) stdhttp.Handler {
 	return stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-		w.Header().Set("Access-Shell-Allow-Origin", "*")
-		w.Header().Set("Access-Shell-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Shell-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(stdhttp.StatusNoContent)
 			return

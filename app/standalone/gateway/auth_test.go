@@ -1,4 +1,4 @@
-package webui
+package gateway
 
 import (
 	"net/http"
