@@ -39,6 +39,7 @@ standalone 有**三种进程**，不是"一个主进程 + 子模块"：
 - **一个二进制，三种身份**。`niq`、`niq shell`、`niq project run <id>` 是同一个可执行文件。shell 用 `os.Executable()` + `project run` 拉起项目，和 `docker` 拉起容器进程同构。
 - **launcher 不是守护进程**。项目实例由端口识别，不由父子关系识别；`niq project stop` 在 shell 没跑时同样有效。shell 重启不影响任何运行中的项目。
 - **人类身份在项目里**。interface worker（`webui` 这个总线身份）运行在 project 进程内，它的 backend 是项目 API。浏览器和未来的 TUI 都是这个 API 的客户端，**不持有总线凭证**（见 §6）。
+- **`niq` 是唯一入口，但不是一个"全能 TUI"**。裸 `niq` 拉起 shell 进程；`niq project` 是启动器 picker（列表 + start/stop/restart）；资源管理（模板/provider）与项目视图都只在 webui 里。CLI 不提供它们，也不假装提供。
 
 ```
                       ┌──────────── shell 进程 ────────────┐
@@ -70,7 +71,8 @@ app/
 │   │   └── menubar/      macOS 菜单栏壳（Swift，驱动 CLI，不持有状态）
 │   ├── launcher/         领域：项目目录、模板、provider、端口、日志、起停/链接
 │   ├── project/          运行时：总线和 worker 的装配与恢复
-│   │   └── api/          项目 HTTP API：项目数据查询/操作、SSE、人类入口（iface.Backend）
+│   │   ├── api/          项目 HTTP API：项目数据查询/操作、SSE、人类入口（iface.Backend）
+│   │   └── entry/        进程入口：argv 契约（Command）+ 子进程侧参数解析（Run）
 │   ├── store/            落盘、路径与本地后端的唯一主人
 │   │   ├── root.go         NIQ_HOME / 项目目录 / 文件名 / auth 与 provider 路径
 │   │   ├── project.go      project.json
@@ -93,10 +95,11 @@ app/
 | 包 | 负责 | **不负责**（硬性） |
 |---|---|---|
 | `shell/webui` | HTTP 入口、SPA、auth、`/p/{id}` 代理、把 launcher 请求转成 HTTP | 不 import `project`；不碰总线；不持有项目状态 |
-| `shell/cli` | 命令解析、flag、shell 守护（pid/日志）、picker、把 `project run` 交给 runtime | 不实现起停能力（调 launcher）；不做 HTTP 代理 |
+| `shell/cli` | 命令解析、flag、shell 守护（pid/日志）、picker、把 `project run` 路由到 `project/entry` | 不实现起停能力（调 launcher）；不做 HTTP 代理 |
 | `shell/menubar` | 菜单栏交互 | 不持有状态：每次 `niq status --json`，每个动作一次 `niq` 调用 |
-| `launcher` | 项目目录视图、create/link/start/stop/restart、模板、provider、端口分配、日志定位 | 不监听端口；不渲染；不 import `shell/*` |
+| `launcher` | 项目目录视图、create/link/start/stop/restart、模板、provider、端口分配、日志定位 | 不监听端口；不渲染；不 import `shell/*`；**起进程只经 `project/entry`**，不直接调 `RunProject` |
 | `project` | 单项目 runtime：装配总线、恢复 worker、收尾、快照 | 不认识其他项目；不 import `launcher` / `shell/*` |
+| `project/entry` | 项目进程的 argv 约定与构造（`Command`）、子进程侧参数解析并调用 `RunProject`（`Run`） | 不做端口等待、不管理实例、不认识其他项目 |
 | `project/api` | 项目数据的 JSON/SSE 契约、人类入口、审批 inbox | 不托管 SPA；不做 auth；不认识 launcher |
 | `store` | 根与路径解析、每种落盘形状的读写、原子写、迁移入口 | 不 import `project` / `launcher` / `shell/*` |
 | `store/program` | program 文件的路径约定与 `program.Store` 适配 | `pgbackend` 仍是 core 机制（core 测试要用），这里只封装路径 |
@@ -110,11 +113,12 @@ app/
 ```
 store            → store/migrate, store/program, worker（仅 Manifest 等类型）
 provider         → store（取配置路径）
-launcher         → store, provider
+launcher         → store, provider, project/entry
 project          → store, worker, provider
 project/api      → store, worker 契约, core（不 import project 内部）
+project/entry    → project
 worker           → core + 注入（program.Store / provider handles）
-shell/cli        → launcher, project（仅 RunProject 交接）
+shell/cli        → launcher, project/entry（argv 路由）
 shell/webui      → launcher, store（读端口）, 前端产物
 ```
 
@@ -127,7 +131,7 @@ shell/webui      → launcher, store（读端口）, 前端产物
    go list -deps ./app/standalone/shell/webui | grep 'standalone/project$'   # 必须为空
    ```
 2. **`shell/*` 不实现领域能力**：项目的起停、端口、模板只在 `launcher`。（`shell/cli` 允许 exec 自己，用于把 shell 进程放到后台——那是外壳自身的生命周期。）
-3. **`launcher` 不 import `project`**：启动实例靠 exec `niq project run`，是进程边界，不是包依赖。
+3. **`launcher` 不直接调用 `project.RunProject`**：起进程只经 `project/entry.Command`，参数解析与 `RunProject` 的调用在子进程侧的 `project/entry.Run`。进程边界不变，但 argv 契约有了唯一的家。
 4. **`project` 不 import `launcher` / `shell/*`**。
 5. **`store` 不 import `project` / `launcher` / `shell/*`**。
 6. **`core` 不 import `app`**；`app/standalone` 与 `app/cluster` 互不 import。
@@ -313,15 +317,15 @@ func Restart(ctx context.Context, id string) (Instance, error)
 
 1. 从 `store` 读 `project.json`，拿到已分配端口；
 2. 端口已在服务 → 返回 `Already`；
-3. `exec.Command(self, "project", "run", id)`，起进程并起一个 reaper goroutine；
+3. `entry.Command(self, id)`，起进程并起一个 reaper goroutine；
 4. 等 WebUI 端口真正 accept（有超时，也监听子进程退出）；
 5. 失败时读 `store.LogPath(id)` 的尾部，把可读原因带回。
 
 `Stop`：端口不在服务 → 空操作；否则按端口发 SIGINT（`InterruptPortHolders` 从 `project/run.go` 移到 launcher），等端口释放。
 
-**边界**：`launcher` 不 import `project`。它启动的是**进程**（`niq project run`），`project.RunProject` 在子进程里执行。若 launcher 直接调 `project.RunProject`，项目就会跑在 shell 进程里——`niq project start` 永不返回、webui shell 变成 N 个项目的宿主，进程模型就破了。
+**边界**：`launcher` 启动的是**进程**，`project.RunProject` 在子进程里执行，进程模型不变。argv 契约只在 `project/entry` 一处：`launcher` 用 `Command` 造命令，`shell/cli` 用 `Run` 处理 `project run` 子命令。于是 webui 与 cli 之间连"命令行长什么样"都不必知道。
 
-依赖：`launcher → store`；`project` 只被 `shell/cli` 的 `project run` 动词引用。
+依赖：`launcher → store, project/entry`；`shell/cli → launcher, project/entry`；两个 shell 互不依赖。
 
 **验收**：
 ```sh
@@ -373,6 +377,7 @@ CLI 与 WebUI 的起停行为一致（同一份等待超时、日志尾部、错
 | WebUI（项目内） | **project api** | 项目数据的 HTTP 契约，TUI 也消费 |
 | CLI | **shell/cli** | 与 `shell/webui` 并列的另一套壳 |
 | home | **store**（root.go） | 根与路径解析并入 store |
+| `project run`（CLI 动词的实现） | **project/entry** | 进程入口独立成包，cli 只做 argv 路由 |
 | declaration | **manifest** | 已落地 |
 | worker service | **workerlife.Manager** | 已落地 |
 
