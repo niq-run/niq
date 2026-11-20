@@ -2,7 +2,7 @@
 // subcommands, flags, and — the part that actually saves typing — the project
 // ids for `niq project run`.
 //
-// The generated scripts call `niq project list --ids`, so completion always
+// The generated scripts call `niq status --ids`, so completion always
 // reflects the projects on this machine without a separate cache to keep fresh.
 package cli
 
@@ -44,7 +44,7 @@ _niq() {
 	COMPREPLY=()
 
 	if (( COMP_CWORD == 1 )); then
-		COMPREPLY=( $(compgen -W "start stop restart status update project p completion help version" -- "$cur") )
+		COMPREPLY=( $(compgen -W "start stop restart status update i w completion help version" -- "$cur") )
 		return
 	fi
 
@@ -59,7 +59,7 @@ _niq() {
 			if [[ "$cur" == -* ]]; then
 				COMPREPLY=( $(compgen -W "--bus --webui --webui-auth" -- "$cur") )
 			else
-				COMPREPLY=( $(compgen -W "$(niq project list --ids 2>/dev/null)" -- "$cur") )
+				COMPREPLY=( $(compgen -W "$(niq status --ids 2>/dev/null)" -- "$cur") )
 			fi
 			;;
 		list)
@@ -91,7 +91,7 @@ const zshCompletion = `#compdef niq
 
 _niq_projects() {
 	local -a ids
-	ids=(${(f)"$(niq project list --ids 2>/dev/null)"})
+	ids=(${(f)"$(niq status --ids 2>/dev/null)"})
 	_describe -t projects 'project' ids
 }
 
@@ -175,7 +175,7 @@ complete -c niq -n '__fish_seen_subcommand_from project; and not __fish_seen_sub
 complete -c niq -n '__fish_seen_subcommand_from project; and not __fish_seen_subcommand_from list create run' -a create -d 'create a project from a template'
 complete -c niq -n '__fish_seen_subcommand_from project; and not __fish_seen_subcommand_from list create run' -a run -d 'run an instance in this terminal'
 
-complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from run' -a '(niq project list --ids 2>/dev/null)'
+complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from run' -a '(niq status --ids 2>/dev/null)'
 complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from list' -l ids -d 'print project ids only'
 complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from create' -l template -d 'template name'
 complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from run' -l bus -d 'event bus address'

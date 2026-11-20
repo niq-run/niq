@@ -9,27 +9,20 @@
 //	niq stop [-p]           — stop the background control plane (-p: the projects too)
 //	niq restart [-p]        — stop and start it again (-p: the projects too)
 //	niq update              — install the latest release with npm
-//	niq project | niq p     — pick a project, then stop or restart it
-//	niq project list        — list projects, their ports and run state
-//	niq project create <id> — create a project from a template
-//	niq project run <id>    — run a project instance in this process
+//	niq i                   — open the interactive terminal shell
+//	niq w                   — start the browser shell (same as bare niq)
 package cli
 
 import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/niq-run/niq/app/standalone/launcher"
-	"github.com/niq-run/niq/app/standalone/project"
-	"github.com/niq-run/niq/app/standalone/project/template"
 	"github.com/niq-run/niq/app/standalone/shell/tui"
-	"github.com/niq-run/niq/app/standalone/store"
 )
 
 // version is injected at build time via -ldflags:
@@ -74,8 +67,8 @@ func Main() {
 	switch {
 	case len(os.Args) > 1 && os.Args[1] == "i":
 		err = tui.RunPicker()
-	case len(os.Args) > 1 && (os.Args[1] == "project" || os.Args[1] == "p"):
-		err = runProject(os.Args[2:])
+	case len(os.Args) > 1 && os.Args[1] == "w":
+		err = runControl(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "stop":
 		err = runStop(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "restart":
@@ -183,143 +176,17 @@ func helpOrErr(err error) error {
 	return err
 }
 
-func runProject(args []string) error {
-	if len(args) == 0 {
-		return tui.RunPicker()
-	}
-	fs := flag.NewFlagSet("niq project", flag.ContinueOnError)
-	switch {
-	case args[0] == "list":
-		// `list` is the picker, like bare `niq project`; --ids is the
-		// machine-readable form shell completion calls.
-		ids := fs.Bool("ids", false, "Print project ids, one per line")
-		if err := fs.Parse(args[1:]); err != nil {
-			return helpOrErr(err)
-		}
-		if *ids {
-			projects, err := project.ListProjects()
-			if err != nil {
-				return err
-			}
-			for _, p := range projects {
-				fmt.Println(p.ID)
-			}
-			return nil
-		}
-		return tui.RunPicker()
-
-	case len(args) >= 2 && args[0] == "create":
-		id := args[1]
-		templateName := fs.String("template", "default", "Template to create the project from")
-		if err := fs.Parse(args[2:]); err != nil {
-			return err
-		}
-		path := store.ProjectPath(id)
-		if _, err := project.LoadProject(id); err == nil {
-			return fmt.Errorf("project %q already exists at %s", id, path)
-		}
-		tmpl, err := template.Load(template.TemplatesDir(), *templateName)
-		if err != nil {
-			return err
-		}
-		p, err := project.CreateProject(id, *templateName, tmpl)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("created project %q -> %s\n", p.ID, path)
-		return nil
-
-	case len(args) >= 2 && args[0] == "run":
-		id := args[1]
-		busAddr := fs.String("bus", "", "httptrans bus listen address (empty reuses the project's persisted port)")
-		webUIAddr := fs.String("webui", "", "WebUI listen address (empty reuses the project's persisted port; a non-loopback bind is unauthenticated unless --webui-auth is set)")
-		webUIAuth := fs.String("webui-auth", "", "Basic auth 'user:pass' for non-localhost WebUI access; persists to ~/.niq/common/auth.json (empty = read that file)")
-		if err := fs.Parse(args[2:]); err != nil {
-			return err
-		}
-		project.SetupLogging(id)
-		err := project.RunProject(project.ProjectRunOptions{
-			ProjectID: id,
-			BusAddr:   *busAddr,
-			WebUIAddr: *webUIAddr,
-			WebUIAuth: *webUIAuth,
-		})
-		if err != nil {
-			// The failure reason otherwise only reaches stderr: the control
-			// plane reports "exit status 1" and points at this log, which used
-			// to end at the last successful line.
-			log.Printf("[project] startup failed: %v", err)
-		}
-		return err
-
-	case len(args) >= 2 && (args[0] == "start" || args[0] == "stop" || args[0] == "restart"):
-		// One instance, by id: the same three operations the picker offers,
-		// scriptable — and the menu bar app's whole vocabulary.
-		p, err := project.LoadProject(args[1])
-		if err != nil {
-			return err
-		}
-		// The project package logs the signal it sends to a port holder; here the
-		// one-line report below is the answer.
-		prev := log.Writer()
-		log.SetOutput(io.Discard)
-		defer log.SetOutput(prev)
-
-		var line string
-		switch args[0] {
-		case "start":
-			line, err = tui.StartProject(*p)
-		case "stop":
-			line, err = tui.StopProject(*p)
-		default:
-			line, err = tui.RestartProject(*p)
-		}
-		if line != "" {
-			fmt.Println(line)
-		}
-		return err
-
-	case args[0] == "help" || args[0] == "-h" || args[0] == "--help":
-		printProjectUsage()
-		return nil
-
-	default:
-		return fmt.Errorf("usage: niq project [list | create <id> | run <id> | start|stop|restart <id>] (see: niq project --help)")
-	}
-}
-
-// setupLogging sends control-plane logs to <niq root>/niq.log.
-func setupLogging() {
-	path := controlLogPath()
-	os.MkdirAll(filepath.Dir(path), 0755)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err == nil {
-		log.SetOutput(f)
-	} else {
-		log.SetOutput(io.Discard)
-	}
-	log.SetPrefix("[niq] ")
-}
-
-// setupProjectLogging sends this project process's logs to
-// ~/.niq/projects/<id>/logs/niq-YYYY-MM-DD.log. The date in the filename gives
-// free daily rotation: a new day starts a new file, same-day restarts append.
-
 func printUsage() {
 	printBanner(banner{tagline: dim("neural interface quantum")})
 	fmt.Println()
 	fmt.Printf("%s\n", bracketed("usage"))
 	printUsageRows([][2]string{
 		{"niq", "start the control plane in the background, or report on it when it is already running"},
-		{"niq w [-f]", "start the browser shell (foreground with -f) and open it"},
+		{"niq w [-f]", "start the browser shell (foreground with -f)"},
 		{"niq status", "the control plane and every project instance"},
 		{"niq stop [-p]", "stop the control plane; -p also stops the running projects"},
 		{"niq restart [-p]", "restart the control plane; -p also restarts the running projects"},
 		{"niq update", "install the latest release with npm"},
-		{"niq project, niq p", "pick a project, then start, stop or restart it"},
-		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
-		{"niq project start|stop|restart <id>", "act on one instance, without the picker"},
-		{"niq project create <id> [--template <name>]", "create a project from a template"},
 		{"niq i", "open the interactive terminal shell"},
 		{"niq completion <shell>", "print a completion script: bash, zsh or fish"},
 		{"niq --version", "print the version"},
@@ -353,17 +220,4 @@ func printUsageRows(rows [][2]string) {
 		fmt.Printf("%s\n", bold(r[0]))
 		fmt.Printf("%s  %s\n", strings.Repeat(" ", col), dim(r[1]))
 	}
-}
-
-func printProjectUsage() {
-	printBanner(banner{tagline: dim("project instances")})
-	fmt.Println()
-	fmt.Printf("%s\n", bracketed("usage"))
-	printUsageRows([][2]string{
-		{"niq project", "pick a project (↑/↓, enter), then start, stop or restart it"},
-		{"niq project list", "same as 'niq project'; --ids prints just the ids"},
-		{"niq project start|stop|restart <id>", "act on one instance, without the picker"},
-		{"niq project create <id> [--template <name>]", "create a project from a template"},
-		{"niq project run <id> [--bus :0] [--webui 127.0.0.1:0] [--webui-auth user:pass]", "run an instance in this terminal (non-loopback webui is unauthenticated without webui-auth)"},
-	})
 }

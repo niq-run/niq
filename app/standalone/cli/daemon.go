@@ -43,6 +43,18 @@ const defaultAddr = "127.0.0.1:9527"
 
 func controlStatePath() string { return filepath.Join(store.Root(), "shell.json") }
 
+// setupLogging sends the shell daemon's output to <root>/niq.log.
+func setupLogging() {
+	path := controlLogPath()
+	_ = os.MkdirAll(filepath.Dir(path), 0755)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.SetOutput(io.Discard)
+		return
+	}
+	log.SetOutput(f)
+}
+
 func controlLogPath() string { return filepath.Join(store.Root(), "niq.log") }
 
 func readControlState() (*controlState, bool) {

@@ -42,6 +42,7 @@ type projectSnapshot struct {
 func runStatus(args []string) error {
 	fs := flag.NewFlagSet("niq status", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "Print the status as JSON")
+	asIDs := fs.Bool("ids", false, "Print project ids, one per line")
 	fs.Usage = func() {
 		fmt.Println(bold("niq status") + dim(" — the control plane and every project instance"))
 		fmt.Println()
@@ -49,6 +50,12 @@ func runStatus(args []string) error {
 	}
 	if err := fs.Parse(args); err != nil {
 		return helpOrErr(err)
+	}
+	if *asIDs {
+		for _, p := range takeStatus().Projects {
+			fmt.Println(p.ID)
+		}
+		return nil
 	}
 	if !*asJSON {
 		return statusControl()
