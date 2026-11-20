@@ -71,7 +71,8 @@ app/
 │   ├── launcher/         领域：项目目录、模板、provider、端口、日志、起停/链接
 │   ├── project/          运行时：总线和 worker 的装配与恢复
 │   │   └── api/          项目 HTTP API：项目数据查询/操作、SSE、人类入口（iface.Backend）
-│   ├── store/            落盘形状的唯一主人
+│   ├── store/            落盘与路径的唯一主人
+│   │   ├── layout/         叶包：NIQ_HOME / 项目目录 / 文件名 / auth 与 provider 路径
 │   │   ├── project.go      project.json
 │   │   ├── manifest.go     workers.json / workers.archived.json
 │   │   ├── state.go        workers/<id>/state.json
@@ -80,8 +81,7 @@ app/
 │   │   └── event/          事件存储（SQLite）
 │   ├── worker/           worker 控制面：placement、builder 表、恢复与收尾
 │   │   └── process/        OS 子进程监督（机制）
-│   ├── provider/         LLM provider 配置（launcher / api / worker 共享）
-│   └── home/             宿主根解析：NIQ_HOME / ~/.niq
+│   └── provider/         LLM provider 配置（launcher / api / worker 共享）
 ├── cluster/              另一形态（占位；自带 UI，不复用 shell/webui）
 ├── webui/                前端源码（组件 + 构建）；两个形态的 UI 各自 embed 产物
 └── publish/              组合根 + 发行物：薄 main、npm、install.sh、goreleaser
@@ -97,24 +97,28 @@ app/
 | `launcher` | 项目目录视图、create/link/start/stop/restart、模板、provider、端口分配、日志定位 | 不监听端口；不渲染；不 import `shell/*` |
 | `project` | 单项目 runtime：装配总线、恢复 worker、收尾、快照 | 不认识其他项目；不 import `launcher` / `shell/*` |
 | `project/api` | 项目数据的 JSON/SSE 契约、人类入口、审批 inbox | 不托管 SPA；不做 auth；不认识 launcher |
-| `store` | 每种落盘形状的读写、原子写、迁移入口 | 不接收 project id、不认识 `~/.niq` 布局（只收路径）；不 import `project` / `launcher` |
+| `store` | 每种落盘形状的读写、原子写、迁移入口 | 不 import `project` / `launcher` / `shell/*` |
+| `store/layout` | 根与路径：`NIQ_HOME`、项目目录、各文件名、auth/provider 路径 | **叶包**：不 import 任何 app 包，只做 env 读取与路径拼接 |
 | `worker` | placement → 机制、类型注册表、恢复顺序、保护集 | 不知道项目文件；不 import `store` |
-| `provider` | provider 配置读取与启动门控 | 不认识项目实例 |
-| `home` | 宿主根与凭证路径解析 | 不认识任何领域类型 |
+| `provider` | provider 配置读取与启动门控 | 不认识项目实例；路径来自 `store/layout` |
 
 ---
 
 ## 4. 依赖规则
 
 ```
-shell/cli ──► launcher ──► store ──► worker（仅类型）
-    │            │           │
-    │            └──► provider
-    └──► project ──► worker ──► process
-              └──► project/api
-shell/webui ──► launcher ──► store
-    └──► 前端产物（embed）
+store/layout   ← 叶：只读 env、拼路径，不 import 任何 app 包
+store          → store/layout, store/migrate, worker（仅 Manifest 等类型）
+worker         → store/layout, provider, process
+provider       → store/layout
+launcher       → store, provider
+project        → store, worker, provider
+project/api    → store, worker 契约, core（不 import project 内部）
+shell/cli      → launcher, project（仅 RunProject 交接）
+shell/webui    → launcher, store（读端口）, 前端产物
 ```
+
+读法：`store` 与 `worker` 都依赖 `store/layout`，而 `layout` 谁也不依赖，所以不会成环。`launcher` 不 import `project`：它启动实例靠 exec 自己，不靠包调用。
 
 硬规则，可用命令校验：
 
@@ -122,15 +126,16 @@ shell/webui ──► launcher ──► store
    ```sh
    go list -deps ./app/standalone/shell/webui | grep 'standalone/project$'   # 必须为空
    ```
-2. **`shell/*` 不实现领域能力**：起停、端口、模板只在 `launcher`。
-   ```sh
-   go list -deps ./app/standalone/shell/... | grep 'os/exec'   # 只允许 cli 的 project run 交接
-   ```
-3. **领域之间单向**：`launcher → project` 只允许出现在"启动一个实例"这一处（exec），不 import runtime 内部。
+2. **`shell/*` 不实现领域能力**：项目的起停、端口、模板只在 `launcher`。（`shell/cli` 允许 exec 自己，用于把 shell 进程放到后台——那是外壳自身的生命周期。）
+3. **`launcher` 不 import `project`**：启动实例靠 exec `niq project run`，是进程边界，不是包依赖。
 4. **`project` 不 import `launcher` / `shell/*`**。
 5. **`store` 不 import `project` / `launcher` / `shell/*`**。
 6. **`core` 不 import `app`**；`app/standalone` 与 `app/cluster` 互不 import。
 7. **数据形状只有一处**：任何 JSON 文件的 marshal/unmarshal 只在 `store`（前端契约除外）。
+8. **路径只有一处**：根、项目目录、文件名、auth 与 provider 路径都由 `store/layout` 给出；其他包只拼业务语义，不再拼路径。
+   ```sh
+   go list -deps ./app/standalone/store/layout | grep 'niq/app/standalone'   # 必须为空
+   ```
 
 ---
 
@@ -180,7 +185,7 @@ shell/webui ──► launcher ──► store
 
 | 路径 | 主人 | 读者 |
 |---|---|---|
-| `<root>/shell.json` | `shell/cli`（守护） | `niq status`、menubar |
+| `<root>/shell.json` | `shell`（cli 启动时写，进程内更新） | `niq status`、menubar |
 | `<root>/common/auth.json` | `shell/webui` | 仅 shell |
 | `<root>/common/providers/provider.json` | `provider` | launcher、api、worker |
 | `<root>/projects/<id>/project.json` | `store` | launcher、shell、project |
@@ -192,12 +197,13 @@ shell/webui ──► launcher ──► store
 | `<root>/projects/<id>/logs/niq-<date>.log` | project runtime | shell / launcher（定位与展示） |
 
 规则：**谁写谁拥有**。shell 不写项目文件；launcher 只通过 `store` 写；project 只写自己的 state、日志和 `identities.json`。
+所有路径由 `store/layout` 计算（`layout.AuthConfigPath`、`layout.ProviderConfigPath`、`layout.ProjectDir` 等），本表的"主人"指的是**内容的所有权**，不是路径的拼装权。
 
 ---
 
 ## 8. 关键不变量
 
-1. **一个落盘形状只有一个主人**（`store`）。别的包只调 API，不拼 JSON。
+1. **落盘形状与路径各只有一个主人**：形状归 `store`，路径归 `store/layout`。别的包只调 API，不拼 JSON、不拼路径。
 2. **外壳不持有领域状态**。杀掉 shell，所有项目照常跑；重启 shell，状态从磁盘重建。
 3. **项目不依赖 shell 存活**。实例由端口识别，起停靠信号 + 端口探测。
 4. **对外入口唯一**。只有 shell 可以绑非 loopback；项目 API 永远 loopback。
@@ -216,6 +222,8 @@ shell/webui ──► launcher ──► store
 | `app/publish/cmd`（命令树 + 守护 + picker） | `shell/cli` + `publish/cmd`（薄 main） | 移 | 未开始 |
 | `app/standalone/menubar` | `shell/menubar` | 移 | 未开始 |
 | `app/webui`（Go 包：SPA + 项目 API + iface.Backend + auth） | `project/api` + `shell/webui` + `app/webui`（仅前端） | 三分 | 未开始 |
+| `app/standalone/home` | `app/standalone/store/layout` | 移（叶子子包，见下） | 未开始 |
+| `project.go` 的 `ProjectsRoot/ProjectDir/ProjectPath/LogPath/RootSecretPath` | `store/layout` | 移 | 未开始 |
 | `app/standalone/project/store` | `app/standalone/store` | 移 | 未开始 |
 | `app/standalone/project/migrate` | `app/standalone/store/migrate` | 移 | 未开始 |
 | `app/standalone/project/provider` | `app/standalone/provider` | 移（去掉 `worker → project/*` 反向边） | 未开始 |
@@ -225,6 +233,7 @@ shell/webui ──► launcher ──► store
 
 已知偏差（落地时要一并处理）：
 
+- **为什么 `home` 不能直接并进 `store`**：`worker` 需要 programs 默认根（现在是 `home.Root()`），而 `store` 需要 `worker.Manifest`。若 `home` 变成 `store` 本身，就得到 `worker → store → worker` 的包循环。因此它必须是一个**叶子子包** `store/layout`：`store`、`worker`、`provider` 都可以依赖它，它谁也不依赖。用户视角上它仍是"store 的一部分"。
 - `store/manifest.go` 目前 import `project/migrate`，而 `migrate` 又 import `worker`（→ `provider`）。**store 不能依赖 worker 类型库**：`store/migrate` 应只做 JSON 形状转换，输出 `map[string]any`，由 `store` 反序列化；或接受这一条编译期依赖并在文档中注明。推荐前者。
 - `webui.Server` 一物四职（项目 API / SPA / iface.Backend / auth），必须先拆 API 再拆 SPA，否则 TUI 会被 SPA 绑架。
 
@@ -236,12 +245,20 @@ shell/webui ──► launcher ──► store
 
 ### 第 1 步：store 抽离
 
+- `app/standalone/home` → `app/standalone/store/layout`（叶子子包）
+- `project` 的根与目录/文件名函数 → `store/layout`
 - `app/standalone/project/store` → `app/standalone/store`
 - `project/migrate` → `store/migrate`
 - `project/provider` → `app/standalone/provider`
-- `project` 保留 `RunProject` 与路径别名，其余迁走
+- `project` 保留 `RunProject`，其余迁走
 
-**验收**：`go list -deps ./app/standalone/store | grep 'standalone/project'` 为空；全部测试通过；无行为变化。
+**验收**：
+```sh
+go list -deps ./app/standalone/store | grep 'standalone/project'   # 空
+go list -deps ./app/standalone/store/layout | grep 'niq/app/standalone'  # 空（叶包）
+grep -rn 'standalone/home' --include=*.go .                        # 空
+```
+全部测试通过；无行为变化。
 
 ### 第 2 步：launcher 抽离
 
@@ -293,6 +310,7 @@ shell/webui ──► launcher ──► store
 | control | **launcher** | 项目启动器 + 共享资源管理器（模板/provider/端口） |
 | WebUI（项目内） | **project api** | 项目数据的 HTTP 契约，TUI 也消费 |
 | CLI | **shell/cli** | 与 `shell/webui` 并列的另一套壳 |
+| home | **store/layout** | 根与路径解析；作为 store 的叶子子包 |
 | declaration | **manifest** | 已落地 |
 | worker service | **workerlife.Manager** | 已落地 |
 
