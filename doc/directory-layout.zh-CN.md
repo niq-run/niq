@@ -1,7 +1,7 @@
 # niq 目录划分
 
 > 状态：as-built（2026-11-20）。这份文档只描述**代码目录的归属规则**；`~/.niq` 的运行时数据布局见 `design/project/README.zh-CN.md`。
-> 目标形态（launcher / shell / project api 的分层）见 [application-architecture.zh-CN.md](./application-architecture.zh-CN.md)；本文会在其落地后同步。
+> 目标形态（launcher / shell / project api 的分层）是方案文档，见设计文档仓库 `design/app/`；本文会在其落地后同步。
 
 ## 0. 一句话
 
