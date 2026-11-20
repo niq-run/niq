@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/niq-run/niq/app/standalone/project/store"
-	"github.com/niq-run/niq/app/standalone/project/store/identity"
+	"github.com/niq-run/niq/app/standalone/store"
+	"github.com/niq-run/niq/app/standalone/store/identity"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/baseworker"

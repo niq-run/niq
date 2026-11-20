@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/standalone/home"
-	"github.com/niq-run/niq/app/standalone/project/migrate"
-	"github.com/niq-run/niq/app/standalone/project/store"
+	"github.com/niq-run/niq/app/standalone/store/migrate"
+	"github.com/niq-run/niq/app/standalone/store"
 	projtemplate "github.com/niq-run/niq/app/standalone/project/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )

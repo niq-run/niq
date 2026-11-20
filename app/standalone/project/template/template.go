@@ -20,7 +20,7 @@ import (
 	"sort"
 
 	"github.com/niq-run/niq/app/standalone/home"
-	"github.com/niq-run/niq/app/standalone/project/migrate"
+	"github.com/niq-run/niq/app/standalone/store/migrate"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 

@@ -20,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/niq-run/niq/app/standalone/project/store/identity"
+	"github.com/niq-run/niq/app/standalone/store/identity"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"

@@ -1,7 +1,7 @@
 // Package store implements the standalone form's durable storage: worker
 // manifests (workers.json / workers.archived.json), runtime state
-// (workers/<id>/state.json), bus identities (identity/) and the SQLite event
-// store (sqlite/).
+// (workers/<id>/state.json), bus identities (identity/), the SQLite event
+// store (event/) and the one-time migration of legacy files (migrate/).
 //
 // Everything here is path-based: the caller passes the project directory or the
 // state root, so this package knows no project ids and no ~/.niq layout. It is
@@ -16,7 +16,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/niq-run/niq/app/standalone/project/migrate"
+	"github.com/niq-run/niq/app/standalone/store/migrate"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
