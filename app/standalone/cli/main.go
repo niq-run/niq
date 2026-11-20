@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/niq-run/niq/app/standalone/launcher"
+	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/shell/tui"
 )
 
@@ -68,7 +69,7 @@ func Main() {
 	case len(os.Args) > 1 && os.Args[1] == "i":
 		err = tui.RunPicker()
 	case len(os.Args) > 1 && os.Args[1] == "w":
-		err = runControl(os.Args[2:])
+		err = runControl(os.Args[2:], true)
 	case len(os.Args) > 1 && os.Args[1] == "stop":
 		err = runStop(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "restart":
@@ -80,7 +81,7 @@ func Main() {
 	case len(os.Args) > 1 && (os.Args[1] == "completion" || os.Args[1] == "complete"):
 		err = runCompletion(os.Args[2:])
 	case len(os.Args) > 1:
-		err = runControl(os.Args[1:])
+		err = runControl(os.Args[1:], false)
 	default:
 		err = runDefault()
 	}
@@ -111,7 +112,7 @@ func runDefault() error {
 	return nil
 }
 
-func runControl(args []string) error {
+func runControl(args []string, openBrowser bool) error {
 	// Accept the explicit "control" / "start" word, which for historical
 	// reasons can precede the flags; flag.Parse would otherwise stop there and
 	// silently ignore --addr/--auth.
@@ -138,6 +139,9 @@ func runControl(args []string) error {
 	}
 	if st != nil {
 		printControlStarted(st)
+		if openBrowser {
+			openInBrowser(project.LocalhostURL(st.Bound))
+		}
 	}
 	return nil
 }

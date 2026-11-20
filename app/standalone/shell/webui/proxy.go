@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/niq-run/niq/app/standalone/project"
+	"github.com/niq-run/niq/app/standalone/launcher"
 )
 
 // projectPrefix is where a project's WebUI is mounted on the control plane:
@@ -104,7 +104,7 @@ func (c *Shell) serveSPA(w stdhttp.ResponseWriter, r *stdhttp.Request, prefix st
 // started by this control plane and for one started by hand.
 func (c *Shell) handleProjectProxy(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	id := r.PathValue("id")
-	p, err := project.LoadProject(id)
+	p, err := launcher.LoadProject(id)
 	if err != nil {
 		stdhttp.Error(w, "project not found: "+id, stdhttp.StatusNotFound)
 		return

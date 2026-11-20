@@ -86,7 +86,7 @@ func takeStatus() statusSnapshot {
 		snap.Control.Started = st.Started
 	}
 
-	projects, err := project.ListProjects()
+	projects, err := launcher.ListProjects()
 	if err != nil {
 		return snap
 	}

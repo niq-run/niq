@@ -39,6 +39,44 @@ type Instance struct {
 	Already   bool   `json:"already,omitempty"`
 }
 
+// Project and its metadata are the launcher's domain vocabulary. They are
+// aliases today because the catalog implementation still lives in project;
+// the shells depend on launcher, never on project.
+type (
+	Project      = project.Project
+	ProjectPorts = project.ProjectPorts
+)
+
+// ListProjects returns the catalog without run state.
+func ListProjects() ([]Project, error) { return project.ListProjects() }
+
+// LoadProject reads one project definition.
+func LoadProject(id string) (Project, error) {
+	p, err := project.LoadProject(id)
+	if err != nil {
+		return Project{}, err
+	}
+	return *p, nil
+}
+
+// CreateProject creates a project from a template.
+func CreateProject(id, templateName string, tmpl *project.TemplateConfig) (Project, error) {
+	p, err := project.CreateProject(id, templateName, tmpl)
+	if err != nil {
+		return Project{}, err
+	}
+	return *p, nil
+}
+
+// LinkProject opens an external project directory.
+func LinkProject(path string) (Project, error) {
+	p, err := project.LinkProject(path)
+	if err != nil {
+		return Project{}, err
+	}
+	return *p, nil
+}
+
 // View is a project definition plus its live run state, for the project list.
 type View struct {
 	project.Project

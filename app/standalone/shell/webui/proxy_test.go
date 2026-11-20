@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
 )
 
@@ -23,12 +24,12 @@ func setProjectWebUIPort(t *testing.T, id, port string) {
 	if err != nil {
 		t.Fatalf("port %q: %v", port, err)
 	}
-	p, err := project.LoadProject(id)
+	p, err := launcher.LoadProject(id)
 	if err != nil {
 		t.Fatalf("load project: %v", err)
 	}
 	p.Ports.WebUI = n
-	if err := project.SaveProject(p); err != nil {
+	if err := project.SaveProject(&p); err != nil {
 		t.Fatalf("save project: %v", err)
 	}
 }
@@ -50,7 +51,7 @@ func TestProjectProxyUnknownProject(t *testing.T) {
 // an explanatory message.
 func TestProjectProxyNotRunning(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
+	if _, err := launcher.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	base := newControl(t)
@@ -73,7 +74,7 @@ func TestProjectProxyNotRunning(t *testing.T) {
 // 502 they know how to report.
 func TestProjectProxyServesStoppedShell(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
+	if _, err := launcher.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	// A WebUI port nobody listens on: the project exists and was started before,
@@ -123,7 +124,7 @@ func TestProjectProxyServesStoppedShell(t *testing.T) {
 // client address preserved for the upstream.
 func TestProjectProxyForwards(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
+	if _, err := launcher.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -161,7 +162,7 @@ func TestProjectProxyForwards(t *testing.T) {
 // writes the second one (the project's /api/stream is SSE).
 func TestProjectProxyStreamsSSE(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
+	if _, err := launcher.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 

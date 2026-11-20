@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -271,7 +272,7 @@ func stopControlPlane() error {
 // runningProjectIDs lists the projects whose persisted WebUI port answers,
 // i.e. the instances a plain `niq stop` leaves alone.
 func runningProjectIDs() []string {
-	projects, err := project.ListProjects()
+	projects, err := launcher.ListProjects()
 	if err != nil {
 		return nil
 	}
@@ -307,11 +308,11 @@ func stopProjects() error {
 	log.SetOutput(io.Discard)
 	defer log.SetOutput(prev)
 
-	projects, err := project.ListProjects()
+	projects, err := launcher.ListProjects()
 	if err != nil {
 		return err
 	}
-	var running []project.Project
+	var running []launcher.Project
 	for _, p := range projects {
 		if launcher.IsRunning(p) {
 			running = append(running, p)
@@ -418,12 +419,12 @@ func restartProjectInstances(ids []string) {
 	defer log.SetOutput(prev)
 
 	for _, id := range ids {
-		p, err := project.LoadProject(id)
+		p, err := launcher.LoadProject(id)
 		if err != nil {
 			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
 			continue
 		}
-		line, err := tui.RestartProject(*p)
+		line, err := tui.RestartProject(p)
 		if err != nil {
 			fmt.Printf("%s %s\n", bold(id), red(err.Error()))
 			continue
@@ -477,13 +478,13 @@ func printControlStopped() {
 // controlURL, when the control plane is up, is the address that reaches the
 // project from outside; otherwise the loopback URL is shown.
 func printProjectStatus(controlURL string) {
-	projects, err := project.ListProjects()
+	projects, err := launcher.ListProjects()
 	if err != nil || len(projects) == 0 {
 		return
 	}
 	// Every project gets an address, running or not: /p/<id>/ renders a start
 	// page when the instance is down, so the link is worth clicking either way.
-	url := func(p project.Project) string {
+	url := func(p launcher.Project) string {
 		target := ""
 		switch {
 		case controlURL != "":
@@ -503,6 +504,16 @@ func printProjectStatus(controlURL string) {
 	// The list reports state; acting on it is the picker's job, so the heading
 	// says where that is.
 	tui.PrintTable(projects, url, bold("niq project")+dim(" to start, stop or restart one"))
+}
+
+// openInBrowser is best-effort: the address is always printed, so a failed
+// opener (headless box, container) is not an error.
+func openInBrowser(url string) {
+	opener := "open"
+	if runtime.GOOS == "linux" {
+		opener = "xdg-open"
+	}
+	_ = exec.Command(opener, url).Start()
 }
 
 func printControlStarted(st *controlState) {

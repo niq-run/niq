@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private var snapshot: Snapshot?
+    private var shellURL: URL?
     private var refreshing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -66,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if result.status == 0, let data = result.out.data(using: .utf8),
            let parsed = try? JSONDecoder().decode(Snapshot.self, from: data) {
             snapshot = parsed
+            shellURL = parsed.control.url.flatMap(URL.init(string:))
             rebuild()
         } else {
             rebuild(error: result.err.isEmpty ? "niq status failed" : result.err)
@@ -221,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async {
                 if let parsed {
                     self.snapshot = parsed
+                    self.shellURL = parsed.control.url.flatMap(URL.init(string:))
                     self.rebuild()
                 } else {
                     self.rebuild(error: result.err.isEmpty ? "niq status failed" : result.err)
@@ -289,9 +292,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } else {
                 actions.addItem(item("Open WebUI", #selector(openURL(_:)), represented: nil, enabled: false))
             }
-            actions.addItem(item("Start", #selector(runCommand(_:)), represented: ["project", "start", project.id], enabled: !project.running))
-            actions.addItem(item("Stop", #selector(runCommand(_:)), represented: ["project", "stop", project.id], enabled: project.running))
-            actions.addItem(item("Restart", #selector(runCommand(_:)), represented: ["project", "restart", project.id], enabled: project.running))
+            actions.addItem(item("Start", #selector(runCommand(_:)), represented: ["http", "start", project.id], enabled: !project.running))
+            actions.addItem(item("Stop", #selector(runCommand(_:)), represented: ["http", "stop", project.id], enabled: project.running))
+            actions.addItem(item("Restart", #selector(runCommand(_:)), represented: ["http", "restart", project.id], enabled: project.running))
 
             entry.submenu = actions
             menu.addItem(entry)
@@ -319,6 +322,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func runCommand(_ sender: NSMenuItem) {
         guard let args = sender.representedObject as? [String] else { return }
+        // Project actions go through the shell's HTTP API: the CLI no longer
+        // has project verbs, and the shell is the only HTTP entry.
+        if args.count == 3, args[0] == "http" {
+            post(action: args[1], project: args[2])
+            return
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let result = self.run(args)
@@ -329,6 +338,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.refresh()
             }
         }
+    }
+
+    /// POST /api/projects/{id}/{action} on the running shell.
+    private func post(action: String, project: String) {
+        guard let base = shellURL else {
+            report(args: [action, project], stderr: "the webui shell is not running")
+            return
+        }
+        guard let url = URL(string: "\(base.absoluteString)/api/projects/\(project)/\(action)") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let err {
+                    self.report(args: [action, project], stderr: err.localizedDescription)
+                } else if let code = (resp as? HTTPURLResponse)?.statusCode, code >= 300 {
+                    self.report(args: [action, project], stderr: String(data: data ?? Data(), encoding: .utf8) ?? "HTTP \(code)")
+                }
+                self.refresh()
+            }
+        }.resume()
     }
 
     private func report(args: [String], stderr: String) {

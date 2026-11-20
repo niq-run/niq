@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/template"
 	"github.com/niq-run/niq/app/standalone/store"
@@ -76,7 +77,7 @@ func TestControlBasicAuthLoopbackOpen(t *testing.T) {
 
 func TestControlContextAndList(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
+	if _, err := launcher.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -144,7 +145,7 @@ func TestControlTemplates(t *testing.T) {
 // returns 409 before any subprocess is launched.
 func TestControlCreateRejectsDuplicate(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("taken", "", fakeTemplate()); err != nil {
+	if _, err := launcher.CreateProject("taken", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	base := newControl(t)
@@ -224,7 +225,7 @@ func TestControlCreateRejectsUnknownTemplate(t *testing.T) {
 	if resp.StatusCode != 400 {
 		t.Fatalf("unknown template status=%d, want 400", resp.StatusCode)
 	}
-	if _, err := project.LoadProject("x"); err == nil {
+	if _, err := launcher.LoadProject("x"); err == nil {
 		t.Fatal("project should not have been created")
 	}
 }
@@ -304,7 +305,7 @@ func TestControlStartProjectNotFound(t *testing.T) {
 // template), updating it (PUT), and the validation paths.
 func TestControlTemplateFromProject(t *testing.T) {
 	setupProjectsRoot(t)
-	if _, err := project.CreateProject("alpha", "", fakeTemplate()); err != nil {
+	if _, err := launcher.CreateProject("alpha", "", fakeTemplate()); err != nil {
 		t.Fatal(err)
 	}
 	base := newControl(t)
