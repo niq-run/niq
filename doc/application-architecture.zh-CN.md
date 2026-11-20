@@ -157,6 +157,8 @@ worker   ctx.Providers.Find / ctx.ProviderSources
 
 注意这不是新增一层"providerStore"：它只是 `store` 里的**又一个文件适配器**，与 `project.go` / `manifest.go` / `state.go` / `identity/` / `event/` / `program/` 并列。`provider` 包本身不消失，只是从"既管文件又管语义"收缩为"只管语义"。
 
+**定位相同，形态不必强求一致**：`store` 里本来就有三种形态——根包函数族（`project.go`）、实现 core 契约的带锁类型（`Manifest` / `State` / `identity.Store`）、以及工厂返回接口（`eventstore.New`）。provider 没有 core 契约、`provider.json` 又是宿主级单文件，所以取最接近的 `project.go` 那种根包函数族即可；不要为了对称硬造一个没有契约的 `Store` 类型。将来若真要在运行时缓存/反复读写，再升级为带类型适配器。
+
 调用方的变化：
 
 - shell 的 `/api/providers`：`store.LoadProvider` 读、`store.SaveProvider` 写，`provider` 只做校验与 Build。
