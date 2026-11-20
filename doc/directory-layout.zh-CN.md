@@ -5,7 +5,7 @@
 
 ## 0. 一句话
 
-`core/` 放**契约**和**与部署形态无关的机制**；`app/` 放**部署形态**、**共享运行时**和**产品入口**。依赖只能从 `app` 指向 `core`，形态之间平级。
+`core/` 放**契约**和**与部署形态无关的机制**；`app/` 放**部署形态**（含各自的 shell）和**产品入口**。依赖只能从 `app` 指向 `core`，形态之间平级。
 
 ## 1. 源码树
 
@@ -54,13 +54,13 @@ niq/
 │   │   │   ├── identity.go       #     首次连接的身份播种
 │   │   │   ├── store.go          #     ManifestStore 契约
 │   │   │   └── process/          #     OS 子进程：provision + supervisor
+│   │   ├── shell/
+│   │   │   └── webui/            #   浏览器 shell：HTTP/SSE + SPA
+│   │   │       └── assets/       #     前端源码与构建产物（dist 是 go:embed 的）
 │   │   └── menubar/              #   macOS 菜单栏壳（Swift，驱动 CLI，不在 Go import 图）
 │   │
 │   ├── cluster/                  # 部署形态：分布式（占位，与 standalone 平级）
 │   │   └── README.md
-│   │
-│   ├── webui/                    # 共享运行时：HTTP/SSE + SPA 服务
-│   │   └── assets/               #   前端源码与构建产物（dist 是 go:embed 的）
 │   │
 │   └── publish/                  # 产品入口 + 发行物
 │       ├── cmd/                  #   niq CLI（组合根：装配 standalone）
@@ -81,9 +81,11 @@ niq/
 | **契约** | 只有接口/值类型；被多方实现 | `core/itfs/*` |
 | **机制** | 与部署形态无关的实现；不读项目文件 | `core/impl/*`（`workerlife`、`busctl`、`eventbus`、worker 类型库） |
 | **部署形态** | 知道 placement、项目文件布局、进程模型、存储适配 | `app/<form>/`（`standalone`、`cluster`） |
-| **共享运行时 / 产品入口** | 跨形态复用（`webui`），或负责把某个形态装起来（`publish`） | `app/` 顶层 |
+| **产品入口** | 负责把某个形态装起来（`publish`） | `app/` 顶层 |
 
-`app/standalone/home` 是形态内的“host 环境”知识（`NIQ_HOME`、`~/.niq`、auth 路径），不是共享运行时：`app/webui` 不能 import 它，auth 文件路径由调用方传入。
+`app/standalone/home` 是形态内的“host 环境”知识（`NIQ_HOME`、`~/.niq`、auth 路径）：`app/standalone/shell/webui` 不 import 它，auth 文件路径由调用方传入。
+
+shell（`shell/webui`、未来的 `shell/tui`）属于形态内部，不是跨形态共享件。cluster 的 UI 单独实现；等它出现后，再从 `shell/webui/assets` 抽公共前端组件。
 
 ## 3. 为什么 `busctl` 和 `workerlife` 都在 core
 
@@ -97,20 +99,19 @@ worker 的**控制面**不在这里，因为 placement 集合、builder 表、�
 ## 4. 依赖方向（硬规则）
 
 ```
-app/publish ──▶ app/standalone ──▶ app/webui ──▶ core
-                                  └────────────▶ core
+app/publish ──▶ app/standalone ──▶ core
 app/cluster ──▶ core
 ```
 
 - `app/standalone/*` 与 `app/cluster/*` **互不 import**；
-- `app/webui` **不 import 任何形态包**（它只拿 `worker.Manifest`、`bus.Control`、`IdentityRegistry`、`EventLog` 这些 core 句柄）；
-- 形态包可以 import `app/webui`（装配自己的界面）；
+- `app/standalone/shell/webui` 只依赖 core 句柄，不 import `standalone/control`、`standalone/project`、`cluster`；
+- 今天 `standalone/project` 反向 import `shell/webui`（项目进程还宿主着 HTTP API）；`project/api` 拆分后这条边消失；
 - `app/publish` 是组合根，可以依赖形态；**形态不反向 import 它**。
 
 可执行校验：
 
 ```sh
-go list -deps ./app/webui | grep -E 'app/(standalone|cluster)'        # 应为空
+go list -deps ./app/standalone/shell/webui | grep -E 'standalone/(control|project)|app/cluster'  # 应为空
 go list -deps ./app/standalone/... | grep 'app/cluster'               # 应为空
 go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为空
 ```

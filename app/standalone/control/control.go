@@ -30,7 +30,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/home"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/project/template"
-	"github.com/niq-run/niq/app/webui"
+	"github.com/niq-run/niq/app/standalone/shell/webui"
 )
 
 // ControlOptions configures the control-plane service.

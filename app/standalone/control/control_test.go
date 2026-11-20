@@ -21,7 +21,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/project/provider"
 	"github.com/niq-run/niq/app/standalone/project/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
-	"github.com/niq-run/niq/app/webui"
+	"github.com/niq-run/niq/app/standalone/shell/webui"
 )
 
 func doGet(t *testing.T, url string) (int, string) {

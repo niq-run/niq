@@ -23,7 +23,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/project/store/identity"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
-	"github.com/niq-run/niq/app/webui"
+	"github.com/niq-run/niq/app/standalone/shell/webui"
 	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"

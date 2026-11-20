@@ -1,7 +1,7 @@
 PREFIX ?= $(HOME)/.local/bin
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo 0.0.0-dev)
 BUILDTIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-WEBUI := app/webui/assets
+WEBUI := app/standalone/shell/webui/assets
 # Every step announces itself and npm logs each fetch, so a slow or stuck build
 # says which stage and which host it is waiting on instead of looking frozen.
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
@@ -66,7 +66,7 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 
 GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
 
-# The CLI. It embeds whatever bundle is in app/webui/assets/dist, so this does
+# The CLI. It embeds whatever bundle is in app/standalone/shell/webui/assets/dist, so this does
 # not rebuild the SPA — `make build webui` (or plain `make build`) is that step.
 niq:
 	@echo "go: building ./bin/niq…"
