@@ -4,9 +4,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/niq-run/niq/app/standalone/helper"
 )
 
 // Root resolution and path layout for the standalone form.
@@ -116,12 +117,7 @@ func LocalhostURL(resolved string) string {
 	return "http://" + resolved
 }
 
-// PortOf parses the numeric port from a host:port address, 0 on failure.
-func PortOf(addr string) int {
-	if _, port, err := net.SplitHostPort(addr); err == nil {
-		if n, err := strconv.Atoi(port); err == nil {
-			return n
-		}
-	}
-	return 0
-}
+// PortOf parses the numeric port from a host:port address (a bare "port" too),
+// 0 on failure. The parsing itself lives in helper so the CLI, the launcher and
+// the project runtime read addresses the same way.
+func PortOf(addr string) int { return helper.Port(addr) }

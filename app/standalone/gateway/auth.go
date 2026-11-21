@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/niq-run/niq/app/standalone/helper"
 )
 
 // AuthConfig is the persisted basic-auth credentials used to protect both the
@@ -51,19 +53,6 @@ func SaveAuth(path string, cfg AuthConfig) error {
 	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
-// IsLocalOnlyAddr reports whether addr binds exclusively to the loopback
-// interface (127.0.0.1 / ::1), i.e. remote hosts cannot reach the server.
-// Wildcard and explicit non-loopback addrs (":9527", "0.0.0.0:9527",
-// "[::]:9527", "192.168.1.10:9527") are not loopback-only.
-func IsLocalOnlyAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
 // StartupAuth resolves the basic-auth credentials for a WebUI separate of the
 // listen address. A non-empty spec ("user:pass", or a bare password defaulting
 // the user to "niq") is persisted to the auth file and used immediately;
@@ -87,7 +76,7 @@ func StartupAuth(addr, spec, path string) (user, pass string, enabled bool, warn
 
 	// Loopback-only binding needs no auth and no warning: remote can't reach us.
 	// Non-loopback binding with auth configured is fine too.
-	if IsLocalOnlyAddr(addr) || enabled {
+	if helper.IsLoopbackBind(addr) || enabled {
 		return user, pass, enabled, ""
 	}
 

@@ -6,20 +6,18 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/niq-run/niq/app/standalone/helper"
 	"github.com/niq-run/niq/app/standalone/project/api"
 	providerpkg "github.com/niq-run/niq/app/standalone/provider"
 	"github.com/niq-run/niq/app/standalone/store"
-	"github.com/niq-run/niq/app/standalone/store/event"
+	eventstore "github.com/niq-run/niq/app/standalone/store/event"
 	"github.com/niq-run/niq/app/standalone/store/identity"
 	"github.com/niq-run/niq/app/standalone/store/migrate"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
@@ -42,19 +40,6 @@ type ProjectRunOptions struct {
 	BusAddr   string // httptrans bus listen address (":0" = dynamic)
 	WebUIAddr string // webui listen address (":0" = dynamic)
 	WebUIAuth string // optional user:pass basic-auth spec for the WebUI (empty = disabled)
-}
-
-// loopbackBind keeps the project's HTTP API on loopback: the shell is the only
-// remote entry, and it proxies project data.
-func loopbackBind(addr string) string {
-	if addr == "" {
-		return ""
-	}
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	return net.JoinHostPort("127.0.0.1", port)
 }
 
 // SetupLogging directs the standard logger to the project's daily log file.
@@ -100,11 +85,11 @@ func RunProject(opts ProjectRunOptions) error {
 	// ephemeral port: first run must not expose it on every interface.
 	// Validate persisted ports up front: an invalid value (>65535 or <=0) would
 	// fail to bind and silently fall back to a random port — warn instead.
-	if p.Ports.Bus != 0 && !validPort(p.Ports.Bus) {
+	if p.Ports.Bus != 0 && !helper.ValidPort(p.Ports.Bus) {
 		log.Printf("[project %s] ignoring invalid bus port %d (must be 1-65535)", opts.ProjectID, p.Ports.Bus)
 		p.Ports.Bus = 0
 	}
-	if p.Ports.WebUI != 0 && !validPort(p.Ports.WebUI) {
+	if p.Ports.WebUI != 0 && !helper.ValidPort(p.Ports.WebUI) {
 		log.Printf("[project %s] ignoring invalid webui port %d (must be 1-65535)", opts.ProjectID, p.Ports.WebUI)
 		p.Ports.WebUI = 0
 	}
@@ -122,7 +107,7 @@ func RunProject(opts ProjectRunOptions) error {
 	}
 	// The browser shell is the only remote entry; a project API listens on
 	// loopback so the shell can proxy it without a second auth gate.
-	webUIAddr := loopbackBind(opts.WebUIAddr)
+	webUIAddr := helper.LoopbackBind(opts.WebUIAddr)
 	if webUIAddr == "" {
 		if p.Ports.WebUI != 0 {
 			webUIAddr = fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI)
@@ -134,11 +119,11 @@ func RunProject(opts ProjectRunOptions) error {
 	onResolved := func(bus, webui string) {
 		newBus := store.PortOf(bus)
 		if newBus == 0 {
-			newBus = resolvePort(busAddr)
+			newBus = helper.Port(busAddr)
 		}
 		newWeb := store.PortOf(webui)
 		if newWeb == 0 {
-			newWeb = resolvePort(webUIAddr)
+			newWeb = helper.Port(webUIAddr)
 		}
 		// Only persist when the ports actually changed, so a stable re-start does
 		// not churn project.json.
@@ -432,82 +417,35 @@ func runAssembly(opts assemblyOptions) error {
 	return nil
 }
 
-// validPort reports whether n is a usable TCP port (1-65535).
-func validPort(n int) bool { return n > 0 && n <= 65535 }
-
 // freeProjectPorts makes the persisted ports authoritative: if a port is currently
 // occupied, it kills the holder(s) so the project binds its recorded address.
 func freeProjectPorts(addrs ...string) {
 	for _, a := range addrs {
-		if a == "" || a == ":0" {
-			continue
-		}
-		_, port, err := net.SplitHostPort(a)
-		if err != nil {
-			continue
-		}
-		if n, err := strconv.Atoi(port); err != nil || n == 0 {
-			continue
-		}
-		if conn, err := net.DialTimeout("tcp", "127.0.0.1:"+port, 200*time.Millisecond); err != nil {
+		port := helper.Port(a)
+		if port == 0 || !helper.IsServingPort(port) {
 			continue // free already
-		} else {
-			conn.Close()
 		}
-		log.Printf("[project] port %s occupied; killing holder(s) to reuse it", port)
+		log.Printf("[project] port %d occupied; killing holder(s) to reuse it", port)
 		killPortHolders(port)
 	}
 	// Give the sockets a moment to release before binding.
 	time.Sleep(300 * time.Millisecond)
 }
 
-// killPortHolders kills every process LISTENING on a TCP port, via lsof.
-func killPortHolders(port string) {
-	_ = signalPortHolders(port, os.Kill)
-}
-
-// signalPortHolders sends sig to every process LISTENING on the TCP port (via
-// lsof) and returns how many were signalled. Only listeners are matched: a
-// plain `-i tcp:<port>` would also match any client connected to that port (e.g.
-// the control plane proxying a project), and we must never signal those. pid 1
-// is never touched.
-func signalPortHolders(port string, sig os.Signal) int {
-	out, err := exec.Command("lsof", "-ti", "tcp:"+port, "-sTCP:LISTEN").Output()
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, line := range strings.Split(string(out), "\n") {
-		pidStr := strings.TrimSpace(line)
-		if pidStr == "" {
-			continue
-		}
-		pid, err := strconv.Atoi(pidStr)
-		if err != nil || pid <= 1 { // never signal init/pid 1
-			continue
-		}
-		p, err := os.FindProcess(pid)
-		if err != nil {
-			continue
-		}
-		log.Printf("[project] signalling pid %d holding port %s", pid, port)
-		if p.Signal(sig) == nil {
-			n++
-		}
-	}
-	return n
+// killPortHolders kills every process LISTENING on a TCP port.
+func killPortHolders(port int) {
+	_ = helper.Signal(port, os.Kill)
 }
 
 // InterruptPortHolders sends SIGINT to every process listening on port — how a
-// project started manually from the CLI (outside the control plane) is stopped
-// gracefully: 'niq project run' snapshots on SIGINT, exactly like a
-// control-plane stop. Returns the number of processes signalled (0 = nothing
-// was listening, i.e. not running).
+// project started manually (outside the gateway) is stopped gracefully: the
+// project snapshots on SIGINT. Returns the number of processes signalled
+// (0 = nothing was listening, i.e. not running).
 func InterruptPortHolders(port int) int {
 	if port <= 0 {
 		return 0
 	}
-	return signalPortHolders(strconv.Itoa(port), os.Interrupt)
+	return helper.Signal(port, os.Interrupt)
 }
 
 // bindServer binds a listener at reqAddr via start; if a specific (non-":0")
@@ -520,37 +458,12 @@ func bindServer(reqAddr string, start func(addr string) (string, error)) (string
 	if err == nil || reqAddr == ":0" {
 		return resolved, err
 	}
-	fallback := ephemeralAddr(reqAddr)
+	fallback := helper.EphemeralAddr(reqAddr)
 	log.Printf("[project] addr %s unavailable (%v); falling back to %s", reqAddr, err, fallback)
 	if resolved2, err2 := start(fallback); err2 == nil {
 		return resolved2, nil
 	}
 	return "", err
-}
-
-// ephemeralAddr maps reqAddr to port 0 on the same host, so the fallback keeps
-// the requested exposure: a loopback bind stays loopback (a project WebUI must
-// never widen to all interfaces just because its port was taken), while a
-// wildcard or explicit LAN bind keeps that interface.
-func ephemeralAddr(reqAddr string) string {
-	host, _, err := net.SplitHostPort(reqAddr)
-	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
-		return ":0" // already the widest exposure
-	}
-	return net.JoinHostPort(host, "0")
-}
-
-// resolvePort reads the numeric port of a flat ":N" or "host:N" address
-// without actually binding (used only as a fallback sync for known ports).
-func resolvePort(addr string) int {
-	if n := store.PortOf(addr); n != 0 {
-		return n
-	}
-	trimmed := strings.TrimPrefix(addr, ":")
-	if n, err := strconv.Atoi(trimmed); err == nil {
-		return n
-	}
-	return 0
 }
 
 // rootSecretPath is the file holding the project bus's token-signing secret.

@@ -9,27 +9,6 @@ import (
 	"testing"
 )
 
-// TestIsLocalOnlyAddr verifies loopback-bound detection across common address
-// forms.
-func TestIsLocalOnlyAddr(t *testing.T) {
-	for _, tc := range []struct {
-		addr string
-		want bool
-	}{
-		{"127.0.0.1:9527", true},
-		{"localhost:9527", false}, // conservative: unresolvable name → not local-only
-		{":9527", false},          // wildcard → remote-reachable
-		{"0.0.0.0:9527", false},
-		{"[::]:9527", false},
-		{"192.168.1.10:9527", false},
-		{"[::1]:9527", true},
-	} {
-		if got := IsLocalOnlyAddr(tc.addr); got != tc.want {
-			t.Fatalf("IsLocalOnlyAddr(%q) = %v, want %v", tc.addr, got, tc.want)
-		}
-	}
-}
-
 // TestStartupAuthSpecPersistsAndReloads verifies a spec writes credentials to
 // the auth file and a later empty spec reloads them.
 func TestStartupAuthSpecPersistsAndReloads(t *testing.T) {
