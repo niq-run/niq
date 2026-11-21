@@ -26,7 +26,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/gateway"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/store"
-	"github.com/niq-run/niq/app/ui/tui"
+	"github.com/niq-run/niq/app/client/tui"
 )
 
 // shellState is the on-disk record of a running control plane.

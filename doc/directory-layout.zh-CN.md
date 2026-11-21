@@ -62,7 +62,7 @@ niq/
 │   │       ├── store.go          #     ManifestStore 契约
 │   │       └── process/          #     OS 子进程：provision + supervisor
 │   │
-│   ├── ui/                       # 界面：全部是 gateway 的客户端
+│   ├── client/                   # 界面：全部是 gateway 的客户端
 │   │   ├── webui/                #   浏览器界面：assets/ + Assets()（没有服务器）
 │   │   └── tui/                  #   终端界面：picker、状态表
 │   │
@@ -93,7 +93,7 @@ niq/
 
 `app/standalone/store/root.go` 是形态内的路径知识（`NIQ_HOME`、`~/.niq`、项目目录、auth 与 provider 路径、地址渲染）。别的包只调 `store.*`，不自己拼路径；`gateway` 的 auth 文件路径也由调用方传入。
 
-`app/ui/*` 是界面实现，本身不含形态知识：`webui` 只有资产，`tui` 只有终端渲染与 `contract.Client`。它们不 import `app/standalone` 的任何包。cluster 的界面单独实现；等它出现后，再从 `app/ui/webui/assets` 抽公共前端组件。
+`app/client/*` 是界面实现，本身不含形态知识：`webui` 只有资产，`tui` 只有终端渲染与 `contract.Client`。它们不 import `app/standalone` 的任何包。cluster 的界面单独实现；等它出现后，再从 `app/client/webui/assets` 抽公共前端组件。
 
 ## 3. 为什么 `busctl` 和 `workerlife` 都在 core
 
@@ -109,12 +109,12 @@ worker 的**控制面**不在这里，因为 placement 集合、builder 表、�
 ```
 app/publish ──▶ app/standalone ──▶ core
      │                │
-     └──▶ app/ui ──▶ app/contract
+     └──▶ app/client ──▶ app/contract
 app/cluster ──▶ core
 ```
 
 - `app/standalone/*` 与 `app/cluster/*` **互不 import**；
-- `app/ui/*` 不 import `app/standalone/*`，只 import `app/contract`；
+- `app/client/*` 不 import `app/standalone/*`，只 import `app/contract`；
 - `app/contract` 只 import stdlib，所以任何界面（包括未来的远程客户端）都能安全使用；
 - `app/standalone/gateway` 不认识具体 UI，只认 `UIMount`；
 - `app/publish` 是分发层，可以依赖形态与界面；**形态不反向 import 它**。
@@ -122,7 +122,7 @@ app/cluster ──▶ core
 可执行校验：
 
 ```sh
-go list -deps ./app/ui/... | grep 'app/standalone'          # 应为空
+go list -deps ./app/client/... | grep 'app/standalone'          # 应为空
 go list -f '{{join .Imports " "}}' ./app/contract | grep 'niq-run/niq'  # 应为空
 go list -deps ./app/standalone/... | grep 'app/cluster'               # 应为空
 go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为空
@@ -140,7 +140,7 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为�
 | 新的形态内存储 | 该形态的 `store/` 子包（例如 `store/identity`） |
 | 新的上层界面 | 实现 `iface.Backend`，由形态装配一个 interface worker（不需要 manifest） |
 | 新的 CLI 命令 / 发行配置 | `app/publish` |
-| 浏览器界面与前端 | `app/ui/webui`（含 `assets/`）；cluster 自带 UI，公共组件等它出现后再从 assets 抽 |
+| 浏览器界面与前端 | `app/client/webui`（含 `assets/`）；cluster 自带 UI，公共组件等它出现后再从 assets 抽 |
 
 ## 6. 容易放错的三个位置
 

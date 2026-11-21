@@ -19,7 +19,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/store"
 	"github.com/niq-run/niq/app/standalone/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
-	"github.com/niq-run/niq/app/ui/webui"
+	"github.com/niq-run/niq/app/client/webui"
 )
 
 func doGet(t *testing.T, url string) (int, string) {

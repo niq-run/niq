@@ -24,7 +24,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/gateway"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/store"
-	"github.com/niq-run/niq/app/ui/tui"
+	"github.com/niq-run/niq/app/client/tui"
 )
 
 // version is injected at build time via -ldflags:

@@ -255,7 +255,7 @@ core/itfs/        interfaces & types (contracts, not implementations)
 core/impl/        implementations (workers, bus, transports, providers, hosts)
 app/contract/     shapes + HTTP client shared by every interface (stdlib only)
 app/standalone/   the single-machine form: gateway, launcher, project, store, cli
-app/ui/           interfaces: webui (assets) and tui (both gateway clients)
+app/client/           interfaces: webui (assets) and tui (both gateway clients)
 app/publish/cmd   CLI entry point (package main)
 app/publish/mac   macOS distribution (menu bar app + bundled niq)
 app/publish/npm   npm distribution (launcher shim + package template)

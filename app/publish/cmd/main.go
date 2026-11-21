@@ -6,7 +6,7 @@ package main
 import (
 	"github.com/niq-run/niq/app/standalone"
 	"github.com/niq-run/niq/app/standalone/gateway"
-	"github.com/niq-run/niq/app/ui/webui"
+	"github.com/niq-run/niq/app/client/webui"
 )
 
 // Injected at build time via -ldflags -X main.version / -X main.buildTime.
