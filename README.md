@@ -39,7 +39,7 @@ double-clicking the app.
 **Install script** (no npm; the binary goes to `~/.niq/bin`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/cmd/install.sh | sh
 ```
 
 **From source** (Go 1.26+ — the embedded JS engine requires it — and Node 20+
