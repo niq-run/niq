@@ -70,7 +70,7 @@ niq/
 │   │   └── README.md
 │   │
 │   └── publish/                  # 分发：决定带哪些 UI、是否打包二进制
-│       ├── cmd/                  #   niq CLI：薄 main + install.sh（二进制安装脚本）
+│       ├── cmd/                  #   niq CLI：薄 main + install.sh + .goreleaser.yaml
 │       ├── mac/                  #   macOS 分发：打包脚本 + miq 启动器（界面源码在 client/menubar）
 │       ├── npm/                  #   npm 包与发布脚本
 │       └── release-notes/        #   每版本归档 + RELEASE_NOTES.md（当前草稿）
