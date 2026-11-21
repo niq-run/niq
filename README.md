@@ -31,7 +31,7 @@ then gets out of the way. From there, **http://localhost:9527** is the WebUI, an
 
 Installation (three channels), upgrading, every command and flag, server
 deployment and the environment variables are all in
-**[doc/install-and-cli.md](doc/install-and-cli.md)** ([简体中文](doc/install-and-cli.zh-CN.md)).
+**[doc/install-and-cli.md](doc/install-and-cli.md)**.
 
 ## Model provider
 
@@ -45,7 +45,7 @@ interfaces and `app/publish/` for the distributions.
 
 [doc/directory-layout.md](doc/directory-layout.md) is the full picture: the
 as-built tree, the ownership rules behind it, where new things go, and the
-dependency checks that enforce them ([简体中文](doc/directory-layout.zh-CN.md)).
+dependency checks that enforce them.
 
 ## Build & test
 
@@ -60,15 +60,11 @@ make build               # ./bin/niq, plus the app on macOS
 
 [doc/build-and-test.md](doc/build-and-test.md) has the make targets, how to run
 one package or one test, the WebUI dev server, the TypeScript SDK, the local
-release dry run, and what is (and is not yet) covered
-([简体中文](doc/build-and-test.zh-CN.md)).
+release dry run, and what is (and is not yet) covered.
 
 ## Data directory
 
-Runtime data lives under `~/.niq/` by default; `NIQ_HOME` relocates the root, and
-`NIQ_AUTH_CONFIG` / `NIQ_PROVIDER_CONFIG` override those two individual files
-wholesale (taking priority over `NIQ_HOME`).
-
-The tree, which file belongs to which component, and what each process reads are
-in [doc/install-and-cli.md §6](doc/install-and-cli.md#6-where-it-writes) and
-`design/project/README.zh-CN.md`.
+Everything niq writes lives under `~/.niq` (`NIQ_HOME` relocates the root;
+`NIQ_AUTH_CONFIG` / `NIQ_PROVIDER_CONFIG` override those two files wholesale).
+The tree, which component owns each file, and what each process reads are in
+[doc/install-and-cli.md §6](doc/install-and-cli.md#6-where-it-writes).
