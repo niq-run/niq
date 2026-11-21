@@ -225,8 +225,10 @@ func (w *Worker) serves(typ event.EventType) bool {
 	return false
 }
 
-// Stop leaves the bus and closes every subscription. Backends are not told to
-// stop: they were injected by the assembly, which owns their lifetime.
+// Stop leaves the bus and closes every subscription. A backend that implements
+// Runnable stops first, in reverse order, so its last delivery can still reach
+// the bus; a plain backend is left alone, because the assembly injected it and
+// owns its lifetime.
 func (w *Worker) Stop() error {
 	w.mu.Lock()
 	cancel := w.cancel
