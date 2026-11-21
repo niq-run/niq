@@ -133,11 +133,28 @@ func (g *Gateway) GetHTML(t *testing.T, path string) (int, string) {
 // PostJSON performs a JSON POST.
 func (g *Gateway) PostJSON(t *testing.T, path string, body any) (int, string) {
 	t.Helper()
+	return g.sendJSON(t, http.MethodPost, path, body)
+}
+
+// PutJSON performs a JSON PUT — the ACL and params editors.
+func (g *Gateway) PutJSON(t *testing.T, path string, body any) (int, string) {
+	t.Helper()
+	return g.sendJSON(t, http.MethodPut, path, body)
+}
+
+// Delete performs a DELETE on the project's API.
+func (g *Gateway) Delete(t *testing.T, path string) (int, string) {
+	t.Helper()
+	return g.do(t, http.MethodDelete, path, nil, "")
+}
+
+func (g *Gateway) sendJSON(t *testing.T, method, path string, body any) (int, string) {
+	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal body: %v", err)
 	}
-	return g.do(t, http.MethodPost, path, bytes.NewReader(raw), "application/json")
+	return g.do(t, method, path, bytes.NewReader(raw), "application/json")
 }
 
 func (g *Gateway) do(t *testing.T, method, path string, body io.Reader, accept string) (int, string) {

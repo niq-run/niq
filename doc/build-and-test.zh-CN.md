@@ -105,8 +105,17 @@ go test -race ./app/standalone/...                    # 并发敏感的包
 ```sh
 make e2e                       # 全部套件
 make e2e-cli                   # 装配层：启停/重启、端口、输出、补全
+make e2e-bus                   # 数据面：dial-in 参与者、投递、ACL、请求-回复
 go test -tags e2e ./e2e/suites/cli -run TestE2EStop -v
 ```
+
+三套件，按观察的层划分：
+
+| 套件 | 驱动什么 | 断言什么 |
+|---|---|---|
+| `cli` | 像用户一样驱动二进制 | 退出码、输出、`shell.json`、端口 |
+| `bus` | 以 dial-in 身份接真实 HTTP 传输 | 定向投递、广播、活动连接上的 ACL 变更、请求-回复、transient 与持久历史 |
+| `worker` | 内置 worker 类型 | timer 触发、workspace 挂载、directory 名册、program 存储、host 生命周期、一轮桩模型推理 |
 
 每条测试有自己的 `NIQ_HOME`、自己的 `HOME`，以及一个 `open`/`npm` 都空转的 `PATH`；网关一律起在 `127.0.0.1:0`——所以这套东西可以在已经跑着 niq 的机器上并行跑。每个沙箱在测试结束前会停掉自己启动的全部进程，包括 `niq i`／`niq w` 自己拉起的网关。
 

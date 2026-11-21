@@ -115,9 +115,18 @@ They are behind the `e2e` build tag, so `go test ./...` stays fast:
 
 ```sh
 make e2e                       # every suite
-make e2e-cli                   # the assembly layer: start/stop/restart, ports, output, completion
+make e2e-cli                   # assembly: start/stop/restart, ports, output, completion
+make e2e-bus                   # data plane: dial-in peers, delivery, ACL, request/reply
 go test -tags e2e ./e2e/suites/cli -run TestE2EStop -v
 ```
+
+Three suites, split by the layer they observe:
+
+| suite | what it drives | what it asserts |
+|---|---|---|
+| `cli` | the binary, as a user does | exit codes, output, `shell.json`, the port |
+| `bus` | a dial-in worker over the real HTTP transport | directed delivery, broadcast, ACL edits on a live connection, request/reply, transient vs durable |
+| `worker` | the bundled worker types | timer fires, workspace mounts, directory roster, program store, host lifecycle, one reason turn against a stub model |
 
 Each test gets its own `NIQ_HOME`, its own `HOME`, and a `PATH` whose `open` and
 `npm` do nothing, and starts gateways on `127.0.0.1:0` — so the suites run in

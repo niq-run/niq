@@ -7,7 +7,7 @@ WEBUI := app/client/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build niq miq webui miq-universal dist-miq app snapshot npm-publish e2e e2e-cli
+.PHONY: install build niq miq webui miq-universal dist-miq app snapshot npm-publish e2e e2e-cli e2e-bus e2e-worker
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -92,6 +92,12 @@ e2e:
 
 e2e-cli:
 	go test -tags e2e ./e2e/suites/cli -count=1 -timeout 600s
+
+e2e-bus:
+	go test -tags e2e ./e2e/suites/bus -count=1 -timeout 600s
+
+e2e-worker:
+	go test -tags e2e ./e2e/suites/worker -count=1 -timeout 600s
 
 snapshot:
 	goreleaser release --snapshot --clean --config app/publish/cmd/.goreleaser.yaml
