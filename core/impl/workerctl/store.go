@@ -1,4 +1,4 @@
-package workerlife
+package workerctl
 
 import (
 	"github.com/niq-run/niq/core/itfs/worker"
@@ -17,7 +17,7 @@ type StateRecord struct {
 // WorkerStore is the persistence backend for managed workers' runtime state.
 // Manager calls SaveState on every lifecycle transition and LoadAll on
 // recovery. The concrete implementation lives in the assembly layer (project),
-// which owns the storage layout — workerlife only depends on this contract.
+// which owns the storage layout — workerctl only depends on this contract.
 type WorkerStore interface {
 	// SaveState writes the worker's lifecycle state and latest snapshot.
 	SaveState(id string, state worker.WorkerState, snapshot []byte) error

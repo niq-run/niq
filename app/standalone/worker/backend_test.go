@@ -15,7 +15,7 @@ import (
 	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
-	"github.com/niq-run/niq/core/impl/workerlife"
+	"github.com/niq-run/niq/core/impl/workerctl"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
@@ -141,7 +141,7 @@ func (w *fakeWorker) Restore([]byte) error        { return nil }
 type testRig struct {
 	cp         *ControlPlane
 	backend    *workerHostBackend
-	manager    *workerlife.Manager
+	manager    *workerctl.Manager
 	supervisor *projprocess.Supervisor
 	manifests  *memManifests
 	registry   corebus.IdentityRegistry

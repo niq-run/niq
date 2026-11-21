@@ -109,7 +109,7 @@ func TestApprovalDecisionApproved(t *testing.T) {
 
 	decision := event.New(event.TypeApprovalDecision, "approver-w", map[string]any{"approved": true})
 	decision.RequestId = req.RequestId
-	h.w.handleApprovalDecision(context.Background(), decision)
+	h.w.handleApprovalDecision(decision)
 
 	// The escaped path's directory is now mounted and the call completed.
 	// The re-dispatch runs on its own goroutine, so wait for its reply.
@@ -139,7 +139,7 @@ func TestApprovalDecisionRejected(t *testing.T) {
 
 	decision := event.New(event.TypeApprovalDecision, "approver-w", map[string]any{"approved": false, "note": "no"})
 	decision.RequestId = req.RequestId
-	h.w.handleApprovalDecision(context.Background(), decision)
+	h.w.handleApprovalDecision(decision)
 
 	last := h.ch.sent[len(h.ch.sent)-1]
 	if last.Type != event.TypeRequestFailed || last.RequestId != "caller-1-read" {
@@ -250,7 +250,7 @@ func TestMountAddFromOtherWorkerWaitsForApproval(t *testing.T) {
 	// Approval applies the mount and answers the requester.
 	decision := event.New(event.TypeApprovalDecision, "approver-w", map[string]any{"approved": true})
 	decision.RequestId = h.ch.sent[0].RequestId
-	h.w.handleApprovalDecision(context.Background(), decision)
+	h.w.handleApprovalDecision(decision)
 	if !mountsContain(h.b.Mounts(), extra) {
 		t.Fatalf("mounts = %v, want %s", h.b.Mounts(), extra)
 	}
@@ -274,7 +274,7 @@ func TestMountAddFromOtherWorkerDenied(t *testing.T) {
 	h.w.handleMountAdd(event.New(TypeMountAdd, "reason-1", map[string]any{"path": extra}))
 	decision := event.New(event.TypeApprovalDecision, "approver-w", map[string]any{"approved": false, "note": "no"})
 	decision.RequestId = h.ch.sent[0].RequestId
-	h.w.handleApprovalDecision(context.Background(), decision)
+	h.w.handleApprovalDecision(decision)
 
 	last := h.ch.sent[len(h.ch.sent)-1]
 	if last.Type != event.TypeRequestFailed {
@@ -321,7 +321,7 @@ func TestSnapshotCarriesModeAndPendings(t *testing.T) {
 	}
 	decision := event.New(event.TypeApprovalDecision, "approver-w", map[string]any{"approved": true})
 	decision.RequestId = req.RequestId
-	w2.handleApprovalDecision(context.Background(), decision)
+	w2.handleApprovalDecision(decision)
 	if !mountsContain(b2.Mounts(), filepath.Dir(h.outsideFile)) {
 		t.Fatalf("restored worker did not mount %s: %v", filepath.Dir(h.outsideFile), b2.Mounts())
 	}

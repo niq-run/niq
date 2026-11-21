@@ -13,7 +13,7 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/iface"
-	"github.com/niq-run/niq/core/impl/workerlife"
+	"github.com/niq-run/niq/core/impl/workerctl"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
@@ -169,7 +169,7 @@ func TestSpawnRejectsUnknownParams(t *testing.T) {
 type testEngine struct {
 	types *typeRegistry
 	bc    BuildContext
-	mgr   *workerlife.Manager
+	mgr   *workerctl.Manager
 }
 
 // newTestEngine wires up a registry, engine and in-process listener exactly as
@@ -203,7 +203,7 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 
 	bus := busctl.New(newMemIdentityStore(), registry)
 	types := newTypeRegistry()
-	mgr := workerlife.New(workerlife.Config{Build: types.Build})
+	mgr := workerctl.New(workerctl.Config{Build: types.Build})
 	bc := BuildContext{
 		Registry:     registry,
 		Bus:          bus,
@@ -259,7 +259,7 @@ func TestWorkspaceSuspendResume(t *testing.T) {
 	}
 }
 
-func firstWorkerOfType(mgr *workerlife.Manager, typ string) string {
+func firstWorkerOfType(mgr *workerctl.Manager, typ string) string {
 	for _, wi := range mgr.List("") {
 		if wi.Type == typ {
 			return wi.ID
@@ -268,7 +268,7 @@ func firstWorkerOfType(mgr *workerlife.Manager, typ string) string {
 	return ""
 }
 
-func workerStatus(mgr *workerlife.Manager, id string) coreworker.WorkerInfo {
+func workerStatus(mgr *workerctl.Manager, id string) coreworker.WorkerInfo {
 	for _, wi := range mgr.List("") {
 		if wi.ID == id {
 			return wi

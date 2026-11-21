@@ -15,7 +15,7 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/eventbus"
-	"github.com/niq-run/niq/core/impl/workerlife"
+	"github.com/niq-run/niq/core/impl/workerctl"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
@@ -26,7 +26,7 @@ import (
 type Config struct {
 	ProjectID  string
 	Manifests  ManifestStore
-	StateStore workerlife.WorkerStore
+	StateStore workerctl.WorkerStore
 	Registry   corebus.IdentityRegistry
 	Bus        corebus.Control
 	Signer     *eventbus.TokenSigner
@@ -41,10 +41,10 @@ type Config struct {
 // ControlPlane owns the worker subsystem for one project.
 type ControlPlane struct {
 	backend    *workerHostBackend
-	manager    *workerlife.Manager
+	manager    *workerctl.Manager
 	types      *typeRegistry
 	manifests  ManifestStore
-	state      workerlife.WorkerStore
+	state      workerctl.WorkerStore
 	supervisor *process.Supervisor
 	protect    []string
 	logf       func(string, ...any)
@@ -59,7 +59,7 @@ func New(cfg Config) *ControlPlane {
 		logf = log.Printf
 	}
 	types := newTypeRegistry()
-	manager := workerlife.New(workerlife.Config{Store: cfg.StateStore, Build: types.Build})
+	manager := workerctl.New(workerctl.Config{Store: cfg.StateStore, Build: types.Build})
 	cp := &ControlPlane{
 		manifests:  cfg.Manifests,
 		state:      cfg.StateStore,
@@ -96,7 +96,7 @@ func (c *ControlPlane) RegisterBuilders(ctx BuildContext) { registerBuilders(ctx
 
 // RegisterBuilder registers a single type. It is the seam tests and
 // out-of-tree worker types use; the built-in set goes through RegisterBuilders.
-func (c *ControlPlane) RegisterBuilder(typ string, b workerlife.Builder, check func(map[string]any) error) {
+func (c *ControlPlane) RegisterBuilder(typ string, b workerctl.Builder, check func(map[string]any) error) {
 	c.types.register(typ, b, check)
 }
 
@@ -105,7 +105,7 @@ func (c *ControlPlane) Types() []string { return c.types.Types() }
 
 // Manager exposes the instance manager to the assembly: builders use it to
 // checkpoint a worker whose durable state changed at runtime.
-func (c *ControlPlane) Manager() *workerlife.Manager { return c.manager }
+func (c *ControlPlane) Manager() *workerctl.Manager { return c.manager }
 
 // HostBackend is the exit the host worker drives: the full lifecycle plus
 // manifest surface, with no ACL editing (identity writes belong to the bus

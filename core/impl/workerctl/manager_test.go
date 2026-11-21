@@ -1,4 +1,4 @@
-package workerlife
+package workerctl
 
 import (
 	"context"

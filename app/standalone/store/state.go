@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	projworker "github.com/niq-run/niq/app/standalone/worker"
-	"github.com/niq-run/niq/core/impl/workerlife"
+	"github.com/niq-run/niq/core/impl/workerctl"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
@@ -23,7 +23,7 @@ type State struct {
 	root string
 }
 
-var _ workerlife.WorkerStore = (*State)(nil)
+var _ workerctl.WorkerStore = (*State)(nil)
 
 // NewState creates a state store rooted at root (created if missing).
 func NewState(root string) (*State, error) {
@@ -37,7 +37,7 @@ func (s *State) dir(id string) string {
 	return filepath.Join(s.root, projworker.SanitizeID(id))
 }
 
-// SaveState implements workerlife.WorkerStore.
+// SaveState implements workerctl.WorkerStore.
 func (s *State) SaveState(id string, state coreworker.WorkerState, snapshot []byte) error {
 	dir := s.dir(id)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -60,13 +60,13 @@ func (s *State) SaveState(id string, state coreworker.WorkerState, snapshot []by
 	return nil
 }
 
-// LoadAll implements workerlife.WorkerStore.
-func (s *State) LoadAll() ([]workerlife.StateRecord, error) {
+// LoadAll implements workerctl.WorkerStore.
+func (s *State) LoadAll() ([]workerctl.StateRecord, error) {
 	entries, err := os.ReadDir(s.root)
 	if err != nil {
 		return nil, fmt.Errorf("store: read state root: %w", err)
 	}
-	var recs []workerlife.StateRecord
+	var recs []workerctl.StateRecord
 	for _, de := range entries {
 		if !de.IsDir() {
 			continue
@@ -76,7 +76,7 @@ func (s *State) LoadAll() ([]workerlife.StateRecord, error) {
 		if err != nil {
 			continue
 		}
-		recs = append(recs, workerlife.StateRecord{
+		recs = append(recs, workerctl.StateRecord{
 			ID:       id,
 			State:    state,
 			Snapshot: snapshot,
@@ -85,7 +85,7 @@ func (s *State) LoadAll() ([]workerlife.StateRecord, error) {
 	return recs, nil
 }
 
-// Delete implements workerlife.WorkerStore.
+// Delete implements workerctl.WorkerStore.
 func (s *State) Delete(id string) error {
 	return os.RemoveAll(s.dir(id))
 }

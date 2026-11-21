@@ -15,7 +15,7 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/eventbus"
-	"github.com/niq-run/niq/core/impl/workerlife"
+	"github.com/niq-run/niq/core/impl/workerctl"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
@@ -28,7 +28,7 @@ type backendConfig struct {
 	// process log.
 	ProjectID string
 	// Manager runs live worker instances. Required.
-	Manager *workerlife.Manager
+	Manager *workerctl.Manager
 	// Types resolves worker type → builder. Required.
 	Types *typeRegistry
 	// Manifests is the manifest store. Required.
@@ -54,7 +54,7 @@ type backendConfig struct {
 // the process supervisor, the manifest store and the bus control plane.
 type workerHostBackend struct {
 	projectID  string
-	manager    *workerlife.Manager
+	manager    *workerctl.Manager
 	types      *typeRegistry
 	manifests  ManifestStore
 	supervisor *process.Supervisor

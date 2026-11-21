@@ -1,7 +1,7 @@
 // The worker-type registry: which types exist, how each is constructed, and
 // which spawn parameters each reads.
 //
-// This is assembly knowledge, not mechanism. workerlife.Manager receives one
+// This is assembly knowledge, not mechanism. workerctl.Manager receives one
 // Build function and never learns that types exist; the control plane owns the
 // table because it is the layer that decides what a project may spawn.
 package worker
@@ -11,20 +11,20 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/niq-run/niq/core/impl/workerlife"
+	"github.com/niq-run/niq/core/impl/workerctl"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
 // typeRegistry maps a type label to its builder and spawn-parameter check.
 type typeRegistry struct {
 	mu          sync.RWMutex
-	builders    map[string]workerlife.Builder
+	builders    map[string]workerctl.Builder
 	paramChecks map[string]func(params map[string]any) error
 }
 
 func newTypeRegistry() *typeRegistry {
 	return &typeRegistry{
-		builders:    map[string]workerlife.Builder{},
+		builders:    map[string]workerctl.Builder{},
 		paramChecks: map[string]func(map[string]any) error{},
 	}
 }
@@ -32,7 +32,7 @@ func newTypeRegistry() *typeRegistry {
 // register adds a type's builder and, optionally, its spawn-parameter check.
 // The check is registered next to the builder because the valid parameter set
 // is that type's own knowledge.
-func (r *typeRegistry) register(typ string, b workerlife.Builder, check func(map[string]any) error) {
+func (r *typeRegistry) register(typ string, b workerctl.Builder, check func(map[string]any) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.builders[typ] = b
@@ -41,7 +41,7 @@ func (r *typeRegistry) register(typ string, b workerlife.Builder, check func(map
 	}
 }
 
-// Build implements workerlife.Builder.
+// Build implements workerctl.Builder.
 func (r *typeRegistry) Build(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	r.mu.RLock()
 	b, ok := r.builders[cfg.Type]

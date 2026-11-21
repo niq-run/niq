@@ -78,7 +78,7 @@ func (w *HostWorker) registerExtensions() {
 			},
 			"approver": map[string]any{
 				"type":        "string",
-				"description": "Worker that approves boundary-expansion requests (when type=workspace). Defaults to webui; empty disables the approval flow.",
+				"description": "Worker that approves boundary-expansion requests (when type=workspace). Defaults to webui; empty disables the approval flow. The workspace can hand this role to another worker at runtime via its approver.set event (e.g. a reason worker that decides out-of-mount requests itself).",
 			},
 			"tags": map[string]any{
 				"type":        "array",

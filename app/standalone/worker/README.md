@@ -14,7 +14,7 @@ core/itfs/worker           Lifecycle / Manifest / Backend / WorkerInfo
         │
 app/standalone/worker      ControlPlane + backend + builders + manifest model
         │
-        ├── workerlife     (core/impl) live instances: build/spawn/snapshot/…
+        ├── workerctl     (core/impl) live instances: build/spawn/snapshot/…
         └── process        OS children: provision + supervise
 ```
 
@@ -22,7 +22,7 @@ app/standalone/worker      ControlPlane + backend + builders + manifest model
 
 | piece | responsibility | where |
 |---|---|---|
-| `workerlife.Manager` | live instance lifecycle: build, spawn, suspend (snapshot), resume, restart, destroy, checkpoint | `core/impl/workerlife` |
+| `workerctl.Manager` | live instance lifecycle: build, spawn, suspend (snapshot), resume, restart, destroy, checkpoint | `core/impl/workerctl` |
 | `process.Supervisor` | OS child lifecycle: launch, crash restart with backoff, stop, shutdown kill-tree | `process/` |
 | identity provisioning | mint credentials, register identities with the bus control plane | `process/provision.go` |
 | `typeRegistry` | which types exist, how each is built, which params each reads | `registry.go` |
@@ -81,8 +81,8 @@ construction bag:
 | `store.go` | `ManifestStore`: the storage boundary the project implements. |
 | `process/` | Third-party process runtime: provisioning, supervisor, platform shims. |
 
-Runtime state (`state.json` / snapshots) is `workerlife.WorkerStore`, defined in
-`core/impl/workerlife` and implemented by `app/standalone/project`.
+Runtime state (`state.json` / snapshots) is `workerctl.WorkerStore`, defined in
+`core/impl/workerctl` and implemented by `app/standalone/project`.
 
 ## Where a backend comes from
 
@@ -104,7 +104,7 @@ ManifestStore.List(false)
       │
       ▼
 ControlPlane.Recover
-      ├── in-process ....... workerlife.Manager.RecoverAll (snapshot replay)
+      ├── in-process ....... workerctl.Manager.RecoverAll (snapshot replay)
       └── process .......... backend.Resume → provision → supervisor / identity only
 
 ctx.Done (assembly)

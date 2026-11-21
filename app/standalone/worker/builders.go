@@ -24,7 +24,7 @@ import (
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/iface"
 	reasonbase "github.com/niq-run/niq/core/impl/reason"
-	"github.com/niq-run/niq/core/impl/workerlife"
+	"github.com/niq-run/niq/core/impl/workerctl"
 	"github.com/niq-run/niq/core/impl/workers/coding"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	"github.com/niq-run/niq/core/impl/workers/history"
@@ -65,7 +65,7 @@ type BuildContext struct {
 	Bus        corebus.Control
 	Listener   *inprocess.InProcListener
 	Engine     *eventbus.Engine
-	Manager    *workerlife.Manager
+	Manager    *workerctl.Manager
 	EventLog   *eventbusapi.EventLog
 	EventStore event.EventStore
 	// ProviderLoad reads provider.json. It is injected (store.LoadProvider in

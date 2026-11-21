@@ -60,6 +60,35 @@ func (s *stubChannel) waitForReplyType(want event.EventType, timeout time.Durati
 	return s.lastReplyType() == want
 }
 
+// waitForReplyTo polls until an event of the wanted type carrying the given
+// request id is recorded (or timeout elapses). Used when a call's own reply is
+// not the last event on the channel (e.g. a re-dispatch replies separately).
+func (s *stubChannel) waitForReplyTo(requestID string, want event.EventType, timeout time.Duration) (event.Event, bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		s.mu.Lock()
+		for _, e := range s.sent {
+			if e.RequestId == requestID && e.Type == want {
+				s.mu.Unlock()
+				return e, true
+			}
+		}
+		s.mu.Unlock()
+		if time.Now().After(deadline) {
+			return event.Event{}, false
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// reset drops the recorded events, for tests that assert on a fresh burst.
+func (s *stubChannel) reset() {
+	s.mu.Lock()
+	s.sent = nil
+	s.targets = nil
+	s.mu.Unlock()
+}
+
 // TestSnapshotRestoreRoundtrip verifies that a runtime-modified mount set
 // survives the Snapshot → Restore cycle (the persistence path behind
 // mount.add + checkpoint).

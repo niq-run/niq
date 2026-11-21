@@ -8,7 +8,7 @@ import (
 )
 
 // Worker is the contract for built-in Go workers running inside the
-// workerlife manager. External workers connect to the bus via UDS/WS and are
+// workerctl manager. External workers connect to the bus via UDS/WS and are
 // not constrained by this interface.
 type Worker interface {
 	// ID returns the unique identifier of this Worker.

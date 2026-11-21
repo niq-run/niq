@@ -1,4 +1,4 @@
-// Package workerlife manages live worker instances: construct, connect, start,
+// Package workerctl manages live worker instances: construct, connect, start,
 // snapshot, suspend, resume, restart, destroy, and their persisted state.
 //
 // It knows nothing about bus semantics or placements. It receives a Build
@@ -14,7 +14,7 @@
 // Checkpoint intentionally does not take the per-id lock: it is called from a
 // worker's own durable-state callback and may run while that worker is being
 // suspended. It only updates the cached snapshot under the registry lock.
-package workerlife
+package workerctl
 
 import (
 	"context"
@@ -81,11 +81,11 @@ func New(cfg Config) *Manager {
 // buildSpec runs the injected builder, naming the wrapper clearly in errors.
 func (m *Manager) buildSpec(cfg worker.WorkerConfig) (worker.SpawnSpec, error) {
 	if m.build == nil {
-		return worker.SpawnSpec{}, fmt.Errorf("workerlife: no builder configured")
+		return worker.SpawnSpec{}, fmt.Errorf("workerctl: no builder configured")
 	}
 	spec, err := m.build(cfg)
 	if err != nil {
-		return worker.SpawnSpec{}, fmt.Errorf("workerlife: build %q: %w", cfg.ID, err)
+		return worker.SpawnSpec{}, fmt.Errorf("workerctl: build %q: %w", cfg.ID, err)
 	}
 	return spec, nil
 }
@@ -146,7 +146,7 @@ func (s *Manager) Create(ctx context.Context, cfg worker.WorkerConfig) (worker.W
 	l.Lock()
 	defer l.Unlock()
 	if s.Has(spec.ID()) {
-		return worker.WorkerConfig{}, fmt.Errorf("workerlife: worker %s already exists", spec.ID())
+		return worker.WorkerConfig{}, fmt.Errorf("workerctl: worker %s already exists", spec.ID())
 	}
 	if err := s.spawn(ctx, spec); err != nil {
 		return worker.WorkerConfig{}, err
@@ -158,7 +158,7 @@ func (s *Manager) Create(ctx context.Context, cfg worker.WorkerConfig) (worker.W
 	if s.onSpawn != nil {
 		if err := s.onSpawn(spec.Config); err != nil {
 			_ = s.destroyLocked(spec.ID())
-			return spec.Config, fmt.Errorf("workerlife: declare %q: %w", spec.ID(), err)
+			return spec.Config, fmt.Errorf("workerctl: declare %q: %w", spec.ID(), err)
 		}
 	}
 	return spec.Config, nil
@@ -170,16 +170,16 @@ func (s *Manager) spawn(ctx context.Context, spec worker.SpawnSpec) error {
 	// Check before opening a connection: a duplicate must not leak a worker or
 	// a channel. The id lock makes this a definitive check.
 	if s.Has(spec.ID()) {
-		return fmt.Errorf("workerlife: worker %s already exists", spec.ID())
+		return fmt.Errorf("workerctl: worker %s already exists", spec.ID())
 	}
 	ch, err := spec.Connect()
 	if err != nil {
-		return fmt.Errorf("workerlife: connect %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerctl: connect %q: %w", spec.ID(), err)
 	}
 	w := spec.Build(ch)
 	if err := w.Start(ctx); err != nil {
 		_ = ch.Close()
-		return fmt.Errorf("workerlife: start %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerctl: start %q: %w", spec.ID(), err)
 	}
 
 	s.mu.Lock()
@@ -187,7 +187,7 @@ func (s *Manager) spawn(ctx context.Context, spec worker.SpawnSpec) error {
 		s.mu.Unlock()
 		_ = w.Stop()
 		_ = ch.Close()
-		return fmt.Errorf("workerlife: worker %s already exists", spec.ID())
+		return fmt.Errorf("workerctl: worker %s already exists", spec.ID())
 	}
 	s.entries = append(s.entries, workerEntry{
 		spec:   spec,
@@ -200,10 +200,10 @@ func (s *Manager) spawn(ctx context.Context, spec worker.SpawnSpec) error {
 	s.mu.Unlock()
 	if store != nil {
 		if err := store.SaveState(spec.ID(), worker.StateRunning, nil); err != nil {
-			log.Printf("[workerlife] persist state %s: %v", spec.ID(), err)
+			log.Printf("[workerctl] persist state %s: %v", spec.ID(), err)
 		}
 	}
-	log.Printf("[workerlife] created worker %s (type=%s)", spec.ID(), spec.Type())
+	log.Printf("[workerctl] created worker %s (type=%s)", spec.ID(), spec.Type())
 	return nil
 }
 
@@ -228,22 +228,22 @@ func (s *Manager) RestoreAndRun(ctx context.Context, cfg worker.WorkerConfig, sn
 // connection is opened, and a race is cleaned up rather than leaked.
 func (s *Manager) restoreAndRunLocked(ctx context.Context, spec worker.SpawnSpec, snapshot []byte) error {
 	if s.Has(spec.ID()) {
-		return fmt.Errorf("workerlife: worker %s already exists", spec.ID())
+		return fmt.Errorf("workerctl: worker %s already exists", spec.ID())
 	}
 	ch, err := spec.Connect()
 	if err != nil {
-		return fmt.Errorf("workerlife: connect %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerctl: connect %q: %w", spec.ID(), err)
 	}
 	w := spec.Build(ch)
 	if len(snapshot) > 0 {
 		if err := w.Restore(snapshot); err != nil {
 			_ = ch.Close()
-			return fmt.Errorf("workerlife: restore %q: %w", spec.ID(), err)
+			return fmt.Errorf("workerctl: restore %q: %w", spec.ID(), err)
 		}
 	}
 	if err := w.Start(ctx); err != nil {
 		_ = ch.Close()
-		return fmt.Errorf("workerlife: start %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerctl: start %q: %w", spec.ID(), err)
 	}
 
 	s.mu.Lock()
@@ -251,7 +251,7 @@ func (s *Manager) restoreAndRunLocked(ctx context.Context, spec worker.SpawnSpec
 		s.mu.Unlock()
 		_ = w.Stop()
 		_ = ch.Close()
-		return fmt.Errorf("workerlife: worker %s already exists", spec.ID())
+		return fmt.Errorf("workerctl: worker %s already exists", spec.ID())
 	}
 	s.entries = append(s.entries, workerEntry{
 		spec:   spec,
@@ -264,10 +264,10 @@ func (s *Manager) restoreAndRunLocked(ctx context.Context, spec worker.SpawnSpec
 	s.mu.Unlock()
 	if store != nil {
 		if err := store.SaveState(spec.ID(), worker.StateRunning, snapshot); err != nil {
-			log.Printf("[workerlife] persist state %s: %v", spec.ID(), err)
+			log.Printf("[workerctl] persist state %s: %v", spec.ID(), err)
 		}
 	}
-	log.Printf("[workerlife] restored worker %s (type=%s)", spec.ID(), spec.Type())
+	log.Printf("[workerctl] restored worker %s (type=%s)", spec.ID(), spec.Type())
 	return nil
 }
 
@@ -289,12 +289,12 @@ func (s *Manager) suspendLocked(id string) error {
 	s.mu.Lock()
 	if s.protected[id] {
 		s.mu.Unlock()
-		return fmt.Errorf("workerlife: worker %s is protected and cannot be suspended", id)
+		return fmt.Errorf("workerctl: worker %s is protected and cannot be suspended", id)
 	}
 	e := s.findLocked(id)
 	if e == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workerlife: worker %s not found", id)
+		return fmt.Errorf("workerctl: worker %s not found", id)
 	}
 	if e.state == worker.StateSuspended {
 		s.mu.Unlock()
@@ -308,10 +308,10 @@ func (s *Manager) suspendLocked(id string) error {
 	// Snapshot must happen before stopping so we capture a consistent state.
 	snap, err := w.Snapshot()
 	if err != nil {
-		return fmt.Errorf("workerlife: snapshot %s: %w", id, err)
+		return fmt.Errorf("workerctl: snapshot %s: %w", id, err)
 	}
 	if err := w.Stop(); err != nil {
-		return fmt.Errorf("workerlife: stop %s: %w", id, err)
+		return fmt.Errorf("workerctl: stop %s: %w", id, err)
 	}
 	if ch != nil {
 		_ = ch.Close()
@@ -335,10 +335,10 @@ func (s *Manager) suspendLocked(id string) error {
 	}
 	store := s.store
 	s.mu.Unlock()
-	log.Printf("[workerlife] suspended worker %s", id)
+	log.Printf("[workerctl] suspended worker %s", id)
 	if store != nil {
 		if err := store.SaveState(id, worker.StateSuspended, snap); err != nil {
-			log.Printf("[workerlife] persist state %s: %v", id, err)
+			log.Printf("[workerctl] persist state %s: %v", id, err)
 		}
 	}
 	return nil
@@ -355,7 +355,7 @@ func (s *Manager) Resume(ctx context.Context, id string) error {
 	e := s.findLocked(id)
 	if e == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workerlife: worker %s not found", id)
+		return fmt.Errorf("workerctl: worker %s not found", id)
 	}
 	if e.state == worker.StateRunning {
 		s.mu.Unlock()
@@ -367,18 +367,18 @@ func (s *Manager) Resume(ctx context.Context, id string) error {
 
 	ch, err := spec.Connect()
 	if err != nil {
-		return fmt.Errorf("workerlife: reconnect %q: %w", id, err)
+		return fmt.Errorf("workerctl: reconnect %q: %w", id, err)
 	}
 	w := spec.Build(ch)
 	if snapshot != nil {
 		if err := w.Restore(snapshot); err != nil {
 			_ = ch.Close()
-			return fmt.Errorf("workerlife: restore %q: %w", id, err)
+			return fmt.Errorf("workerctl: restore %q: %w", id, err)
 		}
 	}
 	if err := w.Start(ctx); err != nil {
 		_ = ch.Close()
-		return fmt.Errorf("workerlife: start %q: %w", id, err)
+		return fmt.Errorf("workerctl: start %q: %w", id, err)
 	}
 
 	s.mu.Lock()
@@ -389,10 +389,10 @@ func (s *Manager) Resume(ctx context.Context, id string) error {
 	}
 	store := s.store
 	s.mu.Unlock()
-	log.Printf("[workerlife] resumed worker %s", id)
+	log.Printf("[workerctl] resumed worker %s", id)
 	if store != nil {
 		if err := store.SaveState(id, worker.StateRunning, snapshot); err != nil {
-			log.Printf("[workerlife] persist state %s: %v", id, err)
+			log.Printf("[workerctl] persist state %s: %v", id, err)
 		}
 	}
 	return nil
@@ -413,11 +413,11 @@ func (s *Manager) Checkpoint(id string) error {
 	e := s.findLocked(id)
 	if e == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workerlife: worker %s not found", id)
+		return fmt.Errorf("workerctl: worker %s not found", id)
 	}
 	if e.worker == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workerlife: worker %s is not running (nothing to snapshot)", id)
+		return fmt.Errorf("workerctl: worker %s is not running (nothing to snapshot)", id)
 	}
 	w := e.worker
 	store := s.store
@@ -428,7 +428,7 @@ func (s *Manager) Checkpoint(id string) error {
 	}
 	snap, err := w.Snapshot()
 	if err != nil {
-		return fmt.Errorf("workerlife: snapshot %s: %w", id, err)
+		return fmt.Errorf("workerctl: snapshot %s: %w", id, err)
 	}
 
 	// Keep the entry's cached snapshot in step: it is what a later
@@ -438,14 +438,14 @@ func (s *Manager) Checkpoint(id string) error {
 	e = s.findLocked(id)
 	if e == nil || e.worker != w || e.state != worker.StateRunning {
 		s.mu.Unlock()
-		return fmt.Errorf("workerlife: worker %s stopped while checkpointing", id)
+		return fmt.Errorf("workerctl: worker %s stopped while checkpointing", id)
 	}
 	e.snapshot = snap
 	e.snapSeq++
 	s.mu.Unlock()
 
 	if err := store.SaveState(id, worker.StateRunning, snap); err != nil {
-		return fmt.Errorf("workerlife: persist state %s: %w", id, err)
+		return fmt.Errorf("workerctl: persist state %s: %w", id, err)
 	}
 	return nil
 }
@@ -467,12 +467,12 @@ func (s *Manager) destroyLocked(id string) error {
 	s.mu.Lock()
 	if s.protected[id] {
 		s.mu.Unlock()
-		return fmt.Errorf("workerlife: worker %s is protected and cannot be destroyed", id)
+		return fmt.Errorf("workerctl: worker %s is protected and cannot be destroyed", id)
 	}
 	e := s.findLocked(id)
 	if e == nil {
 		s.mu.Unlock()
-		return fmt.Errorf("workerlife: worker %s not found", id)
+		return fmt.Errorf("workerctl: worker %s not found", id)
 	}
 	w := e.worker
 	ch := e.ch
@@ -481,7 +481,7 @@ func (s *Manager) destroyLocked(id string) error {
 
 	if w != nil {
 		if err := w.Stop(); err != nil {
-			return fmt.Errorf("workerlife: stop %s: %w", id, err)
+			return fmt.Errorf("workerctl: stop %s: %w", id, err)
 		}
 	}
 	if ch != nil {
@@ -494,7 +494,7 @@ func (s *Manager) destroyLocked(id string) error {
 	if store != nil {
 		_ = store.Delete(id)
 	}
-	log.Printf("[workerlife] destroyed worker %s", id)
+	log.Printf("[workerctl] destroyed worker %s", id)
 	return nil
 }
 
@@ -534,13 +534,13 @@ func (s *Manager) Restart(ctx context.Context, cfg worker.WorkerConfig) error {
 		return s.restoreAndRunLocked(ctx, spec, s.persistedSnapshot(spec.ID()))
 	}
 	if s.isProtected(spec.ID()) {
-		return fmt.Errorf("workerlife: worker %s is protected and cannot be restarted", spec.ID())
+		return fmt.Errorf("workerctl: worker %s is protected and cannot be restarted", spec.ID())
 	}
 
 	// Suspend snapshots before stopping and persists the result, so the state a
 	// restart has to keep is on disk before the live instance goes away.
 	if err := s.suspendLocked(spec.ID()); err != nil {
-		return fmt.Errorf("workerlife: restart %q: %w", spec.ID(), err)
+		return fmt.Errorf("workerctl: restart %q: %w", spec.ID(), err)
 	}
 
 	s.mu.Lock()
@@ -561,7 +561,7 @@ func (s *Manager) Restart(ctx context.Context, cfg worker.WorkerConfig) error {
 		snap = s.persistedSnapshot(spec.ID())
 	}
 	if prevType != "" && prevType != spec.Type() {
-		log.Printf("[workerlife] restart %s: type %s -> %s, dropping the %s snapshot", spec.ID(), prevType, spec.Type(), prevType)
+		log.Printf("[workerctl] restart %s: type %s -> %s, dropping the %s snapshot", spec.ID(), prevType, spec.Type(), prevType)
 		snap = nil
 	}
 	return s.restoreAndRunLocked(ctx, spec, snap)
@@ -576,7 +576,7 @@ func (s *Manager) persistedSnapshot(id string) []byte {
 	}
 	recs, err := s.store.LoadAll()
 	if err != nil {
-		log.Printf("[workerlife] read persisted state %s: %v", id, err)
+		log.Printf("[workerctl] read persisted state %s: %v", id, err)
 		return nil
 	}
 	for _, rec := range recs {
@@ -609,7 +609,7 @@ func (s *Manager) SnapshotAll() {
 	for _, t := range targets {
 		snap, err := t.w.Snapshot()
 		if err != nil {
-			log.Printf("[workerlife] shutdown snapshot %s: %v", t.id, err)
+			log.Printf("[workerctl] shutdown snapshot %s: %v", t.id, err)
 			continue
 		}
 		s.mu.Lock()
@@ -624,7 +624,7 @@ func (s *Manager) SnapshotAll() {
 		s.mu.Unlock()
 		if store != nil {
 			if err := store.SaveState(t.id, worker.StateRunning, snap); err != nil {
-				log.Printf("[workerlife] persist shutdown state %s: %v", t.id, err)
+				log.Printf("[workerctl] persist shutdown state %s: %v", t.id, err)
 			}
 		}
 	}
@@ -712,7 +712,7 @@ func (s *Manager) RestoreSuspended(cfg worker.WorkerConfig, snapshot []byte) err
 		state:    worker.StateSuspended,
 		snapshot: snapshot,
 	})
-	log.Printf("[workerlife] restored suspended worker %s (type=%s)", spec.ID(), spec.Type())
+	log.Printf("[workerctl] restored suspended worker %s (type=%s)", spec.ID(), spec.Type())
 	return nil
 }
 
@@ -724,7 +724,7 @@ func (s *Manager) RestoreSuspended(cfg worker.WorkerConfig, snapshot []byte) err
 func (s *Manager) RecoverAll(ctx context.Context, workers []worker.WorkerConfig, protect []string) error {
 	recs, err := s.LoadAll()
 	if err != nil {
-		return fmt.Errorf("workerlife: load all: %w", err)
+		return fmt.Errorf("workerctl: load all: %w", err)
 	}
 	byID := map[string]StateRecord{}
 	for _, rec := range recs {
@@ -747,7 +747,7 @@ func (s *Manager) RecoverAll(ctx context.Context, workers []worker.WorkerConfig,
 			rec = StateRecord{ID: cfg.ID, State: worker.StateRunning}
 		}
 		if err := s.restoreOne(ctx, cfg, rec); err != nil {
-			log.Printf("[workerlife] recover worker %s: %v", cfg.ID, err)
+			log.Printf("[workerctl] recover worker %s: %v", cfg.ID, err)
 		}
 	}
 	return nil
@@ -776,7 +776,7 @@ func (s *Manager) StopAll() {
 	}
 	s.mu.Unlock()
 	for _, w := range workers {
-		log.Printf("[workerlife] stopping worker %s", w.ID())
+		log.Printf("[workerctl] stopping worker %s", w.ID())
 		_ = w.Stop()
 	}
 }

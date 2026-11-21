@@ -124,7 +124,7 @@ set.
 ## Boundary approval and read-only mode
 
 `mount.add` is the runtime mount-update extension: requests from the
-configured approver (default `webui-hiw`) apply directly; a request from any
+configured approver (default `webui`) apply directly; a request from any
 other worker parks behind an approval — the worker sends `approval.request`
 and only expands the boundary once `approval.decision` grants it, then
 replies to the requester. Without a configured approver every request applies
@@ -134,6 +134,59 @@ The same approval pair covers tool escapes: when a tool path escapes every
 mount and an approver is configured, the worker parks the call, sends
 `approval.request`, and on approval mounts the path and re-dispatches the
 call. Pending approvals travel in the worker's Snapshot.
+
+An `approval.decision` is accepted only from the approver it was sent to (or
+the current approver, after a handover); a stray decision leaves the call
+parked.
+
+### Answering a request (self-describing by design)
+
+The approver may be an automated worker, so the request carries everything
+needed to answer it — no source reading, no out-of-band docs:
+
+- **`approval.request` payload** — the situation (`origin`, `requested_by`,
+  `action`, `tool`, `path`, `exists`, `mounts`, `args`) plus a `reply` block:
+  the answer event (`approval.decision`), the `target`, the `request_id`, a
+  `payload_template`, what each verdict does (`approved_effect` /
+  `denied_effect`) and a `hint`.
+- **`approval.decision` is a registered capability** — it is announced in
+  `worker.ready` with `Parameters { request_id, approved, note? }` and a
+  `Response { request_id, approved, resolved, mounted }`, so a reason worker
+  sees it as a callable tool (e.g. `ws-proj__approval_decision`) whose
+  description explains the verdict and its effects.
+
+Two wire forms reach the same handler:
+
+| Form | Payload | `RequestId` | Answered? |
+|---|---|---|---|
+| human UI worker (protocol reply) | `{approved, note}` | the approval request | no — nobody awaits it |
+| automated approver (capability call) | `{request_id, approved, note?}` | the caller's own call id | yes — `request.completed/failed` for that call |
+
+A capability call is always answered (unknown request, wrong sender, missing
+`approved`), so an automated approver's tool call cannot hang; the parked
+operation itself stays put until the real approver decides. On approval the
+verdict names the mount (`mounted`) in the approver's reply, while the parked
+call's own reply goes to the original caller.
+
+### Handing the approver over (`approver.set`)
+
+The approver is seeded from config (`Config.Approver`, which the app fills
+from the spawn `approver` param) and can be reassigned at runtime with
+`approver.set` `{"approver": "reason-auto", "reason"?: "…"}` — e.g. to a
+reason worker that decides out-of-mount requests itself, so a human no longer
+approves each one. The protocol does not change: the approver is just the
+address `approval.request` is sent to.
+
+- Once an approver is configured, **only that approver may reassign it**
+  (delegation), so no worker can make itself approver and self-approve.
+- With **no approver configured**, any worker may install one: an empty
+  approver means `mount.add` applies directly and escapes fail, so installing
+  a gate only narrows what callers can do.
+- An empty `approver` clears the role (back to the no-approver semantics).
+- Already-parked requests keep the approver they were sent to and stay
+  decidable by it, so a handover does not strand a human-held request.
+- The approver, like the mount set and the mode, is durable: it travels in the
+  worker's Snapshot and comes back on Restore, overriding the spawn config.
 
 `mode.set` switches between `readwrite` (default) and `readonly` at runtime.
 Tools stay registered and listening in both modes — a write/edit/bash call
@@ -156,7 +209,8 @@ func (b *MyBackend) Write(ctx context.Context, path, content string) error { ...
 |---|---|
 | `worker.go` | WorkspaceWorker: bus protocol, route table, result formatting, Snapshot/Restore |
 | `mounts.go` | mount.add / mount.list extensions + MountManager probing |
-| `approval.go` | boundary-escape → approval.request flow + parked-call resolution |
+| `approval.go` | boundary-escape → approval.request flow (with the `reply` block), approval.decision capability, parked-call resolution |
+| `approver.go` | approver.set — runtime handover of the approval role |
 | `mode.go` | mode.set (readwrite/readonly) extension |
 | `tools.go` | tool handler assembly from backend interfaces |
 

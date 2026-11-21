@@ -3,7 +3,7 @@
 // this interface. The concrete implementation is app/standalone/project.
 //
 // Runtime state (state.json / snapshots) is NOT declared here: its single
-// definition is workerlife.WorkerStore, the contract the instance manager calls.
+// definition is workerctl.WorkerStore, the contract the instance manager calls.
 package worker
 
 // ManifestStore is the manifest storage the control plane drives. It is the

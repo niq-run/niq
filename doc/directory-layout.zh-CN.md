@@ -1,6 +1,8 @@
 # niq 目录划分
 
-> 状态：as-built（2026-11-20）。这份文档只描述**代码目录的归属规则**；`~/.niq` 的运行时数据布局见 `design/project/README.zh-CN.md`。
+> 状态：as-built（2026-11-21）。简体中文 · [English](directory-layout.md)。
+>
+> 这份文档只描述**代码目录的归属规则**；`~/.niq` 的运行时数据布局见 `design/project/README.zh-CN.md`。
 > 分层原则与目标形态见设计文档仓库 `design/app/`（`architecture` 讲为什么，`application-architecture` 讲怎么落）；本文会在其落地后同步。
 
 ## 0. 一句话
@@ -19,10 +21,10 @@ niq/
 │   │   ├── program/              #   program 的读写契约
 │   │   └── llm/                  #   模型调用契约
 │   └── impl/                     # 机制层：契约的实现 + worker 类型库
-│       ├── workerlife/           #   活实例机制：build/spawn/snapshot/suspend/resume/restart/destroy
+│       ├── workerctl/           #   活实例机制：build/spawn/snapshot/suspend/resume/restart/destroy
 │       ├── busctl/               #   总线身份控制面（Store 注入，Store 适配在形态里）
 │       ├── eventbus/             #   engine、registry（运行时身份投影）、HTTP transport
-│       ├── workers/<type>/       #   reason / coding / workspace / mcp / timer / host / …
+│       ├── workers/<type>/       #   coding / directory / history / host / mcp / niq / program / reason / timer / workspace
 │       ├── iface/                #   interface worker 基类
 │       ├── baseworker/           #   工具/presence 的公共实现
 │       ├── reason/               #   推理引擎（transcript、provider 适配）
@@ -31,7 +33,7 @@ niq/
 │
 ├── app/
 │   ├── standalone/               # 部署形态：本地单机 niq
-│   │   ├── cli/                  #   `niq` 命令树：路由、网关守护、update/completion
+│   │   ├── cli/                  #   `niq` 命令树：路由、网关守护、update/completion、Spec
 │   │   ├── contract/             #   线上形状（Project/View/Instance）+ HTTP client；仅 stdlib
 │   │   ├── gateway/              #   唯一 HTTP 端点：auth、/api/*、/p/{id} 代理、UIMount 挂载
 │   │   ├── launcher/             #   实例：List/Start/Stop/Restart + 私有子进程入口
@@ -45,7 +47,7 @@ niq/
 │   │   │   ├── root.go           #     NIQ_HOME / 项目目录 / 文件名 / auth 与 provider 路径 / 地址渲染
 │   │   │   ├── project.go        #     project.json（形状由 contract 提供）
 │   │   │   ├── manifest.go       #     workers.json + worker.ManifestStore
-│   │   │   ├── state.go          #     state.json + workerlife.WorkerStore
+│   │   │   ├── state.go          #     state.json + workerctl.WorkerStore
 │   │   │   ├── provider.go       #     provider.json 的读写
 │   │   │   ├── migrate/          #     旧格式 → 当前 schema（唯一读旧格式的地方）
 │   │   │   ├── identity/         #     identities.json 的 bus.Store
@@ -76,7 +78,7 @@ niq/
 │       └── releases/             #   每版本归档 + LATEST.md（当前草稿）
 │
 ├── sdk/ts/                       # 进程外 TypeScript SDK（HTTP 客户端 + InterfaceWorker）
-├── doc/                          # 仓库内文档（本文件）
+├── doc/                          # 仓库内文档（本文的中文版 + 英文版）
 └── Makefile / go.mod / README.md
 ```
 
@@ -92,20 +94,22 @@ niq/
 | 类别 | 判据 | 放哪 |
 |---|---|---|
 | **契约** | 只有接口/值类型；被多方实现 | `core/itfs/*` |
-| **机制** | 与部署形态无关的实现；不读项目文件 | `core/impl/*`（`workerlife`、`busctl`、`eventbus`、worker 类型库） |
+| **机制** | 与部署形态无关的实现；不读项目文件 | `core/impl/*`（`workerctl`、`busctl`、`eventbus`、worker 类型库） |
 | **部署形态** | 知道 placement、项目文件布局、进程模型、存储适配 | `app/<form>/`（`standalone`、`cluster`） |
 | **产品入口** | 负责把某个形态装起来（`publish`） | `app/` 顶层 |
 
 `app/standalone/store/root.go` 是形态内的路径知识（`NIQ_HOME`、`~/.niq`、项目目录、auth 与 provider 路径、地址渲染）。别的包只调 `store.*`，不自己拼路径；`gateway` 的 auth 文件路径也由调用方传入。
 
-`app/client/*` 是界面实现，本身不含形态知识：`webui` 只有资产，`tui` 只有终端渲染与 `contract.Client`。它们不 import `app/standalone` 的任何包。cluster 的界面单独实现；等它出现后，再从 `app/client/webui/assets` 抽公共前端组件。
+`app/client/*` 是界面实现，本身不含形态知识：`webui` 只有资产，`tui` 只有终端渲染与 `contract.Client`。它们除 `app/standalone/contract` 外不 import `app/standalone` 的任何包。cluster 的界面单独实现；等它出现后，再从 `app/client/webui/assets` 抽公共前端组件。
 
-## 3. 为什么 `busctl` 和 `workerlife` 都在 core
+分发层要声明的不是一个环境，而是一个值：`publish/cmd` 构造 `cli.Spec{Version, BuildTime, UI}` 交给 `cli.Main`，UI 挂载表只从这里进形态。
+
+## 3. 为什么 `busctl` 和 `workerctl` 都在 core
 
 它们都是**与形态无关**的：
 
-- `busctl.ControlPlane` 只认 `bus.Identity` + 注入的 `bus.Store`，不碰文件系统（`go list` 的 import 只有 `fmt/sort/sync` + 契约）；standalone 注入 `store/identity`，cluster 换成 KV 即可复用。
-- `workerlife.Manager` 只认 `WorkerConfig` / `SpawnSpec` / `ManagedWorker`，不管 placement、总线语义、类型注册。
+- `busctl.ControlPlane` 只认 `bus.Identity` + 注入的 `bus.Store`，不碰文件系统（`go list` 的 import 只有 `fmt`、`sort` 与契约）；standalone 注入 `store/identity`，cluster 换成 KV 即可复用。
+- `workerctl.Manager` 只认 `WorkerConfig` / `SpawnSpec` / `ManagedWorker`，不管 placement、总线语义、类型注册。
 
 worker 的**控制面**不在这里，因为 placement 集合、builder 表、进程托管是形态知识，所以它在 `app/standalone/worker`。cluster 会带自己的控制面，但可以复用这两个库。
 
@@ -140,7 +144,7 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为�
 | 新增 worker 类型 | `app/standalone/worker`：`params.go` 参数契约 + `builders.go` 构造器 + `registry.go` 注册 |
 | 新增 placement | `core/itfs/worker` 常量 + `app/standalone/worker/backend.go` 路由 |
 | 新增总线身份规则 | `core/itfs/bus` 契约 + `core/impl/busctl` |
-| 新增实例生命周期能力 | `core/impl/workerlife` |
+| 新增实例生命周期能力 | `core/impl/workerctl` |
 | 新增部署形态 | `app/<form>/`，实现 `worker.Backend` 与自己的一套存储/placement |
 | 新的形态内存储 | 该形态的 `store/` 子包（例如 `store/identity`） |
 | 新的上层界面 | 实现 `iface.Backend`，由形态装配一个 interface worker（不需要 manifest） |

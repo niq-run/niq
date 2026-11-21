@@ -37,9 +37,9 @@ func (w *WorkspaceWorker) readmeText() string {
 		mountList = strings.Join(mounts, ", ")
 		primary = mounts[0]
 	}
-	approver := w.approver
+	approver := w.approverID()
 	if approver == "" {
-		approver = "none (boundary escapes fail immediately)"
+		approver = "none (escapes fail immediately; mount.add applies directly)"
 	}
 	toolList := "(none)"
 	if len(tools) > 0 {
@@ -77,6 +77,12 @@ Boundary and mode:
   for approval; the approver's own request applies directly.
 - mount.list {} — the current mount set (the first is the primary).
 - mount.remove { path } — unmount; the last remaining mount cannot be removed.
+- approval.decision { request_id, approved, note? } — the approver's verdict on a
+  pending approval.request; approving mounts the path and retries the parked
+  call. Only the request's approver (or the current one) may decide.
+- approver.set { approver } — hand the approval role to another worker (e.g. a
+  reason worker that decides out-of-mount requests itself). Only the current
+  approver may reassign it; an empty approver disables the flow.
 - mode.set { mode: "readwrite" | "readonly" } — readonly rejects write/edit/bash
   while keeping every tool declared and listening.
 
@@ -86,7 +92,9 @@ Boundary and mode:
 - Absolute paths are accepted when they fall inside any mounted directory.
 - A path that escapes every mount fails; with an approver configured it becomes
   an approval.request, and once approved that path is mounted and the call is
-  retried.
+  retried. The request's payload carries a "reply" block with the exact answer
+  (event, target, request_id, payload template) — an automated approver can
+  decide from the request alone.
 - The tool set can vary with the backend: only tools this backend supports are
   announced.
 
@@ -94,4 +102,5 @@ Boundary and mode:
 
 - A non-zero exit code from bash is a result, not a tool failure — read the exit
   code and stderr to decide what happened.
-- mount.add / mount.remove / mode.set are durable: they survive a restart.`
+- mount.add / mount.remove / mode.set / approver.set are durable: they survive a
+  restart.`
