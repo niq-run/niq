@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"strings"
 
+	"github.com/niq-run/niq/app/standalone/contract"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/store"
 )
@@ -99,7 +99,7 @@ func takeStatus() statusSnapshot {
 		}
 		switch {
 		case gatewayURL != "" && v.Ports.WebUI != 0:
-			ps.URL = strings.TrimSuffix(gatewayURL, "/") + "/p/" + v.ID + "/"
+			ps.URL = contract.ProjectURL(gatewayURL, v.ID)
 		case v.Ports.WebUI != 0:
 			ps.URL = store.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", v.Ports.WebUI))
 		}
