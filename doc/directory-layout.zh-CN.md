@@ -108,7 +108,7 @@ niq/
 
 它们都是**与形态无关**的：
 
-- `busctl.ControlPlane` 只认 `bus.Identity` + 注入的 `bus.Store`，不碰文件系统（`go list` 的 import 只有 `fmt`、`sort` 与契约）；standalone 注入 `store/identity`，cluster 换成 KV 即可复用。
+- `busctl.Manager` 只认 `bus.Identity` + 注入的 `bus.Store`，不碰文件系统（`go list` 的 import 只有 `fmt`、`sort` 与契约）；standalone 注入 `store/identity`，cluster 换成 KV 即可复用。
 - `workerctl.Manager` 只认 `WorkerConfig` / `SpawnSpec` / `ManagedWorker`，不管 placement、总线语义、类型注册。
 
 worker 的**控制面**不在这里，因为 placement 集合、builder 表、进程托管是形态知识，所以它在 `app/standalone/worker`。cluster 会带自己的控制面，但可以复用这两个库。

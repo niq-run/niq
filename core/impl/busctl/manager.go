@@ -16,21 +16,21 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
-// ControlPlane implements corebus.Control over an injected store and keeps a
+// Manager implements corebus.Control over an injected store and keeps a
 // runtime registry in step with it. The store is the single durable owner; the
 // registry is the live projection the engine and transport read.
-type ControlPlane struct {
+type Manager struct {
 	store   corebus.Store
 	runtime corebus.IdentityRegistry
 }
 
 // New creates a control plane over store. runtime is the projection target and
 // may be nil (a caller that only wants durable bookkeeping).
-func New(store corebus.Store, runtime corebus.IdentityRegistry) *ControlPlane {
-	return &ControlPlane{store: store, runtime: runtime}
+func New(store corebus.Store, runtime corebus.IdentityRegistry) *Manager {
+	return &Manager{store: store, runtime: runtime}
 }
 
-var _ corebus.Control = (*ControlPlane)(nil)
+var _ corebus.Control = (*Manager)(nil)
 
 // Seed projects every durable identity onto the runtime registry. It runs once
 // at startup, before the bus serves connections, so a remote worker can
@@ -40,7 +40,7 @@ var _ corebus.Control = (*ControlPlane)(nil)
 // workers): their grants are kept for a restore, but they are not part of the
 // running swarm. The assembly computes the set from the manifest store — the
 // control plane stays ignorant of manifests.
-func (c *ControlPlane) Seed(exclude []string) error {
+func (c *Manager) Seed(exclude []string) error {
 	if c.runtime == nil {
 		return nil
 	}
@@ -64,7 +64,7 @@ func (c *ControlPlane) Seed(exclude []string) error {
 }
 
 // Register implements corebus.Control.
-func (c *ControlPlane) Register(id corebus.Identity) error {
+func (c *Manager) Register(id corebus.Identity) error {
 	if id.WorkerID == "" {
 		return fmt.Errorf("busctl: identity has no worker id")
 	}
@@ -83,7 +83,7 @@ func (c *ControlPlane) Register(id corebus.Identity) error {
 }
 
 // SetCredential implements corebus.Control.
-func (c *ControlPlane) SetCredential(workerID, credential string) error {
+func (c *Manager) SetCredential(workerID, credential string) error {
 	id, ok, err := c.store.Load(workerID)
 	if err != nil {
 		return err
@@ -110,7 +110,7 @@ func awaitingLaunch(id corebus.Identity) bool {
 }
 
 // UpdateACL implements corebus.Control.
-func (c *ControlPlane) UpdateACL(workerID string, publish []event.PublishPattern, subscribe []event.EventPattern) error {
+func (c *Manager) UpdateACL(workerID string, publish []event.PublishPattern, subscribe []event.EventPattern) error {
 	id, ok, err := c.store.Load(workerID)
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func (c *ControlPlane) UpdateACL(workerID string, publish []event.PublishPattern
 }
 
 // Project implements corebus.Control.
-func (c *ControlPlane) Project(workerID string) error {
+func (c *Manager) Project(workerID string) error {
 	id, ok, err := c.store.Load(workerID)
 	if err != nil {
 		return err
@@ -144,7 +144,7 @@ func (c *ControlPlane) Project(workerID string) error {
 // Revoke implements corebus.Control. An unknown id is a no-op for the store,
 // but the runtime projection is still cleared: a temporary or legacy identity
 // can exist without a durable record, and a destroy must not leave it routable.
-func (c *ControlPlane) Revoke(workerID string) error {
+func (c *Manager) Revoke(workerID string) error {
 	if _, ok, err := c.store.Load(workerID); err != nil {
 		return err
 	} else if ok {
@@ -161,7 +161,7 @@ func (c *ControlPlane) Revoke(workerID string) error {
 }
 
 // Lookup implements corebus.Control.
-func (c *ControlPlane) Lookup(workerID string) (corebus.Identity, bool) {
+func (c *Manager) Lookup(workerID string) (corebus.Identity, bool) {
 	id, ok, err := c.store.Load(workerID)
 	if err != nil {
 		return corebus.Identity{}, false
@@ -170,7 +170,7 @@ func (c *ControlPlane) Lookup(workerID string) (corebus.Identity, bool) {
 }
 
 // List implements corebus.Control.
-func (c *ControlPlane) List() []corebus.Identity {
+func (c *Manager) List() []corebus.Identity {
 	ids, err := c.store.All()
 	if err != nil {
 		return nil

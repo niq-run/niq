@@ -51,7 +51,7 @@ func (s *memStore) All() ([]corebus.Identity, error) {
 	return out, nil
 }
 
-func testPlane(t *testing.T) (*ControlPlane, *eventbus.LayeredRegistry) {
+func testPlane(t *testing.T) (*Manager, *eventbus.LayeredRegistry) {
 	t.Helper()
 	runtime := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
 	return New(newMemStore(), runtime), runtime

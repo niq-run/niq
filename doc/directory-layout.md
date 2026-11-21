@@ -127,7 +127,7 @@ only place the UI mount table enters the form.
 
 Both are **form-agnostic**:
 
-- `busctl.ControlPlane` only knows `bus.Identity` plus an injected `bus.Store`
+- `busctl.Manager` only knows `bus.Identity` plus an injected `bus.Store`
   and touches no filesystem (`go list` shows just `fmt`, `sort` and the
   contracts); standalone injects `store/identity`, and cluster swaps in a KV
   store to reuse it.

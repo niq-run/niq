@@ -96,7 +96,7 @@ func (s *memStore) All() ([]corebus.Identity, error) {
 	return out, nil
 }
 
-func testRig(t *testing.T) (*busctl.ControlPlane, *eventbus.LayeredRegistry, *eventbus.TokenSigner) {
+func testRig(t *testing.T) (*busctl.Manager, *eventbus.LayeredRegistry, *eventbus.TokenSigner) {
 	t.Helper()
 	registry := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
 	return busctl.New(newMemStore(), registry), registry, eventbus.NewTokenSigner([]byte("test-secret"))

@@ -9,7 +9,7 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
-func testIdentityControl(t *testing.T) (*busctl.ControlPlane, *eventbus.LayeredRegistry) {
+func testIdentityControl(t *testing.T) (*busctl.Manager, *eventbus.LayeredRegistry) {
 	t.Helper()
 	runtime := eventbus.NewLayeredRegistry(eventbus.NewMemoryIdentityRegistry())
 	return busctl.New(newMemIdentityStore(), runtime), runtime
