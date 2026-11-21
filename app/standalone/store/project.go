@@ -9,12 +9,16 @@ import (
 	"github.com/niq-run/niq/app/standalone/contract"
 )
 
-// The project shapes are shared with every client, so they live in contract;
-// this package owns only how project.json is read and written.
-type (
-	ProjectPorts = contract.Ports
-	Project      = contract.Project
-)
+// Project is project.json — the only project shape that is persisted. What a
+// client sees is contract.View, built by the launcher: a field added here is
+// private to this machine until it is also added there.
+type Project struct {
+	SchemaVersion int            `json:"schema_version,omitempty"`
+	ID            string         `json:"id"`
+	CreatedAt     string         `json:"created_at,omitempty"`
+	Ports         contract.Ports `json:"ports,omitempty"`
+	UploadDir     string         `json:"upload_dir,omitempty"`
+}
 
 // ProjectFile returns the project.json file in dir.
 func ProjectFile(dir string) string { return filepath.Join(dir, "project.json") }

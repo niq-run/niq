@@ -90,19 +90,18 @@ func takeStatus() statusSnapshot {
 		return snap
 	}
 	for _, v := range views {
-		p := v.Project
 		ps := projectSnapshot{
-			ID:      p.ID,
+			ID:      v.ID,
 			Running: v.Running,
-			WebUI:   p.Ports.WebUI,
-			Bus:     p.Ports.Bus,
-			Log:     store.LogPath(p.ID),
+			WebUI:   v.Ports.WebUI,
+			Bus:     v.Ports.Bus,
+			Log:     store.LogPath(v.ID),
 		}
 		switch {
-		case gatewayURL != "" && p.Ports.WebUI != 0:
-			ps.URL = strings.TrimSuffix(gatewayURL, "/") + "/p/" + p.ID + "/"
-		case p.Ports.WebUI != 0:
-			ps.URL = store.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", p.Ports.WebUI))
+		case gatewayURL != "" && v.Ports.WebUI != 0:
+			ps.URL = strings.TrimSuffix(gatewayURL, "/") + "/p/" + v.ID + "/"
+		case v.Ports.WebUI != 0:
+			ps.URL = store.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", v.Ports.WebUI))
 		}
 		snap.Projects = append(snap.Projects, ps)
 	}

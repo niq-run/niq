@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +24,7 @@ import (
 	"github.com/niq-run/niq/app/client/tui"
 	"github.com/niq-run/niq/app/standalone/contract"
 	"github.com/niq-run/niq/app/standalone/gateway"
+	"github.com/niq-run/niq/app/standalone/helper"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/store"
 )
@@ -105,39 +105,12 @@ func clearShellState(pid int) {
 	_ = os.Remove(shellStatePath())
 }
 
-// probeAddr maps a listen address to something dialable from this machine:
-// an unspecified host (":9527", "0.0.0.0:9527", "[::]:9527") means loopback.
-func probeAddr(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return ""
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return net.JoinHostPort(host, port)
-}
-
-// isServing reports whether something accepts connections on addr.
-func isServing(addr string) bool {
-	pa := probeAddr(addr)
-	if pa == "" {
-		return false
-	}
-	conn, err := net.DialTimeout("tcp", pa, 300*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
-}
-
 // isRunning reports whether the recorded control plane is both alive and
 // answering. The pid check keeps a stale record — or a foreign process that
 // grabbed the port after a crash — from reading as "running"; the dial check
 // keeps a recycled pid from doing the same.
 func isRunning(st *shellState) bool {
-	return st != nil && processAlive(st.PID) && isServing(st.Bound)
+	return st != nil && processAlive(st.PID) && helper.IsServing(st.Bound)
 }
 
 // startBackground launches the control plane detached from this terminal.
@@ -168,7 +141,7 @@ func startBackground(addr, auth string) (*shellState, error) {
 	go func() { exited <- cmd.Wait() }()
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		if st, ok := readShellState(); ok && st.PID == cmd.Process.Pid && isServing(st.Bound) {
+		if st, ok := readShellState(); ok && st.PID == cmd.Process.Pid && helper.IsServing(st.Bound) {
 			return st, nil
 		}
 		if time.Now().After(deadline) {
@@ -335,7 +308,7 @@ func stopProjects() error {
 	for {
 		var left []string
 		for _, p := range running {
-			if launcher.IsRunning(p.Project) {
+			if launcher.IsRunningPort(p.Ports.WebUI) {
 				left = append(left, p.ID)
 			}
 		}

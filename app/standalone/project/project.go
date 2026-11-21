@@ -30,12 +30,9 @@ import (
 // projects are converted once by store/migrate before they reach here.
 const SchemaVersion = store.SchemaVersion
 
-// ProjectPorts and Project are the on-disk metadata shape; the IO lives in
-// store/project.go. The aliases keep the project package's vocabulary.
-type (
-	ProjectPorts = store.ProjectPorts
-	Project      = store.Project
-)
+// Project is the on-disk metadata shape; the IO lives in store/project.go. The
+// alias keeps the project package's vocabulary.
+type Project = store.Project
 
 // CreateProject creates a project directory, its metadata file and its active
 // worker file, seeding the template's declarations. It fails if the project id

@@ -11,7 +11,6 @@ package launcher
 import (
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/standalone/contract"
+	"github.com/niq-run/niq/app/standalone/helper"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 )
@@ -39,15 +39,32 @@ func List() ([]contract.View, error) {
 	}
 	views := make([]contract.View, 0, len(projects))
 	for _, p := range projects {
-		views = append(views, contract.View{Project: p, Dir: store.ProjectDir(p.ID), Running: IsRunning(p)})
+		views = append(views, ViewOf(p))
 	}
 	return views, nil
 }
 
-// IsRunning reports whether the project's persisted WebUI port answers.
-func IsRunning(p contract.Project) bool {
-	return p.Ports.WebUI != 0 && probePort(p.Ports.WebUI)
+// ViewOf is the one place that turns a stored project into what a client sees.
+// The wire shape is a decision made here, not an inheritance from project.json:
+// paths are resolved on this side so a client never learns the layout, and the
+// run state is probed now rather than stored.
+func ViewOf(p store.Project) contract.View {
+	return contract.View{
+		ID:        p.ID,
+		CreatedAt: p.CreatedAt,
+		Ports:     p.Ports,
+		Dir:       store.ProjectDir(p.ID),
+		Running:   IsRunning(p),
+	}
 }
+
+// IsRunning reports whether the project's persisted WebUI port answers.
+func IsRunning(p store.Project) bool { return IsRunningPort(p.Ports.WebUI) }
+
+// IsRunningPort reports whether something answers on the instance's WebUI port.
+// An instance is identified by that port, so this is the whole of "is it up" —
+// which is also why a caller holding only a View can ask.
+func IsRunningPort(port int) bool { return port != 0 && helper.IsServingPort(port) }
 
 // Start brings a project up on its persisted ports and waits until its WebUI
 // answers. Starting an already-running project is not an error: the same
@@ -166,7 +183,7 @@ func ChildMain(args []string) error {
 	return project.RunProject(project.ProjectRunOptions{ProjectID: args[0]})
 }
 
-func instanceOf(p contract.Project, already bool) contract.Instance {
+func instanceOf(p store.Project, already bool) contract.Instance {
 	addr := ""
 	if p.Ports.WebUI != 0 {
 		addr = "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI)
@@ -182,7 +199,7 @@ func waitStart(id string, exited <-chan error) (string, error) {
 	for {
 		if p, err := project.LoadProject(id); err == nil && p.Ports.WebUI != 0 {
 			addr := "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI)
-			if probeAddr(addr) {
+			if helper.IsServing(addr) {
 				return addr, nil
 			}
 		}
@@ -197,30 +214,13 @@ func waitStart(id string, exited <-chan error) (string, error) {
 	}
 }
 
-func probePort(port int) bool {
-	return probeAddr("127.0.0.1:" + strconv.Itoa(port))
-}
-
-func probeAddr(addr string) bool {
-	conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
-}
-
-// waitPortFree blocks until nothing listens on port (or the deadline lapses),
-// so the relaunch binds the persisted port instead of falling back to a random
-// one.
 func waitPortFree(port int) {
 	if port == 0 {
 		return
 	}
-	addr := "127.0.0.1:" + strconv.Itoa(port)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if !probeAddr(addr) {
+		if !helper.IsServingPort(port) {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)

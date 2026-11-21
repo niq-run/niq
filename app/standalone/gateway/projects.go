@@ -8,15 +8,11 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/niq-run/niq/app/standalone/contract"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 	"github.com/niq-run/niq/app/standalone/template"
 )
-
-// projectView augments a project definition with its live run state.
-type projectView = contract.View
 
 // handleListProjects returns the project definitions plus live run state.
 func (c *Gateway) handleListProjects(w stdhttp.ResponseWriter, r *stdhttp.Request) {
@@ -90,7 +86,7 @@ func (c *Gateway) handleLinkProject(w stdhttp.ResponseWriter, r *stdhttp.Request
 		stdhttp.Error(w, err.Error(), 400)
 		return
 	}
-	json.NewEncoder(w).Encode(projectView{Project: *p, Running: launcher.IsRunning(*p)})
+	json.NewEncoder(w).Encode(launcher.ViewOf(*p))
 }
 
 // handleRestartProject stops the running instance and relaunches it on its

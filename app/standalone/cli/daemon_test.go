@@ -7,22 +7,6 @@ import (
 	"github.com/niq-run/niq/app/standalone/store"
 )
 
-func TestProbeAddr(t *testing.T) {
-	cases := map[string]string{
-		":9527":          "127.0.0.1:9527",
-		"0.0.0.0:9527":   "127.0.0.1:9527",
-		"[::]:9527":      "127.0.0.1:9527",
-		"127.0.0.1:8080": "127.0.0.1:8080",
-		"10.0.0.2:80":    "10.0.0.2:80",
-		"nonsense":       "",
-	}
-	for in, want := range cases {
-		if got := probeAddr(in); got != want {
-			t.Errorf("probeAddr(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // TestControlStateRoundTrip covers the record start/stop/status share: it must
 // survive a write and only be cleared by its owner.
 func TestControlStateRoundTrip(t *testing.T) {
