@@ -1,7 +1,5 @@
 # app/standalone/worker — the standalone worker control plane
 
-> 中文说明：`../../../../doc/design/worker/README.zh-CN.md`。
-
 This package is the **complete worker control plane** for the standalone
 deployment form. It owns every worker's manifest and lifecycle, assembles the
 two mechanism libraries it needs, and exposes stable exits for the host worker
@@ -75,14 +73,18 @@ construction bag:
 | `declaration.go` | The model, no IO: `Definition` / `Manifest`, `Placement` / `PlacementOf`, display metadata validation, `SanitizeID`, `Instantiate`. |
 | `params.go` | `SpawnConfig` / `Spec` / `ManifestFromSpec`, the per-type spawn contract, `ValidateProcessParams`, and param readers. |
 | `registry.go` | `typeRegistry`: type label → builder + spawn-parameter check. |
-| `builders.go` | `BuildContext` and one constructor per worker type; `specConnect` ensures the worker's durable identity. |
+| `builders.go` | `BuildContext`, the type-label constants (`TypeInterface`, `DefaultWebUIID`, `DefaultHostWorkerID`), and one constructor per built-in type; `specConnect` ensures the worker's durable identity. |
 | `identity.go` | `ensureIdentity`: register on first connect, keep an edited grant, seed the type default only once. |
 | `backend.go` | `worker.Backend`: placement routing, lifecycle verbs, manifest edits, archive, protected ids, per-id serialization. |
-| `store.go` | `ManifestStore`: the storage boundary the project implements. |
-| `process/` | Third-party process runtime: provisioning, supervisor, platform shims. |
+| `store.go` | `ManifestStore`: the storage boundary `app/standalone/store` implements. |
+| `process/` | Third-party process runtime: its own input contract (`spec.go`), provisioning (`provision.go`), supervision (`supervisor.go`), log/state dir naming (`ids.go`), platform shims (unix/windows). |
 
 Runtime state (`state.json` / snapshots) is `workerctl.WorkerStore`, defined in
-`core/impl/workerctl` and implemented by `app/standalone/project`.
+`core/impl/workerctl` and implemented by `store.NewState` (`app/standalone/store`).
+The direction is one-way by design: `store` imports this package's *value types*
+(`Manifest`, `WorkerSet`) so it can serialize them, and this package never imports
+`store` — it drives the `ManifestStore` interface declared here and receives a
+`*workerctl.Manager` from the assembly.
 
 ## Where a backend comes from
 
@@ -91,11 +93,12 @@ what it cannot, the assembly injects.**
 
 | backend | source | why |
 |---|---|---|
-| workspace / program / mcp | builder, from `params` (mounts, roots, servers) | derivable from the manifest |
-| host (lifecycle), niq (far-side link) | builder, from `params` + ambient services (`WorkerBackend`, `Manager`) | params are the input; the rest is process infrastructure |
+| `reason`, `coding`, `workspace`, `program`, `mcp`, `timer`, `history`, `directory` | builder, from `params` (goal, mounts, roots, servers, …) | derivable from the manifest |
+| `host` (lifecycle), `niq` (far-side link) | builder, from `params` + ambient services (`WorkerBackend`, `Manager`) | params are the input; the rest is process infrastructure |
 | interface worker (`webui`, type `interface`) | **assembly**, through `iface.Config.Backends` | its backend is a process-local object (the app), which no manifest can express |
 
-So `type: interface` has no builder and is not spawnable.
+Those ten are exactly what `registerBuilders` registers. `type: interface` is the
+eleventh label: no builder, not spawnable.
 
 ## Flow
 
@@ -142,8 +145,8 @@ the WebUI, or startup recovery.
   per launch and never persisted; unmanaged-process credentials are durable.
 - **Validation at the spawn boundary only.** Recovery deliberately skips the
   param check so an accepted manifest is not stranded by a retired key.
-- **Legacy lives in the migration.** `app/standalone/project/migrate` converts
-  old project and template files once; runtime reads schema 2 only.
+- **Legacy lives in the migration.** `store/migrate` converts old project and
+  template files once; runtime reads schema 2 only.
 
 ## Editing vs. lifecycle
 
