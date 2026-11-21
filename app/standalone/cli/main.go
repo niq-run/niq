@@ -21,30 +21,32 @@ import (
 	"os"
 	"strings"
 
+	"github.com/niq-run/niq/app/client/tui"
 	"github.com/niq-run/niq/app/standalone/gateway"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/store"
-	"github.com/niq-run/niq/app/client/tui"
 )
 
-// version is injected at build time via -ldflags:
-//
-//	-X main.version=v1.2.3
-var Version = "dev"
+// Spec is what a distribution decides: its build identity and the static
+// interfaces the gateway should serve. publish/cmd fills it; nothing else does.
+type Spec struct {
+	Version   string
+	BuildTime string
+	UI        []gateway.UIMount
+}
 
-// buildTime is the build timestamp, injected the same way (RFC3339, UTC):
-//
-//	-X main.buildTime=2026-11-02T08:41:12Z
-//
-// Empty for a plain `go build`, in which case the version line omits it.
-var BuildTime = ""
+// version and buildTime are injected through Spec by publish/cmd. The ldflags
+// still target main.version / main.buildTime, and publish/cmd forwards them.
+var (
+	version   = "dev"
+	buildTime = ""
+	ui        []gateway.UIMount
+)
 
-// UI is the mount table this distribution ships, set by standalone.Main before
-// Main runs. Empty means the binary serves no static UI (a headless build).
-var UI []gateway.UIMount
-
-func Main() {
-	tui.Version = Version
+// Main runs the CLI with the given spec.
+func Main(spec Spec) {
+	version, buildTime, ui = spec.Version, spec.BuildTime, spec.UI
+	tui.Version = version
 	// The launcher's private child entry: this process is a project runtime,
 	// not the CLI. Dispatch before anything else so the CLI never sees it.
 	if launcher.IsChild(os.Args) {

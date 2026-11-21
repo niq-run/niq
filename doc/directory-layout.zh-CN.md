@@ -32,7 +32,6 @@ niq/
 ├── app/
 │   ├── contract/                 # 共享形状（Project/View/Instance）+ HTTP client；仅 stdlib
 │   ├── standalone/               # 部署形态：本地单机 niq
-│   │   ├── run.go                #   组合根入口：standalone.Spec{Version, BuildTime, UI} + Main
 │   │   ├── cli/                  #   `niq` 命令树：路由、网关守护、update/completion
 │   │   ├── gateway/              #   唯一 HTTP 端点：auth、/api/*、/p/{id} 代理、UIMount 挂载
 │   │   ├── launcher/             #   实例：List/Start/Stop/Restart + 私有子进程入口
@@ -64,14 +63,15 @@ niq/
 │   │
 │   ├── client/                   # 界面：全部是 gateway 的客户端
 │   │   ├── webui/                #   浏览器界面：assets/ + Assets()（没有服务器）
-│   │   └── tui/                  #   终端界面：picker、状态表
+│   │   ├── tui/                  #   终端界面：picker、状态表
+│   │   └── menubar/              #   macOS 菜单栏界面：Swift + Info.plist + 图标
 │   │
 │   ├── cluster/                  # 部署形态：分布式（占位，与 standalone 平级）
 │   │   └── README.md
 │   │
 │   └── publish/                  # 分发：决定带哪些 UI、是否打包二进制
 │       ├── cmd/                  #   niq CLI：薄 main，声明 build 身份与 UI 挂载
-│       ├── mac/                  #   macOS 分发：菜单栏 app + 打包的 niq 二进制
+│       ├── mac/                  #   macOS 分发：打包脚本 + miq 启动器（界面源码在 client/menubar）
 │       ├── npm/                  #   npm 包与发布脚本
 │       └── release-notes/
 │

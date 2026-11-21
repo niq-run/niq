@@ -22,11 +22,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/niq-run/niq/app/client/tui"
 	"github.com/niq-run/niq/app/contract"
 	"github.com/niq-run/niq/app/standalone/gateway"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/store"
-	"github.com/niq-run/niq/app/client/tui"
 )
 
 // shellState is the on-disk record of a running control plane.
@@ -205,7 +205,7 @@ func runShellForeground(addr, auth string) error {
 	err := gateway.Run(gateway.Options{
 		Addr: addr,
 		Auth: auth,
-		UI:   UI,
+		UI:   ui,
 		OnReady: func(bound string) {
 			writeShellState(&shellState{
 				PID:     os.Getpid(),
