@@ -98,10 +98,6 @@ func Main(spec Spec) {
 	}
 }
 
-// runDefault makes a bare `niq` idempotent: it starts the control plane when
-// nothing is running, and reports on it (exactly what `niq status` prints) when
-// it is. Repeating the command is therefore how you check on the service, and
-// no flags means "the default address", never "a second instance".
 // runInteractive opens the terminal shell. Like every other face it needs the
 // gateway: the picker is a client, not a second control path.
 func runInteractive() error {
@@ -124,6 +120,10 @@ func runInteractive() error {
 	return tui.RunPicker(store.LocalhostURL(st.Bound))
 }
 
+// runDefault makes a bare `niq` idempotent: it starts the control plane when
+// nothing is running, and reports on it (exactly what `niq status` prints) when
+// it is. Repeating the command is therefore how you check on the service, and
+// no flags means "the default address", never "a second instance".
 func runDefault() error {
 	if st, ok := readShellState(); ok && isRunning(st) {
 		err := printStatus()

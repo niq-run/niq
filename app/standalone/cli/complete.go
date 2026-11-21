@@ -1,9 +1,9 @@
 // Shell completion: `niq completion <shell>` prints a script that completes
-// subcommands, flags, and — the part that actually saves typing — the project
-// ids for `niq project run`.
+// subcommands and their flags.
 //
-// The generated scripts call `niq status --ids`, so completion always
-// reflects the projects on this machine without a separate cache to keep fresh.
+// Projects are not a verb any more — every UI reaches them through a running
+// gateway — so the scripts complete the gateway commands only. `niq status
+// --ids` remains, for scripts that want the project ids.
 package cli
 
 import (
@@ -49,27 +49,6 @@ _niq() {
 	fi
 
 	case "${COMP_WORDS[1]}" in
-	project)
-		if (( COMP_CWORD == 2 )); then
-			COMPREPLY=( $(compgen -W "list create run help" -- "$cur") )
-			return
-		fi
-		case "${COMP_WORDS[2]}" in
-		run)
-			if [[ "$cur" == -* ]]; then
-				COMPREPLY=( $(compgen -W "--bus --webui --webui-auth" -- "$cur") )
-			else
-				COMPREPLY=( $(compgen -W "$(niq status --ids 2>/dev/null)" -- "$cur") )
-			fi
-			;;
-		list)
-			COMPREPLY=( $(compgen -W "--ids" -- "$cur") )
-			;;
-		create)
-			COMPREPLY=( $(compgen -W "--template" -- "$cur") )
-			;;
-		esac
-		;;
 	stop|restart)
 		COMPREPLY=( $(compgen -W "-p --projects" -- "$cur") )
 		;;
@@ -117,7 +96,6 @@ _niq() {
 	w)
 		_values 'option' '--addr[listen address]' '--auth[basic auth user:pass]' '--foreground[run attached to this terminal]'
 		;;
-		;;
 	completion|complete)
 		_values 'shell' bash zsh fish
 		;;
@@ -142,17 +120,6 @@ complete -c niq -n '__fish_use_subcommand' -a update -d 'install the latest rele
 complete -c niq -n '__fish_use_subcommand' -a completion -d 'print a completion script'
 complete -c niq -n '__fish_use_subcommand' -a help -d 'print usage'
 complete -c niq -n '__fish_use_subcommand' -a version -d 'print the version'
-
-complete -c niq -n '__fish_seen_subcommand_from project; and not __fish_seen_subcommand_from list create run' -a list -d 'pick or list projects'
-complete -c niq -n '__fish_seen_subcommand_from project; and not __fish_seen_subcommand_from list create run' -a create -d 'create a project from a template'
-complete -c niq -n '__fish_seen_subcommand_from project; and not __fish_seen_subcommand_from list create run' -a run -d 'run an instance in this terminal'
-
-complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from run' -a '(niq status --ids 2>/dev/null)'
-complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from list' -l ids -d 'print project ids only'
-complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from create' -l template -d 'template name'
-complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from run' -l bus -d 'event bus address'
-complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from run' -l webui -d 'WebUI address'
-complete -c niq -n '__fish_seen_subcommand_from project; and __fish_seen_subcommand_from run' -l webui-auth -d 'basic auth user:pass'
 
 complete -c niq -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 complete -c niq -n '__fish_seen_subcommand_from stop' -l projects -s p -d 'also stop the running projects'
