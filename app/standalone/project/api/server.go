@@ -143,8 +143,6 @@ type Server struct {
 }
 
 // New creates a WebUI Server.
-
-// New creates a WebUI Server.
 // devMode enables Vite-proxy mode (frontend runs on :5173, APIs stay on addr).
 func New(el *eventbusapi.EventLog, engine *eventbus.Engine, catalog worker.Manifest, registry corebus.IdentityRegistry, addr string, devMode bool) *Server {
 	s := &Server{eventLog: el, engine: engine, catalog: catalog, registry: registry, devMode: devMode}
