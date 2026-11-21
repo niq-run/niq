@@ -3,10 +3,10 @@
 > Status: as-built (2026-11-21). English · [简体中文](directory-layout.zh-CN.md).
 >
 > This document describes only **where code belongs**. The runtime layout of
-> `~/.niq` is described in `design/project/README.zh-CN.md`; the layering
-> principles and the target form live in the design docs repo (`design/app/` —
-> `architecture` explains why, `application-architecture` explains how it lands),
-> and this file is synced once they land.
+> `~/.niq` is described in `install-and-cli.md` §6; the layering principles and
+> the target form live in the design docs repo (`design/app/` — `architecture`
+> explains why, `application-architecture` explains how it lands), and this file
+> is synced once they land.
 
 ## 0. One sentence
 
@@ -23,7 +23,7 @@ niq/
 │   ├── itfs/                     # contracts: interfaces and value types only — no implementations, no IO
 │   │   ├── worker/               #   Lifecycle / Manifest / Backend / WorkerInfo / Placement
 │   │   ├── bus/                  #   Identity / Control / Store / Channel
-│   │   ├── event/                #   events and their match patterns
+│   │   ├── event/                #   events, match patterns, the reply convention, the event-store contract
 │   │   ├── program/              #   the program read/write contract
 │   │   └── llm/                  #   the model-call contract
 │   └── impl/                     # mechanisms: implementations of the contracts + the worker type library
@@ -39,16 +39,17 @@ niq/
 │
 ├── app/
 │   ├── standalone/               # deployment form: single-machine niq
-│   │   ├── cli/                  #   the `niq` command tree: routing, gateway daemon, update/completion, Spec
+│   │   ├── cli/                  #   the `niq` command tree: routing, gateway daemon (incl. the port-conflict choice), update/completion, Spec
 │   │   ├── contract/             #   wire shapes of the project API (View/Instance) + HTTP client; stdlib only
 │   │   ├── helper/               #   stdlib-only primitives: port holders, dial/probe, loopback and ephemeral bind, port parsing
 │   │   ├── gateway/              #   the only HTTP endpoint: auth, /api/*, /p/{id} proxy, UIMount table
 │   │   ├── launcher/             #   instances: List/Start/Stop/Restart + the private child-process entry
 │   │   ├── project/              #   project definition + single-project runtime
 │   │   │   ├── run.go            #     startup orchestration (owns the signal ctx)
-│   │   │   ├── api/              #     project HTTP API: JSON/SSE + the human entry
+│   │   │   ├── api/              #     project HTTP API (JSON/SSE, approvals, uploads, programs) + its iface.Backend half
 │   │   │   ├── project.go        #     create/list/link (reads and writes via store)
-│   │   │   └── export.go         #     project → template export
+│   │   │   ├── export.go         #     project → template export
+│   │   │   └── types.go          #     package doc + the project's vocabulary aliases
 │   │   ├── template/             #   templates and presets (shared domain)
 │   │   ├── store/                #   the only owner of paths and on-disk layout
 │   │   │   ├── root.go           #     NIQ_HOME / project dirs / file names / auth and provider paths / address rendering
@@ -65,6 +66,7 @@ niq/
 │   │       ├── backend.go        #     worker.Backend: placement routing + lifecycle
 │   │       ├── builders.go       #     one constructor per type
 │   │       ├── registry.go       #     type → builder + parameter contract
+│   │       ├── params.go         #     per-manifest parameter projection + validation
 │   │       ├── declaration.go    #     the Manifest model
 │   │       ├── identity.go       #     identity seeding on first connection
 │   │       ├── store.go          #     the ManifestStore contract
@@ -85,7 +87,7 @@ niq/
 │       └── releases/             #   per-version archive + LATEST.md (the current draft)
 │
 ├── sdk/ts/                       # out-of-process TypeScript SDK (HTTP client + InterfaceWorker)
-├── doc/                          # in-repo docs (this file in English and Chinese)
+├── doc/                          # in-repo docs: install/CLI, build & test, this layout — each in English and Chinese
 └── Makefile / go.mod / README.md
 ```
 
@@ -166,6 +168,8 @@ app/cluster ──▶ core
 - `app/client/*` imports `app/standalone/contract` and nothing else from the form;
 - `app/standalone/contract` imports stdlib only, so any interface — including a
   future remote client — can safely use it;
+- `app/standalone/helper` likewise imports stdlib only, so `store` can use its
+  address primitives without the layering pointing back up;
 - `app/standalone/gateway` knows no concrete UI, only `UIMount`;
 - `app/publish` is the distribution layer and may depend on forms and interfaces;
   **forms never import it**.
@@ -175,6 +179,7 @@ Checks you can run:
 ```sh
 go list -deps ./app/client/... | grep 'app/standalone' | grep -v '/contract$'  # must be empty
 go list -f '{{join .Imports " "}}' ./app/standalone/contract | grep 'niq-run/niq'  # must be empty
+go list -f '{{join .Imports " "}}' ./app/standalone/helper | grep 'niq-run/niq'    # must be empty
 go list -deps ./app/standalone/... | grep 'app/cluster'               # must be empty
 go list -deps ./app/cluster/...    | grep 'app/standalone'            # must be empty
 ```
@@ -185,6 +190,7 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # must be 
 |---|---|
 | Add a worker type | `app/standalone/worker`: parameter contract in `params.go`, constructor in `builders.go`, registration in `registry.go` |
 | Add a placement | constant in `core/itfs/worker` + routing in `app/standalone/worker/backend.go` |
+| Add a host/port primitive that several packages need | `app/standalone/helper` (stdlib only; no domain knowledge) |
 | Add a bus identity rule | contract in `core/itfs/bus` + `core/impl/busctl` |
 | Add instance lifecycle capability | `core/impl/workerctl` |
 | Add a deployment form | `app/<form>/`, implementing `worker.Backend` with its own storage and placement |

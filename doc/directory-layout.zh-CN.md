@@ -2,7 +2,7 @@
 
 > 状态：as-built（2026-11-21）。简体中文 · [English](directory-layout.md)。
 >
-> 这份文档只描述**代码目录的归属规则**；`~/.niq` 的运行时数据布局见 `design/project/README.zh-CN.md`。
+> 这份文档只描述**代码目录的归属规则**；`~/.niq` 的运行时数据布局见 `install-and-cli.md` §6。
 > 分层原则与目标形态见设计文档仓库 `design/app/`（`architecture` 讲为什么，`application-architecture` 讲怎么落）；本文会在其落地后同步。
 
 ## 0. 一句话
@@ -17,7 +17,7 @@ niq/
 │   ├── itfs/                     # 契约层：只有接口与值类型，没有实现、没有 IO
 │   │   ├── worker/               #   Lifecycle / Manifest / Backend / WorkerInfo / Placement
 │   │   ├── bus/                  #   Identity / Control / Store / Channel
-│   │   ├── event/                #   事件与匹配模式
+│   │   ├── event/                #   事件、匹配模式、回复约定、事件存储契约
 │   │   ├── program/              #   program 的读写契约
 │   │   └── llm/                  #   模型调用契约
 │   └── impl/                     # 机制层：契约的实现 + worker 类型库
@@ -33,16 +33,17 @@ niq/
 │
 ├── app/
 │   ├── standalone/               # 部署形态：本地单机 niq
-│   │   ├── cli/                  #   `niq` 命令树：路由、网关守护、update/completion、Spec
+│   │   ├── cli/                  #   `niq` 命令树：路由、网关守护（含端口冲突选择）、update/completion、Spec
 │   │   ├── contract/             #   项目 API 的线上形状（View/Instance）+ HTTP client；仅 stdlib
 │   │   ├── helper/               #   仅 stdlib 的原语：端口占用者、拨号/探测、loopback/ephemeral 绑定、端口解析
 │   │   ├── gateway/              #   唯一 HTTP 端点：auth、/api/*、/p/{id} 代理、UIMount 挂载
 │   │   ├── launcher/             #   实例：List/Start/Stop/Restart + 私有子进程入口
 │   │   ├── project/              #   项目定义 + 单 project 运行时
 │   │   │   ├── run.go            #     启动编排（持有信号 ctx）
-│   │   │   ├── api/              #     项目 HTTP API：JSON/SSE + 人类入口
+│   │   │   ├── api/              #     项目 HTTP API（JSON/SSE、审批、上传、program）+ 它作为 iface.Backend 的那一半
 │   │   │   ├── project.go        #     创建/列出/链接（读写经 store）
-│   │   │   └── export.go         #     项目 → 模板导出
+│   │   │   ├── export.go         #     项目 → 模板导出
+│   │   │   └── types.go          #     包文档 + 项目自己的词汇别名
 │   │   ├── template/             #   模板与 preset（共享领域）
 │   │   ├── store/                #   落盘与路径的唯一主人
 │   │   │   ├── root.go           #     NIQ_HOME / 项目目录 / 文件名 / auth 与 provider 路径 / 地址渲染
@@ -59,6 +60,7 @@ niq/
 │   │       ├── backend.go        #     worker.Backend：placement 路由 + 生命周期
 │   │       ├── builders.go       #     每类型一个构造器
 │   │       ├── registry.go       #     type → builder + 参数契约
+│   │       ├── params.go         #     manifest 的参数投影与校验
 │   │       ├── declaration.go    #     Manifest 模型
 │   │       ├── identity.go       #     首次连接的身份播种
 │   │       ├── store.go          #     ManifestStore 契约
@@ -79,7 +81,7 @@ niq/
 │       └── releases/             #   每版本归档 + LATEST.md（当前草稿）
 │
 ├── sdk/ts/                       # 进程外 TypeScript SDK（HTTP 客户端 + InterfaceWorker）
-├── doc/                          # 仓库内文档（本文的中文版 + 英文版）
+├── doc/                          # 仓库内文档：安装与 CLI、构建与测试、本文，均中英各一份
 └── Makefile / go.mod / README.md
 ```
 
@@ -130,6 +132,7 @@ app/cluster ──▶ core
 - `app/standalone/*` 与 `app/cluster/*` **互不 import**；
 - `app/client/*` 只 import `app/standalone/contract`，不 import standalone 的其他任何包；
 - `app/standalone/contract` 只 import stdlib，所以任何界面（包括未来的远程客户端）都能安全使用；
+- `app/standalone/helper` 同样只 import stdlib，所以 `store` 可以用它的地址原语而不必反向依赖；
 - `app/standalone/gateway` 不认识具体 UI，只认 `UIMount`；
 - `app/publish` 是分发层，可以依赖形态与界面；**形态不反向 import 它**。
 
@@ -138,6 +141,7 @@ app/cluster ──▶ core
 ```sh
 go list -deps ./app/client/... | grep 'app/standalone' | grep -v '/contract$'  # 应为空
 go list -f '{{join .Imports " "}}' ./app/standalone/contract | grep 'niq-run/niq'  # 应为空
+go list -f '{{join .Imports " "}}' ./app/standalone/helper | grep 'niq-run/niq'    # 应为空
 go list -deps ./app/standalone/... | grep 'app/cluster'               # 应为空
 go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为空
 ```
@@ -148,6 +152,7 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为�
 |---|---|
 | 新增 worker 类型 | `app/standalone/worker`：`params.go` 参数契约 + `builders.go` 构造器 + `registry.go` 注册 |
 | 新增 placement | `core/itfs/worker` 常量 + `app/standalone/worker/backend.go` 路由 |
+| 多个包共用的 host/port 原语 | `app/standalone/helper`（仅 stdlib；不含领域知识） |
 | 新增总线身份规则 | `core/itfs/bus` 契约 + `core/impl/busctl` |
 | 新增实例生命周期能力 | `core/impl/workerctl` |
 | 新增部署形态 | `app/<form>/`，实现 `worker.Backend` 与自己的一套存储/placement |
