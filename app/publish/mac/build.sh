@@ -44,14 +44,18 @@ build)
 universal)
 	echo "app: building $app (universal)…"
 	assemble
-	rm -f build/niq-menubar-*
-	mkdir -p build
+	# The two slices are lipo inputs, not artifacts: keep them under dist so
+	# the source tree has no build/ directory, and drop them when done.
+	tmp=dist/.build
+	rm -rf "$tmp"
+	mkdir -p "$tmp"
 	swiftc -O -swift-version 5 -target "arm64-apple-macos$min_macos" -framework AppKit \
-		"$src/main.swift" -o build/niq-menubar-arm64
+		"$src/main.swift" -o "$tmp/niq-menubar-arm64"
 	swiftc -O -swift-version 5 -target "x86_64-apple-macos$min_macos" -framework AppKit \
-		"$src/main.swift" -o build/niq-menubar-x86_64
+		"$src/main.swift" -o "$tmp/niq-menubar-x86_64"
 	lipo -create -output "$app/Contents/MacOS/niq-menubar" \
-		build/niq-menubar-arm64 build/niq-menubar-x86_64
+		"$tmp/niq-menubar-arm64" "$tmp/niq-menubar-x86_64"
+	rm -rf "$tmp"
 	# lipo invalidates the linker's ad-hoc signature, and an unsigned arm64
 	# binary will not run at all — re-sign the bundle. miq is a shell script
 	# and has no architectures, so only the bundle needs signing.
@@ -69,6 +73,7 @@ zip)
 	# --norsrc/--noextattr: no AppleDouble ._ entries in the archive
 	(cd dist && ditto -c -k --norsrc --noextattr --noqtn --noacl \
 		--keepParent niq-menubar "$zip_name")
+	rm -rf dist/niq-menubar
 	echo "app: dist/$zip_name"
 	;;
 *)

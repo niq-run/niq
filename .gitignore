@@ -22,4 +22,3 @@ sdk/ts/dist/
 
 # Frontend caches (any shell's assets)
 **/assets/.vite/
-build/

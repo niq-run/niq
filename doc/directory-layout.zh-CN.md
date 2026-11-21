@@ -80,7 +80,12 @@ niq/
 └── Makefile / go.mod / README.md
 ```
 
-构建产物 `bin/`、`build/`、`dist/` 不入库，也不属于目录划分。
+构建产物只有两个目录，都不入库，也不属于目录划分：
+
+- `bin/`：本地可执行（`make build` 的 `niq`、`make miq` 的 `miq`），`make install` 从这里链接；
+- `dist/`：可分发的产物（goreleaser 归档、`niq.app`、zip、npm 树）。`goreleaser --clean` 会清空它，所以可执行文件不放这里。
+
+中间文件不进源码树：通用构建的两个架构切片放在 `dist/.build`，lipo 后立刻删除。
 
 ## 2. 四类东西，四种归属
 
