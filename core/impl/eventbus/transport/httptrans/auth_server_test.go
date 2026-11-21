@@ -171,6 +171,10 @@ func TestStaleStreamTeardownKeepsTheReplacementSession(t *testing.T) {
 	// Two SSE streams for the same id; each handleEvents call blocks until its
 	// request context is cancelled, so drive them on their own contexts.
 	open := func() (*httptest.ResponseRecorder, context.CancelFunc, chan struct{}) {
+		// A second stream REPLACES the first session, so "a session exists" is not
+		// enough: wait until the stored session is a different one, or the teardown
+		// below may race the replacement it is supposed to preserve.
+		prev, _ := srv.sessions.Load("remote-w")
 		ctx, cancel := context.WithCancel(context.Background())
 		req := httptest.NewRequest("GET", "/events?credential="+tok, nil).WithContext(ctx)
 		w := httptest.NewRecorder()
@@ -183,7 +187,7 @@ func TestStaleStreamTeardownKeepsTheReplacementSession(t *testing.T) {
 		waitSession := func() {
 			deadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(deadline) {
-				if _, ok := srv.sessions.Load("remote-w"); ok {
+				if cur, ok := srv.sessions.Load("remote-w"); ok && cur != prev {
 					return
 				}
 				time.Sleep(5 * time.Millisecond)

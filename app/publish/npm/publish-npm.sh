@@ -88,7 +88,7 @@ cp "${NPM_DIR}/README.md" "${OUT}/niq/README.md"
 
 # The launcher that opens the menu bar app. It is a shell script, platform
 # independent: elsewhere it simply finds no bundle and says so.
-cp "${ROOT}/app/menubar/miq" "${OUT}/niq/bin/miq"
+cp "${ROOT}/app/publish/mac/miq" "${OUT}/niq/bin/miq"
 chmod +x "${OUT}/niq/bin/miq"
 
 # 3. niq.app, when the macOS job produced it. It rides inside the package (so

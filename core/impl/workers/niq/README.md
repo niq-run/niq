@@ -17,7 +17,7 @@ needs to know this worker type exists.
 |---|---|
 | bus participation (loop, tools dispatch, presence) | `iface.Worker` |
 | the far-side link, bindings, `niq.*` tools | `Backend` (this package) |
-| declaration / spawn / ACL wiring | `app/project/worker/builders.go` (`buildNIQSpec`) |
+| manifest / spawn / identity wiring | `app/standalone/worker/builders.go` (`buildNIQSpec`) |
 
 ## Two bindings, both runtime-mutable and durable
 

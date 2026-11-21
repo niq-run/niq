@@ -112,15 +112,14 @@ func (c *recordingChannel) Broadcast(context.Context, event.Event) error        
 func (c *recordingChannel) Receive(context.Context) (<-chan event.Event, error) { return nil, nil }
 func (c *recordingChannel) Close() error                                        { return nil }
 
-// TestHelpCoversUpdateArchiveACL verifies the newer tools are documented through
+// TestHelpCoversUpdateArchive verifies the newer tools are documented through
 // worker.help too, so an agent can read the contract before calling them.
-func TestHelpCoversUpdateArchiveACL(t *testing.T) {
+func TestHelpCoversUpdateArchive(t *testing.T) {
 	ch := &recordingChannel{}
-	w := New(Config{ID: "host", Bus: ch, Engine: &fakeBackend{}, ACL: &fakeACL{}})
+	w := New(Config{ID: "host", Bus: ch, Engine: &fakeBackend{}})
 	for typ, want := range map[event.EventType]string{
-		TypeUpdate:    "params",
-		TypeArchive:   "archived",
-		TypeUpdateACL: "publish",
+		TypeUpdate:  "params",
+		TypeArchive: "archived",
 	} {
 		evt := event.New(event.TypeWorkerHelp, "peer", map[string]any{"event_name": string(typ)})
 		evt.RequestId = "req-help"

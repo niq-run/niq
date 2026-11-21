@@ -30,7 +30,9 @@ type Config struct {
 	Mode    Mode
 	// Approver is the worker ID boundary-expansion requests (approval.request)
 	// are sent to when a tool path escapes every mount. Empty disables the
-	// approval flow — escapes fail immediately.
+	// approval flow — escapes fail immediately. It seeds the runtime role: the
+	// approver may hand it over via approver.set, and the current value is what
+	// the Snapshot carries.
 	Approver string
 	// OnDurableChange is invoked when the worker changed state that must
 	// survive a restart (e.g. a runtime-added mount). Baseworker machinery;
@@ -50,10 +52,12 @@ type WorkspaceWorker struct {
 	cancelRun context.CancelFunc
 	mu        sync.Mutex
 
-	// approver receives approval.request events for boundary expansion;
+	// approver receives approval.request events for boundary expansion; it is
+	// reassignable at runtime (approver.set), so it is guarded by mu — tool
+	// dispatch and Snapshot both read it off the event loop.
 	// pendingApprovals parks the tool calls awaiting a decision (keyed by the
-	// approval event's ID). Guarded by pendingMu; the event loop is single,
-	// so the mutex mainly serializes against Snapshot.
+	// approval event's ID). Guarded by pendingMu; the event loop is single, so
+	// the mutex mainly serializes against Snapshot.
 	approver         string
 	pendingMu        sync.Mutex
 	pendingApprovals map[string]*pendingApproval
@@ -109,13 +113,18 @@ func (w *WorkspaceWorker) Stop() error {
 }
 
 // workspaceState is the worker's durable execution state: the mount set, the
-// read/write mode, and the tool calls parked awaiting approval. Config seeds
-// the mounts at construction and runtime events mutate them, so restore
-// unconditionally overrides config whenever the snapshot carries mounts (same
-// semantics as the reason worker's Programs).
+// read/write mode, the approver and the tool calls parked awaiting approval.
+// Config seeds the mounts and the approver at construction and runtime events
+// mutate them, so restore overrides config whenever the snapshot carries them
+// (same semantics as the reason worker's Programs).
+//
+// Approver is a pointer so an explicit empty approver ("no approver", set via
+// approver.set) is distinguishable from a field absent in an older snapshot —
+// the former must persist, the latter must leave config standing.
 type workspaceState struct {
 	Mounts           []string          `json:"mounts"`
 	Mode             string            `json:"mode,omitempty"`
+	Approver         *string           `json:"approver,omitempty"`
 	PendingApprovals []pendingApproval `json:"pending_approvals,omitempty"`
 }
 
@@ -131,8 +140,14 @@ func (w *WorkspaceWorker) Snapshot() ([]byte, error) {
 	}
 	w.mu.Lock()
 	mode := modeName(w.mode)
+	approver := w.approver
 	w.mu.Unlock()
-	state := workspaceState{Mounts: mounts, Mode: mode, PendingApprovals: w.parkedApprovals()}
+	state := workspaceState{
+		Mounts:           mounts,
+		Mode:             mode,
+		Approver:         &approver,
+		PendingApprovals: w.parkedApprovals(),
+	}
 	return json.Marshal(state)
 }
 
@@ -170,9 +185,14 @@ func (w *WorkspaceWorker) Restore(state []byte) error {
 			log.Printf("[workspace %s] restore: unknown mode %q ignored", w.ID(), s.Mode)
 		}
 	}
+	if s.Approver != nil {
+		w.mu.Lock()
+		w.approver = *s.Approver
+		w.mu.Unlock()
+	}
 	w.restoreParkedApprovals(s.PendingApprovals)
-	log.Printf("[workspace %s] restore: %d mount(s), mode %s, %d pending approval(s)",
-		w.ID(), len(s.Mounts), modeName(w.mode), len(s.PendingApprovals))
+	log.Printf("[workspace %s] restore: %d mount(s), mode %s, approver %q, %d pending approval(s)",
+		w.ID(), len(s.Mounts), modeName(w.mode), w.approverID(), len(s.PendingApprovals))
 	return nil
 }
 
@@ -199,11 +219,10 @@ func (w *WorkspaceWorker) process(ctx context.Context, evt event.Event) {
 	case event.TypeRequestCancel:
 		callID := evt.RequestId
 		log.Printf("[workspace %s] cancel requested for %s (best-effort)", w.ID(), callID)
-	case event.TypeApprovalDecision:
-		// A reply, not an extension invocation: resolve the parked call it
-		// correlates with (approval.request's RequestId).
-		w.handleApprovalDecision(ctx, evt)
 	default:
+		// approval.decision arrives here too: it is a registered extension (the
+		// approving side of the protocol is a discoverable capability, so an
+		// automated approver can call it like any other tool).
 		if !w.DispatchExtension(evt) {
 			log.Printf("[workspace %s] no extension for event %s", w.ID(), evt.Type)
 		}

@@ -22,16 +22,16 @@ jobs:
           go-version-file: go.mod
 
       # Release notes: one archived file per release under
-      # app/publish/release-notes, named after the tag. app/publish/RELEASE_NOTES.md
+      # app/publish/releases, named after the tag. app/publish/releases/LATEST.md
       # holds the current release's notes; it is used as a fallback only when it
       # names the tag being released, so a stale copy can never publish the
       # previous version's notes under a new tag.
       - name: Determine release notes
         id: notes
         run: |
-          args="release --clean --config app/publish/.goreleaser.yaml"
-          notes="app/publish/release-notes/${GITHUB_REF_NAME}.md"
-          current="app/publish/RELEASE_NOTES.md"
+          args="release --clean --config app/publish/cmd/.goreleaser.yaml"
+          notes="app/publish/releases/${GITHUB_REF_NAME}.md"
+          current="app/publish/releases/LATEST.md"
           if [ -f "$notes" ]; then
             echo "Using $notes as the release body."
             args="$args --release-notes $notes"

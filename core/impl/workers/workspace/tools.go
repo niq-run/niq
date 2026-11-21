@@ -322,6 +322,8 @@ func (w *WorkspaceWorker) registerExtensions() {
 
 	w.registerMountExtensions()
 	w.registerModeExtension()
+	w.registerApproverExtension()
+	w.registerApprovalDecisionExtension()
 	w.registerReadme()
 }
 

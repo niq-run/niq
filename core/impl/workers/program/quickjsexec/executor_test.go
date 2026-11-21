@@ -26,7 +26,9 @@ func run(t *testing.T, ex *Executor, src string, args map[string]any, call func(
 
 	var mu sync.Mutex
 	var logs []string
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		for line := range sess.Logs() {
 			mu.Lock()
 			logs = append(logs, line)
@@ -35,6 +37,13 @@ func run(t *testing.T, ex *Executor, src string, args map[string]any, call func(
 	}()
 
 	value, err := sess.Result(ctx)
+	// The session closes the log stream before publishing its result, so waiting
+	// for the drain guarantees every line is in logs before we copy it.
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Error("log stream did not close after the result")
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	return value, err, append([]string(nil), logs...)

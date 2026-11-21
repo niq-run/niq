@@ -85,8 +85,9 @@ func (w *WorkspaceWorker) handleMountAdd(evt event.Event) {
 
 	// Approval gating: the approver's own request is the consent; any other
 	// worker's request waits for it.
-	if w.approver != "" && evt.WorkerId != w.approver {
-		w.requestMountApproval(evt, path, mm.Mounts())
+	approver := w.approverID()
+	if approver != "" && evt.WorkerId != approver {
+		w.requestMountApproval(evt, path, approver, mm.Mounts())
 		return
 	}
 
@@ -107,7 +108,7 @@ func (w *WorkspaceWorker) handleMountAdd(evt event.Event) {
 // tool escapes, the approved object is the path itself (existence is not a
 // precondition — the directory may be created later). mounts is the boundary
 // being expanded, carried in the payload for the approver's context.
-func (w *WorkspaceWorker) requestMountApproval(evt event.Event, path string, mounts []string) {
+func (w *WorkspaceWorker) requestMountApproval(evt event.Event, path, approver string, mounts []string) {
 	_, existsErr := os.Stat(path)
 	appr := event.New(event.TypeApprovalRequest, w.ID(), jsonSafe(map[string]any{
 		"origin":       evt.WorkerId, // who set this in motion (reason worker / human UI)
@@ -119,8 +120,13 @@ func (w *WorkspaceWorker) requestMountApproval(evt event.Event, path string, mou
 	}))
 	appr.RequestId = appr.ID
 	appr.TraceID = evt.TraceID
-	if err := w.Channel.Send(context.Background(), appr, w.approver); err != nil {
-		log.Printf("[workspace %s] approval request to %s: %v", w.ID(), w.approver, err)
+	// Self-describing reply contract (see approvalReplyHint): the approver may
+	// be an automated worker answering from the payload alone.
+	appr.Payload["reply"] = approvalReplyHint(w.ID(), appr.ID,
+		"the directory is mounted and the mount.add request completes with the new mount set",
+		"the mount.add request fails with the denial note")
+	if err := w.Channel.Send(context.Background(), appr, approver); err != nil {
+		log.Printf("[workspace %s] approval request to %s: %v", w.ID(), approver, err)
 		w.ReplyFailed(evt.WorkerId, evt.RequestId, "approval request failed: "+err.Error(), evt.TraceID)
 		return
 	}
@@ -131,11 +137,12 @@ func (w *WorkspaceWorker) requestMountApproval(evt event.Event, path string, mou
 		CallerID:   evt.WorkerId,
 		CallID:     evt.RequestId,
 		TraceID:    evt.TraceID,
+		Approver:   approver,
 	}
 	w.pendingMu.Unlock()
 	w.NotifyDurableChange()
 	log.Printf("[workspace %s] approval requested from %s: mount %s (requested by %s, parked)",
-		w.ID(), w.approver, path, evt.WorkerId)
+		w.ID(), approver, path, evt.WorkerId)
 }
 
 // handleMountRemove serves a mount.remove request: it detaches the given

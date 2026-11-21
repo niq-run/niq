@@ -1,7 +1,7 @@
 PREFIX ?= $(HOME)/.local/bin
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo 0.0.0-dev)
 BUILDTIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-WEBUI := app/webui/assets
+WEBUI := app/client/webui/assets
 # Every step announces itself and npm logs each fetch, so a slow or stuck build
 # says which stage and which host it is waiting on instead of looking frozen.
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
@@ -66,80 +66,26 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 
 GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
 
-# The CLI. It embeds whatever bundle is in app/webui/assets/dist, so this does
+# The CLI. It embeds whatever bundle is in app/client/webui/assets/dist, so this does
 # not rebuild the SPA — `make build webui` (or plain `make build`) is that step.
 niq:
 	@echo "go: building ./bin/niq…"
 	$(GO_BUILD)
 
-# The menu bar app is a thin front end: it runs `niq status --json` and the
-# per-project commands, so nothing here duplicates the CLI's logic. Built with
-# the system Swift compiler into a .app bundle (LSUIElement: no Dock icon),
-# plus ./bin/miq, the launcher that opens it.
-APP := dist/niq.app
-
+# The macOS distribution. Packaging lives with it (app/publish/mac/build.sh);
+# these targets are the familiar entry points.
 miq:
-	@echo "app: building $(APP) (swiftc)…"
-	rm -rf "$(APP)"
-	mkdir -p "$(APP)/Contents/MacOS" bin
-	swiftc -O -swift-version 5 -framework AppKit app/menubar/main.swift \
-		-o "$(APP)/Contents/MacOS/niq-menubar"
-	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
-	mkdir -p "$(APP)/Contents/Resources"
-	cp app/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
-	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
-	@echo "app: installing ./bin/miq (launcher)…"
-	cp app/menubar/miq ./bin/miq
-	chmod +x ./bin/miq
-	@echo "app: built — run: ./bin/miq"
-
-# Universal build + zip for the release: the app is small, so compiling it twice
-# and lipo-ing costs a few seconds and saves shipping two downloads. The zip
-# holds niq.app and the miq launcher together, which is how they are used.
-APP_MIN_MACOS := 13.0
-MENUBAR_ZIP := dist/niq_menubar_darwin_universal.zip
+	@app/publish/mac/build.sh
 
 miq-universal:
-	@echo "app: building $(APP) (universal)…"
-	rm -rf "$(APP)" build/niq-menubar-*
-	mkdir -p "$(APP)/Contents/MacOS" build bin
-	swiftc -O -swift-version 5 -target arm64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
-		app/menubar/main.swift -o build/niq-menubar-arm64
-	swiftc -O -swift-version 5 -target x86_64-apple-macos$(APP_MIN_MACOS) -framework AppKit \
-		app/menubar/main.swift -o build/niq-menubar-x86_64
-	lipo -create -output "$(APP)/Contents/MacOS/niq-menubar" build/niq-menubar-arm64 build/niq-menubar-x86_64
-	cp app/menubar/Info.plist "$(APP)/Contents/Info.plist"
-	mkdir -p "$(APP)/Contents/Resources"
-	cp app/menubar/AppIcon.icns "$(APP)/Contents/Resources/"
-	printf 'APPL????' > "$(APP)/Contents/PkgInfo"
-	@# miq is a shell script and has no architectures; only the bundle needs
-	@# signing. lipo invalidates the linker's ad-hoc signature, and an unsigned
-	@# arm64 binary will not run at all — re-sign the bundle.
-	codesign --force --sign - --timestamp=none "$(APP)"
-	@echo "app: installing ./bin/miq (launcher)…"
-	cp app/menubar/miq ./bin/miq
-	chmod +x ./bin/miq
-	@echo "app: built (universal)"
+	@app/publish/mac/build.sh universal
 
-# Zip for the GitHub release: a folder with the app and the launcher, so it
-# unpacks into something you can run without reading instructions.
-dist-miq: miq-universal
-	@echo "app: packaging $(MENUBAR_ZIP)…"
-	rm -rf dist/niq-menubar
-	mkdir -p dist/niq-menubar
-	cp -R "$(APP)" dist/niq-menubar/
-	cp ./bin/miq dist/niq-menubar/
-	@# --norsrc/--noextattr: no AppleDouble ._ entries in the archive
-	cd dist && ditto -c -k --norsrc --noextattr --noqtn --noacl \
-		--keepParent niq-menubar "$(notdir $(MENUBAR_ZIP))"
-	@echo "app: $(MENUBAR_ZIP)"
-
-# `make app` is the older spelling of `make miq`.
-app: miq
+dist-miq:
+	@app/publish/mac/build.sh zip
 
 # Full local test of the release pipeline (no upload, no publish).
 snapshot:
-	goreleaser release --snapshot --clean --config app/publish/.goreleaser.yaml
+	goreleaser release --snapshot --clean --config app/publish/cmd/.goreleaser.yaml
 	./app/publish/npm/publish-npm.sh "$(VERSION:v%=%)" ./dist --dry-run
 
 # Publish npm packages from a goreleaser dist/ directory (run snapshot or

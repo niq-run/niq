@@ -12,6 +12,8 @@ export {
 export type {
   Backend as IfaceBackend,
   Handler as IfaceHandler,
+  Runnable as IfaceRunnable,
+  ToolHost as IfaceToolHost,
   EventFilter,
   InterfaceWorkerOptions,
   RequestOptions,
