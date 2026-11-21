@@ -87,6 +87,7 @@ niq/
 │       └── releases/             #   per-version archive + LATEST.md (the current draft)
 │
 ├── sdk/ts/                       # out-of-process TypeScript SDK (HTTP client + InterfaceWorker)
+├── e2e/                          # black-box suites: harness + suites/{cli,bus,worker}, behind the `e2e` tag
 ├── doc/                          # in-repo docs: install/CLI, build & test, this layout — each in English and Chinese
 └── Makefile / go.mod / README.md
 ```

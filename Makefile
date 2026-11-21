@@ -7,7 +7,7 @@ WEBUI := app/client/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build niq miq webui miq-universal dist-miq app snapshot npm-publish
+.PHONY: install build niq miq webui miq-universal dist-miq app snapshot npm-publish e2e e2e-cli
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -84,6 +84,15 @@ dist-miq:
 	@app/publish/mac/build.sh zip
 
 # Full local test of the release pipeline (no upload, no publish).
+# End-to-end suites: black-box tests that build the CLI and drive it the way a
+# user does. They are behind the `e2e` build tag, so `go test ./...` stays fast;
+# run them when you change the command surface or the process model.
+e2e:
+	go test -tags e2e ./e2e/suites/... -count=1 -timeout 600s
+
+e2e-cli:
+	go test -tags e2e ./e2e/suites/cli -count=1 -timeout 600s
+
 snapshot:
 	goreleaser release --snapshot --clean --config app/publish/cmd/.goreleaser.yaml
 	./app/publish/npm/publish-npm.sh "$(VERSION:v%=%)" ./dist --dry-run

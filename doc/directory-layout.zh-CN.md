@@ -81,6 +81,7 @@ niq/
 │       └── releases/             #   每版本归档 + LATEST.md（当前草稿）
 │
 ├── sdk/ts/                       # 进程外 TypeScript SDK（HTTP 客户端 + InterfaceWorker）
+├── e2e/                          # 黑盒套件：harness + suites/{cli,bus,worker}，由 `e2e` 标签保护
 ├── doc/                          # 仓库内文档：安装与 CLI、构建与测试、本文，均中英各一份
 └── Makefile / go.mod / README.md
 ```

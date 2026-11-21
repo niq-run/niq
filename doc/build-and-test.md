@@ -103,6 +103,28 @@ Where the tests live, roughly by area:
 | workers | `core/impl/reason`, `core/impl/workers/*` |
 | providers | `core/impl/provider/{openai,openairesponses,anthropic}` |
 
+### End-to-end suites
+
+Everything above tests a package from inside. `e2e/suites/` is different: it
+builds the CLI and drives it the way a user does — argv in, exit codes and
+output out, state on disk, HTTP on a real port. There is no import of the
+packages under test, so a suite fails when behaviour changes rather than when a
+signature does.
+
+They are behind the `e2e` build tag, so `go test ./...` stays fast:
+
+```sh
+make e2e                       # every suite
+make e2e-cli                   # the assembly layer: start/stop/restart, ports, output, completion
+go test -tags e2e ./e2e/suites/cli -run TestE2EStop -v
+```
+
+Each test gets its own `NIQ_HOME`, its own `HOME`, and a `PATH` whose `open` and
+`npm` do nothing, and starts gateways on `127.0.0.1:0` — so the suites run in
+parallel on a machine that is already using niq. A sandbox stops whatever it
+started before the test ends, including a gateway that `niq i` or `niq w`
+started on its own.
+
 ## 5. WebUI development
 
 The bundle is a Vite app in `app/client/webui/assets`.

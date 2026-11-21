@@ -96,6 +96,20 @@ go test -race ./app/standalone/...                    # 并发敏感的包
 | worker | `core/impl/reason`、`core/impl/workers/*` |
 | provider | `core/impl/provider/{openai,openairesponses,anthropic}` |
 
+### 端到端测试套件
+
+上面都是在包内部测。`e2e/suites/` 不同：它编译出 CLI，然后像用户一样驱动它——argv 进去，退出码与输出出来，状态写到磁盘，HTTP 打在真实端口上。它不 import 被测包，所以行为变了才会红，签名变了不会。
+
+它们由 `e2e` 构建标签保护，所以 `go test ./...` 依然很快：
+
+```sh
+make e2e                       # 全部套件
+make e2e-cli                   # 装配层：启停/重启、端口、输出、补全
+go test -tags e2e ./e2e/suites/cli -run TestE2EStop -v
+```
+
+每条测试有自己的 `NIQ_HOME`、自己的 `HOME`，以及一个 `open`/`npm` 都空转的 `PATH`；网关一律起在 `127.0.0.1:0`——所以这套东西可以在已经跑着 niq 的机器上并行跑。每个沙箱在测试结束前会停掉自己启动的全部进程，包括 `niq i`／`niq w` 自己拉起的网关。
+
 ## 5. WebUI 开发
 
 bundle 是 `app/client/webui/assets` 里的一个 Vite 应用。
