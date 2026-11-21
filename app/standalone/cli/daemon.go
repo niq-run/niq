@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/niq-run/niq/app/client/tui"
-	"github.com/niq-run/niq/app/contract"
+	"github.com/niq-run/niq/app/standalone/contract"
 	"github.com/niq-run/niq/app/standalone/gateway"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/store"

@@ -253,8 +253,8 @@ PATH.
 ```
 core/itfs/        interfaces & types (contracts, not implementations)
 core/impl/        implementations (workers, bus, transports, providers, hosts)
-app/contract/     shapes + HTTP client shared by every interface (stdlib only)
 app/standalone/   the single-machine form: gateway, launcher, project, store, cli
+                  contract/ holds the wire shapes + HTTP client (stdlib only)
 app/client/       interfaces: webui (assets), tui, menubar — all gateway clients
 app/publish/cmd   CLI entry point (package main)
 app/publish/mac   macOS distribution: packaging for client/menubar + bundled niq

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/niq-run/niq/app/contract"
+	"github.com/niq-run/niq/app/standalone/contract"
 )
 
 // The project shapes are shared with every client, so they live in contract;

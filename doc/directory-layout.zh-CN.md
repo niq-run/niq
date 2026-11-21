@@ -30,9 +30,9 @@ niq/
 │       └── embedws/              #   workspace 的文件系统后端
 │
 ├── app/
-│   ├── contract/                 # 共享形状（Project/View/Instance）+ HTTP client；仅 stdlib
 │   ├── standalone/               # 部署形态：本地单机 niq
 │   │   ├── cli/                  #   `niq` 命令树：路由、网关守护、update/completion
+│   │   ├── contract/             #   线上形状（Project/View/Instance）+ HTTP client；仅 stdlib
 │   │   ├── gateway/              #   唯一 HTTP 端点：auth、/api/*、/p/{id} 代理、UIMount 挂载
 │   │   ├── launcher/             #   实例：List/Start/Stop/Restart + 私有子进程入口
 │   │   ├── project/              #   项目定义 + 单 project 运行时
@@ -109,21 +109,21 @@ worker 的**控制面**不在这里，因为 placement 集合、builder 表、�
 ```
 app/publish ──▶ app/standalone ──▶ core
      │                │
-     └──▶ app/client ──▶ app/contract
+     └──▶ app/client ──▶ app/standalone/contract
 app/cluster ──▶ core
 ```
 
 - `app/standalone/*` 与 `app/cluster/*` **互不 import**；
-- `app/client/*` 不 import `app/standalone/*`，只 import `app/contract`；
-- `app/contract` 只 import stdlib，所以任何界面（包括未来的远程客户端）都能安全使用；
+- `app/client/*` 只 import `app/standalone/contract`，不 import standalone 的其他任何包；
+- `app/standalone/contract` 只 import stdlib，所以任何界面（包括未来的远程客户端）都能安全使用；
 - `app/standalone/gateway` 不认识具体 UI，只认 `UIMount`；
 - `app/publish` 是分发层，可以依赖形态与界面；**形态不反向 import 它**。
 
 可执行校验：
 
 ```sh
-go list -deps ./app/client/... | grep 'app/standalone'          # 应为空
-go list -f '{{join .Imports " "}}' ./app/contract | grep 'niq-run/niq'  # 应为空
+go list -deps ./app/client/... | grep 'app/standalone' | grep -v '/contract$'  # 应为空
+go list -f '{{join .Imports " "}}' ./app/standalone/contract | grep 'niq-run/niq'  # 应为空
 go list -deps ./app/standalone/... | grep 'app/cluster'               # 应为空
 go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为空
 ```
