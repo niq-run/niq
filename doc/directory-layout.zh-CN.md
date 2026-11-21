@@ -73,7 +73,7 @@ niq/
 │       ├── cmd/                  #   niq CLI：薄 main + install.sh + .goreleaser.yaml
 │       ├── mac/                  #   macOS 分发：打包脚本 + miq 启动器（界面源码在 client/menubar）
 │       ├── npm/                  #   npm 包与发布脚本
-│       └── release-notes/        #   每版本归档 + RELEASE_NOTES.md（当前草稿）
+│       └── releases/             #   每版本归档 + LATEST.md（当前草稿）
 │
 ├── sdk/ts/                       # 进程外 TypeScript SDK（HTTP 客户端 + InterfaceWorker）
 ├── doc/                          # 仓库内文档（本文件）
