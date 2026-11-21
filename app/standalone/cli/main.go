@@ -108,7 +108,7 @@ func runInteractive() error {
 	st, ok := readShellState()
 	if !ok || !isRunning(st) {
 		var err error
-		st, err = startBackground(defaultAddr, "")
+		st, err = ensureGateway(defaultAddr, "", askOnTerminal())
 		if err != nil {
 			return err
 		}
@@ -130,7 +130,7 @@ func runDefault() error {
 		checkForUpdate()
 		return err
 	}
-	st, err := startBackground(defaultAddr, "")
+	st, err := ensureGateway(defaultAddr, "", askOnTerminal())
 	if err != nil {
 		return err
 	}
@@ -160,9 +160,19 @@ func runShell(args []string, openBrowser bool) error {
 		return fmt.Errorf("unknown command %q (try: niq --help)", fs.Arg(0))
 	}
 	if *foreground {
-		return runShellForeground(*addr, *auth)
+		// A gateway of ours is not a port conflict: keep the existing
+		// "already running" answer instead of offering to stop the recorded
+		// pid. runShellForeground owns that check and its message.
+		if st, ok := readShellState(); ok && isRunning(st) {
+			return runShellForeground(*addr, *auth)
+		}
+		newAddr, cancelled, err := resolvePortConflict(*addr, askOnTerminal(), defaultPortOps)
+		if err != nil || cancelled {
+			return err
+		}
+		return runShellForeground(newAddr, *auth)
 	}
-	st, err := startBackground(*addr, *auth)
+	st, err := ensureGateway(*addr, *auth, askOnTerminal())
 	if err != nil {
 		return err
 	}

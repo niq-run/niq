@@ -16,6 +16,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -114,6 +115,28 @@ func (c *Gateway) SetBasicAuth(user, pass string) {
 	c.authUser, c.authPass = user, pass
 }
 
+// PortInUseError reports that the listen address is already taken. The
+// gateway only detects it; choosing what to do (stop the holder, start on
+// another port) belongs to the layer that owns the daemon lifecycle, so this
+// type keeps the fact separable from the policy.
+type PortInUseError struct {
+	Addr string
+	Err  error
+}
+
+func (e *PortInUseError) Error() string {
+	return fmt.Sprintf("gateway: %s is already in use", e.Addr)
+}
+
+func (e *PortInUseError) Unwrap() error { return e.Err }
+
+// IsPortInUse reports whether err means "this address is already taken":
+// either the typed error Bind returns, or a raw EADDRINUSE from elsewhere.
+func IsPortInUse(err error) bool {
+	var inUse *PortInUseError
+	return errors.As(err, &inUse) || errors.Is(err, syscall.EADDRINUSE)
+}
+
 // Bind binds the listen socket and returns the resolved host:port.
 func (c *Gateway) Bind() (string, error) {
 	if c.listener != nil {
@@ -121,6 +144,9 @@ func (c *Gateway) Bind() (string, error) {
 	}
 	ln, err := net.Listen("tcp", c.addr)
 	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return "", &PortInUseError{Addr: c.addr, Err: err}
+		}
 		return "", fmt.Errorf("gateway: bind %s: %w", c.addr, err)
 	}
 	c.listener = ln

@@ -354,7 +354,7 @@ func restartControl(withProjects bool) error {
 	}
 	// Credentials survive in ~/.niq/common/auth.json, so a restart needs no
 	// --auth to keep remote access behind the same basic-auth pair.
-	st, err := startBackground(addr, "")
+	st, err := ensureGateway(addr, "", askOnTerminal())
 	if err != nil {
 		return err
 	}
