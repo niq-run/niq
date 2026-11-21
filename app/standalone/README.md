@@ -21,7 +21,7 @@ placeholder for the distributed one.
 | `gateway` | the only entry point into niq: auth, `/api/*`, `/p/{id}/` proxy, the `UIMount` table | know a concrete UI; assume the caller is a browser; run a project in its own process |
 | `launcher` | instances: `List`/`Start`/`Stop`/`Restart`/`IsRunning`, and the private child-process protocol | render; listen on a port; import `cli` or `app/client` |
 | `project` | the project definition (create/list/link/load) and one project's runtime assembly | know other projects; import `launcher` or `gateway` |
-| `project/api` | the project's HTTP surface: JSON, SSE, approvals, uploads, programs | serve the SPA; do auth; touch `store` or `worker` |
+| `project/api` | the project's HTTP surface (JSON, SSE, approvals, uploads, programs) and its `iface.Backend` half, which is how it speaks on the bus | serve the SPA; do auth; touch `store` or `worker` |
 | `template` | project templates: built-in presets, parse/validate, zip import, instantiation input | know a project instance |
 | `store` | where things live and what shape they have: every path, `project.json`'s `Project`, every JSON/SQLite file | import `project`, `launcher` or `app/client` |
 | `provider` | provider config *semantics*: `Find`, `Default`, `Build`, `ProviderSources`, the startup gate | read or write files; have instances or a lifecycle |

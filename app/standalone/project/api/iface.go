@@ -9,6 +9,11 @@ import (
 	"github.com/niq-run/niq/core/itfs/event"
 )
 
+// This file is the api package's iface.Backend: the half of *Server that faces
+// the bus, next to server.go's half that faces the human. It is named for the
+// interface it implements, not for a server-side "backend" — there is no other
+// backend in this package.
+//
 // The WebUI is the backend of its interface worker: the worker faces the bus,
 // the app faces the human. SetHandler is the injection point — it arrives before
 // the worker starts, which is exactly when the app needs to know how to reach
