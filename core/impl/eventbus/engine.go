@@ -181,6 +181,8 @@ func (e *Engine) handleSend(ctx context.Context, req corebus.Request, from strin
 		if !ok {
 			continue
 		}
+		// Keep the audit snapshot before delivery: see auditCopy.
+		audit := auditCopy(evt)
 		evt.WorkerId = from // ensure identity is set by bus, not by sender
 		// Only override the trace when the request actually carries one; the
 		// in-process transport leaves req.TraceID empty, so dropping it would
@@ -222,8 +224,8 @@ func (e *Engine) handleSend(ctx context.Context, req corebus.Request, from strin
 		// Persist only events that were actually delivered; a fully denied
 		// publish is not a real bus event and does not reach the audit log.
 		if delivered > 0 {
-			evt.Recipients = req.Targets
-			e.persistEvent(ctx, evt)
+			audit.Recipients = req.Targets
+			e.persistEvent(ctx, audit)
 		}
 	}
 }
@@ -298,6 +300,9 @@ func (e *Engine) handleBroadcast(ctx context.Context, req corebus.Request, from 
 // must be called with e.mu held (RLock). The publisher ACL has already been
 // checked by the caller.
 func (e *Engine) broadcastLocked(ctx context.Context, evt event.Event, from string) {
+	// Snapshot for the log before any recipient can touch the payload: see
+	// auditCopy.
+	audit := auditCopy(evt)
 	// Find all targets: online workers whose SubscribeAllow matches.
 	var targets []string
 	for workerID, ch := range e.channels {
@@ -319,7 +324,8 @@ func (e *Engine) broadcastLocked(ctx context.Context, evt event.Event, from stri
 
 	evt.Recipients = targets
 	log.Printf("[eventbus] broadcast: %s from %s to %d worker(s)", evt.Type, from, len(targets))
-	e.persistEvent(ctx, evt)
+	audit.Recipients = targets
+	e.persistEvent(ctx, audit)
 }
 
 // ingressEvent prepares an event for routing: it canonicalizes the payload to
@@ -335,6 +341,23 @@ func ingressEvent(evt event.Event) (event.Event, bool) {
 		evt.Recipients = append([]string(nil), evt.Recipients...)
 	}
 	return evt, true
+}
+
+// auditCopy is the event the log keeps: a snapshot taken before delivery, so a
+// handler that decorates the payload it received cannot rewrite history — and,
+// more importantly, cannot race the log's encoder. Handlers are allowed to
+// write into the payload they are handed (baseworker exposes it as the tool
+// arguments), and mutating a map while json.Marshal walks it is a runtime
+// fatal — "concurrent map iteration and map write" — which a recover cannot
+// catch, so the process dies.
+func auditCopy(evt event.Event) event.Event {
+	cp, ok := ingressEvent(evt)
+	if !ok {
+		// Canonicalization failed and was logged; the event is still routed, but
+		// there is no safe snapshot to keep.
+		return evt
+	}
+	return cp
 }
 
 // OnEvent registers a callback invoked for every event routed via
