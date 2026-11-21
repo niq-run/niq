@@ -84,7 +84,7 @@ CLI、app —— 目标名一起写时顺序不影响结果（`make build niq we
 miq              # 把 niq 放进菜单栏；再次运行则聚焦它
 ```
 
-发布构建（`niq_menubar_darwin_universal.zip`）是 ad-hoc 签名、未公证，所以新下载的
+发布构建（`niq_mac_darwin_universal.zip`）是 ad-hoc 签名、未公证，所以新下载的
 `niq.app` 首次需要右键 → 打开，或执行 `xattr -d com.apple.quarantine niq.app`。
 
 ### 验证

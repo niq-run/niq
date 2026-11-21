@@ -1,5 +1,5 @@
 #!/bin/sh
-# miq — open the niq menu bar app ("niq" with an m for menu bar).
+# miq — open the niq macOS app ("niq" with an m; today a menu bar item).
 #
 # The app is a bundle; this only finds it and hands it to LaunchServices, so
 # running miq again focuses the instance already in the menu bar instead of

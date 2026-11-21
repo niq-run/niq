@@ -75,14 +75,14 @@ niq/
 │   ├── client/                   # interfaces: every one of them is a gateway client
 │   │   ├── webui/                #   browser interface: assets/ + Assets() (no server)
 │   │   ├── tui/                  #   terminal interface: picker, status table
-│   │   └── menubar/              #   macOS menu bar interface: Swift + Info.plist + icon
+│   │   └── mac/                  #   macOS interface (today: menu bar): Swift + Info.plist + icon
 │   │
 │   ├── cluster/                  # deployment form: distributed (placeholder, a peer of standalone)
 │   │   └── README.md
 │   │
 │   └── publish/                  # distribution: decides which UIs ship and whether the binary is bundled
 │       ├── cmd/                  #   the niq CLI: thin main + install.sh + .goreleaser.yaml
-│       ├── mac/                  #   macOS distribution: packaging script + the miq launcher (interface source: client/menubar)
+│       ├── mac/                  #   macOS distribution: packaging script + the miq launcher (interface source: client/mac)
 │       ├── npm/                  #   npm package and publish scripts
 │       └── releases/             #   per-version archive + LATEST.md (the current draft)
 │

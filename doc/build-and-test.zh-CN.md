@@ -53,7 +53,7 @@ make install            # 把已构建的产物软链到 $(PREFIX)；从不构�
 | `make niq` | `./bin/niq` | 注入 `-X main.version`（来自 `git describe`）与 `main.buildTime` |
 | `make miq` | `dist/niq.app`、`./bin/miq` | 仅 macOS；打包逻辑在 `app/publish/mac/build.sh` |
 | `make miq-universal` | `dist/niq.app`（arm64 + x86_64） | 仅 macOS |
-| `make dist-miq` | `dist/niq_menubar_darwin_universal.zip` | 发布时要发的那个包 |
+| `make dist-miq` | `dist/niq_mac_darwin_universal.zip` | 发布时要发的那个包 |
 | `make install` | `$(PREFIX)` 下的软链（默认 `~/.local/bin`） | 链接 `./bin/niq`（构建过 `miq` 也一起链），随后安装补全 |
 | `make snapshot` | `dist/` | 完整的发布试跑，不上传（见 §7） |
 | `make npm-publish` | npm 包 | `DRY=--dry-run` 预览；需要已构建的 `dist/` |
@@ -143,7 +143,7 @@ make snapshot        # goreleaser release --snapshot --clean，然后 npm publis
 ```
 
 它会把 linux/darwin/windows（amd64 与 arm64）的 CLI 归档构建到 `dist/`，并组装 npm 目录树，
-所以你可以直接检视一次发布究竟会发什么。真正的发布（打 tag、GitHub Release、menubar job）
+所以你可以直接检视一次发布究竟会发什么。真正的发布（打 tag、GitHub Release、mac job）
 在 `.github/workflows/release.yml`；`make npm-publish` 从已有的 `dist/` 发布 npm 包
 （`DRY=--dry-run` 预览）。
 

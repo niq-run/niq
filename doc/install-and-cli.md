@@ -95,7 +95,7 @@ the menu.
 miq              # puts niq in the menu bar; running it again focuses it
 ```
 
-Release builds (`niq_menubar_darwin_universal.zip`) are ad-hoc signed, not
+Release builds (`niq_mac_darwin_universal.zip`) are ad-hoc signed, not
 notarized, so a freshly downloaded `niq.app` needs right-click → Open the first
 time — or `xattr -d com.apple.quarantine niq.app`.
 

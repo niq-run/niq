@@ -1,23 +1,22 @@
 #!/bin/sh
 # Packaging for the macOS distribution.
 #
-# The interface lives in app/client/menubar (Swift + the bundle's plist and
-# icon); this script turns it into a download: compile the app, assemble
-# niq.app, and, for a release, lipo a universal binary and zip it with the miq
-# launcher.
+# The app lives in app/client/mac (Swift + the bundle's plist and icon);
+# this script turns it into a download: compile the app, assemble niq.app, and,
+# for a release, lipo a universal binary and zip it with the miq launcher.
 #
 #   build.sh             a .app for this machine, plus ./bin/miq
 #   build.sh universal   one .app for arm64 and x86_64
-#   build.sh zip         universal + dist/niq_menubar_darwin_universal.zip
+#   build.sh zip         universal + dist/niq_mac_darwin_universal.zip
 set -eu
 
 root=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$root"
 
-src=app/client/menubar
+src=app/client/mac
 app=dist/niq.app
 min_macos=13.0
-zip_name=niq_menubar_darwin_universal.zip
+zip_name=niq_mac_darwin_universal.zip
 
 assemble() {
 	rm -rf "$app"
@@ -37,7 +36,7 @@ build)
 	echo "app: building $app (swiftc)…"
 	assemble
 	swiftc -O -swift-version 5 -framework AppKit "$src/main.swift" \
-		-o "$app/Contents/MacOS/niq-menubar"
+		-o "$app/Contents/MacOS/niq-mac"
 	install_launcher
 	echo "app: built — run: ./bin/miq"
 	;;
@@ -50,11 +49,11 @@ universal)
 	rm -rf "$tmp"
 	mkdir -p "$tmp"
 	swiftc -O -swift-version 5 -target "arm64-apple-macos$min_macos" -framework AppKit \
-		"$src/main.swift" -o "$tmp/niq-menubar-arm64"
+		"$src/main.swift" -o "$tmp/niq-mac-arm64"
 	swiftc -O -swift-version 5 -target "x86_64-apple-macos$min_macos" -framework AppKit \
-		"$src/main.swift" -o "$tmp/niq-menubar-x86_64"
-	lipo -create -output "$app/Contents/MacOS/niq-menubar" \
-		"$tmp/niq-menubar-arm64" "$tmp/niq-menubar-x86_64"
+		"$src/main.swift" -o "$tmp/niq-mac-x86_64"
+	lipo -create -output "$app/Contents/MacOS/niq-mac" \
+		"$tmp/niq-mac-arm64" "$tmp/niq-mac-x86_64"
 	rm -rf "$tmp"
 	# lipo invalidates the linker's ad-hoc signature, and an unsigned arm64
 	# binary will not run at all — re-sign the bundle. miq is a shell script
@@ -66,14 +65,14 @@ universal)
 zip)
 	"$0" universal
 	echo "app: packaging dist/${zip_name}"
-	rm -rf dist/niq-menubar
-	mkdir -p dist/niq-menubar
-	cp -R "$app" dist/niq-menubar/
-	cp ./bin/miq dist/niq-menubar/
+	rm -rf dist/niq-mac
+	mkdir -p dist/niq-mac
+	cp -R "$app" dist/niq-mac/
+	cp ./bin/miq dist/niq-mac/
 	# --norsrc/--noextattr: no AppleDouble ._ entries in the archive
 	(cd dist && ditto -c -k --norsrc --noextattr --noqtn --noacl \
-		--keepParent niq-menubar "$zip_name")
-	rm -rf dist/niq-menubar
+		--keepParent niq-mac "$zip_name")
+	rm -rf dist/niq-mac
 	echo "app: dist/$zip_name"
 	;;
 *)

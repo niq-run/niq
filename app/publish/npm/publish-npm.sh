@@ -45,9 +45,9 @@ mkdir -p "${OUT}"
 for archive in "${DIST}"/niq_*_*.tar.gz "${DIST}"/niq_*_*.zip; do
   [ -e "$archive" ] || continue
   base="$(basename "$archive")"
-  # niq_menubar_darwin_universal.zip is the app, not a CLI archive; it is
+  # niq_mac_darwin_universal.zip is the app, not a CLI archive; it is
   # packaged separately below.
-  case "$base" in niq_menubar_*) continue ;; esac
+  case "$base" in niq_mac_*) continue ;; esac
   # niq_darwin_arm64.tar.gz -> goos=darwin goarch=arm64
   goos="$(echo "$base" | cut -d_ -f2)"
   goarch="$(echo "$base" | cut -d_ -f3)"
@@ -93,11 +93,11 @@ chmod +x "${OUT}/niq/bin/miq"
 
 # 3. niq.app, when the macOS job produced it. It rides inside the package (so
 # `miq` finds it next to itself) and postinstall copies it to ~/Applications.
-MENUBAR_ZIP="${DIST}/niq_menubar_darwin_universal.zip"
+MAC_ZIP="${DIST}/niq_mac_darwin_universal.zip"
 if [ -f "${MENUBAR_ZIP}" ]; then
   tmp="$(mktemp -d)"
-  unzip -q "${MENUBAR_ZIP}" "niq-menubar/niq.app/*" -d "${tmp}"
-  cp -R "${tmp}/niq-menubar/niq.app" "${OUT}/niq/niq.app"
+  unzip -q "${MAC_ZIP}" "niq-mac/niq.app/*" -d "${tmp}"
+  cp -R "${tmp}/niq-mac/niq.app" "${OUT}/niq/niq.app"
   rm -rf "${tmp}"
   echo "packaged niq.app"
 else

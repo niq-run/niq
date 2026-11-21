@@ -51,10 +51,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # The menu bar app is Swift and the npm package carries it, so both happen on
-  # a Mac — goreleaser runs on linux and cannot build either. The CLI archives
+  # The macOS app is Swift and the npm package carries it, so both happen on a
+  # Mac — goreleaser runs on linux and cannot build either. The CLI archives
   # are fetched back from the release it just published.
-  menubar:
+  mac:
     needs: release
     runs-on: macos-latest
     steps:
@@ -69,13 +69,13 @@ jobs:
           node-version: '20'
           registry-url: https://registry.npmjs.org
 
-      - name: Build the menu bar app (universal)
+      - name: Build the macOS app (universal)
         run: make dist-miq
 
       - name: Attach it to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/niq_menubar_darwin_universal.zip --clobber
+        run: gh release upload "$GITHUB_REF_NAME" dist/niq_mac_darwin_universal.zip --clobber
 
       - name: Fetch the CLI archives
         env:

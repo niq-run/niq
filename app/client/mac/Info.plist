@@ -7,9 +7,9 @@
   <key>CFBundleDisplayName</key>
   <string>niq</string>
   <key>CFBundleIdentifier</key>
-  <string>run.niq.menubar</string>
+  <string>run.niq.mac</string>
   <key>CFBundleExecutable</key>
-  <string>niq-menubar</string>
+  <string>niq-mac</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundlePackageType</key>

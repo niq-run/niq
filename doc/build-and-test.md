@@ -58,7 +58,7 @@ together the bundle is built first regardless of the order typed.
 | `make niq` | `./bin/niq` | injects `-X main.version` (from `git describe`) and `main.buildTime` |
 | `make miq` | `dist/niq.app`, `./bin/miq` | macOS only; packaging is `app/publish/mac/build.sh` |
 | `make miq-universal` | `dist/niq.app` (arm64 + x86_64) | macOS only |
-| `make dist-miq` | `dist/niq_menubar_darwin_universal.zip` | what a release ships |
+| `make dist-miq` | `dist/niq_mac_darwin_universal.zip` | what a release ships |
 | `make install` | symlinks in `$(PREFIX)` (default `~/.local/bin`) | links `./bin/niq` (and `./bin/miq` if built), then installs completion |
 | `make snapshot` | `dist/` | full release dry run, no upload (see §7) |
 | `make npm-publish` | npm packages | `DRY=--dry-run` to preview; needs a built `dist/` |
@@ -153,7 +153,7 @@ make snapshot        # goreleaser release --snapshot --clean, then npm publish -
 
 It builds the CLI archives for linux/darwin/windows (amd64 and arm64) into
 `dist/` and assembles the npm tree so you can inspect exactly what a release
-would ship. The actual publishing (tag push, GitHub Release, menubar job) is in
+would ship. The actual publishing (tag push, GitHub Release, mac job) is in
 `.github/workflows/release.yml`; `make npm-publish` publishes the npm packages
 from an existing `dist/` (`DRY=--dry-run` to preview).
 
