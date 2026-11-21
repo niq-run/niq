@@ -34,7 +34,8 @@ niq/
 ├── app/
 │   ├── standalone/               # 部署形态：本地单机 niq
 │   │   ├── cli/                  #   `niq` 命令树：路由、网关守护、update/completion、Spec
-│   │   ├── contract/             #   线上形状（Project/View/Instance）+ HTTP client；仅 stdlib
+│   │   ├── contract/             #   项目 API 的线上形状（View/Instance）+ HTTP client；仅 stdlib
+│   │   ├── helper/               #   仅 stdlib 的原语：端口占用者、拨号/探测、loopback/ephemeral 绑定、端口解析
 │   │   ├── gateway/              #   唯一 HTTP 端点：auth、/api/*、/p/{id} 代理、UIMount 挂载
 │   │   ├── launcher/             #   实例：List/Start/Stop/Restart + 私有子进程入口
 │   │   ├── project/              #   项目定义 + 单 project 运行时
@@ -45,7 +46,7 @@ niq/
 │   │   ├── template/             #   模板与 preset（共享领域）
 │   │   ├── store/                #   落盘与路径的唯一主人
 │   │   │   ├── root.go           #     NIQ_HOME / 项目目录 / 文件名 / auth 与 provider 路径 / 地址渲染
-│   │   │   ├── project.go        #     project.json（形状由 contract 提供）
+│   │   │   ├── project.go        #     project.json（落盘的项目形状）
 │   │   │   ├── manifest.go       #     workers.json + worker.ManifestStore
 │   │   │   ├── state.go          #     state.json + workerctl.WorkerStore
 │   │   │   ├── provider.go       #     provider.json 的读写
@@ -100,7 +101,11 @@ niq/
 
 `app/standalone/store/root.go` 是形态内的路径知识（`NIQ_HOME`、`~/.niq`、项目目录、auth 与 provider 路径、地址渲染）。别的包只调 `store.*`，不自己拼路径；`gateway` 的 auth 文件路径也由调用方传入。
 
+地址解析与探测还要再低一层：`app/standalone/helper` 仅依赖 stdlib，拥有端口解析、拨号/存活探测、loopback 与 ephemeral 绑定整形、端口占用者发现与停止。`store.PortOf` 委托给它；CLI 既用它判断存活，也用它处理 gateway 端口被占。
+
 `app/client/*` 是界面实现，本身不含形态知识：`webui` 只有资产，`tui` 只有终端渲染与 `contract.Client`。它们除 `app/standalone/contract` 外不 import `app/standalone` 的任何包。cluster 的界面单独实现；等它出现后，再从 `app/client/webui/assets` 抽公共前端组件。
+
+形态内部**有意保留两个项目形状**：`store.Project` 是 `project.json` 里的东西，`contract.View` 是 `/api/projects` 返回的东西。`launcher.ViewOf` 是二者唯一的转换点——它解析目录、探测端口得到运行状态，只发布客户端需要的字段，因此往文件里加字段不会自动出现在线上。
 
 分发层要声明的不是一个环境，而是一个值：`publish/cmd` 构造 `cli.Spec{Version, BuildTime, UI}` 交给 `cli.Main`，UI 挂载表只从这里进形态。
 

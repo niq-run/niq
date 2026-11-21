@@ -40,7 +40,8 @@ niq/
 ├── app/
 │   ├── standalone/               # deployment form: single-machine niq
 │   │   ├── cli/                  #   the `niq` command tree: routing, gateway daemon, update/completion, Spec
-│   │   ├── contract/             #   wire shapes (Project/View/Instance) + HTTP client; stdlib only
+│   │   ├── contract/             #   wire shapes of the project API (View/Instance) + HTTP client; stdlib only
+│   │   ├── helper/               #   stdlib-only primitives: port holders, dial/probe, loopback and ephemeral bind, port parsing
 │   │   ├── gateway/              #   the only HTTP endpoint: auth, /api/*, /p/{id} proxy, UIMount table
 │   │   ├── launcher/             #   instances: List/Start/Stop/Restart + the private child-process entry
 │   │   ├── project/              #   project definition + single-project runtime
@@ -51,7 +52,7 @@ niq/
 │   │   ├── template/             #   templates and presets (shared domain)
 │   │   ├── store/                #   the only owner of paths and on-disk layout
 │   │   │   ├── root.go           #     NIQ_HOME / project dirs / file names / auth and provider paths / address rendering
-│   │   │   ├── project.go        #     project.json (shape provided by contract)
+│   │   │   ├── project.go        #     project.json (the stored project shape)
 │   │   │   ├── manifest.go       #     workers.json + worker.ManifestStore
 │   │   │   ├── state.go          #     state.json + workerctl.WorkerStore
 │   │   │   ├── provider.go       #     provider.json read/write
@@ -113,11 +114,24 @@ project directories, the auth and provider paths, address rendering). Other
 packages call `store.*` and never assemble a path themselves; the gateway's auth
 file path is passed in by its caller.
 
+Address parsing and probing sit one level below even that: `app/standalone/helper`
+is stdlib-only and owns port parsing, dial/liveness probes, loopback and
+ephemeral bind shaping, and port-holder discovery/stop. `store.PortOf` delegates
+to it, and the CLI uses it both for liveness and for resolving an occupied
+gateway port.
+
 `app/client/*` holds interface implementations with no form knowledge: `webui`
 has assets only, `tui` has terminal rendering plus `contract.Client`. Neither
 imports anything from `app/standalone` except `app/standalone/contract`. cluster
 implements its own interfaces; once it exists, shared frontend components come
 out of `app/client/webui/assets`.
+
+Inside the form there are two project shapes on purpose: `store.Project` is what
+`project.json` holds, and `contract.View` is what `/api/projects` returns.
+`launcher.ViewOf` is the only place that turns one into the other. It resolves
+the directory, probes the port for the run state, and publishes only the fields
+a client needs, so a field added to the file stays private until someone decides
+otherwise.
 
 The declaration a distribution makes is a value, not an environment: `publish/cmd`
 builds `cli.Spec{Version, BuildTime, UI}` and hands it to `cli.Main`, which is the

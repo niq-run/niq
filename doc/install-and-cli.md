@@ -221,6 +221,11 @@ Flags go anywhere a start goes — `niq --addr :8080`, `niq w --addr :8080`,
 `niq -f` and `niq w -f` are the same thing: the foreground gateway. With no
 terminal to detach from, they are what a supervisor should use.
 
+If the address is already taken, a start does not simply fail: in a terminal it
+offers to stop the process holding the port, move to the next free port on the
+same host, or cancel. Without a terminal (a script, a supervisor) it names the
+holder and the two ways out, and exits non-zero.
+
 ### 3.5 Status for scripts
 
 `niq status --json` prints the same snapshot the table draws:

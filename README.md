@@ -29,6 +29,10 @@ That prints the gateway's address, its log, and every project with its ports —
 then gets out of the way. From there, **http://localhost:9527** is the WebUI, and
 `niq i` is the same thing in the terminal.
 
+If the gateway's port is already taken, `niq` asks instead of failing: stop the
+process holding it, start on another port, or cancel. With no terminal (a script)
+it reports who holds the port and the two ways out.
+
 Installation (three channels), upgrading, every command and flag, server
 deployment and the environment variables are all in
 **[doc/install-and-cli.md](doc/install-and-cli.md)**.
