@@ -32,7 +32,6 @@ type View struct {
 // actually bound, and whether it was already up.
 type Instance struct {
 	ID        string `json:"project"`
-	WebUIAddr string `json:"-"`
 	WebUIPort int    `json:"webui_port"`
 	BusPort   int    `json:"bus_port,omitempty"`
 	Already   bool   `json:"already,omitempty"`

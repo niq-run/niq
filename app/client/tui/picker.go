@@ -4,8 +4,8 @@
 // when it is running.
 //
 // Everything here goes through the gateway's HTTP API, so the terminal is just
-// another client: no domain package is imported, and the same client will work
-// against a remote instance.
+// another client: no domain package is imported, and the gateway's address is
+// handed in rather than discovered.
 //
 // The menu is a few dozen lines of escape codes rather than a TUI dependency:
 // two short blocks, redrawn in place.
@@ -96,25 +96,31 @@ func (m *menu) run() (int, error) {
 	defer term.Restore(fd, state)
 
 	in := bufio.NewReader(os.Stdin)
-	m.draw(os.Stdout)
+	return m.loop(func() key { return readKey(in, os.Stdin.SetReadDeadline) }, os.Stdout)
+}
+
+// loop is run() with the terminal taken out: the key source and the output are
+// arguments, so the redraw, select and quit rules can be tested without a TTY.
+func (m *menu) loop(read func() key, out io.Writer) (int, error) {
+	m.draw(out)
 	for {
-		switch readKey(in) {
+		switch read() {
 		case keyUp:
 			m.move(-1)
-			m.draw(os.Stdout)
+			m.draw(out)
 		case keyDown:
 			m.move(+1)
-			m.draw(os.Stdout)
+			m.draw(out)
 		case keyEnter:
 			if m.cursor < len(m.disabled) && m.disabled[m.cursor] {
 				continue // shown, not offered
 			}
 			if !m.keep {
-				m.erase(os.Stdout)
+				m.erase(out)
 			}
 			return m.cursor, nil
 		case keyQuit:
-			m.erase(os.Stdout)
+			m.erase(out)
 			return -1, nil
 		}
 	}
@@ -164,8 +170,10 @@ func (m *menu) height() int {
 	return h
 }
 
-// readKey maps one keypress (or one arrow-key escape sequence) to a key.
-func readKey(in *bufio.Reader) key {
+// readKey maps one keypress (or one arrow-key escape sequence) to a key. The
+// deadline is what tells a lone Esc ("quit") apart from the start of an arrow
+// sequence; it is a parameter so a test can pass a no-op.
+func readKey(in *bufio.Reader, setDeadline func(time.Time) error) key {
 	b, err := in.ReadByte()
 	if err != nil {
 		return keyQuit
@@ -182,9 +190,9 @@ func readKey(in *bufio.Reader) key {
 	case 0x1b:
 		// Arrows arrive as ESC [ A / ESC [ B in a single burst, but a lone Esc
 		// means quit — wait a moment for the rest before deciding.
-		_ = os.Stdin.SetReadDeadline(time.Now().Add(40 * time.Millisecond))
+		_ = setDeadline(time.Now().Add(40 * time.Millisecond))
 		next, err := in.ReadByte()
-		_ = os.Stdin.SetReadDeadline(time.Time{})
+		_ = setDeadline(time.Time{})
 		if err != nil {
 			return keyQuit
 		}
@@ -205,9 +213,10 @@ func readKey(in *bufio.Reader) key {
 	return keyOther
 }
 
-// runProjectPicker is what `niq project` (and `niq project list`) does: pick an
-// instance, then an action. Without a terminal it degrades to the plain table,
-// so piping the command still means something.
+// RunPicker is `niq i`: pick an instance, then an action. baseURL is the
+// gateway the caller resolved, and the address of every project link this
+// prints comes from it. Without a terminal it degrades to the plain table, so
+// piping the command still means something.
 func RunPicker(baseURL string) error {
 	// The list stays up after an action: acting on one project is rarely the
 	// whole errand. The block is redrawn in place each round — states reloaded,
@@ -258,7 +267,7 @@ func RunPicker(baseURL string) error {
 		if action == "" {
 			continue
 		}
-		if line, err := runAction(client, p, action); err != nil {
+		if line, err := runAction(client, baseURL, p, action); err != nil {
 			list.status = red(err.Error())
 		} else {
 			list.status = line
@@ -332,14 +341,14 @@ func cursorDot(selected bool) string {
 }
 
 // runAction performs one action and returns the line the picker shows for it.
-func runAction(c *contract.Client, p contract.View, action string) (string, error) {
+func runAction(c *contract.Client, baseURL string, p contract.View, action string) (string, error) {
 	switch action {
 	case "start":
-		return startProject(c, p)
+		return startProject(c, baseURL, p)
 	case "stop":
 		return stopProject(c, p)
 	default:
-		return restartProject(c, p)
+		return restartProject(c, baseURL, p)
 	}
 }
 
@@ -360,9 +369,9 @@ func projectRow(p contract.View, idWidth int, trailing string, cursor int, selec
 	// Every name is bracketed — the brackets are part of the row, not a cursor
 	// — and the selected one alone takes the theme colour. The cell is
 	// idWidth+2 wide either way, so the state and ports stay in one column.
-	name := bold("["+p.ID+"]") + strings.Repeat(" ", idWidth-len(p.ID))
+	name := bold("["+p.ID+"]") + strings.Repeat(" ", idWidth-displayWidth(p.ID))
 	if selected {
-		name = brandBold("["+p.ID+"]") + strings.Repeat(" ", idWidth-len(p.ID))
+		name = brandBold("["+p.ID+"]") + strings.Repeat(" ", idWidth-displayWidth(p.ID))
 	}
 	row := fmt.Sprintf("%s%s  %s  %s %-5s  %s %-5s  %s",
 		dot,
@@ -380,8 +389,8 @@ func projectRow(p contract.View, idWidth int, trailing string, cursor int, selec
 func projectRows(projects []contract.View, trailing func(contract.View) string, cursor int) []string {
 	idWidth := 2
 	for _, p := range projects {
-		if len(p.ID) > idWidth {
-			idWidth = len(p.ID)
+		if w := displayWidth(p.ID); w > idWidth {
+			idWidth = w
 		}
 	}
 	rows := make([]string, len(projects))
@@ -393,10 +402,10 @@ func projectRows(projects []contract.View, trailing func(contract.View) string, 
 
 func projectDirCell(p contract.View) string { return dim(shortPath(p.Dir)) }
 
-// printProjectTable is the non-interactive view: `niq project` without a
-// terminal, and the list under `niq status`. note, when set, is printed after
-// the heading — the status report uses it to say where the list can be acted on,
-// which the picker itself does not need to explain.
+// PrintTable is the non-interactive view: the picker without a terminal, and
+// the list under `niq status`. note, when set, is printed after the heading —
+// the status report uses it to say where the list can be acted on, which the
+// picker itself does not need to explain.
 func PrintTable(projects []contract.View, trailing func(contract.View) string, note string) {
 	head := bracketed("projects")
 	if note != "" {
@@ -418,24 +427,21 @@ func stopProject(c *contract.Client, p contract.View) (string, error) {
 	return fmt.Sprintf("%s %s", bold(p.ID), green("stopped")), nil
 }
 
-func startProject(c *contract.Client, p contract.View) (string, error) {
+func startProject(c *contract.Client, baseURL string, p contract.View) (string, error) {
 	inst, err := c.Start(p.ID)
 	if err != nil {
 		return "", err
 	}
+	url := brand(contract.ProjectURL(baseURL, p.ID))
 	if inst.Already {
-		return fmt.Sprintf("%s is %s %s", bold(p.ID), green("already running"),
-			brand(fmt.Sprintf("http://localhost:%d", inst.WebUIPort))), nil
+		return fmt.Sprintf("%s is %s %s", bold(p.ID), green("already running"), url), nil
 	}
-	return fmt.Sprintf("%s %s %s", bold(p.ID), green("started"),
-		brand(fmt.Sprintf("http://localhost:%d", inst.WebUIPort))), nil
+	return fmt.Sprintf("%s %s %s", bold(p.ID), green("started"), url), nil
 }
 
-func restartProject(c *contract.Client, p contract.View) (string, error) {
-	inst, err := c.Restart(p.ID)
-	if err != nil {
+func restartProject(c *contract.Client, baseURL string, p contract.View) (string, error) {
+	if _, err := c.Restart(p.ID); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s %s %s", bold(p.ID), green("restarted"),
-		brand(fmt.Sprintf("http://localhost:%d", inst.WebUIPort))), nil
+	return fmt.Sprintf("%s %s %s", bold(p.ID), green("restarted"), brand(contract.ProjectURL(baseURL, p.ID))), nil
 }

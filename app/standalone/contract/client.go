@@ -26,6 +26,13 @@ func New(baseURL string) *Client {
 	}
 }
 
+// ProjectURL is where a project's interface is reachable on a gateway: the
+// shell lives under /p/<id>/, and the project's own port is a data port that
+// speaks JSON and SSE only. Callers build this instead of pasting the path.
+func ProjectURL(baseURL, id string) string {
+	return strings.TrimRight(baseURL, "/") + "/p/" + url.PathEscape(id) + "/"
+}
+
 // List returns every project with its running state.
 func (c *Client) List() ([]View, error) {
 	var out []View

@@ -103,15 +103,14 @@ func Start(id string) (contract.Instance, error) {
 		exited <- werr
 	}()
 
-	addr, err := waitStart(id, exited)
-	if err != nil {
+	if _, err := waitStart(id, exited); err != nil {
 		return contract.Instance{}, err
 	}
 	p, err = project.LoadProject(id)
 	if err != nil {
 		return contract.Instance{}, err
 	}
-	return contract.Instance{ID: id, WebUIAddr: addr, WebUIPort: p.Ports.WebUI, BusPort: p.Ports.Bus}, nil
+	return contract.Instance{ID: id, WebUIPort: p.Ports.WebUI, BusPort: p.Ports.Bus}, nil
 }
 
 // Stop interrupts whoever listens on the project's WebUI port. It returns
@@ -184,11 +183,7 @@ func ChildMain(args []string) error {
 }
 
 func instanceOf(p store.Project, already bool) contract.Instance {
-	addr := ""
-	if p.Ports.WebUI != 0 {
-		addr = "127.0.0.1:" + strconv.Itoa(p.Ports.WebUI)
-	}
-	return contract.Instance{ID: p.ID, WebUIAddr: addr, WebUIPort: p.Ports.WebUI, BusPort: p.Ports.Bus, Already: already}
+	return contract.Instance{ID: p.ID, WebUIPort: p.Ports.WebUI, BusPort: p.Ports.Bus, Already: already}
 }
 
 // startTimeout bounds how long Start waits for the new WebUI to accept.

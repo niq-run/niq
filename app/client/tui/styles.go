@@ -89,6 +89,50 @@ func portCell(n int) string {
 	return strconv.Itoa(n)
 }
 
+// displayWidth is how many terminal cells s occupies: an East Asian wide rune
+// takes two, everything else one. Project ids are user text (SanitizeID only
+// swaps separators), so padding them by byte length would misalign a CJK name
+// against an ASCII one.
+func displayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		if isWide(r) {
+			w += 2
+			continue
+		}
+		w++
+	}
+	return w
+}
+
+// isWide reports whether r is East Asian wide or an emoji, the cases a
+// terminal renders in two cells.
+func isWide(r rune) bool {
+	switch {
+	case r < 0x1100:
+		return false
+	case r <= 0x115F, r == 0x2329, r == 0x232A:
+		return true
+	case r >= 0x2E80 && r <= 0xA4CF: // CJK radicals, kana, han, Yi
+		return true
+	case r >= 0xAC00 && r <= 0xD7A3: // Hangul syllables
+		return true
+	case r >= 0xF900 && r <= 0xFAFF: // CJK compatibility ideographs
+		return true
+	case r >= 0xFE30 && r <= 0xFE6F: // CJK compatibility forms
+		return true
+	case r >= 0xFF00 && r <= 0xFF60: // fullwidth forms
+		return true
+	case r >= 0xFFE0 && r <= 0xFFE6:
+		return true
+	case r >= 0x1F300 && r <= 0x1FAFF: // emoji and pictographs
+		return true
+	case r >= 0x20000 && r <= 0x3FFFD:
+		return true
+	}
+	return false
+}
+
 // Version is set by the CLI before it opens the picker, so the header shows the
 // same version as `niq --version`.
 var Version = "dev"

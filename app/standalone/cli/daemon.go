@@ -272,9 +272,9 @@ func reportRunningProjects() {
 }
 
 // stopProjects interrupts every running project instance. SIGINT is the same
-// graceful path Ctrl+C takes — 'niq project run' snapshots its state — and it
-// reaches both instances this control plane launched and ones started by hand
-// in another terminal (they are found by their WebUI port).
+// graceful path Ctrl+C takes — the project snapshots its state on shutdown —
+// and it reaches both instances this control plane launched and ones started by
+// hand in another terminal (they are found by their WebUI port).
 func stopProjects() error {
 	// The project package logs the signal it sends to a port holder; on a
 	// report like this it would land between the control line and the summary.
@@ -446,25 +446,21 @@ func printControlStopped() {
 // proxies its old port.
 //
 // controlURL, when the control plane is up, is the address that reaches the
-// project from outside; otherwise the loopback URL is shown.
+// project from outside. When it is down there is no such address: the project's
+// own port speaks JSON only, and its ports are already in their own columns.
 func printProjectStatus(controlURL string) {
 	views, err := launcher.List()
 	if err != nil || len(views) == 0 {
 		return
 	}
-	// Every project gets an address, running or not: /p/<id>/ renders a start
-	// page when the instance is down, so the link is worth clicking either way.
+	// Every project gets an address while the gateway is up, running or not:
+	// /p/<id>/ serves the shell, with a start page when the instance is down, so
+	// the link is worth clicking either way.
 	url := func(v contract.View) string {
-		target := ""
-		switch {
-		case controlURL != "":
-			target = strings.TrimSuffix(controlURL, "/") + "/p/" + v.ID + "/"
-		case v.Ports.WebUI != 0:
-			target = store.LocalhostURL(fmt.Sprintf("127.0.0.1:%d", v.Ports.WebUI))
-		}
-		if target == "" {
+		if controlURL == "" {
 			return ""
 		}
+		target := contract.ProjectURL(controlURL, v.ID)
 		if !v.Running {
 			return dim(target)
 		}
