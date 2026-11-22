@@ -194,9 +194,10 @@ goes all the way through:
   `miq`, and `LSUIElement` still hides it from the Dock — it is a menu bar item
   until a window says otherwise.
 
-The npm package ships that bundle again: the packaging script's macOS guard was
-testing a variable the rename no longer set, which would have published this
-release's package without `niq.app`.
+The npm package carries that bundle. The packaging script's macOS guard was
+testing a variable the rename no longer set, which under `set -u` stops the job
+outright — after goreleaser has published the release, so the archives ship and
+the npm packages never do.
 
 ## 7. What the suites found
 
