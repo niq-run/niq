@@ -22,16 +22,16 @@ jobs:
           go-version-file: go.mod
 
       # Release notes: one archived file per release under
-      # app/publish/release-notes, named after the tag. app/publish/RELEASE_NOTES.md
+      # app/publish/releases, named after the tag. app/publish/releases/LATEST.md
       # holds the current release's notes; it is used as a fallback only when it
       # names the tag being released, so a stale copy can never publish the
       # previous version's notes under a new tag.
       - name: Determine release notes
         id: notes
         run: |
-          args="release --clean --config app/publish/.goreleaser.yaml"
-          notes="app/publish/release-notes/${GITHUB_REF_NAME}.md"
-          current="app/publish/RELEASE_NOTES.md"
+          args="release --clean --config app/publish/cmd/.goreleaser.yaml"
+          notes="app/publish/releases/${GITHUB_REF_NAME}.md"
+          current="app/publish/releases/LATEST.md"
           if [ -f "$notes" ]; then
             echo "Using $notes as the release body."
             args="$args --release-notes $notes"
@@ -51,10 +51,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # The menu bar app is Swift and the npm package carries it, so both happen on
-  # a Mac — goreleaser runs on linux and cannot build either. The CLI archives
+  # The macOS app is Swift and the npm package carries it, so both happen on a
+  # Mac — goreleaser runs on linux and cannot build either. The CLI archives
   # are fetched back from the release it just published.
-  menubar:
+  mac:
     needs: release
     runs-on: macos-latest
     steps:
@@ -69,13 +69,13 @@ jobs:
           node-version: '20'
           registry-url: https://registry.npmjs.org
 
-      - name: Build the menu bar app (universal)
+      - name: Build the macOS app (universal)
         run: make dist-miq
 
       - name: Attach it to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/niq_menubar_darwin_universal.zip --clobber
+        run: gh release upload "$GITHUB_REF_NAME" dist/niq_mac_darwin_universal.zip --clobber
 
       - name: Fetch the CLI archives
         env:

@@ -1,0 +1,372 @@
+// Package eventstore implements [event.AppendStore] backed by a local SQLite
+// database. The directory says what it stores (events); SQLite is the backend.
+package eventstore
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/niq-run/niq/core/itfs/event"
+
+	_ "modernc.org/sqlite"
+)
+
+// Store is a persistent event store backed by SQLite.
+type Store struct {
+	db *sql.DB
+}
+
+// New opens (or creates) a SQLite-backed event store at the given path.
+func New(path string) (*Store, error) {
+	// Pragmas ride the DSN so EVERY pooled connection gets them. busy_timeout
+	// and synchronous are per-connection settings — a one-off db.Exec only
+	// reaches whichever pooled connection happens to serve it, leaving the
+	// rest at busy_timeout=0, which fails instantly with SQLITE_BUSY on lock
+	// contention. 5000 ms makes contended writers wait instead of erroring
+	// (without it events were dropped: delivered to SSE but never persisted,
+	// so the event query silently missed tool replies).
+	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: open: %w", err)
+	}
+	s := &Store{db: db}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// Close releases the database connection.
+func (s *Store) Close() error {
+	return s.db.Close()
+}
+
+func (s *Store) migrate() error {
+	query := `
+	CREATE TABLE IF NOT EXISTS events (
+		id              TEXT PRIMARY KEY,
+		type            TEXT NOT NULL,
+		worker_id       TEXT NOT NULL,
+		payload         TEXT NOT NULL DEFAULT '{}',
+		timestamp       INTEGER NOT NULL,
+		target_worker_id TEXT DEFAULT '',
+		recipients      TEXT DEFAULT '',
+		trace_id        TEXT,
+		request_id      TEXT,
+		specversion     TEXT,
+		dataschema      TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_events_worker_time ON events(worker_id, timestamp DESC);
+	CREATE INDEX IF NOT EXISTS idx_events_target_time ON events(target_worker_id, timestamp DESC);
+	-- Chronological pagination of "all history" (no worker filter). The ORDER BY
+	-- is (timestamp, id) — id is the tiebreak that makes same-second events page
+	-- without skips — so the index carries id too: without it every page needed
+	-- a temp b-tree over the whole range instead of a seek.
+	CREATE INDEX IF NOT EXISTS idx_events_time_id ON events(timestamp DESC, id DESC);
+	-- The older timestamp-only index is a prefix of the one above: keep it and
+	-- every insert pays for two overlapping entries. Dropping an index is cheap
+	-- (no table rewrite), so old stores are cleaned on the next open.
+	DROP INDEX IF EXISTS idx_events_time;
+
+	-- Recipients, normalized: one row per (event, delivered-to worker). The
+	-- recipients JSON column stays as the display source of truth, but queries
+	-- match through this table — exact equality on an indexed column, where
+	-- LIKE on the JSON string both full-scanned AND false-matched substring
+	-- ids (niq matching niq-workspace).
+	CREATE TABLE IF NOT EXISTS event_recipients (
+		event_rowid INTEGER NOT NULL,
+		worker_id   TEXT NOT NULL,
+		PRIMARY KEY (event_rowid, worker_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_event_recipients_worker ON event_recipients(worker_id, event_rowid);
+	`
+	if _, err := s.db.Exec(query); err != nil {
+		return err
+	}
+	// Older databases predate the request_id column: add it so request →
+	// response pairing survives restart (the webui correlates a tool call with
+	// its request.* result by request_id).
+	rows, err := s.db.Query(`PRAGMA table_info(events)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasRequestID := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == "request_id" {
+			hasRequestID = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasRequestID {
+		if _, err = s.db.Exec(`ALTER TABLE events ADD COLUMN request_id TEXT`); err != nil {
+			return err
+		}
+	}
+
+	// Request → reply pairing: the WebUI asks a worker a question and polls
+	// "all events carrying this request_id" until request.completed lands.
+	// Without this index that query has no equality column to seek on, so it
+	// walks every row — and cannot stop early, since a LIMIT counts matches and
+	// there are only one or two. On a 1.2M-row store every poll took ~2s, which
+	// the UI showed as a reply that "arrived late" long after the worker had
+	// already answered. Created after the column exists: an old store gains it
+	// by the ALTER above, and indexing it before that fails.
+	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_events_request_id ON events(request_id)`)
+	return err
+}
+
+// Append implements [event.AppendStore].
+func (s *Store) Append(ctx context.Context, events ...event.Event) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: append: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, evt := range events {
+		payload, _ := json.Marshal(evt.Payload)
+		recipients, _ := json.Marshal(evt.Recipients)
+		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO events
+			(id, type, worker_id, payload, timestamp, target_worker_id, recipients, trace_id, request_id, specversion, dataschema)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			evt.ID, evt.Type, evt.WorkerId, string(payload),
+			evt.Timestamp, evt.TargetWorkerID, string(recipients), evt.TraceID, evt.RequestId, evt.SpecVersion, evt.DataSchema,
+		)
+		if err != nil {
+			return fmt.Errorf("sqlite: append event %s: %w", evt.ID, err)
+		}
+		if err := insertRecipients(ctx, tx, evt); err != nil {
+			return fmt.Errorf("sqlite: append recipients %s: %w", evt.ID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// insertRecipients records the event's recipient workers in the normalized
+// table (exact-match query side). The event row may already exist (INSERT OR
+// IGNORE above), so the rowid is looked up by the event's id.
+func insertRecipients(ctx context.Context, tx *sql.Tx, evt event.Event) error {
+	if len(evt.Recipients) == 0 {
+		return nil
+	}
+	var rowid int64
+	if err := tx.QueryRowContext(ctx, `SELECT rowid FROM events WHERE id = ?`, evt.ID).Scan(&rowid); err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO event_recipients (event_rowid, worker_id) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, id := range evt.Recipients {
+		if id == "" {
+			continue
+		}
+		if _, err := stmt.ExecContext(ctx, rowid, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ByWorker implements [event.EventStore].
+
+// Replay implements [event.EventStore].
+
+func (s *Store) List(ctx context.Context, workerID string, opts event.QueryOpts) ([]event.Event, error) {
+	query := `SELECT id, type, worker_id, payload, timestamp, target_worker_id,
+			recipients, trace_id, request_id, specversion, dataschema
+			FROM events WHERE 1=1`
+	var args []any
+
+	if len(opts.WorkerIDs) > 0 {
+		// Which side of the worker's traffic the filter matches. Empty means
+		// both. Recipient matching goes through the normalized table — exact
+		// and indexed (the old LIKE '%id%' on the JSON column full-scanned AND
+		// false-matched substring ids like niq vs niq-workspace).
+		sent := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, event.RoleSent)
+		received := len(opts.WorkerRoles) == 0 || slices.Contains(opts.WorkerRoles, event.RoleReceived)
+		var branches []string
+		for _, wid := range opts.WorkerIDs {
+			switch {
+			case sent && received:
+				branches = append(branches, `SELECT rowid FROM events WHERE worker_id = ?
+					UNION SELECT rowid FROM events WHERE target_worker_id = ?
+					UNION SELECT event_rowid FROM event_recipients WHERE worker_id = ?`)
+				args = append(args, wid, wid, wid)
+			case sent:
+				branches = append(branches, "SELECT rowid FROM events WHERE worker_id = ?")
+				args = append(args, wid)
+			default: // received only
+				branches = append(branches, `SELECT rowid FROM events WHERE target_worker_id = ?
+					UNION SELECT event_rowid FROM event_recipients WHERE worker_id = ?`)
+				args = append(args, wid, wid)
+			}
+		}
+		query += " AND rowid IN (" + strings.Join(branches, " UNION ") + ")"
+	} else if workerID != "*" && workerID != "" {
+		query += ` AND rowid IN (
+			SELECT rowid FROM events WHERE worker_id = ?
+			UNION SELECT rowid FROM events WHERE target_worker_id = ?
+			UNION SELECT event_rowid FROM event_recipients WHERE worker_id = ?)`
+		args = append(args, workerID, workerID, workerID)
+	}
+	if opts.TraceID != "" {
+		query += " AND trace_id = ?"
+		args = append(args, opts.TraceID)
+	}
+	if opts.RequestID != "" {
+		query += " AND request_id = ?"
+		args = append(args, opts.RequestID)
+	}
+	if opts.Since > 0 {
+		query += " AND timestamp >= ?"
+		args = append(args, opts.Since)
+	}
+	if len(opts.Types) > 0 {
+		query += " AND type IN (" + strings.TrimRight(strings.Repeat("?,", len(opts.Types)), ",") + ")"
+		for _, t := range opts.Types {
+			args = append(args, t)
+		}
+	}
+	// Blacklist: exclude exact and prefixed types, unless kept. Rendered as
+	// `type IN keep OR NOT (excluded OR preface-matched)` so an explicitly kept
+	// exact type (worker.input / worker.abort) survives a covering prefix.
+	// The keep placeholders precede the hide ones in the SQL, so their args are
+	// appended in that same order.
+	if len(opts.ExcludeTypes) > 0 || len(opts.ExcludeTypePrefixes) > 0 {
+		expr := ""
+		if len(opts.KeepTypes) > 0 {
+			expr += "type IN (" + strings.TrimRight(strings.Repeat("?,", len(opts.KeepTypes)), ",") + ")"
+			for _, t := range opts.KeepTypes {
+				args = append(args, t)
+			}
+		}
+		var hide []string
+		if len(opts.ExcludeTypes) > 0 {
+			hide = append(hide, "type IN ("+strings.TrimRight(strings.Repeat("?,", len(opts.ExcludeTypes)), ",")+")")
+			for _, t := range opts.ExcludeTypes {
+				args = append(args, t)
+			}
+		}
+		for _, p := range opts.ExcludeTypePrefixes {
+			if p == "" {
+				continue
+			}
+			hide = append(hide, "type LIKE ?")
+			args = append(args, p+"%")
+		}
+		hideExpr := "(" + strings.Join(hide, " OR ") + ")"
+		if expr != "" {
+			expr += " OR NOT " + hideExpr
+		} else {
+			expr = "NOT " + hideExpr
+		}
+		query += " AND (" + expr + ")"
+	}
+	// Order and paginate by (timestamp, id) — a total order on the event id,
+	// matching the client's sort. Do NOT page by rowid: events are persisted
+	// asynchronously, so rowid (insertion order) does not reliably match
+	// creation time, and pages began overlapping (duplicating rows and making
+	// the "before" cursor never advance). The composite key (timestamp, id) is
+	// deterministic and total (ids are unique), with id as the tiebreak so
+	// same-second events (e.g. thinking then response) page without skips.
+	//
+	// Written as a row-value comparison, not as an OR of two timestamp tests:
+	// SQLite only turns the anchor into an index range bound when it can see a
+	// single ordered comparison. The OR form made it collect the whole index
+	// and sort it (1.2M rows / ~2s on a store of this size) before answering
+	// the first page; the row-value form seeks straight to the anchor and
+	// reads only the page (53 rows / <1ms).
+	if opts.AfterID != "" {
+		query += " AND (timestamp, id) > (SELECT timestamp, id FROM events WHERE id = ?)"
+		args = append(args, opts.AfterID)
+	}
+	if opts.BeforeID != "" {
+		query += " AND (timestamp, id) < (SELECT timestamp, id FROM events WHERE id = ?)"
+		args = append(args, opts.BeforeID)
+	}
+	if opts.Desc {
+		query += " ORDER BY timestamp DESC, id DESC"
+	} else {
+		query += " ORDER BY timestamp ASC, id ASC"
+	}
+	if opts.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, opts.Limit)
+	}
+
+	return s.query(ctx, query, args...)
+}
+
+// Get implements [event.EventStore]: a point lookup by event ID, returning the
+// full event (undisturbed by the worker-scoped filtering or pagination of
+// List). Returns (event, false) when the id is unknown.
+func (s *Store) Get(ctx context.Context, id string) (event.Event, bool, error) {
+	rows, err := s.query(ctx, `SELECT id, type, worker_id, payload, timestamp, target_worker_id,
+			recipients, trace_id, request_id, specversion, dataschema
+			FROM events WHERE id = ?`, id)
+	if err != nil {
+		return event.Event{}, false, err
+	}
+	if len(rows) == 0 {
+		return event.Event{}, false, nil
+	}
+	return rows[0], true, nil
+}
+
+func (s *Store) query(ctx context.Context, query string, args ...any) ([]event.Event, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: query: %w", err)
+	}
+	defer rows.Close()
+
+	var result []event.Event
+	for rows.Next() {
+		var (
+			evt                  event.Event
+			payloadRaw           string
+			recipientsRaw        string
+			traceID, rid, sv, ds sql.NullString
+		)
+		if err := rows.Scan(&evt.ID, &evt.Type, &evt.WorkerId, &payloadRaw,
+			&evt.Timestamp, &evt.TargetWorkerID, &recipientsRaw, &traceID, &rid, &sv, &ds); err != nil {
+			return nil, fmt.Errorf("sqlite: scan: %w", err)
+		}
+		if payloadRaw != "" {
+			json.Unmarshal([]byte(payloadRaw), &evt.Payload)
+		}
+		if recipientsRaw != "" {
+			json.Unmarshal([]byte(recipientsRaw), &evt.Recipients)
+		}
+		evt.TraceID = traceID.String
+		evt.RequestId = rid.String
+		evt.SpecVersion = sv.String
+		evt.DataSchema = ds.String
+		result = append(result, evt)
+	}
+	return result, rows.Err()
+}

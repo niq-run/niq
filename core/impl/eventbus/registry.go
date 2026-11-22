@@ -23,11 +23,11 @@ import (
 // file: read once on construction, rewritten on every mutation, reads served
 // from an in-memory map.
 //
-// It is NOT what a project uses. The project's durable source of truth is
-// workers.json (declarations carry ACL + credential), and its runtime registry
-// is MemoryIdentityRegistry, seeded from those declarations at startup. This
-// implementation stays for a host that genuinely wants a standalone identity
-// file (and for bus-level tests).
+// It is NOT what a project uses. A project's durable identity source is the
+// bus control plane's store (core/impl/busctl), and its runtime registry is a
+// MemoryIdentityRegistry seeded from that store at startup. This implementation
+// stays for a host that genuinely wants a standalone identity file (and for
+// bus-level tests).
 type FileIdentityRegistry struct {
 	mu         sync.RWMutex
 	path       string

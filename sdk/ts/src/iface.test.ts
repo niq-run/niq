@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { InterfaceWorker, ReplyError, type Backend, type Handler } from "./iface.js";
+import {
+  InterfaceWorker,
+  ReplyError,
+  type Backend,
+  type Handler,
+  type Runnable,
+} from "./iface.js";
 import { createEvent } from "./createEvent.js";
 import { EventType, type Event, type WorkerSideChannel } from "./types/index.js";
 
@@ -132,3 +138,49 @@ describe("InterfaceWorker", () => {
     await worker.stop();
   });
 });
+
+describe("InterfaceWorker lifetime and dispatch", () => {
+  it("starts a runnable backend after injection and stops it on stop", async () => {
+    const channel = new fakeChannel();
+    const backend = new runnableBackend();
+    const worker = new InterfaceWorker({ id: "iface-test", channel, backends: [backend] });
+    await worker.start();
+    expect(backend.order).toEqual(["setHandler", "start"]);
+    await worker.stop();
+    expect(backend.order).toEqual(["setHandler", "start", "stop"]);
+  });
+
+  it("does not answer a message a backend consumes as 'no handler'", async () => {
+    const { worker, channel, backend } = await start();
+    backend.handler!.onEvent(() => {}, [EventType.WorkerInput]);
+
+    // A forwarded worker.input carries a request id; consuming it must not
+    // produce a request.failed reply.
+    const forwarded = { ...createEvent(EventType.WorkerInput, { text: "hi" }), request_id: "r1" };
+    channel.push(forwarded);
+    await wait();
+    expect(channel.sent.some((e) => e.type === EventType.RequestFailed)).toBe(false);
+
+    // An event nobody wants still gets the diagnostic reply, so a caller cannot
+    // hang on a silent drop.
+    channel.push({ ...createEvent("nobody.wants.this", {}), request_id: "r2" });
+    await wait();
+    expect(channel.sent.some((e) => e.type === EventType.RequestFailed)).toBe(true);
+    await worker.stop();
+  });
+});
+
+class runnableBackend implements Backend, Runnable {
+  order: string[] = [];
+  handler?: Handler;
+  setHandler(h: Handler): void {
+    this.handler = h;
+    this.order.push("setHandler");
+  }
+  async start(): Promise<void> {
+    this.order.push("start");
+  }
+  async stop(): Promise<void> {
+    this.order.push("stop");
+  }
+}

@@ -1,5 +1,7 @@
 # niq
 
+**English** · [简体中文](doc/README.zh-CN.md)
+
 niq is an **event-driven agent runtime**. It is a single agent composed of many **Workers** that collaborate over an event bus — each worker handles its own focus, and together they form the complete agent.
 
 niq has exactly three core concepts:
@@ -14,312 +16,59 @@ niq grows not by adding new abstractions, but by adding more participants that c
 
 > **Status: early, fast-moving development.** The design is still evolving; APIs and behavior may change without notice.
 
-## Install
+## Get started
 
-Three ways in; each one puts the `niq` command on your PATH. Nothing starts
-until you run it — see [Quick start](#quick-start). None of them need a JS
-runtime: the program worker runs script programs (PTC) inside an embedded QuickJS
-engine (`modernc.org/quickjs`, pure Go), so there is no `node` process to spawn,
-and scripts see only the SDK the worker injects — no `process`, `require`,
-`fetch`, or dynamic `import()`.
-
-**npm** (recommended — `niq update` keeps this install current):
+`niq` has one entry point: install it, then run it.
 
 ```sh
-npm install -g @niq.run/niq
+npm install -g @niq.run/niq   # or: the install script, or a source build
+niq                           # starts the gateway in the background and reports
 ```
 
-On macOS that installs three things: the `niq` command, `miq`, and `niq.app`
-(copied to `~/Applications`, so Spotlight and Finder see it). `miq` opens the
-menu bar app; it is the same menu whether you start it that way or by
-double-clicking the app.
+That prints the gateway's address, its log, and every project with its ports —
+then gets out of the way. From there, **http://localhost:9527** is the WebUI, and
+`niq i` is the same thing in the terminal.
 
-**Install script** (no npm; the binary goes to `~/.niq/bin`):
+If the gateway's port is already taken, `niq` asks instead of failing: stop the
+process holding it, start on another port, or cancel. With no terminal (a script)
+it reports who holds the port and the two ways out.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/niq-run/niq/main/app/publish/install.sh | sh
-```
+Installation (three channels), upgrading, every command and flag, server
+deployment and the environment variables are all in
+**[doc/install-and-cli.md](doc/install-and-cli.md)**.
 
-**From source** (Go 1.26+ — the embedded JS engine requires it — and Node 20+
-for the WebUI bundle). `make install` rebuilds the WebUI, builds `./bin/niq` and
-symlinks it into `~/.local/bin` (`PREFIX=...` for another directory), so `niq`
-works from any shell once that directory is on your PATH:
-
-```sh
-git clone https://github.com/niq-run/niq
-cd niq
-make install
-```
-
-Run `make build` instead if you would rather keep the binary at `./bin/niq` and
-call it from the checkout.
-
-Check it worked — this prints the version and exits:
-
-```sh
-niq --version
-```
-
-**Upgrading.** `niq update` installs the npm package, so it is the way to update
-an npm install. A script install is updated by re-running the `curl` line, and a
-source install by `git pull && make install` — both replace the binary in place.
-The running control plane and projects keep the binary they started with, so
-finish with `niq restart -p`.
-
-## Quick start
-
-With `niq` on your PATH, one command starts everything. niq has two layers: a
-**control plane**, and **projects** — each project is an isolated agent instance
-with its own event bus, worker set and WebUI on its own ports.
-
-```sh
-# start the control plane (default :9527) in the background
-niq
-```
-
-`niq` starts the control plane detached from the terminal, prints where it is
-reachable, and returns to the prompt — closing the shell (or losing an SSH
-session) no longer stops it. Running `niq` again reports on the service instead
-(it is exactly `niq status`), so one command covers both "start it" and "is it
-up?".
-
-```
- - niq -  version: 0.14.0 · build: 2026-11-01T23:55:12Z
-
-[control] running  pid 4711 · since 2026-11-01 23:57
-webui    http://localhost:9527
-log      ~/.niq/niq.log
-stop     niq stop
-restart  niq restart
-
-[projects]  niq project to start, stop or restart one
-● pin   running  webui 57609  bus 57608  http://localhost:9527/p/pin/
-○ notes stopped  webui 57621  bus 57620  http://localhost:9527/p/notes/
-```
-
-`niq status` reports the process, address and log, plus each project's run
-state and URL (a refused port means that instance is not running); `niq stop`
-shuts it down — projects are their own processes, so they keep serving unless
-you add `-p`;
-`niq restart` brings it back on the same address. Put the flags anywhere a
-start goes (`niq --addr :8080 --auth alice:s3cret`, `niq restart` reuses the
-recorded address). To keep it attached to the terminal — systemd, a container,
-`docker run`, or just to watch it — pass `--foreground` (or `-f`):
-
-```sh
-niq control --foreground
-```
-
-Open **http://localhost:9527** — the control plane's WebUI lists your projects and can create and start one from a template, no terminal needed.
-
-Prefer the CLI? Both steps can also be done manually:
-
-```sh
-niq project create my-project
-niq project run my-project
-```
-
-`niq project` on its own (or `niq project list`) is an arrow-key picker over
-every project — state, ports and directory per row: `↑`/`↓`, `⌃n`/`⌃p` or `j`/`k`
-to move, `enter` to pick, then start (if stopped) or stop / restart (if running). An instance is
-identified by its ports, so the CLI, the WebUI and a project started by hand in
-a terminal all act on the same thing — the control plane keeps no list of what
-it launched. Without a terminal the picker prints the same table; `--ids` prints
-just the ids.
-
-| command | |
-| --- | --- |
-| `niq` | start the control plane in the background, or report on it when it is already running |
-| `niq -f`, `niq --foreground` | run the control plane in this terminal |
-| `niq status [--json]` | the control plane and every project instance (`--json` for tools) |
-| `niq stop [-p]` | stop the control plane (`-p` also stops the running projects) |
-| `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
-| `niq project`, `niq p` | pick a project: start, stop or restart it |
-| `niq update` | install the latest release with npm |
-| `niq project start\|stop\|restart <id>` | act on one instance, without the picker |
-| `niq project create` / `niq project run` | create a project / run one in this terminal |
-| `niq completion install` | put completion where your shell already looks |
-| `niq completion <shell>` | print a script for bash, zsh or fish |
-
-`niq update` asks npm for the published version, installs it with
-`npm install -g @niq.run/niq@latest`, and points at `niq restart -p` — the
-control plane and the projects are separate processes still running the old
-binary. A bare `niq` asks the registry at most once a day and mentions a newer
-release every time it starts (from the cached answer) until you install it;
-`NIQ_NO_UPDATE_CHECK=1` turns the check off.
-
-Completion needs no dotfile edit: `niq completion install` writes the script
-into a directory the shell already scans — a writable entry of zsh's `$fpath`,
-`~/.config/fish/completions`, or bash-completion's user directory — and prints
-where it went. `make install`, the install script and the npm package's
-`postinstall` all call it, so a normal install ends with tab completion working
-in the next shell. `NIQ_NO_COMPLETION=1` skips it.
-
-The scripts are printable too, for the cases where that directory is not
-available (a locked-down `/usr/share/zsh`, a shell started from a script):
-
-```sh
-# bash
-source <(niq completion bash)
-# zsh
-niq completion zsh > "${fpath[1]}/_niq"
-# fish
-niq completion fish | source
-```
-
-Output is colored when it goes to a terminal and plain otherwise (or with
-`NO_COLOR` set), so piping and logging stay readable.
-
-Each project serves its own WebUI on a loopback-only port, so it is never
-exposed by accident: open it through the control plane at
-**http://localhost:9527/p/&lt;id&gt;/**, which proxies to that project. That address
-works whether or not the instance is running — opening a stopped project's
-address lands on the projects list with a start prompt instead of an error
-page. Ports are
-assigned dynamically on first run and then persisted per project, so they stay
-stable across restarts (`--bus` / `--webui` override). `niq project list` shows
-each project's `webui` and `bus` ports.
-
-### Server deployment
-
-The control plane is the only port a deployment needs to expose: it serves the
-SPA, the project-management API and every project's WebUI (at `/p/<id>/`).
-Each project's WebUI binds loopback only, so it stays unreachable from outside
-even on a public machine; the event bus listens on all interfaces but
-authenticates every connection with a signed worker token.
-
-```sh
-niq --addr :9527 --auth alice:s3cret
-```
-
-A non-loopback bind is not required to have credentials — auth is opt-in. With
-basic auth configured, requests from any non-loopback address are answered with
-a 401 until they authenticate, while requests from the machine itself stay
-password-free. `--auth` (control plane) and `--webui-auth` (a project started by
-hand) persist to and read from the same `~/.niq/common/auth.json`, so one pair
-of credentials covers everything.
-
-With no credentials configured the server enforces nothing: every caller that
-can reach it is served. That is why the control plane listens on loopback by
-default — pass an explicit `--addr` (and, ideally, `--auth`) to accept remote
-connections.
-
-Basic auth sends the credentials on every request, so terminate TLS in front (or
-tunnel through SSH/WireGuard) before exposing niq to the open internet — niq
-itself speaks plain HTTP.
-
-After upgrading the binary, `niq restart` the control plane and restart the
-running projects: every process serves the page and assets it was built with
-(asset URLs are relative, so a project page loads its own bundle through
-`/p/<id>/`), which means an older project keeps rendering the older UI until it
-is restarted.
-
-### Model provider
+## Model provider
 
 The `reason` worker talks to an LLM provider. Provider settings (endpoint, model, API key) live in `~/.niq/common/providers/provider.json`; `api_key` and header values support environment-variable expansion — e.g. `"api_key": "${OPENAI_API_KEY}"` keeps secrets out of stored files.
 
-## Menu bar (macOS)
-
-The same report, one click away.
-
-```sh
-make build miq   # builds dist/niq.app and ./bin/miq
-miq              # puts niq in the menu bar; running it again focuses it
-```
-
-A `npm install -g @niq.run/niq` on macOS gives you all three already: `niq`,
-`miq`, and `niq.app` in `~/Applications`. `make build miq` is for a checkout.
-
-The icon is the web UI's logo as a template image: a tile in the menu bar's own
-text colour with the 品 knocked out of it. macOS draws templates white on a dark
-menu bar and black on a light one, so the icon follows the appearance without
-any artwork to keep in sync.
-
-The menu is the actions, nothing else: **Open WebUI** and **Stop** (**Start**
-when the control plane is down), then one entry per project — `pin · running` —
-each a submenu of **Open WebUI / Start / Stop / Restart**, with the entries that
-instance cannot perform greyed out. **Open GitHub** and **Quit** close it.
-
-Releases ship a universal build as `niq_menubar_darwin_universal.zip`, holding
-`niq.app` and `miq`. It is ad-hoc signed, not notarized, so the first launch
-needs right-click → Open (or `xattr -d com.apple.quarantine niq.app`).
-
-It refreshes itself when the menu opens, so there is no Refresh item to
-remember. It is a front end, not a second implementation: the status comes from
-`niq status --json`, every action is a `niq` command (`niq project restart <id>`,
-`niq restart -p`, …), so the app cannot drift from the CLI. `miq` is a shell
-script that finds the bundle beside itself first — the one this build produced —
-then `NIQ_APP`, `~/Applications` and `/Applications`, and hands the app the `niq`
-next to it (`--niq <path>`), since a GUI launch does not inherit the shell's
-PATH.
-
 ## Project layout
 
-```
-core/itfs/ interfaces & types (contracts, not implementations)
-core/impl/ implementations (workers, bus, transports, providers, hosts)
-app/       the niq product: control plane, project runtime, WebUI
-app/publish/cmd  CLI entry point (package main)
-app/publish/npm  npm distribution (launcher shim + package template)
-ext/       external worker implementations (HTTP)
-```
+`core/` holds contracts and the mechanisms that do not depend on a deployment
+form; `app/` holds the forms and the product entry, with `app/client/` for the
+interfaces and `app/publish/` for the distributions.
+
+[doc/directory-layout.md](doc/directory-layout.md) is the full picture: the
+as-built tree, the ownership rules behind it, where new things go, and the
+dependency checks that enforce them.
 
 ## Build & test
 
+Go alone builds, vets and tests the backend — the WebUI bundle is committed and
+`go:embed`-ed, so no Node is needed to compile the CLI:
+
 ```sh
 go build ./... && go vet ./...
-go test ./core/impl/eventbus/ -count=1
+go test ./...            # ~6 s
+make build               # ./bin/niq, plus the app on macOS
 ```
 
-The WebUI bundle is committed (it is `go:embed`-ed), and `make build niq` takes
-it exactly as it is: rebuilding the SPA is its own step. A plain `make build`
-does both, in order — bundle, CLI, app. The commit still matters for
-`go build ./...`, `go test ./...` and the release workflow (goreleaser and CI do
-not run Node), so commit the rebuilt `app/webui/assets/dist` with the change:
-
-```sh
-make build              # everything this machine can build
-make build webui        # just the bundle
-make build niq          # just the CLI, embedding the bundle as it is
-make build niq webui    # the bundle, then the CLI
-make build miq          # the menu bar app
-make install            # links what is already built — it does not build
-```
-
-The word after `build` is a target, not an argument — make runs both — so
-`make niq`, `make webui` and `make miq` work on their own too, and `make build`
-alone still means everything. Naming `niq` and `webui` together builds the
-bundle first whichever order you type them in.
-
-`make install` never builds: if `./bin/niq` is missing it says so and stops, so
-an install cannot quietly turn into a long npm/vite run.
-
-### Frontend development
-
-With the control plane running, the Vite dev server (`npm run dev` in
-`app/webui/assets`, port 5173) proxies API traffic to :9527, so both pages
-work with HMR:
-
-- control plane UI: http://localhost:5173/
-- a project's UI: http://localhost:5173/p/&lt;id&gt;/ (that project must be running)
+[doc/build-and-test.md](doc/build-and-test.md) has the make targets, how to run
+one package or one test, the WebUI dev server, the TypeScript SDK, the local
+release dry run, and what is (and is not yet) covered.
 
 ## Data directory
 
-Runtime data lives under `~/.niq/` by default. Set the `NIQ_HOME` environment
-variable to relocate this root to a custom directory (for a portable install,
-tests, or to keep state out of your home dir); `~`/`~/` in the value are
-expanded. `NIQ_AUTH_CONFIG` and `NIQ_PROVIDER_CONFIG` still override those two
-individual files wholesale, taking priority over `NIQ_HOME`.
-
-```
-~/.niq/
-  bin/                         prebuilt binary (install.sh)
-  niq.log                      control-plane log
-  common/
-    templates/                 project templates
-    providers/provider.json    shared provider config (API keys via env expansion)
-  projects/<id>/               one directory per project
-    id/identities.json         worker identity registry (owned by the bus)
-    programs/                  Program storage
-    logs/                      daily-rotated run logs
-```
+Everything niq writes lives under `~/.niq` (`NIQ_HOME` relocates the root;
+`NIQ_AUTH_CONFIG` / `NIQ_PROVIDER_CONFIG` override those two files wholesale).
+The tree, which component owns each file, and what each process reads are in
+[doc/install-and-cli.md §6](doc/install-and-cli.md#6-where-it-writes).

@@ -13,14 +13,13 @@ import (
 // reference, since the placement rules that matter are common to them.
 func (w *HostWorker) registerHelp() {
 	w.RegisterHelp(map[event.EventType]baseworker.HelpFunc{
-		TypeSpawn:     spawnHelp,
-		TypeSuspend:   staticHelp(lifecycleHelp),
-		TypeResume:    staticHelp(lifecycleHelp),
-		TypeRestart:   staticHelp(lifecycleHelp),
-		TypeDestroy:   staticHelp(lifecycleHelp),
-		TypeUpdate:    staticHelp(updateHelp),
-		TypeArchive:   staticHelp(archiveHelp),
-		TypeUpdateACL: staticHelp(aclHelp),
+		TypeSpawn:   spawnHelp,
+		TypeSuspend: staticHelp(lifecycleHelp),
+		TypeResume:  staticHelp(lifecycleHelp),
+		TypeRestart: staticHelp(lifecycleHelp),
+		TypeDestroy: staticHelp(lifecycleHelp),
+		TypeUpdate:  staticHelp(updateHelp),
+		TypeArchive: staticHelp(archiveHelp),
 	})
 }
 
@@ -74,7 +73,7 @@ All four lifecycle tools take one argument:
   restarted or destroyed.
 `
 
-// updateHelp is the guide for the declaration-editing tool.
+// updateHelp is the guide for the manifest-editing tool.
 const updateHelp = `# update
 
 Edit a worker's declaration without touching its runtime state.
@@ -90,28 +89,6 @@ Edit a worker's declaration without touching its runtime state.
   so the change applies on the next start — use ` + "`restart`" + ` to apply it now.
 - Bus ACL is not editable here. Publish/subscribe grants are bus identity data,
   owned by the bus control plane, not by a worker's lifecycle backend.
-`
-
-// aclHelp is the guide for the bus-identity tool.
-const aclHelp = `# acl.update
-
-Replace a worker's bus grants.
-
-` + "```json" + `
-{"worker_id": "<id>",
- "publish_allow":   [{"type": "worker.ready"}, {"type": "request.*", "target": "*"}],
- "subscribe_allow": [{"type": "worker.discover", "source": "*"}]}
-` + "```" + `
-
-- Both lists are replaced WHOLESALE: an omitted list means "no grants", so always
-  send the complete set you want.
-- ` + "`type`" + ` supports ` + "`*`" + ` and ` + "`Prefix.*`" + `. A publish entry's ` + "`target`" + ` limits a directed
-  send to one worker; a subscribe entry's ` + "`source`" + ` limits broadcasts to one
-  publisher (omitted means any).
-- This is identity data, not lifecycle: routing changes immediately, the grant is
-  persisted into the declaration, and nothing is restarted.
-- A worker that is not declared is an error. A declared worker that has not
-  started yet is fine — its identity registers with the persisted grant.
 `
 
 // archiveHelp is the guide for the archive tool.

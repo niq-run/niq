@@ -25,11 +25,11 @@ import (
 // which event types this worker may publish via Send or Broadcast.
 type Identity struct {
 	// WorkerID is the unique identifier for this worker.
-	WorkerID string
+	WorkerID string `json:"worker_id"`
 
 	// Type is the worker type label (e.g. "reason", "workspace", "hiw", "timer").
 	// Populated at registration time by the project assembly.
-	Type string
+	Type string `json:"type,omitempty"`
 
 	// Credential is used to authenticate the worker at connect time.
 	// The credential scheme is transport-specific (e.g., token, API key,
@@ -38,7 +38,7 @@ type Identity struct {
 	// Under the HTTP/SSE transport this holds (or hands the client) the
 	// signed bus token presented on /events + /publish. In-process managed
 	// workers keep it empty — they never authenticate over the wire.
-	Credential string
+	Credential string `json:"credential,omitempty"`
 
 	// Remote reports whether this identity may connect over the HTTP/SSE
 	// remote transport. In-process managed workers leave it false (they only
@@ -47,16 +47,16 @@ type Identity struct {
 	// remotely-connected peers) set it true. The transport server rejects any
 	// SSE connection whose derived id is not remote-connectable, which is the
 	// guard that stops a remote caller from claiming a managed worker's id.
-	Remote bool
+	Remote bool `json:"remote,omitempty"`
 	// PublishAllow lists what this worker may publish: event types, each
 	// optionally restricted to a specific target worker for directed sends.
 	// Supports "*" (all), "Prefix.*" (prefix), and exact match on type.
-	PublishAllow []event.PublishPattern
+	PublishAllow []event.PublishPattern `json:"publish_allow"`
 
 	// SubscribeAllow lists the event patterns this worker subscribes to.
 	// Each pattern may restrict by type ("*", "Prefix.*", exact) and by
 	// optional source worker.
-	SubscribeAllow []event.EventPattern
+	SubscribeAllow []event.EventPattern `json:"subscribe_allow"`
 }
 
 // IdentityRegistry is the control-plane interface for managing identities.

@@ -86,6 +86,15 @@ type EventPattern struct {
 // files). Without this, an old source restriction would silently drop — a
 // silent WIDENING of what the worker receives.
 func (p *EventPattern) UnmarshalJSON(b []byte) error {
+	// A bare string is the config-level spelling of "this type, any source".
+	// It is kept for legacy project files, whose subscriptions were written that
+	// way (and for symmetry with PublishPattern).
+	var typeOnly string
+	if err := json.Unmarshal(b, &typeOnly); err == nil {
+		p.Type = EventType(typeOnly)
+		p.SourceID = ""
+		return nil
+	}
 	type alias EventPattern
 	var a alias
 	if err := json.Unmarshal(b, &a); err != nil {

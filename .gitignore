@@ -11,7 +11,7 @@ bin/
 
 # GoReleaser output (repo root)
 /dist/
-# NOTE: app/webui/assets/dist is go:embed'd and MUST stay committed, so it is
+# NOTE: the shell's assets/dist is go:embed'd and MUST stay committed, so it is
 # deliberately NOT ignored (a rebuild only changes it when the UI changed:
 # vite bundles are content-hashed).
 
@@ -20,6 +20,5 @@ bin/
 # worker-sdk (@niq.run/worker-sdk) node project
 sdk/ts/dist/
 
-# Frontend caches (app/webui)
-app/webui/assets/.vite/
-build/
+# Frontend caches (any shell's assets)
+**/assets/.vite/
