@@ -1,0 +1,60 @@
+name: Worker SDK
+
+# The TypeScript SDK is versioned separately from the CLI: it is a library, not a
+# build of this repository's binary, and it publishes on its own schedule. The
+# CLI release workflow deliberately does not touch it.
+#
+# Workflow is manual because a publish is a decision: bump `version` in
+# sdk/ts/package.json, merge it, then run this. A version already on the registry
+# is skipped, so a re-run is harmless.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Test, build and pack, but do not publish
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/ts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci --no-audit --no-fund
+
+      - run: npm test
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      - name: Pack
+        if: ${{ inputs.dry-run }}
+        run: npm pack --dry-run
+
+      - name: Publish
+        if: ${{ !inputs.dry-run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "skip ${name}@${version} (already published)"
+          else
+            echo "publishing ${name}@${version}"
+            npm publish --access public
+          fi
