@@ -3,7 +3,6 @@
 package cli
 
 import (
-	"errors"
 	"os"
 	"syscall"
 )
@@ -23,11 +22,4 @@ func terminateProcess(pid int) error {
 		return err
 	}
 	return p.Signal(syscall.SIGTERM)
-}
-
-// processAlive reports whether pid still exists. Signal 0 is the portable
-// probe: ESRCH means gone, EPERM means alive but owned by someone else.
-func processAlive(pid int) bool {
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
 }

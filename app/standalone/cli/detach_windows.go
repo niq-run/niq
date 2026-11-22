@@ -30,10 +30,3 @@ func terminateProcess(pid int) error {
 	}
 	return p.Kill()
 }
-
-// processAlive reports whether pid still exists. FindProcess opens the process
-// on Windows and fails once it is gone.
-func processAlive(pid int) bool {
-	_, err := os.FindProcess(pid)
-	return err == nil
-}

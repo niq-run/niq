@@ -110,7 +110,7 @@ func clearShellState(pid int) {
 // grabbed the port after a crash — from reading as "running"; the dial check
 // keeps a recycled pid from doing the same.
 func isRunning(st *shellState) bool {
-	return st != nil && processAlive(st.PID) && helper.IsServing(st.Bound)
+	return st != nil && helper.Alive(st.PID) && helper.IsServing(st.Bound)
 }
 
 // startBackground launches the control plane detached from this terminal.
@@ -232,7 +232,7 @@ func stopShellProcess() error {
 	// The shutdown closes the listener last, so the process being gone means
 	// the ports are free for an immediate restart.
 	deadline := time.Now().Add(10 * time.Second)
-	for processAlive(st.PID) {
+	for helper.Alive(st.PID) {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("control plane (pid %d) did not exit within 10s", st.PID)
 		}
