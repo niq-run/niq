@@ -1,233 +1,272 @@
-# niq v0.16.0
+# niq v0.17.0
 
-A release about the shape of the thing. Almost nothing here is a new capability:
-it is the worker model made explicit — one lifecycle engine, one storage boundary
-per owner, one reusable "interface worker" behind which every outward-facing
-surface sits — and then two real instances talking to each other, which is how
-the transport bugs at the end were found.
+A release about where things live. Almost nothing here is a new capability: the
+repository is reorganised around what a deployment form *is*, and the pieces that
+had been sharing a home were pulled apart — one HTTP surface, one auth point, one
+place that knows about addresses. Then three black-box suites were written against
+the result, which is how a process-killing race in the bus got found.
 
-The sentence the whole release orbits: **a worker type names what is behind it,
-and the layer that can persist something is the layer that owns writing it.**
+The sentence the whole release orbits: **a deployment form is a directory, and
+every interface is a client of it.**
 
 ## Highlights
 
-- **A worker is a declaration, a placement and a backend.** One lifecycle backend
-  for every placement, one `params` bag as the only construction input, and
-  worker storage split into `project.json` (metadata), `workers.json` (active
-  declarations), `workers.archived.json` (archived) and `workers/<id>/` (runtime
-  state). `id/identities.json` is gone; the runtime identity table is a
-  projection of the declarations.
-- **`iface`, the interface worker.** A reusable base for any worker whose
-  capability is reaching outward — a UI, an API app, a chat bridge, another niq.
-  `webui` is now one of them, and the TypeScript SDK ships the same contract.
-- **`niw` is now `niq`**, rebuilt on that base: a worker whose backend is another
-  niq instance. `hiw` is gone; the WebUI is an app-hosted interface worker.
-- **Edits have owners.** Declaration edits are the host's `update` tool, ACL
-  edits are `acl.update` (identity data, not a lifecycle verb), and archive is
-  one operation instead of four steps in an HTTP handler.
-- **Approvals are a capability of the interface worker**, opt-in, with a
-  snapshot for recovery — and the same inbox a terminal or a menubar notifier
-  will use.
-- **Spawn parameters are checked per type** instead of being silently dropped.
+- **`app/` is three kinds of thing.** `app/standalone` is the single-machine form,
+  `app/client` is every interface, `app/publish` is distribution. `core` keeps
+  contracts and form-agnostic mechanisms, and imports none of them.
+- **The gateway is the only HTTP surface.** One auth point, one proxy rule, one
+  mount table. A project port serves JSON/SSE and nothing else.
+- **The worker subsystem closes over its own control plane**, and bus identities
+  get a durable owner of their own (`identities.json`).
+- **`helper` is the one library for addresses.** It turns an address into a dial
+  target, asks whether something answers, and finds who holds a port — so an
+  occupied gateway port becomes a choice instead of a bind error.
+- **A project's stored shape is not its wire shape.** `store.Project` is the file;
+  `contract.View` is the response, and a conversion is the only bridge.
+- **`app/client/mac`** (was `menubar`), bundle `run.niq.mac`, next to `webui` and
+  `tui` and symmetric with the `app/publish/mac` channel.
+- **58 black-box cases** behind `make e2e`, running in ~8 s.
 
-## 1. One lifecycle backend, one params bag
+## 1. `app/` is three kinds of thing
 
-Before this release a worker's definition lived in several typed fields
-(`instruction`, `provider`, `model`, `mounts`, `approver`, …) next to a `params`
-map, and it was never clear which one won. Now there is exactly one:
-**`params` is the only construction input**, `type`/`id`/`placement`/`command`/
-`cwd` are fixed fields, and the rest is the type's business. Each type declares
-which parameters it reads, and a spawn naming something else fails with the list
-of what it does accept rather than quietly ignoring it.
+Before, `app/` was a pile of peers: `control`, `niqhome`, `project`, `webui`,
+`menubar`, `publish`. Nothing said which of them was a deployment form, which was
+a UI, and which was packaging — so every new file had to guess.
 
-`host` drives one `worker.Backend` for all three placements:
+```
+before                          after
+app/control                     app/standalone/{cli, gateway, launcher,
+app/niqhome                       project (+api), store (+event, identity,
+app/project                       migrate), worker (+process), provider,
+app/webui                         template, contract, helper}
+app/menubar                     app/client/{webui, tui, mac}
+app/publish                     app/cluster   (placeholder sibling)
+                                app/publish/{cmd, mac, npm, releases}
+```
 
-| Placement | Lifecycle owner |
+What each move was for:
+
+- **`control` → `gateway` + `cli`.** The old package mixed the HTTP surface with
+  the daemon lifecycle. They split: `gateway` is the only HTTP endpoint (auth,
+  `/api/*`, the `/p/{id}` proxy, the UI mount table) and never runs a project
+  itself; `cli` owns argv, the daemon's lifecycle, `status`, completion, update.
+- **`webui` → three places.** Assets to `app/client/webui` (no server), the
+  project's JSON/SSE API to `app/standalone/project/api`, auth to `gateway`.
+  `shell/webui` and `project/api` used to be one server, which is why a project
+  port could host a SPA.
+- **`project` → `app/standalone/project`**, `project/worker` →
+  `app/standalone/worker`: a form owns its assembly, not just its domain.
+- **`niqhome` → `app/standalone/store`.** Paths and file IO were a peer of the
+  forms; they are now one package the form depends on, with `store/{migrate,
+  identity, event}` under it.
+- **`menubar` → `app/client/mac`**, `publish/cmd`'s command tree →
+  `app/standalone/cli` (publish keeps `main.go`, `install.sh`, goreleaser), and
+  `publish/release-notes` → `publish/releases`.
+- **`core` stays `{itfs, impl}`.** The one rename inside it is `workersvc` →
+  `workerctl` (live instances), so it reads as a peer of `busctl`.
+
+The rules that came out of it, now written down in `doc/directory-layout.md`:
+
+- **The gateway is the only HTTP surface.** Every UI reaches niq through it, so
+  there is one auth point, one proxy rule, one place to add a domain.
+- **A project is a data port.** `project/api` speaks JSON/SSE and binds loopback
+  only; no SPA, no auth.
+- **A UI is a client.** `app/client/*` imports `contract` and nothing else from
+  the form, so `webui`, `tui` and the macOS app are the same kind of thing.
+- **Distribution declares, it does not assemble.** `publish/cmd` hands
+  `cli.Spec{Version, BuildTime, UI}` to `cli.Main`; the mount table enters the
+  form there and nowhere else.
+- **One binary, several process identities.** `main` dispatches once on the
+  private child verb; the CLI front-end, the gateway daemon and each project
+  child are different processes with different composition roots.
+
+## 2. The CLI is a shell of shells
+
+`niq` no longer has a project command family. A project is something a shell does:
+the browser shell and the terminal shell both list, pick, stop and restart, and
+the CLI's job is to start the gateway those shells talk to.
+
+| v0.16.0 | v0.17.0 |
 |---|---|
-| `in-process` | the host's lifecycle engine (snapshot / restore) |
-| `managed-process` | the process supervisor (launch, backoff, restart) |
-| `unmanaged-process` | nobody here — the third party starts itself |
+| `niq control [-f]` | `niq w [-f]` — the browser shell |
+| `niq project` / `niq p` | `niq i` — the interactive terminal shell |
+| `niq project list/create/run` | gone; project operations live in a shell |
+| `niq project list --ids` | `niq status --ids` (or `--json`) |
+| `--webui-auth` | gone — the project API is loopback-only |
+| `control.json` | `shell.json` — the shell's state file |
 
-Concurrency has a contract now, not a hope: lifecycle operations are serialized
-per worker id, slow calls (`Connect`/`Build`/`Start`/`Snapshot`/`Stop`, store I/O)
-run outside the registry lock, snapshots carry a sequence number so a slow one
-cannot overwrite a newer one, and destroy stops first and only then drops the
-entry — a failed stop cannot make a live worker invisible.
+Bare `niq` still starts the gateway in the background and reports on it when it is
+already running, so the common path is unchanged.
 
-## 2. Storage: three boundaries, one owner each
+## 3. The worker subsystem is a self-closed control plane
 
-```
-project.json             metadata only
-root_secret              bus token signing key
-workers.json             active declarations
-workers.archived.json    archived declarations (same shape)
-workers/<id>/            runtime state: state.json, stdout.log, process state
-```
+**Layering**
 
-- **Declarations** are owned by the declaration store. Every write goes through
-  one lock, and the archive move writes the destination before the source, so a
-  crash can only duplicate a declaration, never lose one.
-- **Runtime state** is owned by the worker store (`state.json`) and by the process
-  supervisor (process log + child state dir). Each deletes only what it created;
-  the declaration store no longer deletes runtime state at all.
-- **Identity** has no file. `workers.json` is the durable source, the registry is
-  its runtime projection, and `root_secret` is the only signing authority.
+- `app/standalone/worker.ControlPlane` owns `Recover` and `Stop`: it lists the
+  manifest store itself (in-process first, then process workers), and shutdown no
+  longer blocks waiting for a signal.
 
-## 3. `iface`: the interface worker
+**Contracts (`core/itfs/worker`)**
 
-A worker whose capability is reaching outward, not a domain of its own. It faces
-the bus like every worker (identity, ACL, presence, discover, tools) and holds
-injected **backends** behind it — the same shape a workspace worker has with its
-filesystem backend.
+- One runtime interface `Lifecycle` (now including `Archive`) plus one declaration
+  interface `Manifest` (`Get` / `List(archived)` / `Update`) over a single
+  `WorkerInfo` view.
+- `Backend = Lifecycle + Manifest`; `Editor`, `Archiver`, `Catalog`, `Decl`,
+  `ACLAdmin`, `RecoverOptions`, `Backend.Recover` and `Backend.Run` are deleted.
+- `host` depends on `worker.Backend` alone, and no longer exposes `acl.update` —
+  the bus event world has no permission write entry.
 
-```go
-type Backend interface{ SetHandler(h Handler) }
+**Mechanism libraries**
 
-type Handler interface {
-    ID() string
-    Send(ctx, evt, targets ...string) error
-    Broadcast(ctx, evt) error
-    Request(ctx, target string, evt event.Event) (event.Event, error)
-    OnEvent(fn func(event.Event), types ...event.EventType) Subscription
-}
-```
+- `core/impl/workersvc.WorkerService` → `core/impl/workerctl.Manager`: live
+  instances only, one injected `Build` function; the type registry moved to the
+  control plane.
+- `ProcessSupervisor` → `process.Supervisor`.
+- Neither library knows what a placement is; the control plane maps placement to
+  mechanism.
 
-- `SetHandler` runs **once, before `Start`**, so a backend builds its outward side
-  already knowing how to reach in.
-- `Request` owns the correlation that every caller used to hand-roll: ids, the
-  wait, the timeout, and `request.failed`/`request.rejected` as errors.
-- Inbound fan-out is per backend, each with its own queue and goroutine: a slow or
-  panicking backend cannot stall the loop or starve another.
-- Optional capabilities are assertions on the same handle: `Runnable` (a backend
-  with its own lifetime), `Stateful` (its durable bytes), `Inbox` (approvals).
+**Bus identities (`core/impl/busctl`)**
 
-It is deliberately **not** a bus control plane: editing ACLs and rendering the
-global event stream belong to the app's own bus handles. Routing them through an
-interface worker would add a hop and hide what they are.
+- New `bus.Control` + `bus.Store` over an injected JSON file store; `Seed()`
+  projects durable identities before the bus serves.
+- Grants and credentials move out of `workers.json` into `identities.json`;
+  `migrateInlineIdentities` lifts legacy inline ACLs once.
+- WebUI ACL editing is a single `UpdateACL` call (store plus runtime projection),
+  no bus round-trip.
 
-## 4. `niq`, and the end of `hiw`
+**Terminology**
 
-`niw` was 733 lines of hand-rolled bus plumbing for one idea: link this bus to
-another niq. It is now `niq` — a worker whose backend *is* another niq instance —
-built on `iface`:
+- `Declaration`/`DeclStore` → `Manifest`/`ManifestStore`; the embedded definition
+  type is `Definition` (the old `Config`).
+- Data files (`workers.json`, `workers.archived.json`, `state.json`) and the three
+  placement strings are unchanged.
 
-```
-iface.Worker   the bus half: loop, tool dispatch, presence, Handler
-niq.Backend    the far side: dial + backoff + reconnect, the two recipient
-               bindings, niq.* tools, Snapshot/Restore
-```
+## 4. A project has two shapes
 
-Routing is unchanged: local `worker.input` is directed to the far-side recipient,
-far-side `worker.input` to the local recipient, ids preserved, lifecycle traffic
-never relayed as conversation. The `remote-niw` pseudo-type is gone — the
-identity a link dials in as is simply a `niq` declaration with
-`unmanaged-process` placement, in declarations and in the create form alike.
+`contract.Project` was three things at once — `project.json`, the body of
+`/api/projects`, and a struct every client imported — so a field added to the file
+appeared on the wire.
 
-`hiw` is retired. The WebUI used to borrow a `webui-hiw` worker to speak on the
-bus; now the app **is** its worker's backend:
+- `store.Project` is the file; `contract.View` is the response; `launcher.ViewOf`
+  is the only conversion. It resolves the directory and probes the run state, so a
+  field stays private until someone publishes it.
+- `gateway` and `project` no longer import `contract` at all.
+- `contract.Instance.WebUIAddr` was `json:"-"`: set on the server, never reached a
+  client. Removed.
+- `project/api/backend.go` → `iface.go`, named for the interface it implements
+  (`iface.Backend`) rather than for a "server-side backend" that does not exist in
+  that package. Tests collapsed to one file per source file.
 
-```go
-app := webui.New(eventLog, engine, backend, registry, addr)  // no bus handle yet
-ui := iface.New(iface.Config{ID: "webui", Type: "interface", Bus: ch,
-                             Backends: []iface.Backend{app}, Approvals: true})
-ui.Start(ctx)   // SetHandler(app) → start the backend → receive events
-app.Bind(addr)  // only now listen on HTTP
-```
+## 5. Addresses, and an occupied port
 
-`webui` is the only worker that is on the bus but not in a declaration: the
-assembly joins it, grants its ACL in code, and protects it, so it cannot be
-destroyed or suspended and does not appear as a lifecycle row in the roster.
+Four packages had grown their own copy of the same three ideas — turn an address
+into a dial target, decide whether something answers, find who holds a port — and
+they disagreed where copies do.
 
-## 5. The WebUI speaks core interfaces only
+- New `app/standalone/helper`, stdlib only: `Port`, `DialAddr`, `IsServing`,
+  `IsServingPort`, `ProbeListen`, `IsLoopbackBind`, `LoopbackBind`,
+  `EphemeralAddr`, `ValidPort`, plus `Holders` / `Signal` / `Kill` (listeners only,
+  never itself, never pid ≤ 1). It sits under `store`, which needs address parsing
+  but must not point upward; `store.PortOf` delegates to it.
+- Replaced private copies in `cli` (`probeAddr`/`isServing`), `launcher`
+  (`probePort`/`probeAddr`), `project` (`validPort`/`resolvePort`/`loopbackBind`/
+  `ephemeralAddr`) and `gateway` (`IsLocalOnlyAddr`).
+- **An occupied gateway port is a choice, not a bind error.** `gateway.Bind` wraps
+  `EADDRINUSE` in `PortInUseError`; `cli/ensure.go` decides before the child is
+  spawned: our own gateway is reported rather than offered as a kill target, a
+  dynamic port is skipped, a non-`EADDRINUSE` failure (permission, bad address) is
+  passed through, and with a terminal the operator picks stop-the-holder / another
+  port / cancel. Without a terminal the conflict becomes an error naming the
+  holder. Stopping is `SIGTERM`, a bounded wait, then `SIGKILL`. Every start path
+  goes through it, `restart` included.
 
-The project-side bridge (`app/project/webui_bridge.go`) is gone. Each gap it
-covered went to the layer that owns it:
+## 6. The macOS client is `client/mac`
 
-| Was | Now |
-|---|---|
-| read declarations from `workers.json` | `worker.Catalog.Declarations()` |
-| translate the create form into spawn arguments | `spawn` accepts nested `params` and flattens them itself |
-| write ACL to the file, then mutate the registry | the host's `acl.update` tool → one `ACLAdmin` that does both, in order |
+`app/client/menubar` was the source of the whole app — entry point, plist, icon —
+while naming only the one surface it ships today. With no users yet, the rename
+goes all the way through:
 
-So the app depends on nothing from `app/*`: writes are bus requests to the host,
-reads are the injected catalog/registry/event log, and creating a worker is the
-same single step an agent uses — validate, declare, start — instead of "write a
-declaration, then ask the host to resume it".
+- `app/client/menubar` → `app/client/mac`, next to `webui` and `tui`.
+- `run.niq.menubar` → `run.niq.mac`; bundle executable `niq-menubar` → `niq-mac`;
+  release archive `niq_mac_darwin_universal.zip`; the release job and the npm
+  packaging follow.
+- Unchanged on purpose: the bundle is still `niq.app`, the launcher is still
+  `miq`, and `LSUIElement` still hides it from the Dock — it is a menu bar item
+  until a window says otherwise.
 
-`update` and `archive` joined the host's tool surface for the same reason:
-a declaration edit is not a lifecycle step, and "stop it, hide its declaration,
-drop its identity" is one intent, not four HTTP-handler steps.
+The npm package ships that bundle again: the packaging script's macOS guard was
+testing a variable the rename no longer set, which would have published this
+release's package without `niq.app`.
 
-## 6. Approvals as a reusable capability
+## 7. What the suites found
 
-Serving approvals is a *declaration* on the bus — the worker advertises
-`approval.request` in its watch contract and must be granted it — so an injected
-backend cannot own it, and every outward surface needs the same inbox. It is now
-`Config.Approvals` on the interface worker, with `h.(iface.Inbox)` for
-`Pending` / `Decided` / `Decide` / `OnChange`.
+- **`niq i` linked to the wrong address.** A project row printed the project's own
+  loopback port, which serves `/api` only — no index, no HTML — so the link opened
+  a 404. `contract.ProjectURL` builds the gateway address (`/p/<id>/`, served from
+  the embedded bundle whether the instance runs or not) and both the picker and the
+  `status` table use it. With no gateway there is no such address, so the table
+  leaves the cell empty instead of pointing at a data port.
+- **A CJK project id shifted the table.** Ids were padded by byte length;
+  `SanitizeID` only swaps separators, so a Chinese name counted triple.
+  `displayWidth` counts terminal cells.
+- **`status --json` and the table disagreed** about the project link (one
+  hand-built the path, unescaped). One builder now.
+- **The bus could kill the project process.** Routing canonicalized each event once
+  so the delivered and persisted copies were one snapshot — but handlers are
+  allowed to write into the payload they receive (`baseworker` hands it over as the
+  tool arguments; the timer decorates `tick_type`, the workspace decorates an
+  approval reply). `json.Marshal` walking that map while a handler wrote it is
+  `concurrent map iteration and map write`, a runtime fatal, so the `recover`
+  around routing could not help. The log now keeps a snapshot taken **before**
+  delivery: history records what was routed, and the encoder cannot race a writer.
+  Repro: repeated dial-in worker creation killed the project at ~58 iterations; 260
+  iterations now run clean.
+- Smaller: completion scripts stopped advertising the removed `project` verb (and
+  the zsh script had a stray `;;` that made `_niq` fail to parse); `menu`/`readKey`
+  take their input as arguments, so the keymap and the redraw rules are testable.
 
-Recovery is a **snapshot**, like every other worker's state: `Snapshot` writes
-`{"approvals": …}` plus the backend's bytes, `Restore` runs before `Start` (so a
-request parked before a restart is still answerable), and `OnDurableChange` tells
-the assembly when to persist. An app-hosted worker writes the same
-`workers/<id>/state.json` as everything else.
+## 8. End-to-end suites
 
-## 7. Smaller, sharper
+`e2e/` is black-box: it builds the CLI and drives it the way a user does, so it
+fails when behaviour changes rather than when a signature does. 58 cases, ~8 s,
+behind the `e2e` build tag (plain `go test ./...` is unchanged), `make e2e`.
 
-- **A round that goes unanswered gets a watchdog.** A round that dispatched work
-  and then heard nothing left the worker waiting forever; it now times out and
-  reports instead of stalling.
-- **MCP serves every extension off the event loop**, so one slow remote call no
-  longer delays a local `mcp.server.list`.
-- **A program change is booked, then rendered at a cache reset** — the system
-  prompt stays a pure function of applied state, and the cache is only invalidated
-  when the cost is already being paid.
-- **Remote binds require auth, and auth fails closed**; loopback without
-  credentials still works, because that is an explicit local choice.
-- **Destroy is immediate.** The approval flow around destroy is deferred rather
-  than half-implemented.
+| suite | drives | asserts |
+|---|---|---|
+| `cli` (33) | the binary | start/stop/restart, idempotent start, stale record, `:0` vs fixed address, invalid address, port conflict naming the holder, `--version`/`--help`, no escape codes in a pipe, completion scripts (parse and install), `/p/<id>/` link, CJK alignment, `stop -p`, picker without a TTY |
+| `bus` (13) | a dial-in worker over the real HTTP transport | publish and subscribe grants, dial-in accepted with the issued credential and rejected with a wrong one, reconnect after the stream drops, directed send vs broadcast, per-connection ordering, query by request id, request/reply correlation, failure reply, transient delivered but not stored, SSE feed |
+| `worker` (12) | the bundled worker types | timer fires and lists what it scheduled, workspace mounts edited and refused off a non-workspace, directory roster/search/describe, program round-trip and delete, host suspend/resume/destroy, one reason turn against a stub chat-completions server |
 
-## 8. Transport: two bugs found by running it for real
-
-Linking two live instances surfaced both:
-
-- **A replaced stream's teardown must not delete the live session.** It made every
-  publish from the replacement fail with `worker not connected`, which the client
-  reads as a broken link and reconnects — a flap that never resolves.
-- **The SSE stream refuses to reuse a pooled connection** (a connection the server
-  has already closed makes `net/http` silently retry, and the retry becomes a
-  ghost second attach). The attach log now carries the remote address, which is
-  what tells a colliding second client apart from a real reconnect.
-
-And one from the worker side: **a message a backend consumes is not a "no handler"
-error**. A forwarded `worker.input` carries a request id, and answering it with
-`request.failed` because no *tool* matched was simply wrong.
+Isolation is the part worth keeping: every test gets its own `NIQ_HOME`, `HOME` and
+`XDG_CONFIG_HOME`, a `PATH` whose `open`/`npm` only record the call, and a gateway
+on `127.0.0.1:0`. A sandbox stops what it started at cleanup — including a gateway
+that `niq w` or `niq i` started on their own, which is how the first version leaked
+three of them.
 
 ## 9. Upgrading
 
-Projects are migrated in place on first start — the schema version stays 2:
+Projects migrate in place as before; the schema version stays 2, and no data file
+is renamed.
 
-| Old | New |
-|---|---|
-| `type: niw` | `type: niq` |
-| `niw.*` tool events | `niq.*` |
-| `type: hiw`, `id: webui-hiw` | declaration dropped (the worker is app-hosted now) |
-| ACL `target`/`source`, `workspace.approver` naming `webui-hiw` | `webui` |
-| `type: remote-niw` | `type: niq` + `placement: unmanaged-process` |
+**Stop the old gateway first.** The daemon's state file is now `shell.json`
+(`control.json` in v0.16.0), so a v0.16.0 gateway is invisible to the new CLI: it
+will see 9527 occupied by a process it cannot identify as its own. Run `niq stop`
+with the old binary before upgrading. If you forget, the new CLI names the holder
+and offers to stop it — that is the port prompt working, not a failure.
 
-Free-text references (`niw.status` written into a program or an instruction) are
-logged, not rewritten — rewriting someone's prose is worse than telling them.
+Other things worth knowing:
 
-Things worth knowing:
-
-- **A pending approval parked in an old `hiw` snapshot is not carried over.** The
-  worker it belonged to no longer exists; the requester's own snapshot still holds
-  the parked call, so re-ask if it matters.
-- **ACL edits now go through the bus** (`acl.update`), which means the host must be
-  online. That is the same trade-off suspend/resume already made.
-- **One identity, one dialer.** Two clients presenting the same credential on one
-  bus evict each other, forever. If several surfaces should watch the same niq,
-  give each its own interface worker identity instead of sharing a credential.
-- The TypeScript SDK gained `InterfaceWorker` (same `Backend.setHandler`
-  contract), so a bridge outside the process — Feishu, WeCom, a notifier — can be
-  written without re-implementing request correlation.
+- **The CLI verbs changed** (§2). Scripts that used `niq project …` need
+  `niq status --ids` / `--json` instead, and project operations belong to a shell.
+- **macOS**: reinstall from `niq_mac_darwin_universal.zip`. The bundle identifier
+  is `run.niq.mac`, so the old `niq.app` is a different application — remove it
+  rather than running both menu bar items.
+- **Go import paths** moved with the packages (`app/project` →
+  `app/standalone/project`, and so on). Nothing is expected to import them from
+  outside the repository, but a local build that does will need the new paths.
+- **The TypeScript SDK** (`sdk/ts`, `@niq.run/worker-sdk` 0.9.0) is versioned
+  separately from the CLI and is not published by the release workflow. Its
+  `iface` half gained `Runnable`, `ToolHost` and extension registration, mirroring
+  the Go interface worker.
+- `--auth` is now the single credential path: it protects a non-loopback bind and
+  is saved to `~/.niq/common/auth.json`. There is no second, per-UI auth.

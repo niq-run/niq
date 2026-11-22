@@ -94,14 +94,14 @@ chmod +x "${OUT}/niq/bin/miq"
 # 3. niq.app, when the macOS job produced it. It rides inside the package (so
 # `miq` finds it next to itself) and postinstall copies it to ~/Applications.
 MAC_ZIP="${DIST}/niq_mac_darwin_universal.zip"
-if [ -f "${MENUBAR_ZIP}" ]; then
+if [ -f "${MAC_ZIP}" ]; then
   tmp="$(mktemp -d)"
   unzip -q "${MAC_ZIP}" "niq-mac/niq.app/*" -d "${tmp}"
   cp -R "${tmp}/niq-mac/niq.app" "${OUT}/niq/niq.app"
   rm -rf "${tmp}"
   echo "packaged niq.app"
 else
-  echo "note: ${MENUBAR_ZIP} not found; the npm package will ship without niq.app"
+  echo "note: ${MAC_ZIP} not found; the npm package will ship without niq.app"
 fi
 node - "${VERSION}" "${OUT}" "${ROOT}" <<'EOF'
 const [version, out, root] = process.argv.slice(2);
