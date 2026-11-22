@@ -1,0 +1,145 @@
+name: CI
+
+# Every push and pull request: build, vet, unit tests with the race detector, the
+# black-box suites, and the two Node trees. The release workflow stays separate —
+# it is about publishing, and it should not be the first place a broken test is
+# noticed.
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+# A push to a PR branch cancels the run it superseded. Nothing here publishes, so
+# a cancelled run costs only time.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The Go suites, on both platforms the product ships for and the ones whose
+  # behaviour differs where it matters: process signals, port holders, loopback
+  # binds. `-race` is the point of this job, not an extra: the bus is a
+  # concurrent event system and a race there kills a process, not a test.
+  go:
+    name: go test -race (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: go build ./...
+
+      - run: go vet ./...
+
+      - run: go test -race ./... -count=1
+
+  # The black-box suites build the CLI and drive it. They are a separate job
+  # because they observe the process boundary, not the packages: a green unit job
+  # says nothing about whether `niq start` still records an address.
+  e2e:
+    name: e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The suites are behind the `e2e` build tag, so vet only sees them when the
+      # tag is passed.
+      - run: go vet -tags e2e ./e2e/...
+
+      - run: make e2e
+
+  # The release builds six archives; a break in a platform-only file (a
+  # `_windows.go`, a `//go:build unix`) is invisible on the runners above and
+  # only shows up at tag time. Cross-compiling is the cheap way to know now.
+  cross:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: GOOS=windows GOARCH=amd64 go build ./...
+
+      - run: GOOS=windows GOARCH=arm64 go build ./...
+
+      - run: GOOS=linux GOARCH=arm64 go build ./...
+
+      - run: GOOS=darwin GOARCH=amd64 go build ./...
+
+  # The SDK is versioned and published separately, but it is still code in this
+  # repository and its tests are fast.
+  sdk:
+    name: sdk tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: sdk/ts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: sdk/ts/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      - run: npm test
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+  # The bundle is committed and go:embed-ed, so the repository can drift from its
+  # source: a frontend change that is not rebuilt leaves `go build ./...` green
+  # while the binary serves the old page (doc/build-and-test.md §2). Build it and
+  # require the committed files to match.
+  webui:
+    name: webui bundle is current
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/client/webui/assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: app/client/webui/assets/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      - run: npm run build
+
+      - name: the committed bundle matches its source
+        run: git diff --exit-code --stat -- dist

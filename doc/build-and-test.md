@@ -188,20 +188,50 @@ would ship. The actual publishing (tag push, GitHub Release, mac job) is in
 `.github/workflows/release.yml`; `make npm-publish` publishes the npm packages
 from an existing `dist/` (`DRY=--dry-run` to preview).
 
-## 8. What is covered today, and what is growing
+## 8. What is covered today
 
-- **Go unit/integration tests: 105 `_test.go` files**, all green in ~6 s. They
-  cover the gateways' HTTP contracts, the launcher's process protocol, the bus
-  engine and transports, worker lifecycle and placement, storage/migration, the
-  provider adapters, and the worker type library.
-- **TypeScript SDK: 8 Vitest files** (`sdk/ts`).
-- **No CI test job yet**: the only workflow is `release.yml`, which builds and
-  publishes. Tests are run locally.
-- **No end-to-end suite yet.** The process boundary (binary → `niq` → gateway →
-  `/p/{id}/` → project process) is currently exercised only by unit tests that
-  start real listeners in-process.
+- **Go unit/integration tests: 109 `_test.go` files, 727 tests**, green in ~6 s
+  (~18 s under `-race`). They cover the gateways' HTTP contracts, the launcher's
+  process protocol, the bus engine and transports, worker lifecycle and placement,
+  storage/migration, the provider adapters, and the worker type library.
+- **Black-box suites: 22 `_test.go` files, 58 cases** in
+  `e2e/suites/{cli,bus,worker}`, green in ~8 s. They are the only coverage of the
+  process boundary — binary → `niq` → gateway → `/p/{id}/` → project process
+  (§4).
+- **TypeScript SDK: 8 Vitest files, 64 tests** (`sdk/ts`).
 
-Both are actively growing: unit coverage follows new code, and an e2e suite for
-the real multi-process path is planned. This section will document how to run it
-(`make` target, artifacts, which ports it may bind) once it lands, rather than
-speculating about it here.
+Coverage grows with the code: a new command adds a case to `e2e/suites/cli`, a new
+worker type adds one to `e2e/suites/worker`.
+
+## 9. CI
+
+`.github/workflows/ci.yml` runs on every push to `dev`/`main` and on every pull
+request. It publishes nothing — that is `release.yml`'s job — and its five jobs
+run in parallel:
+
+| job | runner | what it proves |
+|---|---|---|
+| `go` | ubuntu, macOS | `go build`, `go vet`, `go test -race ./... -count=1` |
+| `e2e` | ubuntu, macOS | `go vet -tags e2e ./e2e/...`, then `make e2e` |
+| `cross` | ubuntu | `GOOS=windows` (amd64, arm64), `linux/arm64` and `darwin/amd64` still compile |
+| `sdk` | ubuntu | `npm ci`, `npm test`, `typecheck`, `build` in `sdk/ts` |
+| `webui` | ubuntu | the committed bundle is what `vite build` produces (§2) |
+
+Why those choices:
+
+- **`-race` is part of the job, not an extra.** The bus is a concurrent event
+  system; a race there kills a process rather than failing a test, so a suite that
+  passes without the detector proves less than it looks. A push that supersedes an
+  in-flight run cancels it (`concurrency`), which is what keeps that affordable.
+- **Both platforms, not just Linux.** The parts that differ are the ones this
+  product is about: process signals, port holders, loopback binds, `open` vs
+  `xdg-open`. Linux-only CI would leave the macOS half of `helper` untested.
+- **`cross` exists because the release builds six archives.** A `_windows.go` file
+  that stops compiling is invisible on the runners above and would only surface at
+  tag time.
+- **The bundle check enforces §2.** `go build ./...` passes with a stale embedded
+  bundle, so the rule "commit the rebuilt `dist`" needs something that fails when
+  it is forgotten.
+
+Every job is reproducible locally by running the command in its row: none needs a
+secret, a service container or a prepared environment.
