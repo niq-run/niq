@@ -136,7 +136,11 @@ func TestRateLimitRoundTrip(t *testing.T) {
 		"watch":     []map[string]any{{"event": "elapse", "desc": "reminder timer"}},
 	})
 	waitCond(t, testTimeout, func() bool {
+		// findProvider's contract is that the caller holds w.mu: the watch loop
+		// is writing w.discovered from another goroutine right here.
+		w.mu.Lock()
 		_, ok := w.findProvider(elapseTool)
+		w.mu.Unlock()
 		return ok
 	}, "elapse peer discovered")
 
