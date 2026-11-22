@@ -170,15 +170,43 @@ make snapshot        # goreleaser release --snapshot --clean，然后 npm publis
 在 `.github/workflows/release.yml`；`make npm-publish` 从已有的 `dist/` 发布 npm 包
 （`DRY=--dry-run` 预览）。
 
-## 8. 现在覆盖了什么，什么还在长
+## 8. 现在覆盖了什么
 
-- **Go 单元/集成测试：105 个 `_test.go`**，全部通过约 6 秒。覆盖网关的 HTTP 契约、
-  launcher 的进程协议、总线引擎与传输、worker 生命周期与 placement、存储与迁移、
-  provider 适配器，以及 worker 类型库。
-- **TypeScript SDK：8 个 Vitest 文件**（`sdk/ts`）。
-- **还没有 CI 测试任务**：唯一的 workflow 是 `release.yml`，负责构建与发布。测试目前在本地跑。
-- **还没有端到端测试**。进程边界（二进制 → `niq` → 网关 → `/p/{id}/` → 项目进程）目前只由
-  在同进程内起真实 listener 的单元测试覆盖。
+- **Go 单元/集成测试：109 个 `_test.go`、727 个测试**，约 6 秒全绿（加 `-race` 约 18 秒）。
+  覆盖网关的 HTTP 契约、launcher 的进程协议、总线引擎与传输、worker 生命周期与
+  placement、存储与迁移、provider 适配器，以及 worker 类型库。
+- **黑盒套件：22 个 `_test.go`、58 个用例**，位于 `e2e/suites/{cli,bus,worker}`，约 8 秒全绿。
+  进程边界（二进制 → `niq` → 网关 → `/p/{id}/` → 项目进程）只有它们覆盖（§4）。
+- **TypeScript SDK：8 个 Vitest 文件、64 个测试**（`sdk/ts`）。
 
-这两块都在持续完善：单元覆盖会跟着新代码走，针对真实多进程路径的 e2e 套件也在计划中。
-等它落地后，本节会补上怎么跑（make 目标、产物、会占用哪些端口），而不是现在就凭空描述。
+覆盖跟着代码走：加一个命令就给 `e2e/suites/cli` 加一个用例，加一种 worker 类型就给
+`e2e/suites/worker` 加一个。
+
+## 9. CI
+
+`.github/workflows/ci.yml` 在每次推送到 `dev`/`main` 和每个 pull request 上运行。它不发布
+任何东西——那是 `release.yml` 的事——五个 job 并行：
+
+| job | runner | 证明什么 |
+|---|---|---|
+| `go` | ubuntu、macOS | `go build`、`go vet`、`go test -race ./... -count=1` |
+| `e2e` | ubuntu、macOS | `go vet -tags e2e ./e2e/...`，然后 `make e2e` |
+| `cross` | ubuntu | `GOOS=windows`（amd64、arm64）、`linux/arm64`、`darwin/amd64` 仍能编译 |
+| `sdk` | ubuntu | `sdk/ts` 的 `npm ci`、`npm test`、`typecheck`、`build` |
+| `webui` | ubuntu | 提交进仓库的 bundle 就是 `vite build` 的产物（§2） |
+
+为什么这么选：
+
+- **`-race` 是 job 的一部分，不是附加项。** 总线是并发事件系统，那里的竞争不是让测试
+  失败，而是让进程死掉；不带检测器跑绿，说服力比看上去小。被取代的推送会取消正在跑的
+  那一次（`concurrency`），这是它跑得起的前提。
+- **两个平台，不只 Linux。** 有差异的恰恰是这套东西的重点：进程信号、端口占用者、
+  loopback 绑定、`open` 与 `xdg-open`。只在 Linux 上跑，`helper` 的 macOS 那一半就是
+  没被测过的。
+- **`cross` 存在是因为发布要出六个归档。** 某个 `_windows.go` 停止编译，在上面那些
+  runner 上是看不见的，只会在打 tag 时爆出来。
+- **bundle 检查是在落实 §2。** 嵌入的 bundle 过期时 `go build ./...` 依然通过，所以
+  "把重建的 `dist` 一起提交"这条规则需要一个在忘记时失败的东西。
+
+每个 job 都能在本地复现：直接跑表格里那一行的命令即可，都不需要 secret、service container
+或特别准备的环境。

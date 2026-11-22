@@ -75,6 +75,17 @@ func parseHolders(out string) []Holder {
 // Signal sends sig to every listener on port and returns how many were
 // signalled. This process is never signalled: the caller asking to free a port
 // must not take itself down.
+// Alive reports whether pid still exists. Signal 0 is the probe: ESRCH means
+// gone, EPERM means alive but owned by someone else. Init is never reported
+// alive, matching Holders.
+func Alive(pid int) bool {
+	if pid <= 1 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
 func Signal(port int, sig os.Signal) int {
 	holders, err := Holders(port)
 	if err != nil {

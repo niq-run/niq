@@ -113,14 +113,14 @@ func Start(id string) (contract.Instance, error) {
 	return contract.Instance{ID: id, WebUIPort: p.Ports.WebUI, BusPort: p.Ports.Bus}, nil
 }
 
-// Stop interrupts whoever listens on the project's WebUI port. It returns
-// ErrNotRunning when nothing does.
+// Stop interrupts whoever listens on the project's WebUI port and waits for it
+// to exit. It returns ErrNotRunning when nothing does.
 func Stop(id string) error {
 	p, err := project.LoadProject(id)
 	if err != nil {
 		return err
 	}
-	if project.InterruptPortHolders(p.Ports.WebUI) == 0 {
+	if !stopInstance(p) {
 		return ErrNotRunning
 	}
 	return nil
@@ -133,10 +133,53 @@ func Restart(id string) (contract.Instance, error) {
 		return contract.Instance{}, err
 	}
 	if IsRunning(*p) {
-		project.InterruptPortHolders(p.Ports.WebUI)
-		waitPortFree(p.Ports.WebUI)
+		stopInstance(p)
 	}
 	return Start(id)
+}
+
+// stopTimeout bounds the wait for an interrupted instance to exit.
+const stopTimeout = 10 * time.Second
+
+// stopInstance interrupts the instance serving the project's WebUI port and
+// waits until its process is gone. It reports whether anything was listening.
+//
+// The instance is found by its port, not by a parent/child table — it may have
+// been started by hand or outlived a shell. The wait is on the *process*, not
+// on the port: shutdown closes the listener first and finishes writing state
+// after it, so a caller that acts on "the port is free" (restarting onto the
+// same ports, deleting the project, removing a test's home) would race the last
+// write.
+func stopInstance(p *store.Project) bool {
+	// Best effort: without holder discovery this is empty and the port wait is
+	// all there is.
+	holders, _ := helper.Holders(p.Ports.WebUI)
+	if project.InterruptPortHolders(p.Ports.WebUI) == 0 {
+		return false
+	}
+	waitPortFree(p.Ports.WebUI)
+	waitGone(holders, stopTimeout)
+	return true
+}
+
+// waitGone waits, bounded, for the given processes to exit.
+func waitGone(holders []helper.Holder, timeout time.Duration) {
+	if len(holders) == 0 {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		remaining := 0
+		for _, h := range holders {
+			if helper.Alive(h.PID) {
+				remaining++
+			}
+		}
+		if remaining == 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // WaitStopped blocks until the project's WebUI port stops answering, so a
