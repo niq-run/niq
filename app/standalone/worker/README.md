@@ -1,4 +1,4 @@
-# app/standalone/worker — the standalone worker control plane
+# worker — the standalone worker control plane
 
 This package is the **complete worker control plane** for the standalone
 deployment form. It owns every worker's manifest and lifecycle, assembles the

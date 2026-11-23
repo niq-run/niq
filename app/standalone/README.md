@@ -13,29 +13,32 @@ placeholder for the distributed one.
 
 ## The packages at a glance
 
+Each package has its own README with the file-by-file breakdown; this table is
+the one-page version.
+
 | package | answers only this | must not |
 |---|---|---|
-| `cli` | how a `niq` invocation becomes a process: `Spec`, argv routing, the gateway daemon, `status` snapshot, completion, update | implement a domain; render the UI; import `project` |
-| `contract` | the wire shapes of the project API (`View`, `Instance`, `Ports`) and the HTTP client that speaks them | import anything outside the standard library; know the disk shape |
-| `helper` | the stdlib-only primitives every package shares: port-holder discovery/stop, dialable/probe addresses, loopback and ephemeral bind shaping, port parsing | know a project, worker or auth; import anything from `app` |
-| `gateway` | the only entry point into niq: auth, `/api/*`, `/p/{id}/` proxy, the `UIMount` table | know a concrete UI; assume the caller is a browser; run a project in its own process |
-| `launcher` | instances: `List`/`Start`/`Stop`/`Restart`/`IsRunning`, and the private child-process protocol | render; listen on a port; import `cli` or `app/client` |
-| `project` | the project definition (create/list/link/load) and one project's runtime assembly | know other projects; import `launcher` or `gateway` |
-| `project/api` | the project's HTTP surface (JSON, SSE, approvals, uploads, programs) and its `iface.Backend` half, which is how it speaks on the bus | serve the SPA; do auth; touch `store` or `worker` |
-| `template` | project templates: built-in presets, parse/validate, zip import, instantiation input | know a project instance |
-| `store` | where things live and what shape they have: every path, `project.json`'s `Project`, every JSON/SQLite file | import `project`, `launcher` or `app/client` |
-| `provider` | provider config *semantics*: `Find`, `Default`, `Build`, `ProviderSources`, the startup gate | read or write files; have instances or a lifecycle |
-| `worker` | the worker control plane: registry, builders, params, placement routing, recovery | read global config or assemble paths; import `store` |
+| [`cli`](cli/README.md) | how a `niq` invocation becomes a process: `Spec`, argv routing, the gateway daemon, `status` snapshot, completion, update | implement a domain; render the UI; import `project` |
+| [`contract`](contract/README.md) | the wire shapes of the project API (`View`, `Instance`, `Ports`) and the HTTP client that speaks them | import anything outside the standard library; know the disk shape |
+| [`helper`](helper/README.md) | the stdlib-only primitives every package shares: port-holder discovery/stop, dialable/probe addresses, loopback and ephemeral bind shaping, port parsing | know a project, worker or auth; import anything from `app` |
+| [`gateway`](gateway/README.md) | the only entry point into niq: auth, `/api/*`, `/p/{id}/` proxy, the `UIMount` table | know a concrete UI; assume the caller is a browser; run a project in its own process |
+| [`launcher`](launcher/README.md) | instances: `List`/`Start`/`Stop`/`Restart`/`IsRunning`, and the private child-process protocol | render; listen on a port; import `cli` or `app/client` |
+| [`project`](project/README.md) | the project definition (create/list/link/load) and one project's runtime assembly | know other projects; import `launcher` or `gateway` |
+| [`project/api`](project/api/README.md) | the project's HTTP surface (JSON, SSE, approvals, uploads, programs) and its `iface.Backend` half, which is how it speaks on the bus | serve the SPA; do auth; touch `store` or `worker` |
+| [`template`](template/README.md) | project templates: built-in presets, parse/validate, zip import, instantiation input | know a project instance |
+| [`store`](store/README.md) | where things live and what shape they have: every path, `project.json`'s `Project`, every JSON/SQLite file | import `project`, `launcher` or `app/client` |
+| [`provider`](provider/README.md) | provider config *semantics*: `Find`, `Default`, `Build`, `ProviderSources`, the startup gate | read or write files; have instances or a lifecycle |
+| [`worker`](worker/README.md) | the worker control plane: registry, builders, params, placement routing, recovery | read global config or assemble paths; import `store` |
 
 The sub-packages are narrower on purpose — each is a boundary someone else
 needs, not a folder that grew:
 
 | sub-package | owner of |
 |---|---|
-| `store/event` | the event store (`event.AppendStore`, SQLite) |
-| `store/identity` | `identities.json` as a `bus.Store`, plus `Merge` for legacy seeding |
-| `store/migrate` | every reader of an older file format — the only place allowed to know one |
-| `worker/process` | OS children: `Supervisor` + credential provisioning |
+| [`store/event`](store/event/README.md) | the event store (`event.AppendStore`, SQLite) |
+| [`store/identity`](store/identity/README.md) | `identities.json` as a `bus.Store`, plus `Merge` for legacy seeding |
+| [`store/migrate`](store/migrate/README.md) | every reader of an older file format — the only place allowed to know one |
+| [`worker/process`](worker/process/README.md) | OS children: `Supervisor` + credential provisioning |
 
 ## Dependency direction
 

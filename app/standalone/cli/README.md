@@ -1,4 +1,4 @@
-# cli
+# cli — the entry point and the gateway's lifecycle
 
 The command-line **entry** and the **daemon lifecycle** for niq.
 
