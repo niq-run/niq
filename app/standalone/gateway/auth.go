@@ -53,8 +53,8 @@ func SaveAuth(path string, cfg AuthConfig) error {
 	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
-// StartupAuth resolves the basic-auth credentials for a WebUI separate of the
-// listen address. A non-empty spec ("user:pass", or a bare password defaulting
+// StartupAuth resolves the basic-auth credentials for the gateway's listen
+// address. A non-empty spec ("user:pass", or a bare password defaulting
 // the user to "niq") is persisted to the auth file and used immediately;
 // otherwise credentials are loaded from the file when present.
 //
@@ -84,7 +84,7 @@ func StartupAuth(addr, spec, path string) (user, pass string, enabled bool, warn
 		"no basic auth configured: %s is served without authentication, so any caller that can reach it is allowed.\n\n"+
 			"To require credentials, create %s with your credentials and restart, e.g.:\n\n"+
 			"  { \"user\": \"alice\", \"pass\": \"s3cret\" }\n\n"+
-			"or start once with --auth (control) / --webui-auth (project) to generate it for you.",
+			"or start once with --auth to generate it for you.",
 		addr, path,
 	)
 	return user, pass, enabled, warning

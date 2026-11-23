@@ -1,10 +1,13 @@
-// Package webui is the standalone form's browser shell: it serves the React
-// SPA and talks to the backend over HTTP and SSE.
+// Package api is one project's data port and its half on the bus.
 //
-// The package still carries the project-scoped HTTP API (workers, events,
-// approvals, programs) because the project runtime hosts it today; that half
-// moves to project/api when the shell is split from the runtime. The shell's
-// own assets live in ./assets.
+// Over HTTP it serves the project's own JSON and SSE — workers, events,
+// approvals, uploads, programs — on a loopback address; the gateway
+// authenticates the operator and serves the bundle, then proxies here. It
+// serves no SPA and performs no auth.
+//
+// The other half is iface.Backend (iface.go): the app is the backend of the
+// project's interface worker, so it speaks to the human over HTTP and to the
+// bus through the handler that worker injects.
 package api
 
 import (

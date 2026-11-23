@@ -10,12 +10,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
-	projworker "github.com/niq-run/niq/app/standalone/worker"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+
+	projworker "github.com/niq-run/niq/app/standalone/worker"
 )
 
 // maxImportBytes bounds the total uncompressed size of an imported
@@ -26,10 +27,10 @@ const maxImportBytes = 64 << 20 // 64 MiB
 
 // MaxImportBytes returns the cap on an imported template package's size.
 // It is exposed so the HTTP layer can bound the request body before handing the
-// bytes to ImportTemplateZip.
+// bytes to ImportZip.
 func MaxImportBytes() int64 { return maxImportBytes }
 
-// ImportTemplateZip extracts a shared template package into the on-disk
+// ImportZip extracts a shared template package into the on-disk
 // templates dir under name. The zip may carry the template at its root
 // (template.json and optional programs/) or inside a single wrapping folder
 // (e.g. <name>/template.json) which is stripped. The imported template must

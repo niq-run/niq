@@ -4,9 +4,9 @@
 //
 // A template is the seed of a project, not a running thing: it is a list of
 // worker declarations plus optional program resources. It therefore depends on
-// the worker model (app/project/worker) but on nothing about a live project —
-// the "project → template" direction (export) lives in app/project, which is
-// the only side that reads a project.
+// the worker model (app/standalone/worker) but on nothing about a live project —
+// the "project → template" direction (export) lives in
+// app/standalone/project/export.go, the only side that reads a project.
 package template
 
 import (

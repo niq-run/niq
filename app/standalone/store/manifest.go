@@ -1,10 +1,12 @@
 // Package store implements the standalone form's durable storage: worker
 // manifests (workers.json / workers.archived.json), runtime state
-// (workers/<id>/state.json), bus identities (identity/), the SQLite event
-// store (event/) and the one-time migration of legacy files (migrate/).
+// (workers/<id>/state.json), project metadata (project.json), provider config,
+// and the one-time conversion of legacy files (migrate/). Two sub-packages own
+// files of their own: identities.json (identity/) and the SQLite event store
+// (event/).
 //
-// Everything here is path-based: the caller passes the project directory or the
-// state root, so this package knows no project ids and no ~/.niq layout. It is
+// Layout knowledge is confined to root.go, the only file here that turns a
+// project id into a directory; every other read and write takes a path. This is
 // also the only layer that knows the on-disk shapes.
 package store
 
