@@ -6,15 +6,39 @@ two lifecycle mechanisms it needs (`workerctl`, `process`), and exposes stable
 exits for the host worker and the WebUI. The assembly injects storage providers
 once; from then on the control plane recovers, runs and stops on its own.
 
+```mermaid
+flowchart TB
+    HOST["host worker · on the bus"]
+    API["project/api · read-only"]
+
+    subgraph plane["app/standalone/worker"]
+        CP["ControlPlane · assemble, recover, stop"]
+        BE["backend · placement, lifecycle, manifest edits"]
+        TYPES["type table · registry, builders, params"]
+        MECH["mechanisms · workerctl and process"]
+        MS["ManifestStore · storage boundary"]
+    end
+
+    HOST -->|"writes · a request on the bus"| BE
+    API -->|"reads · in-process"| BE
+    CP --> BE
+    CP --> MECH
+    CP --> MS
+    BE --> TYPES
+    BE --> MECH
+    BE --> MS
 ```
-core/itfs/worker           Lifecycle / Manifest / Backend / WorkerInfo
-        ▲
-        │
-app/standalone/worker      ControlPlane + backend + builders + manifest model
-        │
-        ├── workerctl     (core/impl) live instances: build/spawn/snapshot/…
-        └── process        OS children: provision + supervise
-```
+
+The picture is about doors, not inventory: the WebUI has only one. It reads the
+roster in-process through the injected `Manifest`, and every write it makes is a
+bus request to the `host` worker — the path an agent's tool call takes.
+`ControlPlane` assembles the backend and the two mechanisms and reads the
+manifest set at recovery; the backend routes each placement to a mechanism, owns
+the manifest edits, and persists through the injected `ManifestStore`.
+
+The package's other inputs — the worker types it builds, `provider`, the
+eventbus, the bus control plane — are inventory rather than shape; they are
+listed in [Plane composition](#plane-composition) and [Files](#files).
 
 ## Plane composition
 
@@ -126,11 +150,20 @@ the WebUI, or startup recovery.
 
 | exit | shape | consumer |
 |---|---|---|
-| `HostBackend()` | `worker.Backend` (Lifecycle + Manifest, no ACL) | the host worker |
-| `Manifest()` | `worker.Manifest` (Get / List / Update over `WorkerInfo`) | the WebUI |
+| `HostBackend()` | `worker.Backend` (Lifecycle + Manifest, no ACL) | the host worker, whose tools are on the bus |
+| `Manifest()` | `worker.Manifest` (Get / List over `WorkerInfo`) | `project/api` — the WebUI's read view |
 | `RegisterBuilders` / `RegisterBuilder` | the type table: one builder plus spawn-parameter check per type | the assembly (built-ins), out-of-tree types |
 | `Manager()` | `*workerctl.Manager` | builders that checkpoint a worker whose durable state changed at runtime |
 | HTTP | — | deferred |
+
+The asymmetry is the design: **reads are in-process, writes are not.** `Manifest`
+reaches `project/api` as an injected interface, so listing the roster costs no
+round trip. Every write — spawn, suspend, resume, restart, destroy, archive, and
+the `update` that edits a declaration — is a bus request to the `host` worker,
+which calls the same backend an agent's tool call reaches. A human action and an
+agent action are therefore one operation, in one event stream; the WebUI has no
+privileged path of its own. ACL edits take neither road: identity is the bus
+control plane's, so they never touch a lifecycle backend.
 
 ## Invariants
 
