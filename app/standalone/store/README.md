@@ -63,7 +63,7 @@ worker unchanged.
 
 | File | Responsibility |
 |---|---|
-| `root.go` | The root (`NIQ_HOME`, `~` expansion), every path in the layout table, `SanitizeID`, and the two address helpers: `LocalhostURL` and `PortOf` (delegating to `helper.Port`). |
+| `root.go` | The root (`NIQ_HOME`, `~` expansion), every path in the layout table, `SanitizeID` (an alias for `helper.SafeName`, the form's one naming rule), and the two address helpers: `LocalhostURL` and `PortOf` (delegating to `helper.Port`). |
 | `project.go` | `Project`, `ProjectFile`, `LoadProject`, `SaveProject`: the typed reader/writer for one `project.json`, including the conversion-before-read rule. |
 | `manifest.go` | `SchemaVersion`, `WorkerSet`, the two manifest paths, load/save, `FindWorker`, `ArchivedIDs`, the write lock, archive and remove moves, the `worker.ManifestStore` implementation, and the atomic JSON writers the other files share. |
 | `provider.go` | `LoadProvider`, `SaveProvider`, `EnsureProviderExample`: `provider.json` IO, a missing file as an empty config, and a skeleton seeded once and never overwritten. |

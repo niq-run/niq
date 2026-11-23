@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/niq-run/niq/app/standalone/helper"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
@@ -127,14 +128,10 @@ func ValidateMeta(d Manifest) error {
 	return nil
 }
 
-// SanitizeID makes a string safe as a worker id / directory name: spaces to
-// underscores, slashes to dashes, no leading slash.
-func SanitizeID(path string) string {
-	s := strings.TrimPrefix(path, "/")
-	s = strings.ReplaceAll(s, "/", "-")
-	s = strings.ReplaceAll(s, " ", "_")
-	return s
-}
+// SanitizeID makes a string safe as a worker id / directory name. The rule is
+// helper.SafeName, which project ids and state directories use too: one id must
+// not resolve to two different directories.
+func SanitizeID(path string) string { return helper.SafeName(path) }
 
 // Instantiate resolves template-layer placeholders in a declaration for a
 // concrete project: "{project}" in any params value becomes the project id.

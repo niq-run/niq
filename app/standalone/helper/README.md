@@ -41,15 +41,30 @@ become reachable from the LAN just because its port was busy), while a wildcard
 bind stays wildcard. `LoopbackBind` is its opposite direction, forcing an address
 onto `127.0.0.1` while keeping the port.
 
+## Naming
+
+`SafeName` is the one rule for turning an id into a directory or file name: keep
+letters, digits, `-`, `_` and `.`; drop a leading `/`; map everything else — `/`,
+a space, a colon, a control character — to `_`. It exists here because the
+packages that need it cannot all depend on each other: project ids come from
+`store`, worker ids and template names from `worker` and `template`, and state
+directories from `worker/process`. `store.SanitizeID` and `worker.SanitizeID` are
+thin aliases for it, so the same id cannot resolve to two different directories,
+and a name is already safe on every platform (a colon is a path separator on
+Windows). For an id that is already valid it returns the id unchanged, which is
+what makes it safe to apply to a persisted name.
+
 ## Files
 
 | File | Responsibility |
 |---|---|
 | `doc.go` | The package doc, and the two declarations everything else returns: `ErrUnsupported` and `Holder`. |
 | `net.go` | Pure address work: `Port`, `DialAddr`, `IsServing`/`IsServingPort`, `ProbeListen`, `IsLoopbackBind`, `LoopbackBind`, `EphemeralAddr`, `ValidPort`. |
+| `name.go` | `SafeName`: the single id→path-segment rule the form's stores, workers and templates share. |
 | `process_unix.go` | The lsof-backed half: `Holders` and its `-F` parser, plus `Signal`, `Kill` (SIGTERM then SIGKILL after a grace) and the signal-0 `Alive`. |
 | `process_other.go` | The `!unix` half: `Holders` and `Kill` return `ErrUnsupported`, `Signal` is a no-op, `Alive` uses `os.FindProcess`. |
 | `net_test.go` | Table tests for every address mapping, a real-listener `IsServing` check, and the pre-flight `ProbeListen` on a busy address. |
+| `name_test.go` | The naming table (including `..`-traversal input) and the idempotence callers rely on. |
 | `process_unix_test.go` | `lsof` output parsing without lsof, discovery of a real listener, and the guarantee that `Signal` never targets its own process. |
 
 ## Invariants
