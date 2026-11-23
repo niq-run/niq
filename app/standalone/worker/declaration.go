@@ -5,10 +5,11 @@
 // and how its lifecycle is driven.
 //
 // It deliberately does NOT know about the project file layout: manifests are
-// read and written through the ManifestStore interface, which the project
-// package implements over its on-disk worker files. That keeps the dependency
-// one-way — app/standalone/project → app/standalone/worker — with no import
-// cycle, and lets the whole lifecycle be tested over an in-memory store.
+// read and written through the ManifestStore interface, which
+// app/standalone/store implements over workers.json / workers.archived.json.
+// The dependency stays one-way — store imports this package's value types,
+// never the reverse — which is also what lets the whole lifecycle be tested
+// over an in-memory store.
 package worker
 
 import (

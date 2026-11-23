@@ -1,6 +1,7 @@
 // Manifest storage boundary for the worker control plane. The project owns
 // where manifests live and how they are written; the control plane only sees
-// this interface. The concrete implementation is app/standalone/project.
+// this interface. The concrete implementation is app/standalone/store
+// (`store.NewManifest`), which the assembly injects.
 //
 // Runtime state (state.json / snapshots) is NOT declared here: its single
 // definition is workerctl.WorkerStore, the contract the instance manager calls.

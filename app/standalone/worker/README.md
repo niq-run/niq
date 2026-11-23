@@ -2,9 +2,9 @@
 
 This package is the **complete worker control plane** for the standalone
 deployment form. It owns every worker's manifest and lifecycle, assembles the
-two mechanism libraries it needs, and exposes stable exits for the host worker
-and the WebUI. The assembly injects storage providers once; from then on the
-control plane recovers, runs and stops on its own.
+two lifecycle mechanisms it needs (`workerctl`, `process`), and exposes stable
+exits for the host worker and the WebUI. The assembly injects storage providers
+once; from then on the control plane recovers, runs and stops on its own.
 
 ```
 core/itfs/worker           Lifecycle / Manifest / Backend / WorkerInfo
@@ -46,8 +46,9 @@ type Manifest struct {
     Definition
     Placement Placement       // in-process / managed-process / unmanaged-process
 
-    Label, Description string
-    Tags []string
+    Label       string
+    Tags        []string
+    Description string
 
     Command []string          // managed-process
     Cwd     string            // managed-process
@@ -69,8 +70,8 @@ construction bag:
 
 | File | Responsibility |
 |---|---|
-| `controlplane.go` | `Config` / `ControlPlane`: `New`, `Recover`, `Stop`, `HostBackend`, `Manifest`, app-hosted state helpers. |
-| `declaration.go` | The model, no IO: `Definition` / `Manifest`, `Placement` / `PlacementOf`, display metadata validation, `SanitizeID`, `Instantiate`. |
+| `controlplane.go` | `Config` / `ControlPlane`: `New`, `Recover`, `Stop`, `HostBackend`, `Manifest`, the type table (`RegisterBuilders`, `RegisterBuilder`, `Types`), `Manager`, app-hosted state helpers. |
+| `declaration.go` | The model, no IO: `Definition` / `Manifest`, `Placement` / `PlacementOf`, display metadata validation, `SanitizeID`, `Instantiate` / `InstantiateForm`. |
 | `params.go` | `SpawnConfig` / `Spec` / `ManifestFromSpec`, the per-type spawn contract, `ValidateProcessParams`, and param readers. |
 | `registry.go` | `typeRegistry`: type label → builder + spawn-parameter check. |
 | `builders.go` | `BuildContext`, the type-label constants (`TypeInterface`, `DefaultWebUIID`, `DefaultHostWorkerID`), and one constructor per built-in type; `specConnect` ensures the worker's durable identity. |
@@ -81,10 +82,10 @@ construction bag:
 
 Runtime state (`state.json` / snapshots) is `workerctl.WorkerStore`, defined in
 `core/impl/workerctl` and implemented by `store.NewState` (`app/standalone/store`).
-The direction is one-way by design: `store` imports this package's *value types*
-(`Manifest`, `WorkerSet`) so it can serialize them, and this package never imports
-`store` — it drives the `ManifestStore` interface declared here and receives a
-`*workerctl.Manager` from the assembly.
+The direction is one-way by design: `store` imports this package's value types
+(`Manifest`) and owns the on-disk container around them (`WorkerSet`), while this
+package never imports `store` — it drives the `ManifestStore` interface declared
+here and receives a `*workerctl.Manager` from the assembly.
 
 ## Where a backend comes from
 
@@ -127,6 +128,8 @@ the WebUI, or startup recovery.
 |---|---|---|
 | `HostBackend()` | `worker.Backend` (Lifecycle + Manifest, no ACL) | the host worker |
 | `Manifest()` | `worker.Manifest` (Get / List / Update over `WorkerInfo`) | the WebUI |
+| `RegisterBuilders` / `RegisterBuilder` | the type table: one builder plus spawn-parameter check per type | the assembly (built-ins), out-of-tree types |
+| `Manager()` | `*workerctl.Manager` | builders that checkpoint a worker whose durable state changed at runtime |
 | HTTP | — | deferred |
 
 ## Invariants
