@@ -1,8 +1,9 @@
 // Gateway-plane HTTP service: the fixed-port (default 127.0.0.1:9527) control
 // plane a user opens when no project is attached. It serves the same SPA in
 // "control" mode — project management only — and can start a project, which
-// runs as its own process on its own dynamically-assigned bus/WebUI ports; the
-// user is then redirected to the project's WebUI.
+// runs as its own process on its own dynamically-assigned bus/WebUI ports. The
+// SPA then navigates to the project's UI at /p/{id}/: there is no redirect, the
+// bundle it already has does the routing.
 //
 // Project instances are not children of this process in any way that matters:
 // an instance is identified by the ports persisted in its project.json, so one
@@ -190,7 +191,7 @@ func (c *Gateway) Start(ctx context.Context) error {
 	mux.HandleFunc(projectPrefix+"{id}/", c.handleProjectProxy)
 
 	// Registered without a method so it cannot conflict with the all-methods
-	// /p/{id}/ proxy below ("GET /" vs "/p/{id}/" is ambiguous: the former has a
+	// /p/{id}/ proxy above ("GET /" vs "/p/{id}/" is ambiguous: the former has a
 	// narrower method but a wider path).
 	mux.HandleFunc("/", c.handleUI)
 

@@ -188,10 +188,9 @@ func insertRecipients(ctx context.Context, tx *sql.Tx, evt event.Event) error {
 	return nil
 }
 
-// ByWorker implements [event.EventStore].
-
-// Replay implements [event.EventStore].
-
+// List implements [event.EventStore]: the events matching the query, ordered by
+// (timestamp, id) — ascending by default, descending when opts.Desc is set —
+// with AfterID/BeforeID paging on that same pair.
 func (s *Store) List(ctx context.Context, workerID string, opts event.QueryOpts) ([]event.Event, error) {
 	query := `SELECT id, type, worker_id, payload, timestamp, target_worker_id,
 			recipients, trace_id, request_id, specversion, dataschema

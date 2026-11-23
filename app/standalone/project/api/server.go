@@ -140,9 +140,6 @@ type Server struct {
 	// The default upload directory is projectDir/uploads.
 	projectDir   string
 	uploadDirCfg string // project.json upload_dir override
-
-	// Optional basic auth: required for requests coming from non-loopback peers.
-	// Localhost (same machine) access stays open. Both must be set to enable.
 }
 
 // New creates a WebUI Server.

@@ -20,14 +20,14 @@ the one-page version.
 |---|---|---|
 | [`cli`](cli/README.md) | how a `niq` invocation becomes a process: `Spec`, argv routing, the gateway daemon, `status` snapshot, completion, update | implement a domain; render the UI; import `project` |
 | [`contract`](contract/README.md) | the wire shapes of the project API (`View`, `Instance`, `Ports`) and the HTTP client that speaks them | import anything outside the standard library; know the disk shape |
-| [`helper`](helper/README.md) | the stdlib-only primitives every package shares: port-holder discovery/stop, dialable/probe addresses, loopback and ephemeral bind shaping, port parsing | know a project, worker or auth; import anything from `app` |
+| [`helper`](helper/README.md) | the stdlib-only primitives every package shares: port-holder discovery/stop, dialable/probe addresses, loopback and ephemeral bind shaping, port parsing, and the one id→directory-name rule (`SafeName`) | know a project, worker or auth; import anything from `app` |
 | [`gateway`](gateway/README.md) | the only entry point into niq: auth, `/api/*`, `/p/{id}/` proxy, the `UIMount` table | know a concrete UI; assume the caller is a browser; run a project in its own process |
 | [`launcher`](launcher/README.md) | instances: `List`/`Start`/`Stop`/`Restart`/`IsRunning`, and the private child-process protocol | render; listen on a port; import `cli` or `app/client` |
 | [`project`](project/README.md) | the project definition (create/list/link/load) and one project's runtime assembly | know other projects; import `launcher` or `gateway` |
 | [`project/api`](project/api/README.md) | the project's HTTP surface (JSON, SSE, approvals, uploads, programs) and its `iface.Backend` half, which is how it speaks on the bus | serve the SPA; do auth; touch `store` or `worker` |
 | [`template`](template/README.md) | project templates: built-in presets, parse/validate, zip import, instantiation input | know a project instance |
-| [`store`](store/README.md) | where things live and what shape they have: every path, `project.json`'s `Project`, every JSON/SQLite file | import `project`, `launcher` or `app/client` |
-| [`provider`](provider/README.md) | provider config *semantics*: `Find`, `Default`, `Build`, `ProviderSources`, the startup gate | read or write files; have instances or a lifecycle |
+| [`store`](store/README.md) | where things live and what shape they have: the layout it derives, `project.json`'s `Project`, the worker manifest files, the runtime state files | import `project`, `launcher` or `app/client` |
+| [`provider`](provider/README.md) | provider config *semantics*: `Find`, `Default`, `Build`, `NewProviderSources`, the startup gate | read or write files; have instances or a lifecycle |
 | [`worker`](worker/README.md) | the worker control plane: registry, builders, params, placement routing, recovery | read global config or assemble paths; import `store` |
 
 The sub-packages are narrower on purpose — each is a boundary someone else
@@ -45,23 +45,29 @@ needs, not a folder that grew:
 The exact import edges (internal ones only; every package also reaches `core`):
 
 ```
-cli        contract, gateway, helper, launcher, store, app/client/tui
-gateway    helper, launcher, project, provider, store, template
-launcher   contract, helper, project, store
-project    helper, project/api, provider, store (+event +identity +migrate),
-           template, worker (+process)
-template   store, worker
-worker     provider, worker/process
-store      contract, helper, provider, worker, store/migrate
-contract   stdlib only
-helper     stdlib only
-provider   core only (no file IO; secrets expand from the environment)
-project/api nothing from app/standalone (core contracts only)
+cli              contract, gateway, helper, launcher, store, app/client/tui
+gateway          helper, launcher, project, provider, store, template
+launcher         contract, helper, project, store
+project          helper, project/api, provider, store (+event +identity +migrate),
+                 template, worker (+process)
+template         store (+migrate), worker
+worker           helper, provider, worker/process
+store            contract, helper, provider, store/migrate, worker
+store/migrate    store/identity, worker
+worker/process   helper
+contract         stdlib only
+helper           stdlib only
+provider         core only (no file IO; secrets expand from the environment)
+project/api      nothing from app/standalone (core contracts only)
+store/event      core contracts only
+store/identity   core contracts only
 ```
 
 Read it as strict layering: `store` never points up, `worker` never imports
-`store`, `contract` and `provider` import nothing from this directory, and
-the project's HTTP package knows no domain above it.
+`store`, `contract`, `helper` and `provider` import nothing from this directory,
+and the project's HTTP package knows no domain above it. `store/migrate` and
+`worker/process` are the two places a sub-package reaches sideways, and both do
+it only for the value types they convert or persist.
 
 The one edge that looks like a cycle and is not: `launcher → project` serves
 **only** `ChildMain`. The two process boundaries never meet:
@@ -81,8 +87,9 @@ still be stopped (it is identified by its ports).
 
 | thing | sole owner | everyone else |
 |---|---|---|
-| paths (`NIQ_HOME`, project dirs, file names, auth/provider paths) | `store/root.go` | calls `store.*`; never joins a path |
-| address primitives (port parsing, dial/probe, loopback and ephemeral bind shaping, port holders) | `helper` | calls `helper.*`; never re-implements a probe or a port lookup |
+| the configuration root and the paths derived from it (`NIQ_HOME`, `<root>/projects/<id>/`, the project log, `common/auth.json`, `common/providers/`, `common/templates/`) | `store/root.go` | calls `store.*`; never joins a path itself |
+| the one id→directory-name rule | `helper` (`SafeName`) | `store.SanitizeID` and `worker.SanitizeID` are aliases for it; nothing re-implements the mapping |
+| address primitives (port parsing, dial/probe, loopback and ephemeral bind shaping, port holders, liveness) | `helper` | calls `helper.*`; never re-implements a probe or a port lookup |
 | `project.json` (the stored shape) | `store/project.go` | maps it outward; never publishes it raw |
 | `/api/projects` (the wire shape) | `contract` (`View`) | gateway encodes what `launcher.ViewOf` built |
 | the child argv word (`__project-run`) | `launcher` | `cli` only asks `launcher.IsChild` |
@@ -90,6 +97,13 @@ still be stopped (it is identified by its ports).
 | human identity, approvals, uploads | `project/api` | the UIs post to it over HTTP |
 | provider JSON IO | `store/provider.go` | `provider` receives the parsed `*Config` |
 | manifest files (`workers.json`, `workers.archived.json`) | `store/manifest.go` | `worker` sees `ManifestStore` only |
+| `identities.json` (the durable identity record) | `store/identity` | the bus control plane decides what goes in it |
+| the SQLite event store (`events/events.db`) | `store/event` | history and SSE read through the event log |
+
+Files that sit *beside* a project rather than under a path `root.go` derives are
+named by the owner of the file: the assembly joins `<project>/identities.json`
+and `events/events.db`, the CLI joins `shell.json`, and the worker state root is
+handed to `store.NewState`. `store/README.md` has the layout table.
 
 Two project shapes exist on purpose. `store.Project` is the file, `contract.View`
 is the response, and `launcher.ViewOf` is the only conversion: it resolves the
@@ -112,7 +126,7 @@ domains import nothing from `store`. The one function type that crosses back,
 | a new worker type, placement or param | `worker` (`registry.go`, `builders.go`, `params.go`, `backend.go`) |
 | a new on-disk file or path | `store` (and `store/migrate` if it replaces an old one) |
 | new CLI verb, flag or shell wiring | `cli` |
-| a host/port primitive several packages need | `helper` (stdlib only; no domain knowledge) |
+| a host/port or path-segment primitive several packages need | `helper` (stdlib only; no domain knowledge) |
 | anything a UI needs to know | `contract` first, then `gateway` serves it |
 
 ## Checks you can run
@@ -120,8 +134,8 @@ domains import nothing from `store`. The one function type that crosses back,
 ```sh
 go list -deps ./app/standalone/project/api | grep 'standalone/\(store\|worker\)'  # empty
 go list -deps ./app/standalone/store | grep 'standalone/\(project\|launcher\)'    # empty
+go list -deps ./app/standalone/worker | grep 'standalone/store'                    # empty
 go list -f '{{join .Imports "\n"}}' ./app/standalone/helper | grep 'standalone/'   # empty
-grep -rn 'standalone/store' app/standalone/worker --include=*.go                  # empty
 grep -rn 'NIQ_HOME' app/standalone --include=*.go | grep -v '/store/' | grep -v _test  # empty
 grep -rn 'ChildVerb' app --include=*.go | grep -v 'app/standalone/launcher/'        # empty
 ```

@@ -11,8 +11,9 @@ import (
 	"time"
 )
 
-// Client talks to a niq gateway's project endpoints. It carries no state, so a
-// UI can point one at any instance, local or remote.
+// Client talks to a niq gateway's project endpoints. It holds no session: a
+// caller can point one at any instance, local or remote, and the two fields are
+// just the base URL and the transport it uses.
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client

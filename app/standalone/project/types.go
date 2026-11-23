@@ -1,16 +1,18 @@
-// Package project provides the storage and runtime for niq projects.
+// Package project owns the project definition and one project's runtime
+// assembly.
 //
-// A project lives under ~/.niq/projects/<id>/ and owns its own event bus,
-// WebUI, worker set and state directories. This package reads project
-// templates (JSON), instantiates workers, and manages the project instance
-// lifecycle. This is the only place where
-// template files are parsed into worker instances — no new abstractions.
+// A project lives under <niq root>/projects/<id>/ and is the unit niq runs: one
+// directory holding its metadata, worker declarations and runtime state. This
+// package creates, lists, links, loads and exports that definition, and in
+// run.go assembles exactly one project in its own process — its bus, event
+// store, worker control plane and WebUI. It knows no other project.
 //
-// The worker model itself — manifests, their params projection, the per-type
-// spawn contract, placement, process supervision, provisioning and the
-// lifecycle backend — lives in app/standalone/worker. The type aliases below
-// keep the project's own vocabulary (a "worker config") and let existing code
-// and tests keep their spelling.
+// Parsing a template file is not here: app/standalone/template does that and
+// hands over a validated *Template, which this package instantiates per
+// manifest. The worker model itself — manifests, params, the per-type spawn
+// contract, placement, supervision — lives in app/standalone/worker. The type
+// aliases below keep the project's own vocabulary (a "worker config") so
+// existing code and tests keep their spelling.
 package project
 
 import (
