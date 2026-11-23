@@ -17,7 +17,7 @@ func exportTemplate() *TemplateConfig {
 				Params: map[string]any{
 					"instruction": "do the thing",
 					"provider":    "volcan-ark",
-					"model":       "deepseek-v4-flash",
+					"model":       "deepseek-flash",
 					"mounts":      []any{"/tmp/demo"},
 				},
 			},

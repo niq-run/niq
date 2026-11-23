@@ -39,8 +39,8 @@ becomes the empty string), then dispatches on `Type`:
 | `Type` | adapter | base URL / model defaults |
 |---|---|---|
 | `claude`, `anthropic` | `anthropic.New` | `api.deepseek.com/anthropic`, `claude-sonnet-4-20250514` |
-| `openai-responses`, `responses`, `deepseek-responses` | `openairesponses.New` | `api.deepseek.com`, `deepseek-v4-flash` |
-| `deepseek` | `openai.New` | `api.deepseek.com/v1`, `deepseek-v4-flash` |
+| `openai-responses`, `responses`, `deepseek-responses` | `openairesponses.New` | `api.deepseek.com`, `deepseek-flash` |
+| `deepseek` | `openai.New` | `api.deepseek.com/v1`, `deepseek-flash` |
 | anything else | `openai.New` | `openai-compatible` → `api.deepseek.com/v1`, else `api.openai.com/v1`; `gpt-4o` |
 
 An empty key falls back to `ANTHROPIC_API_KEY` on the claude branch, else

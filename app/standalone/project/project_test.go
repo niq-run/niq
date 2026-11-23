@@ -56,7 +56,7 @@ func fakeTemplate() *TemplateConfig {
 	return &TemplateConfig{SchemaVersion: SchemaVersion, Workers: []WorkerConfig{
 		{Definition: projworker.Definition{Type: "interface", ID: "default-ui"}},
 		{Definition: projworker.Definition{Type: "reason", ID: "niq", Params: map[string]any{
-			"provider": "volcan-ark", "model": "deepseek-v4-flash",
+			"provider": "volcan-ark", "model": "deepseek-flash",
 		}}, Placement: projworker.PlacementInProcess},
 	}}
 }
@@ -87,7 +87,7 @@ func TestCreateLoadListProject(t *testing.T) {
 		}
 	}
 	if wc, ok := store.FindWorker(set, "niq"); ok {
-		if wc.Params["provider"] != "volcan-ark" || wc.Params["model"] != "deepseek-v4-flash" {
+		if wc.Params["provider"] != "volcan-ark" || wc.Params["model"] != "deepseek-flash" {
 			t.Fatalf("niq params = %v", wc.Params)
 		}
 	}

@@ -10,8 +10,8 @@ import (
 func TestProviderConfigDefaultAndFind(t *testing.T) {
 	cfg := &Config{
 		Providers: []Entry{
-			{Name: "deepseek-responses", Type: "openai-responses", BaseURL: "https://api.deepseek.com", Model: "deepseek-v4-flash"},
-			{Name: "deepseek-claude", Type: "claude", BaseURL: "https://api.deepseek.com/anthropic", Model: "deepseek-v4-flash"},
+			{Name: "deepseek-responses", Type: "openai-responses", BaseURL: "https://api.deepseek.com", Model: "deepseek-flash"},
+			{Name: "deepseek-claude", Type: "claude", BaseURL: "https://api.deepseek.com/anthropic", Model: "deepseek-flash"},
 		},
 	}
 
@@ -81,6 +81,12 @@ func TestExampleTemplate(t *testing.T) {
 	}
 	if p.BaseURL != "https://api.deepseek.com/v1" {
 		t.Fatalf("base_url = %q", p.BaseURL)
+	}
+	// The example must be self-consistent: the model it names is the one its
+	// configured list offers, so a user who fills in the key gets what the file
+	// shows rather than falling back to discovery.
+	if p.Model != "deepseek-flash" {
+		t.Fatalf("model = %q, want deepseek-flash", p.Model)
 	}
 	if len(p.Models) != 1 || p.Models[0].Name != "deepseek-flash" || p.Models[0].ContextWindow != 1024000 {
 		t.Fatalf("models = %+v, want deepseek-flash with a 1024000 context window", p.Models)
