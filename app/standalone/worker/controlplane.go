@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/workerctl"
@@ -42,7 +43,7 @@ type Config struct {
 type ControlPlane struct {
 	backend    *workerHostBackend
 	manager    *workerctl.Manager
-	types      *typeRegistry
+	types      *builtin.Registry
 	manifests  ManifestStore
 	state      workerctl.WorkerStore
 	supervisor *process.Supervisor
@@ -58,7 +59,7 @@ func New(cfg Config) *ControlPlane {
 	if logf == nil {
 		logf = log.Printf
 	}
-	types := newTypeRegistry()
+	types := builtin.NewRegistry()
 	manager := workerctl.New(workerctl.Config{Store: cfg.StateStore, Build: types.Build})
 	cp := &ControlPlane{
 		manifests:  cfg.Manifests,
@@ -92,12 +93,12 @@ func New(cfg Config) *ControlPlane {
 }
 
 // RegisterBuilders registers one builder per known worker type.
-func (c *ControlPlane) RegisterBuilders(ctx BuildContext) { registerBuilders(ctx, c.types) }
+func (c *ControlPlane) RegisterBuilders(ctx builtin.BuildContext) { builtin.Register(ctx, c.types) }
 
 // RegisterBuilder registers a single type. It is the seam tests and
 // out-of-tree worker types use; the built-in set goes through RegisterBuilders.
 func (c *ControlPlane) RegisterBuilder(typ string, b workerctl.Builder, check func(map[string]any) error) {
-	c.types.register(typ, b, check)
+	c.types.RegisterBuilder(typ, b, check)
 }
 
 // Types returns the registered worker type labels, sorted.

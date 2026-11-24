@@ -1,15 +1,19 @@
-// Package worker owns the worker model of a project: what a worker declaration
-// looks like, how its params are projected and validated, which spawn
-// parameters each type accepts, where the worker runs (its placement), how a
-// type is constructed, how third-party workers are provisioned and supervised,
-// and how its lifecycle is driven.
+// Package worker owns the worker control plane of one project: the manifest
+// model, where a worker runs (its placement), how a type is turned into a
+// running worker, and how the lifecycle is driven.
+//
+// The pieces below it are separate on purpose. app/standalone/worker/builtin
+// holds the type table — the built-in types, the spawn parameters each accepts
+// and the builder for each — as assembly knowledge rather than mechanism.
+// app/standalone/worker/process owns OS children and credential provisioning.
+// This package assembles them and knows no type of its own.
 //
 // It deliberately does NOT know about the project file layout: manifests are
 // read and written through the ManifestStore interface, which
 // app/standalone/store implements over workers.json / workers.archived.json.
 // The dependency stays one-way — store imports this package's value types,
-// never the reverse — which is also what lets the whole lifecycle be tested
-// over an in-memory store.
+// never the reverse — which is also what lets the lifecycle be tested over an
+// in-memory store.
 package worker
 
 import (
@@ -181,4 +185,80 @@ func instantiateValue(v any, projectID string) any {
 	default:
 		return v
 	}
+}
+
+func Params(d Manifest) map[string]any { return d.Params }
+
+// SpawnConfig lowers a declaration into the lifecycle-level config the worker
+// manager builds from.
+func SpawnConfig(d Manifest) coreworker.WorkerConfig {
+	return coreworker.WorkerConfig{
+		ID:          d.ID,
+		Type:        d.Type,
+		Params:      d.Params,
+		Label:       d.Label,
+		Tags:        append([]string(nil), d.Tags...),
+		Description: d.Description,
+	}
+}
+
+// Spec lowers a declaration into a full lifecycle spec, including the launch
+// fields a managed-process worker needs. Env is derived from Params by the
+// backend, not stored here.
+func Spec(d Manifest) coreworker.WorkerSpec {
+	return coreworker.WorkerSpec{
+		WorkerConfig: SpawnConfig(d),
+		Placement:    PlacementOf(d),
+		Command:      d.Command,
+		Cwd:          d.Cwd,
+	}
+}
+
+// ManifestFromSpec turns a lifecycle spec into a manifest. The params map is
+// stored verbatim; display metadata is carried on typed fields.
+func ManifestFromSpec(spec coreworker.WorkerSpec) Manifest {
+	placement := spec.Placement
+	if placement == "" {
+		placement = coreworker.PlacementInProcess
+	}
+	return Manifest{
+		Definition: Definition{
+			ID:     spec.ID,
+			Type:   spec.Type,
+			Params: spec.Params,
+		},
+		Placement:   placement,
+		Label:       spec.Label,
+		Tags:        append([]string(nil), spec.Tags...),
+		Description: spec.Description,
+		Command:     spec.Command,
+		Cwd:         spec.Cwd,
+	}
+}
+
+// parseMountsParam extracts the mount list from worker params: "mounts" as a
+// []string (config) or []any of strings (bus payloads), or the single-mount
+// "path" sugar used by the host spawn tool. Each path is ~-expanded and made
+// absolute. An absent parameter yields a nil slice.
+
+// ManifestStore is the manifest storage the control plane drives. It is the
+// only place that knows WHERE manifests are written; the control plane only
+// asks what is declared and records changes.
+type ManifestStore interface {
+	// Get returns one manifest. ok is false when the id is not declared.
+	Get(id string) (*Manifest, bool, error)
+	// List returns manifests: archived=false is the active set, archived=true
+	// the archived set. Both are returned in declaration order.
+	List(archived bool) ([]*Manifest, error)
+	// Add records a new manifest. Declaring an existing id is an error: the
+	// control plane checks for duplicates so it can report them precisely.
+	Add(m *Manifest) error
+	// Update replaces an existing manifest; an unknown id is an error.
+	Update(m *Manifest) error
+	// Delete removes a manifest from either set; an unknown id is a no-op.
+	Delete(id string) error
+	// Archive moves a manifest between the active and archived files. An
+	// archived manifest is kept verbatim (it can be restored unchanged); a
+	// missing id in the source file is a no-op.
+	Archive(id string, archived bool) error
 }

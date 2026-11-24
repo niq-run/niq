@@ -1,11 +1,4 @@
-// Creation parameters: what the flat params map carries and what each worker
-// type is allowed to put in it.
-//
-// A declaration's params are the ONLY construction input a builder reads. This
-// file owns the per-type accepted-key contract and the small readers (mounts,
-// programs, events) the builders use. For a managed-process worker the same
-// params become the child's environment; validated in backend.go.
-package worker
+package builtin
 
 import (
 	"fmt"
@@ -17,64 +10,14 @@ import (
 	"github.com/niq-run/niq/core/impl/workers/reason"
 	"github.com/niq-run/niq/core/itfs/event"
 	programpkg "github.com/niq-run/niq/core/itfs/program"
-	coreworker "github.com/niq-run/niq/core/itfs/worker"
 )
 
-// Params returns the declaration's construction params. It is the single
-// construction bag; no typed field overlays it.
-func Params(d Manifest) map[string]any { return d.Params }
+// ── spawn-parameter contract ──
+//
+// Each type declares the keys it reads in its own file, next to its builder;
+// Registry.RegisterType turns that list into the check. TestSpawnParamsCoverEveryBuilder
+// fails when a builder type has no contract, or a contract has no builder.
 
-// SpawnConfig lowers a declaration into the lifecycle-level config the worker
-// manager builds from.
-func SpawnConfig(d Manifest) coreworker.WorkerConfig {
-	return coreworker.WorkerConfig{
-		ID:          d.ID,
-		Type:        d.Type,
-		Params:      d.Params,
-		Label:       d.Label,
-		Tags:        append([]string(nil), d.Tags...),
-		Description: d.Description,
-	}
-}
-
-// Spec lowers a declaration into a full lifecycle spec, including the launch
-// fields a managed-process worker needs. Env is derived from Params by the
-// backend, not stored here.
-func Spec(d Manifest) coreworker.WorkerSpec {
-	return coreworker.WorkerSpec{
-		WorkerConfig: SpawnConfig(d),
-		Placement:    PlacementOf(d),
-		Command:      d.Command,
-		Cwd:          d.Cwd,
-	}
-}
-
-// ManifestFromSpec turns a lifecycle spec into a manifest. The params map is
-// stored verbatim; display metadata is carried on typed fields.
-func ManifestFromSpec(spec coreworker.WorkerSpec) Manifest {
-	placement := spec.Placement
-	if placement == "" {
-		placement = coreworker.PlacementInProcess
-	}
-	return Manifest{
-		Definition: Definition{
-			ID:     spec.ID,
-			Type:   spec.Type,
-			Params: spec.Params,
-		},
-		Placement:   placement,
-		Label:       spec.Label,
-		Tags:        append([]string(nil), spec.Tags...),
-		Description: spec.Description,
-		Command:     spec.Command,
-		Cwd:         spec.Cwd,
-	}
-}
-
-// parseMountsParam extracts the mount list from worker params: "mounts" as a
-// []string (config) or []any of strings (bus payloads), or the single-mount
-// "path" sugar used by the host spawn tool. Each path is ~-expanded and made
-// absolute. An absent parameter yields a nil slice.
 func parseMountsParam(p map[string]any) ([]string, error) {
 	var raws []string
 	switch v := p["mounts"].(type) {
@@ -135,40 +78,6 @@ func ValidateProcessParams(params map[string]any) error {
 	return nil
 }
 
-// ── spawn-parameter contract ──
-
-// SpawnParamsByType is the per-type spawn contract — the keys that type's
-// builder (and the underlying worker) actually read. Keep it in step with the
-// builders in this package: TestSpawnParamsCoverEveryBuilder fails when a
-// builder type has no entry here.
-var SpawnParamsByType = map[string][]string{
-	"reason": {
-		"instruction", "goal", "brief", "programs", "events", "readme",
-		"provider", "model", "collaborators",
-		"budget_soft", "budget_hard",
-		"tail_tokens", "keep_tail", "compact_directive",
-	},
-	"coding": {
-		"instruction", "goal", "brief", "programs", "events", "readme",
-		"provider", "model", "collaborators",
-		"budget_soft", "budget_hard",
-		"tail_tokens", "keep_tail", "compact_directive",
-		"tool_mode",
-	},
-	"workspace": {"mounts", "path", "approver"},
-	"program":   {"mounts", "path"},
-	"host":      {"readme", "readme_append"},
-	"timer":     {"readme", "readme_append"},
-	"directory": {"readme", "readme_append"},
-	"history":   {"max_list_events", "max_list_item_bytes", "readme", "readme_append"},
-	"mcp":       {"expose", "fixed", "servers", "allowed_tools", "mcp", "readme", "readme_append"},
-	"niq":       {"remote_url", "remote_worker_id", "remote_credential", "recipient", "remote_recipient"},
-}
-
-// spawnParamAliases names the mistakes worth pointing at. Only applied when the
-// suggested key is actually valid for the type being spawned, so a workspace
-// spawn with "prompt" gets the plain unknown-parameter error instead of a
-// misleading pointer.
 var spawnParamAliases = map[string]string{
 	"prompt":        "instruction",
 	"system_prompt": "instruction",

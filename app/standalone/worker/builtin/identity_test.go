@@ -1,4 +1,4 @@
-package worker
+package builtin
 
 import (
 	"testing"
@@ -26,7 +26,7 @@ func TestEnsureIdentitySeedsOnlyOnce(t *testing.T) {
 		PublishAllow:   []event.PublishPattern{event.NewPublishPattern("request.*")},
 		SubscribeAllow: []event.EventPattern{event.NewPattern("worker.discover")},
 	}
-	if err := ensureIdentity(control, seed); err != nil {
+	if err := EnsureIdentity(control, seed); err != nil {
 		t.Fatalf("first ensure: %v", err)
 	}
 	if id, ok := runtime.Lookup("w1"); !ok || len(id.PublishAllow) != 1 {
@@ -37,7 +37,7 @@ func TestEnsureIdentitySeedsOnlyOnce(t *testing.T) {
 	if err := control.UpdateACL("w1", []event.PublishPattern{event.NewPublishPattern("worker.ready")}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureIdentity(control, seed); err != nil {
+	if err := EnsureIdentity(control, seed); err != nil {
 		t.Fatalf("second ensure: %v", err)
 	}
 	id, _ := control.Lookup("w1")
@@ -58,7 +58,7 @@ func TestEnsureIdentityKeepsExplicitDeny(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureIdentity(control, corebus.Identity{
+	if err := EnsureIdentity(control, corebus.Identity{
 		WorkerID:       "w1",
 		Type:           "reason",
 		PublishAllow:   []event.PublishPattern{event.NewPublishPattern("*")},
@@ -84,7 +84,7 @@ func TestEnsureIdentityReplacesOnTypeChange(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureIdentity(control, corebus.Identity{WorkerID: "w1", Type: "reason"}); err != nil {
+	if err := EnsureIdentity(control, corebus.Identity{WorkerID: "w1", Type: "reason"}); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 	id, _ := control.Lookup("w1")

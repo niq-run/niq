@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/baseworker"
 	"github.com/niq-run/niq/core/impl/busctl"
@@ -197,7 +198,7 @@ func newTestRig(t *testing.T, protect ...string) *testRig {
 		}
 		id := cfg.ID
 		connect := func() (corebus.WorkerSideChannel, error) {
-			if err := ensureIdentity(bus, corebus.Identity{WorkerID: id, Type: "fake"}); err != nil {
+			if err := builtin.EnsureIdentity(bus, corebus.Identity{WorkerID: id, Type: "fake"}); err != nil {
 				return nil, err
 			}
 			ch := inprocess.NewWorkerSide(id, listener)
@@ -210,7 +211,7 @@ func newTestRig(t *testing.T, protect ...string) *testRig {
 			return &fakeWorker{BaseWorker: baseworker.NewBaseWorker(id, ch)}
 		}
 		return coreworker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
-	}, CheckSpawnParams("fake", []string{"name"}))
+	}, builtin.CheckSpawnParams("fake", []string{"name"}))
 
 	return &testRig{cp: cp, backend: cp.backend, manager: cp.Manager(), supervisor: sup, manifests: manifests, registry: registry, bus: bus}
 }
