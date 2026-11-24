@@ -101,7 +101,8 @@ and recovered, what a manifest is, and what happens to one.
 | `controlplane.go` | `Config` / `ControlPlane`: `New`, `Recover`, `Stop`, `HostBackend`, `Manifest`, the type table (`RegisterBuilders`, `RegisterBuilder`, `Types`), `Manager`, app-hosted state helpers. |
 | `manifest.go` | The model and its storage boundary: `Definition` / `Manifest`, `Placement` / `PlacementOf`, display metadata validation, `SanitizeID`, `Instantiate` / `InstantiateForm`, the lowering to `WorkerConfig` / `WorkerSpec` (`Params`, `SpawnConfig`, `Spec`, `ManifestFromSpec`), and the `ManifestStore` interface. |
 | `backend.go` | `worker.Backend`: placement routing, lifecycle verbs, manifest edits, archive, protected ids, per-id serialization. |
-| `builtin/` | The type table: one file per built-in type (spawn contract + builder + registration), the registry, the assembly context, and credential/identity plumbing. See [its README](builtin/README.md). |
+| `builtin/` | The type-table framework: the registry, the assembly context, the spawn-parameter contract machinery and the identity a builder ensures. See [its README](builtin/README.md). |
+| `builtin/workers/` | The entries: one file per built-in type (contract + builder + registration). See [its README](builtin/workers/README.md). |
 | `process/` | Third-party process runtime: its own input contract (`spec.go`), provisioning (`provision.go`), supervision (`supervisor.go`), log/state dir naming (`ids.go`), platform shims (unix/windows). |
 
 Runtime state (`state.json` / snapshots) is `workerctl.WorkerStore`, defined in
@@ -122,7 +123,7 @@ what it cannot, the assembly injects.**
 | `host` (lifecycle), `niq` (far-side link) | builder, from `params` + ambient services (`WorkerBackend`, `Manager`) | params are the input; the rest is process infrastructure |
 | interface worker (`webui`, type `interface`) | **assembly**, through `iface.Config.Backends` | its backend is a process-local object (the app), which no manifest can express |
 
-Those ten are exactly what `builtin.Register` registers. `type: interface` is the
+Those ten are exactly what `workers.Register` registers. `type: interface` is the
 eleventh label: no builder, not spawnable.
 
 ## Flow

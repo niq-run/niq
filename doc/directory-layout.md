@@ -65,7 +65,8 @@ niq/
 │   │       ├── controlplane.go   #     New / Recover / Stop / HostBackend / Manifest
 │   │       ├── backend.go        #     worker.Backend: placement routing + lifecycle
 │   │       ├── manifest.go       #     the Manifest model, its lowering to a WorkerConfig, the ManifestStore contract
-│   │       ├── builtin/          #     the type table: one file per built-in type (contract + builder + registration)
+│   │       ├── builtin/          #     the type table's framework: registry, assembly context, contract machinery, identity
+│   │       │   └── workers/      #       one file per built-in type: contract + builder + registration
 │   │       └── process/          #     OS child processes: provision + supervisor
 │   │
 │   ├── client/                   # interfaces: every one of them is a gateway client
@@ -185,7 +186,7 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # must be 
 
 | What you want to do | Where |
 |---|---|
-| Add a worker type | `app/standalone/worker/builtin`: one file holding its spawn contract, its constructor and its registration |
+| Add a worker type | `app/standalone/worker/builtin/workers`: one file holding its spawn contract, its constructor and its registration |
 | Add a placement | constant in `core/itfs/worker` + routing in `app/standalone/worker/backend.go` |
 | Add a host/port primitive that several packages need | `app/standalone/helper` (stdlib only; no domain knowledge) |
 | Add a bus identity rule | contract in `core/itfs/bus` + `core/impl/busctl` |

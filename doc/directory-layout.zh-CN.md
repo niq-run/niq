@@ -59,7 +59,8 @@ niq/
 │   │       ├── controlplane.go   #     New / Recover / Stop / HostBackend / Manifest
 │   │       ├── backend.go        #     worker.Backend：placement 路由 + 生命周期
 │   │       ├── manifest.go       #     Manifest 模型、到 WorkerConfig 的降级、ManifestStore 契约
-│   │       ├── builtin/          #     类型表：每个内建类型一个文件（契约 + builder + 注册）
+│   │       ├── builtin/          #     类型表的框架：registry、装配上下文、契约机制、身份
+│   │       │   └── workers/      #       每个内建类型一个文件：契约 + builder + 注册
 │   │       └── process/          #     OS 子进程：provision + supervisor
 │   │
 │   ├── client/                   # 界面：全部是 gateway 的客户端
@@ -147,7 +148,7 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为�
 
 | 想做的事 | 放哪 |
 |---|---|
-| 新增 worker 类型 | `app/standalone/worker/builtin`：一个文件放它的参数契约、构造器与注册 |
+| 新增 worker 类型 | `app/standalone/worker/builtin/workers`：一个文件放它的参数契约、构造器与注册 |
 | 新增 placement | `core/itfs/worker` 常量 + `app/standalone/worker/backend.go` 路由 |
 | 多个包共用的 host/port 原语 | `app/standalone/helper`（仅 stdlib；不含领域知识） |
 | 新增总线身份规则 | `core/itfs/bus` 契约 + `core/impl/busctl` |
