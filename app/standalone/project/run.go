@@ -320,17 +320,13 @@ func runAssembly(opts assemblyOptions) error {
 	})
 
 	buildCtx := projbuiltin.BuildContext{
-		Registry:      registry,
 		Bus:           busControl,
 		Listener:      listener,
-		Engine:        engine,
 		Manager:       cp.Manager(),
 		WorkerBackend: cp.HostBackend(),
-		EventLog:      eventLog,
 		EventStore:    evtStore,
 		ProviderLoad:  store.LoadProvider,
 		ProgramsRoot:  opts.ProgramsRoot,
-		StateDir:      opts.StateDir,
 	}
 	cp.RegisterBuilders(buildCtx)
 

@@ -63,7 +63,7 @@ this package does not ship, and their builders need the same path.
 |---|---|
 | `builtin.go` | The package doc and the three names the assembly references (`TypeInterface`, `DefaultWebUIID`, `DefaultHostWorkerID`). |
 | `registry.go` | `Registry`, `NewRegistry`, `RegisterType`, `RegisterBuilder`, `Build`, `Validate`, `Types`, `Accepted`, and the `SpecFunc` signature a type's builder has. |
-| `build.go` | `BuildContext`: what the assembly injects (identity registry, bus control plane, in-process listener, engine, manager, event log/store, provider loader, programs root, state dir, the lifecycle backend). |
+| `build.go` | `BuildContext`: what the assembly injects into a builder — the bus control plane and in-process listener it connects through, the instance manager for checkpoints, the provider loader, the programs root, the event store, and the lifecycle backend the host worker drives. A field is here only if some builder reads it. |
 | `params.go` | `CheckSpawnParams` + its aliases, `ValidateProcessParams`. |
 | `identity.go` | `EnsureIdentity`. |
 | `identity_test.go` | Seeding vs. an edited grant, and the restore path. |
@@ -73,6 +73,9 @@ this package does not ship, and their builders need the same path.
 - **No type knowledge.** Nothing here names a worker type; the constants are the
   three ids the *assembly* needs, and the interface type is named only to say it
   has no builder.
+- **`BuildContext` carries only what a builder reads.** It is an injection bag,
+  not a mirror of the assembly: a field nobody reads is removed rather than
+  filled.
 - **One build function out.** `Registry.Build` is the single `Build` that
   `workerctl` sees.
 - **Validation is a write-boundary check.** Unknown parameters fail before a

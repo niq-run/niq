@@ -208,10 +208,8 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 	types := builtin.NewRegistry()
 	mgr := workerctl.New(workerctl.Config{Build: types.Build})
 	bc := builtin.BuildContext{
-		Registry:     registry,
 		Bus:          bus,
 		Listener:     listener,
-		Engine:       engine,
 		Manager:      mgr,
 		ProviderLoad: func() (*providerpkg.Config, error) { return &providerpkg.Config{}, nil },
 	}
