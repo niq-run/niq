@@ -9,6 +9,17 @@ export {
   DEFAULT_REQUEST_TIMEOUT_MS,
   replyEvent,
 } from "./iface.js";
+
+export {
+  InterfaceSession,
+  DEFAULT_SESSION_REQUEST_TIMEOUT_MS,
+  DEFAULT_SESSION_CONNECT_TIMEOUT_MS,
+  matchesType,
+} from "./session.js";
+export type {
+  InterfaceSessionOptions,
+  SessionRequestOptions,
+} from "./session.js";
 export type {
   Backend as IfaceBackend,
   Handler as IfaceHandler,

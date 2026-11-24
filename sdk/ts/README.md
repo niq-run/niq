@@ -319,3 +319,46 @@ await worker.start();
   so a throwing backend cannot break the loop or another backend.
 - What it does NOT do: edit ACLs or render the global event stream. Those are the
   app's own bus handles, the same split as in Go.
+
+### Stateless: `InterfaceSession`
+
+`InterfaceSession` is the other half of the same contract: an ephemeral worker
+for CLIs, scripts and one-shot tools. It dials, sends/requests/streams, and
+closes. It keeps no presence (`worker.ready`), no backends and no state after
+`close()` — the SSE session exists only for the object's lifetime.
+
+```ts
+import { HTTPWorkerClient, InterfaceSession, createEvent } from "@niq.run/worker-sdk";
+
+const session = new InterfaceSession({
+  channel: new HTTPWorkerClient({ baseURL, workerID, credential }),
+  requestTimeoutMs: 30_000,
+  connectTimeoutMs: 15_000,
+});
+await session.connect();
+
+await session.send(createEvent("worker.input", { text: "hi" }), "reason.0");
+const reply = await session.request(
+  "hello@bus",
+  createEvent("hello.greet", { name: "niq" }),
+);
+
+for await (const evt of session.events()) {
+  // live events routed to this identity; ends on close() or channel end
+}
+await session.close();
+```
+
+| | `InterfaceWorker` (stateful) | `InterfaceSession` (stateless) |
+|---|---|---|
+| Lifetime | process | one command/scope |
+| Presence | `worker.ready` + discover | none |
+| Backends/tools | yes | no |
+| Request correlation | yes | yes |
+| Reconnect | caller-owned (currently) | no; fail fast |
+| Typical use | bridge, daemon, UI backend | CLI, script, one-shot tool |
+
+Both share the reply convention: `request.completed` resolves,
+`request.failed`/`request.rejected` reject with `ReplyError`; a timeout rejects
+with a plain error. `matchesType(pattern, type)` mirrors the bus's exact / `*` /
+`prefix.*` filtering; `events()` is a single-consumer, buffered stream.
