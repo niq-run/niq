@@ -26,7 +26,7 @@ interface CreateWorkerDialogProps {
   workers?: WorkerInfo[]
 }
 
-// Managed worker types offered by the form. host/hiw are infrastructure the
+// Managed worker types offered by the form. host/interface are infrastructure the
 // assembly owns — creating them from the UI is not a thing. timer, directory
 // and history are built-in singletons (one per project), so a second one is
 // never wanted. niq is a worker whose backend is another niq instance.

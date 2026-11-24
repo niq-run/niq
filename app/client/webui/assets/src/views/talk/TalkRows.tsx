@@ -34,8 +34,8 @@ export interface TalkRowsProps {
 
 // Unified rule for which message bubbles sit on the right. The right side is
 // reserved for messages addressed to a specific reason worker:
-//   (b) the human (hiw) -> that reason worker
-//   (a) a system worker (non-reason, non-hiw) -> that reason worker
+//   (b) the human (the interface worker) -> that reason worker
+//   (a) a system worker (non-reason, non-human) -> that reason worker
 //   (c) another reason worker -> that reason worker, but only when that
 //       worker is the SINGLE currently selected talk worker
 // Self-directed envelopes are the worker's own actions and stay left: the

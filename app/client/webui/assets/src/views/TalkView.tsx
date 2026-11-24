@@ -3,7 +3,7 @@ import ViewHeader from '../components/ViewHeader'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
 import { isToolResult } from '../components/talk-utils'
-import { isReasonFamilyType, isTalkPartnerType, type EventPayload, type WorkerDetailTab } from '../types'
+import { isReasonFamilyType, isTalkPartnerType, WEBUI_WORKER_ID, type EventPayload, type WorkerDetailTab } from '../types'
 import { useChatScroll, TALK_SCROLL_CLASS } from './talk/useChatScroll'
 import TalkRows from './talk/TalkRows'
 import StreamingTail from './talk/StreamingTail'
@@ -53,7 +53,7 @@ interface TalkViewProps {
   onFollowChange?: (following: boolean) => void
 }
 
-export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, onAddFilter, onFocusWorker, deliveries, humanId = 'webui-hiw', workerTypes = {}, thinkingExpanded, collapseEvents, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange, workerLabels, pendingApprovals = 0, onOpenApprovals }: TalkViewProps) {
+export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore, onMention, onOpenDetail, onAddFilter, onFocusWorker, deliveries, humanId = WEBUI_WORKER_ID, workerTypes = {}, thinkingExpanded, collapseEvents, streamingMode, responseOnly, isMobile, onDecide, scrollToBottomSignal, onFollowChange, workerLabels, pendingApprovals = 0, onOpenApprovals }: TalkViewProps) {
   const { dark, colors } = useTheme()
   const { t } = useI18n()
   // Bubbles fill the whole column on phones: a 90% cap plus the scroll area's
@@ -135,9 +135,12 @@ export default function TalkView({ events, talkWorkers, onTraceClick, onLoadMore
     return events.filter(evt => {
       const metaCall = evt.type === 'worker.help' || evt.type === 'worker.readme' || evt.type === 'worker.readme.update'
       if (evt.type.startsWith('worker.') && evt.type !== 'worker.input' && evt.type !== 'worker.abort' && !metaCall) return false
-      // The detail panel's own readme fetch (HIW → worker) is UI housekeeping,
-      // not a conversation row; an agent reading a peer's readme is kept.
-      if (evt.type === 'worker.readme' && workerTypes[evt.worker_id] === 'hiw') return false
+      // The detail panel's own readme fetch (UI → worker) is UI housekeeping,
+      // not a conversation row; an agent reading a peer's readme is kept. Keyed
+      // on the human's id, not its type: the type label ("interface") is shared
+      // by any other interface worker, and keying on a type string is what let
+      // this filter go stale when the worker was renamed.
+      if (evt.type === 'worker.readme' && evt.worker_id === humanId) return false
       // Delta / partial events are never rendered as standalone rows. When
       // streaming mode is on they're consumed to build the streaming UI;
       // when off they're dropped entirely — the terminal events (reason.*,
