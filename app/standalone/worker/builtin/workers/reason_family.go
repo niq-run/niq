@@ -1,9 +1,10 @@
-package builtin
+package workers
 
 import (
 	"fmt"
 
 	providerpkg "github.com/niq-run/niq/app/standalone/provider"
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	reasonbase "github.com/niq-run/niq/core/impl/reason"
 	"github.com/niq-run/niq/core/impl/workers/reason"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -39,7 +40,7 @@ type reasonFamilyIn struct {
 
 // resolveReasonFamily computes the shared inputs from a worker config. typ is
 // the worker type label used for validation messages and the bus identity.
-func resolveReasonFamily(ctx BuildContext, cfg coreworker.WorkerConfig, typ string) (*reasonFamilyIn, error) {
+func resolveReasonFamily(ctx builtin.BuildContext, cfg coreworker.WorkerConfig, typ string) (*reasonFamilyIn, error) {
 	id := cfg.ID
 	if id == "" {
 		return nil, fmt.Errorf("%s: id is required", typ)

@@ -1,8 +1,9 @@
-package builtin
+package workers
 
 import (
 	"log"
 
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/core/impl/workers/coding"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
@@ -10,7 +11,7 @@ import (
 
 // ── coding reason worker ──
 
-func buildCodingSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildCodingSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	in, err := resolveReasonFamily(ctx, cfg, "coding")
 	if err != nil {
 		return coreworker.SpawnSpec{}, err
@@ -60,6 +61,6 @@ var spawnParamsCoding = []string{
 	"tool_mode",
 }
 
-func registerCoding(ctx BuildContext, reg *Registry) {
+func registerCoding(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("coding", spawnParamsCoding, ctx, buildCodingSpec)
 }

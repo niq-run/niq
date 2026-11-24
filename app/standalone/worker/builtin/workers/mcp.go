@@ -1,8 +1,9 @@
-package builtin
+package workers
 
 import (
 	"log"
 
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/core/impl/workers/mcp"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -11,7 +12,7 @@ import (
 
 // ── mcp ──
 
-func buildMCPSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildMCPSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	id := cfg.ID
 	if id == "" {
 		id = "mcp"
@@ -61,6 +62,6 @@ func buildMCPSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Spa
 // ── spawn contract ──
 var spawnParamsMCP = []string{"expose", "fixed", "servers", "allowed_tools", "mcp", "readme", "readme_append"}
 
-func registerMCP(ctx BuildContext, reg *Registry) {
+func registerMCP(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("mcp", spawnParamsMCP, ctx, buildMCPSpec)
 }

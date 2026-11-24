@@ -1,6 +1,7 @@
-package builtin
+package workers
 
 import (
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/core/impl/workers/directory"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -9,7 +10,7 @@ import (
 
 // ── directory ──
 
-func buildDirectorySpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildDirectorySpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
@@ -47,6 +48,6 @@ func buildDirectorySpec(ctx BuildContext, cfg coreworker.WorkerConfig) (corework
 // ── spawn contract ──
 var spawnParamsDirectory = []string{"readme", "readme_append"}
 
-func registerDirectory(ctx BuildContext, reg *Registry) {
+func registerDirectory(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("directory", spawnParamsDirectory, ctx, buildDirectorySpec)
 }

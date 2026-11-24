@@ -1,10 +1,11 @@
-package builtin
+package workers
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	programworker "github.com/niq-run/niq/core/impl/workers/program"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 	"github.com/niq-run/niq/core/impl/workers/program/quickjsexec"
@@ -16,7 +17,7 @@ import (
 
 // ── program ──
 
-func buildProgramSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildProgramSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
@@ -78,6 +79,6 @@ func buildProgramSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker
 // ── spawn contract ──
 var spawnParamsProgram = []string{"mounts", "path"}
 
-func registerProgram(ctx BuildContext, reg *Registry) {
+func registerProgram(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("program", spawnParamsProgram, ctx, buildProgramSpec)
 }

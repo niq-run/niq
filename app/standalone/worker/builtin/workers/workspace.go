@@ -1,4 +1,4 @@
-package builtin
+package workers
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/niq-run/niq/app/standalone/helper"
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	wsbackend "github.com/niq-run/niq/core/impl/embedws"
 	"github.com/niq-run/niq/core/impl/workers/workspace"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -15,7 +16,7 @@ import (
 
 // ── workspace ──
 
-func buildWorkspaceSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildWorkspaceSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	mounts, err := parseMountsParam(p)
 	if err != nil {
@@ -32,7 +33,7 @@ func buildWorkspaceSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (corework
 	}
 	approver, _ := p["approver"].(string)
 	if approver == "" {
-		approver = DefaultWebUIID // default approver: the human UI worker
+		approver = builtin.DefaultWebUIID // default approver: the human UI worker
 	}
 	params := p
 	params["mounts"] = mounts
@@ -89,6 +90,6 @@ func buildWorkspaceSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (corework
 // ── spawn contract ──
 var spawnParamsWorkspace = []string{"mounts", "path", "approver"}
 
-func registerWorkspace(ctx BuildContext, reg *Registry) {
+func registerWorkspace(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("workspace", spawnParamsWorkspace, ctx, buildWorkspaceSpec)
 }

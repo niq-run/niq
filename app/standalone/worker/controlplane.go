@@ -14,6 +14,7 @@ import (
 	"log"
 
 	"github.com/niq-run/niq/app/standalone/worker/builtin"
+	"github.com/niq-run/niq/app/standalone/worker/builtin/workers"
 	"github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/workerctl"
@@ -93,7 +94,7 @@ func New(cfg Config) *ControlPlane {
 }
 
 // RegisterBuilders registers one builder per known worker type.
-func (c *ControlPlane) RegisterBuilders(ctx builtin.BuildContext) { builtin.Register(ctx, c.types) }
+func (c *ControlPlane) RegisterBuilders(ctx builtin.BuildContext) { workers.Register(ctx, c.types) }
 
 // RegisterBuilder registers a single type. It is the seam tests and
 // out-of-tree worker types use; the built-in set goes through RegisterBuilders.

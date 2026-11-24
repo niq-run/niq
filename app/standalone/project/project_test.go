@@ -11,7 +11,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/store"
 	projtemplate "github.com/niq-run/niq/app/standalone/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
-	projbuiltin "github.com/niq-run/niq/app/standalone/worker/builtin"
+	projworkers "github.com/niq-run/niq/app/standalone/worker/builtin/workers"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 )
 
@@ -361,7 +361,7 @@ func TestDefaultPresetShipsUsingNiqPlaybook(t *testing.T) {
 	if len(raw) != 1 {
 		t.Fatalf("programs = %+v", niq.Params)
 	}
-	progs := projbuiltin.ParsePrograms(niq.Params, "niq")
+	progs := projworkers.ParsePrograms(niq.Params, "niq")
 	var seen bool
 	for _, p := range progs {
 		if p.Name == "using-niq" && p.ContentType == "playbook" {

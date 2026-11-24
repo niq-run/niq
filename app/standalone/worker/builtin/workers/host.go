@@ -1,6 +1,7 @@
-package builtin
+package workers
 
 import (
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/core/impl/workers/host"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -9,11 +10,11 @@ import (
 
 // ── host ──
 
-func buildHostSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildHostSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
-		id = DefaultHostWorkerID
+		id = builtin.DefaultHostWorkerID
 	}
 	// PublishAllow: lifecycle replies (request.*) and presence. Its tool
 	// events (spawn/suspend/resume/restart/destroy) are directed calls — no
@@ -44,6 +45,6 @@ func buildHostSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Sp
 // ── spawn contract ──
 var spawnParamsHost = []string{"readme", "readme_append"}
 
-func registerHost(ctx BuildContext, reg *Registry) {
+func registerHost(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("host", spawnParamsHost, ctx, buildHostSpec)
 }

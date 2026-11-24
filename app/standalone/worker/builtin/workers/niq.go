@@ -1,9 +1,10 @@
-package builtin
+package workers
 
 import (
 	"fmt"
 	"log"
 
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/iface"
 	"github.com/niq-run/niq/core/impl/workers/niq"
@@ -19,7 +20,7 @@ import (
 // Its local identity is registered like any managed worker; the remote
 // connection (remote URL / remote worker id / remote credential) comes from
 // Params.
-func buildNIQSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildNIQSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
@@ -92,6 +93,6 @@ func buildNIQSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.Spa
 // ── spawn contract ──
 var spawnParamsNiq = []string{"remote_url", "remote_worker_id", "remote_credential", "recipient", "remote_recipient"}
 
-func registerNiq(ctx BuildContext, reg *Registry) {
+func registerNiq(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("niq", spawnParamsNiq, ctx, buildNIQSpec)
 }

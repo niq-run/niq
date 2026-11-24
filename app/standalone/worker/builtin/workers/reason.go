@@ -1,8 +1,9 @@
-package builtin
+package workers
 
 import (
 	"log"
 
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/core/impl/workers/reason"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	coreworker "github.com/niq-run/niq/core/itfs/worker"
@@ -10,7 +11,7 @@ import (
 
 // ── reason worker ──
 
-func buildReasonSpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildReasonSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	in, err := resolveReasonFamily(ctx, cfg, "reason")
 	if err != nil {
 		return coreworker.SpawnSpec{}, err
@@ -59,6 +60,6 @@ var spawnParamsReason = []string{
 	"tail_tokens", "keep_tail", "compact_directive",
 }
 
-func registerReason(ctx BuildContext, reg *Registry) {
+func registerReason(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("reason", spawnParamsReason, ctx, buildReasonSpec)
 }

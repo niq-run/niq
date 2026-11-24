@@ -1,6 +1,7 @@
-package builtin
+package workers
 
 import (
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/core/impl/workers/history"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
@@ -9,7 +10,7 @@ import (
 
 // ── history ──
 
-func buildHistorySpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
+func buildHistorySpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 	p := cfg.Params
 	id := cfg.ID
 	if id == "" {
@@ -48,6 +49,6 @@ func buildHistorySpec(ctx BuildContext, cfg coreworker.WorkerConfig) (coreworker
 // ── spawn contract ──
 var spawnParamsHistory = []string{"max_list_events", "max_list_item_bytes", "readme", "readme_append"}
 
-func registerHistory(ctx BuildContext, reg *Registry) {
+func registerHistory(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("history", spawnParamsHistory, ctx, buildHistorySpec)
 }

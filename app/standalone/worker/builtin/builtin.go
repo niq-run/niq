@@ -18,19 +18,3 @@ const (
 	// DefaultHostWorkerID is the lifecycle control plane.
 	DefaultHostWorkerID = "host"
 )
-
-// Register adds one builder per known worker type, each with its spawn-
-// parameter contract. The list is explicit rather than discovered, so what a
-// project can spawn is one edit to read.
-func Register(ctx BuildContext, reg *Registry) {
-	registerReason(ctx, reg)
-	registerCoding(ctx, reg)
-	registerWorkspace(ctx, reg)
-	registerHost(ctx, reg)
-	registerTimer(ctx, reg)
-	registerNiq(ctx, reg)
-	registerProgram(ctx, reg)
-	registerHistory(ctx, reg)
-	registerDirectory(ctx, reg)
-	registerMCP(ctx, reg)
-}
