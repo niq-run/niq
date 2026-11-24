@@ -2,9 +2,10 @@
 
 This package is the **complete worker control plane** for the standalone
 deployment form. It owns every worker's manifest and lifecycle, assembles the
-two lifecycle mechanisms it needs (`workerctl`, `process`), and exposes stable
-exits for the host worker and the WebUI. The assembly injects storage providers
-once; from then on the control plane recovers, runs and stops on its own.
+mechanisms it needs — the type table in `builtin`, the OS-child runtime in
+`process`, and `workerctl` from core — and exposes stable exits for the host
+worker and the WebUI. The assembly injects storage providers once; from then on
+the control plane recovers, runs and stops on its own.
 
 ```mermaid
 flowchart TB
@@ -14,7 +15,7 @@ flowchart TB
     subgraph plane["app/standalone/worker"]
         CP["ControlPlane · assemble, recover, stop"]
         BE["backend · placement, lifecycle, manifest edits"]
-        TYPES["type table · registry, builders, params"]
+        TYPES["builtin · the type table"]
         MECH["mechanisms · workerctl and process"]
         MS["ManifestStore · storage boundary"]
     end
@@ -47,7 +48,7 @@ listed in [Plane composition](#plane-composition) and [Files](#files).
 | `workerctl.Manager` | live instance lifecycle: build, spawn, suspend (snapshot), resume, restart, destroy, checkpoint | `core/impl/workerctl` |
 | `process.Supervisor` | OS child lifecycle: launch, crash restart with backoff, stop, shutdown kill-tree | `process/` |
 | identity provisioning | mint credentials, register identities with the bus control plane | `process/provision.go` |
-| `typeRegistry` | which types exist, how each is built, which params each reads | `registry.go` |
+| `builtin.Registry` | which types exist, how each is built, which params each reads | `builtin/registry.go` |
 | `ControlPlane` | owns the above, recovers the manifest set, exposes the exits | `controlplane.go` |
 
 Neither library knows about placements. The control plane is what maps a
@@ -86,22 +87,21 @@ construction bag:
 
 | placement | params | validation |
 |---|---|---|
-| `in-process` | builder construction params | `SpawnParamsByType` |
+| `in-process` | builder construction params | the type's contract in `builtin` |
 | `managed-process` | the child's **environment** | flat string map, valid env keys, no `NIQ_*` |
 | `unmanaged-process` | not passed | must be empty |
 
 ## Files
 
+Three files, because the package holds three things: how the set is assembled
+and recovered, what a manifest is, and what happens to one.
+
 | File | Responsibility |
 |---|---|
 | `controlplane.go` | `Config` / `ControlPlane`: `New`, `Recover`, `Stop`, `HostBackend`, `Manifest`, the type table (`RegisterBuilders`, `RegisterBuilder`, `Types`), `Manager`, app-hosted state helpers. |
-| `declaration.go` | The model, no IO: `Definition` / `Manifest`, `Placement` / `PlacementOf`, display metadata validation, `SanitizeID`, `Instantiate` / `InstantiateForm`. |
-| `params.go` | `SpawnConfig` / `Spec` / `ManifestFromSpec`, the per-type spawn contract, `ValidateProcessParams`, and param readers. |
-| `registry.go` | `typeRegistry`: type label → builder + spawn-parameter check. |
-| `builders.go` | `BuildContext`, the type-label constants (`TypeInterface`, `DefaultWebUIID`, `DefaultHostWorkerID`), and one constructor per built-in type; `specConnect` ensures the worker's durable identity. |
-| `identity.go` | `ensureIdentity`: register on first connect, keep an edited grant, seed the type default only once. |
+| `manifest.go` | The model and its storage boundary: `Definition` / `Manifest`, `Placement` / `PlacementOf`, display metadata validation, `SanitizeID`, `Instantiate` / `InstantiateForm`, the lowering to `WorkerConfig` / `WorkerSpec` (`Params`, `SpawnConfig`, `Spec`, `ManifestFromSpec`), and the `ManifestStore` interface. |
 | `backend.go` | `worker.Backend`: placement routing, lifecycle verbs, manifest edits, archive, protected ids, per-id serialization. |
-| `store.go` | `ManifestStore`: the storage boundary `app/standalone/store` implements. |
+| `builtin/` | The type table: one file per built-in type (spawn contract + builder + registration), the registry, the assembly context, and credential/identity plumbing. See [its README](builtin/README.md). |
 | `process/` | Third-party process runtime: its own input contract (`spec.go`), provisioning (`provision.go`), supervision (`supervisor.go`), log/state dir naming (`ids.go`), platform shims (unix/windows). |
 
 Runtime state (`state.json` / snapshots) is `workerctl.WorkerStore`, defined in
@@ -122,7 +122,7 @@ what it cannot, the assembly injects.**
 | `host` (lifecycle), `niq` (far-side link) | builder, from `params` + ambient services (`WorkerBackend`, `Manager`) | params are the input; the rest is process infrastructure |
 | interface worker (`webui`, type `interface`) | **assembly**, through `iface.Config.Backends` | its backend is a process-local object (the app), which no manifest can express |
 
-Those ten are exactly what `registerBuilders` registers. `type: interface` is the
+Those ten are exactly what `builtin.Register` registers. `type: interface` is the
 eleventh label: no builder, not spawnable.
 
 ## Flow

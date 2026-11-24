@@ -39,6 +39,7 @@ needs, not a folder that grew:
 | [`store/identity`](store/identity/README.md) | `identities.json` as a `bus.Store`, plus `Merge` for legacy seeding |
 | [`store/migrate`](store/migrate/README.md) | every reader of an older file format — the only place allowed to know one |
 | [`worker/process`](worker/process/README.md) | OS children: `Supervisor` + credential provisioning |
+| [`worker/builtin`](worker/builtin/README.md) | the type table: one file per built-in type (spawn contract + builder + registration) |
 
 ## Dependency direction
 
@@ -49,9 +50,10 @@ cli              contract, gateway, helper, launcher, store, app/client/tui
 gateway          helper, launcher, project, provider, store, template
 launcher         contract, helper, project, store
 project          helper, project/api, provider, store (+event +identity +migrate),
-                 template, worker (+process)
+                 template, worker (+builtin +process)
 template         store (+migrate), worker
-worker           helper, provider, worker/process
+worker           builtin, helper, worker/process
+worker/builtin   helper, provider, worker/process
 store            contract, helper, provider, store/migrate, worker
 store/migrate    store/identity, worker
 worker/process   helper
@@ -123,7 +125,7 @@ domains import nothing from `store`. The one function type that crosses back,
 | a new HTTP endpoint for the gateway (projects, templates, providers) | `gateway` (`projects.go`, `templates.go`, `providers.go`) |
 | a new endpoint for a project's data | `project/api` |
 | a new lifecycle action on an instance | `launcher` |
-| a new worker type, placement or param | `worker` (`registry.go`, `builders.go`, `params.go`, `backend.go`) |
+| a new worker type, placement or param | `worker/builtin` (one new file: contract + builder + registration) |
 | a new on-disk file or path | `store` (and `store/migrate` if it replaces an old one) |
 | new CLI verb, flag or shell wiring | `cli` |
 | a host/port or path-segment primitive several packages need | `helper` (stdlib only; no domain knowledge) |

@@ -58,12 +58,8 @@ niq/
 │   │   └── worker/               #   worker 控制面（自闭环）
 │   │       ├── controlplane.go   #     New / Recover / Stop / HostBackend / Manifest
 │   │       ├── backend.go        #     worker.Backend：placement 路由 + 生命周期
-│   │       ├── builders.go       #     每类型一个构造器
-│   │       ├── registry.go       #     type → builder + 参数契约
-│   │       ├── params.go         #     manifest 的参数投影与校验
-│   │       ├── declaration.go    #     Manifest 模型
-│   │       ├── identity.go       #     首次连接的身份播种
-│   │       ├── store.go          #     ManifestStore 契约
+│   │       ├── manifest.go       #     Manifest 模型、到 WorkerConfig 的降级、ManifestStore 契约
+│   │       ├── builtin/          #     类型表：每个内建类型一个文件（契约 + builder + 注册）
 │   │       └── process/          #     OS 子进程：provision + supervisor
 │   │
 │   ├── client/                   # 界面：全部是 gateway 的客户端
@@ -151,7 +147,7 @@ go list -deps ./app/cluster/...    | grep 'app/standalone'            # 应为�
 
 | 想做的事 | 放哪 |
 |---|---|
-| 新增 worker 类型 | `app/standalone/worker`：`params.go` 参数契约 + `builders.go` 构造器 + `registry.go` 注册 |
+| 新增 worker 类型 | `app/standalone/worker/builtin`：一个文件放它的参数契约、构造器与注册 |
 | 新增 placement | `core/itfs/worker` 常量 + `app/standalone/worker/backend.go` 路由 |
 | 多个包共用的 host/port 原语 | `app/standalone/helper`（仅 stdlib；不含领域知识） |
 | 新增总线身份规则 | `core/itfs/bus` 契约 + `core/impl/busctl` |
