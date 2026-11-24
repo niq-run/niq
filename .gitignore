@@ -22,3 +22,10 @@ sdk/ts/dist/
 
 # Frontend caches (any shell's assets)
 **/assets/.vite/
+# tsc's incremental build cache. Build state, not shipped output (the embedded
+# artifact is assets/dist): it is machine- and filesystem-dependent, and one
+# generated on a case-insensitive filesystem keeps stale paths across a
+# case-only rename — it listed ./src/app.tsx while the tree has src/App.tsx, so
+# macOS builds never rewrote it (both names resolve to the same file) and every
+# Linux build did, showing up as a diff.
+**/assets/*.tsbuildinfo
