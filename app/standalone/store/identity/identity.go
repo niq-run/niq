@@ -24,7 +24,7 @@ type Store struct {
 	ids  map[string]corebus.Identity
 }
 
-// newIdentityStore opens (or creates) the identity file at path.
+// New opens (or creates) the identity file at path.
 func New(path string) (*Store, error) {
 	s := &Store{path: path, ids: map[string]corebus.Identity{}}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

@@ -117,7 +117,7 @@ func TestResultOutcomeStructured(t *testing.T) {
 // footer is appended.
 func TestConvertInputEventStructuredContent(t *testing.T) {
 	b64 := base64.StdEncoding.EncodeToString([]byte("fakejpeg"))
-	evt := event.New(event.TypeWorkerInput, "webui-hiw", map[string]any{
+	evt := event.New(event.TypeWorkerInput, "webui", map[string]any{
 		"content": []any{
 			map[string]any{"type": "text", "text": "图如下"},
 			map[string]any{"type": "image", "name": "a.jpg", "mime": "image/jpeg", "data": b64},
@@ -142,7 +142,7 @@ func TestConvertInputEventStructuredContent(t *testing.T) {
 	if content[2].Type != "text" || !strings.Contains(content[2].Text, "/tmp/uploads/r.pdf") || !strings.Contains(content[2].Text, "42") {
 		t.Errorf("block2 = %+v", content[2])
 	}
-	if content[3].Type != "text" || !strings.Contains(content[3].Text, "[Event: worker.input from webui-hiw]") {
+	if content[3].Type != "text" || !strings.Contains(content[3].Text, "[Event: worker.input from webui]") {
 		t.Errorf("block3 = %+v", content[3])
 	}
 }
@@ -150,7 +150,7 @@ func TestConvertInputEventStructuredContent(t *testing.T) {
 // TestConvertInputEventPlainFallsBackToDefault verifies a plain-text input
 // with no content array falls back to the DefaultConverter shape.
 func TestConvertInputEventPlainFallsBackToDefault(t *testing.T) {
-	evt := event.New(event.TypeWorkerInput, "webui-hiw", map[string]any{"text": "hello"})
+	evt := event.New(event.TypeWorkerInput, "webui", map[string]any{"text": "hello"})
 	want := DefaultConverter(evt)
 	got := ConvertInputEvent(evt)
 	if len(got) != 1 || got[0].Content[0].Text != want[0].Content[0].Text {

@@ -1,6 +1,8 @@
-package worker
+package builtin
 
 import (
+	"sort"
+	"sync"
 	"testing"
 
 	"github.com/niq-run/niq/core/impl/busctl"
@@ -26,7 +28,7 @@ func TestEnsureIdentitySeedsOnlyOnce(t *testing.T) {
 		PublishAllow:   []event.PublishPattern{event.NewPublishPattern("request.*")},
 		SubscribeAllow: []event.EventPattern{event.NewPattern("worker.discover")},
 	}
-	if err := ensureIdentity(control, seed); err != nil {
+	if err := EnsureIdentity(control, seed); err != nil {
 		t.Fatalf("first ensure: %v", err)
 	}
 	if id, ok := runtime.Lookup("w1"); !ok || len(id.PublishAllow) != 1 {
@@ -37,7 +39,7 @@ func TestEnsureIdentitySeedsOnlyOnce(t *testing.T) {
 	if err := control.UpdateACL("w1", []event.PublishPattern{event.NewPublishPattern("worker.ready")}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureIdentity(control, seed); err != nil {
+	if err := EnsureIdentity(control, seed); err != nil {
 		t.Fatalf("second ensure: %v", err)
 	}
 	id, _ := control.Lookup("w1")
@@ -58,7 +60,7 @@ func TestEnsureIdentityKeepsExplicitDeny(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureIdentity(control, corebus.Identity{
+	if err := EnsureIdentity(control, corebus.Identity{
 		WorkerID:       "w1",
 		Type:           "reason",
 		PublishAllow:   []event.PublishPattern{event.NewPublishPattern("*")},
@@ -84,7 +86,7 @@ func TestEnsureIdentityReplacesOnTypeChange(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureIdentity(control, corebus.Identity{WorkerID: "w1", Type: "reason"}); err != nil {
+	if err := EnsureIdentity(control, corebus.Identity{WorkerID: "w1", Type: "reason"}); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 	id, _ := control.Lookup("w1")
@@ -97,4 +99,47 @@ func TestEnsureIdentityReplacesOnTypeChange(t *testing.T) {
 	if live, ok := runtime.Lookup("w1"); !ok || live.Type != "reason" {
 		t.Fatalf("runtime = %+v (ok=%v)", live, ok)
 	}
+}
+
+// memIdentityStore is a test-only bus.Store: identity persistence is exercised
+// by the project's file store, so these tests only need a map.
+type memIdentityStore struct {
+	mu  sync.RWMutex
+	ids map[string]corebus.Identity
+}
+
+func newMemIdentityStore() *memIdentityStore {
+	return &memIdentityStore{ids: map[string]corebus.Identity{}}
+}
+
+func (s *memIdentityStore) Load(id string) (corebus.Identity, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	identity, ok := s.ids[id]
+	return identity, ok, nil
+}
+
+func (s *memIdentityStore) Save(id string, identity corebus.Identity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ids[id] = identity
+	return nil
+}
+
+func (s *memIdentityStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.ids, id)
+	return nil
+}
+
+func (s *memIdentityStore) All() ([]corebus.Identity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]corebus.Identity, 0, len(s.ids))
+	for _, identity := range s.ids {
+		out = append(out, identity)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].WorkerID < out[j].WorkerID })
+	return out, nil
 }

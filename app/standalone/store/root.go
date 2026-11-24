@@ -88,25 +88,20 @@ func ProviderConfigPath() string {
 	return filepath.Join(Root(), "common", "providers", "provider.json")
 }
 
-// SanitizeID keeps ids path-safe; an id is a directory name, not a path.
-func SanitizeID(id string) string {
-	out := make([]rune, 0, len(id))
-	for _, r := range id {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			out = append(out, r)
-		case r == '-' || r == '_' || r == '.':
-			out = append(out, r)
-		default:
-			out = append(out, '_')
-		}
-	}
-	return string(out)
-}
+// ConfigPath returns the shell's start preference: <root>/common/config.json.
+// Only the CLI front-end reads it (see cli/startpref.go); by the time the
+// gateway runs, its address has already been decided and passed as --addr.
+func ConfigPath() string { return filepath.Join(Root(), "common", "config.json") }
+
+// SanitizeID keeps ids path-safe; an id is a directory name, not a path. The
+// rule itself lives in helper.SafeName, the one implementation every id that
+// becomes a directory name shares.
+func SanitizeID(id string) string { return helper.SafeName(id) }
 
 // LocalhostURL turns a resolved listen address (e.g. "[::]:19763") into a
-// clickable localhost URL. Exported for the control package, which renders
-// project WebUI URLs from resolved addresses.
+// clickable localhost URL. Used wherever an address is shown or opened: the
+// CLI's status report, the launcher's picker, the gateway's startup line and
+// the project runtime's log.
 func LocalhostURL(resolved string) string {
 	if resolved == "" {
 		return ""

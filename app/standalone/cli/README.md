@@ -1,4 +1,4 @@
-# cli
+# cli — the entry point and the gateway's lifecycle
 
 The command-line **entry** and the **daemon lifecycle** for niq.
 
@@ -30,7 +30,49 @@ code:
 | **Daemon start path** (long-lived) | `runShellForeground` → `gateway.Run` | No — `startBackground` spawns it with the null device as stdio. |
 
 The port-conflict choice (below) belongs to the front-end for exactly that
-reason: the daemon process has no stdin to ask on.
+reason: the daemon process has no stdin to ask on. The same holds for the
+one-time "who may reach the gateway?" question (`startpref.go`, below).
+
+## Start address and the bind preference
+
+Where to listen is resolved **before** the daemon is spawned, in
+`startpref.go`, by `resolveStartAddr`. The order is:
+
+1. an explicit switch — `--addr`, or the per-run `--remote` / `--local`
+   (`startRequest`; `runShell` uses `fs.Visit` so "not set" stays
+   distinguishable from "set to the default");
+2. the remembered preference in `<root>/common/config.json`
+   (`{"default_addr": ":9527"}`);
+3. `defaultAddr` (loopback).
+
+`--remote` and `--local` change only the host and keep the port (the remembered
+one, else the default), are mutually exclusive, are rejected alongside `--addr`
+(`startRequest.validate`), and write nothing — they are the scriptable form of
+the prompt, for a unit file or a one-off.
+
+An absent preference is not "loopback": it means the operator has not decided,
+so a start on a terminal asks once and offers to remember the answer. Declining
+"remember" persists nothing, which is the deliberate "ask me again next time".
+
+`gateway.New("")` keeps its own loopback default and is not touched: the
+resolution layer is the CLI's, and by the time the gateway runs the address is
+already a `--addr` argument.
+
+**Auth is a precondition for a remote bind.** `--remote` fails outright without
+credentials. A remembered or prompted non-loopback address is ignored instead
+(loopback is used, with an explanation) when `common/auth.json` has no
+credentials — credentials can be deleted after the fact, and a silent
+unauthenticated exposure is worse than a local-only start the operator can see.
+An explicit `--addr` still binds regardless, which is what the docs promise;
+that path only warns.
+
+The status report prints the exposure (`loopback only` / `all interfaces` /
+`on <host>`) plus, when remote-reachable, the URL another machine would open
+(`helper.LanAddr` provides a concrete address for a wildcard bind).
+
+`config.json` is deliberately **not** `shell.json`: the latter is the live
+pid/bound record, cleared on stop, and a stale one reads as "not running". The
+preference must outlive any single run.
 
 ## Port conflicts
 
@@ -77,6 +119,7 @@ through injected `portOps` (no real socket or process).
 | `main.go` | Entry point (`Main`), verb dispatch (`w`, `i`, `status`, `stop`, `restart`, `update`, `completion`), `--help` text, and the start path shared by bare `niq` and `niq w`. |
 | `daemon.go` | Background lifecycle: the `shell.json` record, `startBackground`/`runShellForeground`, liveness probing, stop/restart, and the status report (gateway + project table). |
 | `ensure.go` | Port-conflict resolution before starting the daemon: pre-flight probe, the injected asker, and the non-interactive actionable error. |
+| `startpref.go` | Where to listen: the remembered bind preference (`common/config.json`), its resolution order, and the one-time terminal question (with the auth precondition for a remote bind). |
 | `status_json.go` | `niq status --json`: the same snapshot as the human report, for clients that render their own UI (the macOS app). |
 | `ui.go` | Terminal presentation only: colour detection, the banner, rows, labels, path shortening. No lifecycle logic. |
 | `complete.go` | `niq completion <shell>`: generates bash/zsh/fish completion scripts. |
@@ -85,6 +128,7 @@ through injected `portOps` (no real socket or process).
 | `detach_unix.go` | Unix platform primitives: `Setsid` detach, `SIGTERM` to stop, signal-0 liveness. |
 | `detach_windows.go` | Windows equivalents: detached process creation flags, hard kill, `FindProcess` liveness. |
 | `ensure_test.go` | The conflict decision table, driven through fake `portOps` and askers (no sockets, no signals). |
+| `startpref_test.go` | Resolution precedence, the preference round-trip, and the prompt branch table (injected reader). |
 | `daemon_test.go` | The `shell.json` round-trip. |
 | `update_test.go` | Version comparison and update-cache behaviour. |
 

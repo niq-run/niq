@@ -11,6 +11,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/store"
 	projtemplate "github.com/niq-run/niq/app/standalone/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
+	projworkers "github.com/niq-run/niq/app/standalone/worker/builtin/workers"
 	"github.com/niq-run/niq/core/impl/workers/program/pgbackend"
 )
 
@@ -56,7 +57,7 @@ func fakeTemplate() *TemplateConfig {
 	return &TemplateConfig{SchemaVersion: SchemaVersion, Workers: []WorkerConfig{
 		{Definition: projworker.Definition{Type: "interface", ID: "default-ui"}},
 		{Definition: projworker.Definition{Type: "reason", ID: "niq", Params: map[string]any{
-			"provider": "volcan-ark", "model": "deepseek-v4-flash",
+			"provider": "volcan-ark", "model": "deepseek-flash",
 		}}, Placement: projworker.PlacementInProcess},
 	}}
 }
@@ -87,7 +88,7 @@ func TestCreateLoadListProject(t *testing.T) {
 		}
 	}
 	if wc, ok := store.FindWorker(set, "niq"); ok {
-		if wc.Params["provider"] != "volcan-ark" || wc.Params["model"] != "deepseek-v4-flash" {
+		if wc.Params["provider"] != "volcan-ark" || wc.Params["model"] != "deepseek-flash" {
 			t.Fatalf("niq params = %v", wc.Params)
 		}
 	}
@@ -360,7 +361,7 @@ func TestDefaultPresetShipsUsingNiqPlaybook(t *testing.T) {
 	if len(raw) != 1 {
 		t.Fatalf("programs = %+v", niq.Params)
 	}
-	progs := projworker.ParsePrograms(niq.Params, "niq")
+	progs := projworkers.ParsePrograms(niq.Params, "niq")
 	var seen bool
 	for _, p := range progs {
 		if p.Name == "using-niq" && p.ContentType == "playbook" {

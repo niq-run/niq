@@ -190,12 +190,62 @@ restart  niq restart
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
-| `--addr <host:port>` | `127.0.0.1:9527` | 网关监听地址；显式绑到非回环地址才是“对外” |
+| `--remote` | 关 | **本次**监听所有网口；需要 `--auth` 或已保存的凭据 |
+| `--local` | 关 | **本次**只监听回环，忽略已记住的远程地址 |
+| `--addr <host:port>` | 已记住的偏好，否则 `127.0.0.1:9527` | 显式监听地址；显式绑到非回环地址才是“对外” |
 | `--auth <user:pass>` | 读 `~/.niq/common/auth.json` | 对非回环来源的 Basic auth；设置后会持久化到该文件 |
 | `--foreground`、`-f` | 关 | 附着在当前终端里运行（systemd、容器、`docker run`，或只是想盯着看） |
 
 `niq -f` 与 `niq w -f` 是同一件事：前台网关。在没有终端可脱离的场合，这就是 supervisor
 应该用的形式。
+
+`--remote` / `--local` 是**单次**开关：只影响这次启动，且保留端口（有偏好就用偏好的端口，
+否则 9527）。二者互斥，也不能与 `--addr` 同用（一个地址只说一次）。它们可以代替下面的
+交互询问，更适合脚本 —— 如果某台服务应该永远是远程，把 `--remote` 写进 unit 文件，
+或者在询问时答一次并让它被记住。
+
+#### 绑定范围，以及记住这个选择
+
+选定绑定地址有三种方式，按优先级排列：
+
+1. **在命令行直接说**：`niq --remote`、`niq --local` 或 `niq --addr <host:port>`。
+   只对本次生效，不写任何文件。
+2. **已记住的偏好**（`~/.niq/common/config.json`）。
+3. **询问**：上面两者都没有时，在终端里问一次。
+
+所以既没传 `--addr`、也没传 `--remote`/`--local`、也没有已记住的偏好时，终端里启动会问：
+
+```
+who may reach the gateway?
+  [1] this machine only  — 127.0.0.1:9527 (loopback)
+  [2] all interfaces — other machines can open the WebUI
+choice [1/2, Enter=1]:
+```
+
+随后会问是否记住这次选择。回答**否**是明确的“每次单独决定”：下次启动还会再问。回答**是**会写入
+`~/.niq/common/config.json`：
+
+```json
+{ "default_addr": ":9527" }
+```
+
+优先级是 **显式参数 > 已记住的偏好 > 回环默认**，所以一次性的 `niq --addr …`（或
+`--remote`/`--local`）不会改掉你保存的设置。网关本身没变：它仍然默认回环，只绑定 CLI
+传进去的地址。想重新被询问，删掉 `config.json`（或其中的 `default_addr` 键）即可。
+
+对外绑定需要认证。`--remote` 在没凭据时会**直接报错**并说明怎么补
+（`niq --auth user:pass --remote` 一步到位）；在询问时选“all interfaces”则是说明同样的事、
+本次继续用回环且不记住。之前保存的偏好如果事后凭据被删，也会被跳过并给出提示。
+显式的 `--addr` 仍然照绑（那是一条直接指令），由网关警告未认证。
+
+状态行总是写明当前暴露范围，不需要猜：
+
+```
+webui    http://localhost:9527  loopback only
+remote   off — needs auth first: niq --auth user:pass
+```
+
+当网关确实对外可达时，第二行会变成另一台机器可以打开的 URL。
 
 ### 3.5 给脚本用的状态
 
@@ -283,6 +333,10 @@ stdout 是终端时带颜色，否则为纯文本（设置了 `NO_COLOR` 或 `TE
 ```sh
 niq --addr :9527 --auth alice:s3cret
 ```
+
+在终端里也可以不写参数：裸 `niq` 会询问绑回环还是所有网口，并询问是否记住（见 §3.4）。
+但完全没有凭据时仍需要先配好认证，所以 `--auth`（或手写 `~/.niq/common/auth.json`）
+是唯一不能省的一步 —— 否则提示会告诉你该配什么，并继续使用回环。
 
 认证是**可选**的。配置了凭据之后，来自任何非回环地址的请求在认证前都会收到 401，
 而来自本机的请求仍然免密码。`--auth` 会持久化到 `~/.niq/common/auth.json`，所以一对凭据

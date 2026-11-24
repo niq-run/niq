@@ -26,7 +26,7 @@ interface CreateWorkerDialogProps {
   workers?: WorkerInfo[]
 }
 
-// Managed worker types offered by the form. host/hiw are infrastructure the
+// Managed worker types offered by the form. host/interface are infrastructure the
 // assembly owns — creating them from the UI is not a thing. timer, directory
 // and history are built-in singletons (one per project), so a second one is
 // never wanted. niq is a worker whose backend is another niq instance.
@@ -102,6 +102,9 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [note, setNote] = useState('')
   const [result, setResult] = useState<CreateWorkerResult | null>(null)
   const [copied, setCopied] = useState(false)
+  // Connect-config format shown for a freshly created remote worker: the
+  // env block niw consumes, or a ready-to-use agent-interface JSON file.
+  const [configFormat, setConfigFormat] = useState<'niw' | 'cli'>('niw')
 
   // The permission drafts follow the selected worker kind/type: switching type
   // re-seeds them from that type's defaults, but only while the rows are still
@@ -261,6 +264,8 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
       // surface the connect configuration (bus URL + id + credential) so the
       // third party can copy it and connect on its own.
       if (r.remote && r.credential) {
+        setConfigFormat('niw')
+        setCopied(false)
         setResult(r)
       } else {
         onClose()
@@ -272,27 +277,63 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     }
   }
 
-  // connectConfig renders the env-var block a remote worker consumes to reach
-  // the bus on its own (the same convention NIQ_BUS_URL / NIQ_WORKER_ID /
-  // NIQ_WORKER_CREDENTIAL carry for supervisor-launched workers).
-  const remoteConfig = (): string => {
-    const busBase = `${window.location.hostname || 'localhost'}:${busPort ?? 'PORT'}`
-    return [
-      `NIQ_BUS_URL=http://${busBase}`,
-      `NIQ_WORKER_ID=${result?.id ?? ''}`,
-      `NIQ_WORKER_CREDENTIAL=${result?.credential ?? ''}`,
-      `# type=${result?.type ?? ''}`,
-    ].join('\n')
+  // The connect info is offered in the two shapes a remote worker can consume:
+  // niw's env block (the same NIQ_BUS_URL / NIQ_WORKER_ID / NIQ_WORKER_CREDENTIAL
+  // convention the supervisor injects) and an @niq.run/agent-interface-worker credential
+  // file. Both describe the same identity.
+  const busBase = `${window.location.hostname || 'localhost'}:${busPort ?? 'PORT'}`
+
+  const niwConfig = (): string => [
+    `NIQ_BUS_URL=http://${busBase}`,
+    `NIQ_WORKER_ID=${result?.id ?? ''}`,
+    `NIQ_WORKER_CREDENTIAL=${result?.credential ?? ''}`,
+    `# type=${result?.type ?? ''}`,
+  ].join('\n')
+
+  // A complete credential file (one source named after the worker), so it can
+  // be dropped in as ~/.niq/interface.json or merged with `config import`.
+  const agentInterfaceConfig = (): string => {
+    const id = result?.id || 'worker'
+    return JSON.stringify({
+      version: 1,
+      default_source: id,
+      sources: {
+        [id]: {
+          bus_url: `http://${busBase}`,
+          worker_id: id,
+          credential: result?.credential ?? '',
+          ...(result?.type ? { type: result.type } : {}),
+        },
+      },
+    }, null, 2)
   }
 
-  const copyRemoteConfig = async () => {
+  const activeConfig = (): string => (configFormat === 'cli' ? agentInterfaceConfig() : niwConfig())
+
+  const copyConfig = async () => {
     try {
-      await navigator.clipboard.writeText(remoteConfig())
+      await navigator.clipboard.writeText(activeConfig())
       setCopied(true)
       setNote('')
     } catch {
       setNote(t('workers.create.copyFailed'))
     }
+  }
+
+  // Downloading is the agent-interface JSON file, regardless of which format is
+  // being previewed: that is the file a machine can drop in or merge.
+  const downloadConfig = () => {
+    const id = result?.id || 'worker'
+    const blob = new Blob([agentInterfaceConfig()], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `niq-agent-${id}.json`
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
   const copyCredential = async () => {
@@ -611,8 +652,10 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
         )}
 
         {/* Connect configuration for a freshly-created remote worker: a detail
-            card with the credential and the SDK-ready env block, both copyable.
-            The form fields are replaced by this block once created. */}
+            card with the credential and the connect info in either the niw
+            env-block or the agent-interface JSON shape (the JSON is also
+            downloadable). The form fields are replaced by this block once
+            created. */}
         {result && (
           <div style={{ marginBottom: 12, padding: '10px 12px', background: colors.detailBg, borderRadius: 6 }}>
             <div style={{ fontSize: fontSizes.sm, color: colors.textDim, marginBottom: 8, lineHeight: 1.5 }}>
@@ -632,20 +675,38 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
                 {t('workers.create.copyCredential')}
               </span>
             </div>
-            <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, lineHeight: 1.5 }}>
-              {t('workers.create.remoteConfig.sdk')}
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: fontSizes.xs, color: colors.textDimmed }}>{t('workers.create.configFormat')}</span>
+              <span onClick={() => { setConfigFormat('niw'); setCopied(false) }} style={pill(configFormat === 'niw')}>
+                {t('workers.create.configFormat.niw')}
+              </span>
+              <span onClick={() => { setConfigFormat('cli'); setCopied(false) }} style={pill(configFormat === 'cli')}>
+                {t('workers.create.configFormat.cli')}
+              </span>
             </div>
-            <pre style={{ margin: 0, padding: 8, background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, fontSize: fontSizes.xs, color: colors.text, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.6 }}>{remoteConfig()}</pre>
-            <span
-              onClick={copyRemoteConfig}
-              className="btn-hover"
-              style={{ cursor: 'pointer', display: 'inline-block', marginTop: 8, border: '1px solid ' + colors.accent, borderRadius: 3, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
-            >
-              {t('workers.create.copyConfig')}
-            </span>
-            {copied && (
-              <span style={{ fontSize: fontSizes.xs, color: colors.toolCompleted, marginLeft: 10 }}>{t('workers.create.copied')}</span>
-            )}
+            <div style={{ fontSize: fontSizes.xs, color: colors.textDimmed, marginBottom: 4, lineHeight: 1.5 }}>
+              {configFormat === 'cli' ? t('workers.create.remoteConfig.cliHint') : t('workers.create.remoteConfig.sdk')}
+            </div>
+            <pre style={{ margin: 0, padding: 8, background: colors.bg, border: '1px solid ' + colors.border, borderRadius: 4, fontSize: fontSizes.xs, color: colors.text, whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.6 }}>{activeConfig()}</pre>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+              <span
+                onClick={copyConfig}
+                className="btn-hover"
+                style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.accent, borderRadius: 3, padding: '3px 12px', color: colors.accent, fontSize: fontSizes.sm, userSelect: 'none' }}
+              >
+                {t('workers.create.copyConfig')}
+              </span>
+              <span
+                onClick={downloadConfig}
+                className="btn-hover"
+                style={{ cursor: 'pointer', display: 'inline-block', border: '1px solid ' + colors.border, borderRadius: 3, padding: '3px 12px', color: colors.textDim, fontSize: fontSizes.sm, userSelect: 'none' }}
+              >
+                {t('workers.create.downloadConfig')}
+              </span>
+              {copied && (
+                <span style={{ fontSize: fontSizes.xs, color: colors.toolCompleted }}>{t('workers.create.copied')}</span>
+              )}
+            </div>
           </div>
         )}
         </div>

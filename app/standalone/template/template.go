@@ -4,9 +4,9 @@
 //
 // A template is the seed of a project, not a running thing: it is a list of
 // worker declarations plus optional program resources. It therefore depends on
-// the worker model (app/project/worker) but on nothing about a live project —
-// the "project → template" direction (export) lives in app/project, which is
-// the only side that reads a project.
+// the worker model (app/standalone/worker) but on nothing about a live project —
+// the "project → template" direction (export) lives in
+// app/standalone/project/export.go, the only side that reads a project.
 package template
 
 import (
@@ -30,14 +30,18 @@ type Template struct {
 	SchemaVersion int                   `json:"schema_version,omitempty"`
 	Workers       []projworker.Manifest `json:"workers"`
 
-	// UploadDir is where the WebUI stores files uploaded from the talk input
-	// (project.json upload_dir, project metadata). Empty means <project dir>/uploads. Relative
-	// paths resolve against the project dir.
+	// UploadDir is where the WebUI stores files uploaded from the talk input.
+	// Empty means <project dir>/uploads; a relative path resolves against the
+	// project dir.
 	UploadDir string `json:"upload_dir,omitempty"`
 }
 
 //go:embed preset
 var presetFS embed.FS
+
+// templateSchemaVersion is the format of a template file. It is its own
+// version, not the worker-file schema: a template is declarations only.
+const templateSchemaVersion = 2
 
 // Parse parses and validates a template body: JSON syntax plus the structural
 // minimum (at least one worker, each with a type and an id).
@@ -49,11 +53,12 @@ func Parse(raw []byte) (*Template, error) {
 	return Validate(&cfg)
 }
 
-// Parse is also the control API's validator (POST with a full template, PUT of
-// an existing one): the rules are the same as for a template file on disk.
+// Validate checks a template and fills in its schema version. It is also the
+// control API's validator — a POST with a full template and a PUT of an existing
+// one run the same rules as a template file on disk.
 func Validate(cfg *Template) (*Template, error) {
 	if cfg.SchemaVersion == 0 {
-		cfg.SchemaVersion = 2
+		cfg.SchemaVersion = templateSchemaVersion
 	}
 	if len(cfg.Workers) == 0 {
 		return nil, fmt.Errorf("project: template needs at least one worker")

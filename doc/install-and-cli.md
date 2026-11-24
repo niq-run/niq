@@ -214,12 +214,73 @@ Flags go anywhere a start goes — `niq --addr :8080`, `niq w --addr :8080`,
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--addr <host:port>` | `127.0.0.1:9527` | gateway listen address; an explicit non-loopback bind is what exposes niq |
+| `--remote` | off | listen on **all interfaces for this run**; requires `--auth` or saved credentials |
+| `--local` | off | listen on **loopback only for this run**, ignoring a remembered remote address |
+| `--addr <host:port>` | remembered default, else `127.0.0.1:9527` | explicit listen address; an explicit non-loopback bind is what exposes niq |
 | `--auth <user:pass>` | from `~/.niq/common/auth.json` | Basic auth for non-loopback peers; persists to that file when set |
 | `--foreground`, `-f` | off | run attached to this terminal (systemd, containers, `docker run`, or just watching it) |
 
 `niq -f` and `niq w -f` are the same thing: the foreground gateway. With no
 terminal to detach from, they are what a supervisor should use.
+
+`--remote` / `--local` are per-run switches: they change this start and nothing
+else, and they keep the port (the remembered one when set, otherwise 9527).
+They are mutually exclusive, and neither can be combined with `--addr` (one
+address, said once). Both are scriptable substitutes for the prompt below —
+for a service that should always be remote, put `--remote` in the unit file, or
+answer the prompt once and let it be remembered.
+
+#### Binding, and remembering the choice
+
+A bare `niq --addr` is not the only way to pick the bind. Three ways exist, in
+precedence order:
+
+1. **Say it once, on the command line**: `niq --remote`, `niq --local`, or
+   `niq --addr <host:port>`. Per-run, nothing is written.
+2. **Remembered preference** (`~/.niq/common/config.json`).
+3. **Ask**, when neither of the above applies.
+
+So a bare `niq` with no `--addr`, no `--remote`/`--local` and no remembered
+preference asks, on a terminal:
+
+```
+who may reach the gateway?
+  [1] this machine only  — 127.0.0.1:9527 (loopback)
+  [2] all interfaces — other machines can open the WebUI
+choice [1/2, Enter=1]:
+```
+
+It then offers to remember the answer. Saying **no** is a deliberate "decide
+per run": the question comes back on the next start. Saying **yes** writes
+`~/.niq/common/config.json`:
+
+```json
+{ "default_addr": ":9527" }
+```
+
+Resolution order is **explicit flag > remembered preference > loopback default**,
+so a one-off `niq --addr …` (or `--remote`/`--local`) never disturbs what you
+saved. The gateway itself is unchanged: it still defaults to loopback, and it
+only binds what the CLI passes in. Delete `config.json` (or its `default_addr`
+key) to be asked again.
+
+A remote bind requires auth. `--remote` **fails** with an explanation until
+credentials exist (`niq --auth user:pass --remote` fixes it in one step);
+choosing "all interfaces" at the prompt explains the same thing and stays on
+loopback without remembering anything. A preference saved earlier is also
+skipped — with a note — if the credentials have since been deleted. An explicit
+`--addr` still binds regardless (it is a direct instruction), and the gateway
+warns that it is unauthenticated.
+
+The status line always states the exposure, so there is nothing to guess:
+
+```
+webui    http://localhost:9527  loopback only
+remote   off — needs auth first: niq --auth user:pass
+```
+
+When the plane is exposed (and reachable), the second line becomes the URL a
+different machine would open.
 
 If the address is already taken, a start does not simply fail: in a terminal it
 offers to stop the process holding the port, move to the next free port on the
@@ -318,6 +379,12 @@ authenticates every connection with a signed worker token.
 ```sh
 niq --addr :9527 --auth alice:s3cret
 ```
+
+On a terminal you can skip the flags: a bare `niq` asks whether to bind loopback
+or all interfaces, and offers to remember the answer (see §3.4). The first start
+with no credentials still needs auth, so `--auth` (or a hand-written
+`~/.niq/common/auth.json`) is the one thing that cannot be skipped — the prompt
+tells you so and stays on loopback until it exists.
 
 Auth is **opt-in**. With credentials configured, requests from any non-loopback
 address are answered with a 401 until they authenticate, while requests from the

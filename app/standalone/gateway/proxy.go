@@ -1,7 +1,8 @@
 // Project WebUI proxying: the gateway is the only port exposed to the
 // outside world, so a project's WebUI is reached through it at /p/<id>/ rather
 // than on the project's own (loopback-only) port. One origin for the whole
-// product also means one basic-auth prompt and no CORS.
+// product also means one basic-auth prompt; CORS is answered once, by the
+// wrapper in gateway.go, instead of per route.
 package gateway
 
 import (
@@ -50,12 +51,11 @@ func (c *Gateway) newProjectProxy() *httputil.ReverseProxy {
 		},
 		ErrorHandler: func(w stdhttp.ResponseWriter, r *stdhttp.Request, err error) {
 			t, _ := r.Context().Value(proxyTargetKey{}).(proxyTarget)
-			// Navigation and the bundle's own static files come from the
-			// control plane's embedded SPA when the project is down, so the
-			// page still renders the product UI — with its "project stopped"
-			// banner and start button — instead of a dead end. The SPA's API
-			// calls are not SPA files and keep the plain 502 they know how to
-			// report.
+			// Only /api/* reaches the proxy — handleProjectProxy serves the
+			// bundle for every other path — so a browser navigation here is a
+			// corner case; answer it with the shell rather than a bare 502. The
+			// SPA's own API calls have no file to fall back to (wantsHTML is
+			// false) and keep the 502 they know how to report.
 			if c.serveSPA(w, r, t.prefix) {
 				return
 			}

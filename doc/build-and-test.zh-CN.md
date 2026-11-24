@@ -90,7 +90,7 @@ go test -race ./app/standalone/...                    # 并发敏感的包
 | 区域 | 有测试的包 |
 |---|---|
 | 入口与实例 | `app/standalone/cli`、`launcher`、`project`、`project/api`、`gateway` |
-| worker 控制面 | `app/standalone/worker`、`worker/process` |
+| worker 控制面 | `app/standalone/worker`、`worker/builtin`（含 `worker/builtin/workers`）、`worker/process` |
 | 存储与配置 | `app/standalone/store`、`store/migrate`、`template` |
 | 机制 | `core/impl/eventbus`（含 `transport/httptrans`）、`workerctl`、`busctl`、`iface`、`embedws` |
 | worker | `core/impl/reason`、`core/impl/workers/*` |

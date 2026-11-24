@@ -68,6 +68,14 @@ export interface WorkerInfo {
   params?: Record<string, unknown>
 }
 
+// WEBUI_WORKER_ID is the id of the human's own worker: the interface worker the
+// assembly joins so the SPA has a voice on the bus (builtin.DefaultWebUIID on
+// the Go side). The talk view uses it to align the user's own messages on the
+// right and to tell "me" apart from other transports of the same human. Keep it
+// in one place: the id was once `webui-hiw`, and a stale copy silently pushed
+// the user's messages to the left.
+export const WEBUI_WORKER_ID = 'webui'
+
 // The set of worker types that can be a talk conversation partner: ones that
 // consume worker.input. Beyond the reason worker (which reasons), the coding
 // reason worker is a reason-family worker that also consumes worker.input and
@@ -76,7 +84,7 @@ export interface WorkerInfo {
 // registered as a niq worker (the local side of a niq link), which is
 // likewise a valid talk partner. This is the single gate the mention component
 // and the talk worker selector use.
-export const TALK_PARTNER_TYPES = ['reason', 'coding', 'niq', 'niq'] as const
+export const TALK_PARTNER_TYPES = ['reason', 'coding', 'niq'] as const
 
 // The reason FAMILY: workers built on the shared reasoning mechanism. They all
 // emit the reason.* event stream and produce left-side conversation bubbles, so

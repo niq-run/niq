@@ -97,7 +97,7 @@ Where the tests live, roughly by area:
 | Area | Packages with tests |
 |---|---|
 | entry and instances | `app/standalone/cli`, `launcher`, `project`, `project/api`, `gateway` |
-| worker control plane | `app/standalone/worker`, `worker/process` |
+| worker control plane | `app/standalone/worker`, `worker/builtin` (+ `worker/builtin/workers`), `worker/process` |
 | storage and config | `app/standalone/store`, `store/migrate`, `template` |
 | mechanisms | `core/impl/eventbus` (+ `transport/httptrans`), `workerctl`, `busctl`, `iface`, `embedws` |
 | workers | `core/impl/reason`, `core/impl/workers/*` |

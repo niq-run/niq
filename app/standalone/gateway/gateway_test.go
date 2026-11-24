@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/app/client/webui"
 	"github.com/niq-run/niq/app/standalone/project"
 	"github.com/niq-run/niq/app/standalone/store"
 	"github.com/niq-run/niq/app/standalone/template"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
-	"github.com/niq-run/niq/app/client/webui"
 )
 
 func doGet(t *testing.T, url string) (int, string) {
@@ -47,7 +47,7 @@ func fakeTemplate() *project.TemplateConfig {
 	return &project.TemplateConfig{SchemaVersion: 2, Workers: []project.WorkerConfig{
 		{Definition: projworker.Definition{Type: "hiw", ID: "default-hiw"}},
 		{Definition: projworker.Definition{Type: "reason", ID: "niq", Params: map[string]any{
-			"provider": "volcan-ark", "model": "deepseek-v4-flash",
+			"provider": "volcan-ark", "model": "deepseek-flash",
 		}}},
 	}}
 }

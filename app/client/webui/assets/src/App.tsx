@@ -24,7 +24,7 @@ import { CONTROL } from './services/api'
 import { captureScrollAnchor, settleScrollAnchor, type ScrollAnchor } from './views/talk/scrollAnchor'
 import { nearTopPx } from './views/talk/useChatScroll'
 import { sendInput, abortWorker, fetchWorkers, loadEventsBefore, fetchEventsByRequest, fetchContext, getApiBase, fetchArchived, setArchived as apiSetArchived, fetchApprovals, decideApproval, startProject, stopProject, restartProject, sendWorkerEvent, fetchProviders, providersUsable } from './services/api'
-import { isTalkPartnerType, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type InputContent, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerDetailTab, type WorkerInfo } from './types'
+import { isTalkPartnerType, WEBUI_WORKER_ID, RESPONSE_ONLY_TYPES, type ApprovalEntry, type ContextInfo, type EventPayload, type InputContent, type ProjectInfo, type StagedAttachment, type ViewMode, type ViewSettings, type ViewSettingKey, type WatchEntry, type WorkerDetailTab, type WorkerInfo } from './types'
 
 // How many history events the WebUI pages back per /api/events/before call
 // (both the initial watermark backfill and the load-more pagination).
@@ -1554,6 +1554,7 @@ export default function App() {
               onAddFilter={addFilterWorker}
               onFocusWorker={filterOnlyWorker}
               deliveries={deliveries}
+              humanId={WEBUI_WORKER_ID}
               workerTypes={workerTypes}
               workerLabels={workerLabels}
               thinkingExpanded={viewSettings.thinkingExpanded}

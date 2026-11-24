@@ -8,8 +8,8 @@
 //	{
 //	  "active": "deepseek-responses",
 //	  "providers": [
-//	    {"name": "deepseek-responses", "type": "openai-responses", "base_url": "https://api.deepseek.com", "model": "deepseek-v4-flash"},
-//	    {"name": "deepseek-claude", "type": "claude", "base_url": "https://api.deepseek.com/anthropic", "model": "deepseek-v4-flash"}
+//	    {"name": "deepseek-responses", "type": "openai-responses", "base_url": "https://api.deepseek.com", "model": "deepseek-flash"},
+//	    {"name": "deepseek-claude", "type": "claude", "base_url": "https://api.deepseek.com/anthropic", "model": "deepseek-flash"}
 //	  ]
 //	}
 //
@@ -189,7 +189,7 @@ const exampleJSON = `{
       "type": "deepseek",
       "api_key": "",
       "base_url": "https://api.deepseek.com/v1",
-      "model": "deepseek-v4-flash",
+      "model": "deepseek-flash",
       "models": [
         {
           "name": "deepseek-flash",
@@ -287,7 +287,7 @@ func Build(p Entry) llm.LLMProvider {
 			p.BaseURL = "https://api.deepseek.com"
 		}
 		if p.Model == "" {
-			p.Model = "deepseek-v4-flash"
+			p.Model = "deepseek-flash"
 		}
 		return openairesponses.New(openairesponses.Config{
 			APIKey:  p.APIKey,
@@ -303,7 +303,7 @@ func Build(p Entry) llm.LLMProvider {
 			p.BaseURL = "https://api.deepseek.com/v1"
 		}
 		if p.Model == "" {
-			p.Model = "deepseek-v4-flash"
+			p.Model = "deepseek-flash"
 		}
 		return openai.New(openai.Config{
 			APIKey:  p.APIKey,

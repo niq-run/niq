@@ -10,6 +10,8 @@
  * top-level field name.
  */
 
+import type { Event } from "./types/index.js";
+
 /** True for a plain object (not null, not an array). */
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -34,4 +36,25 @@ export function replyText(payload: Record<string, unknown>): string {
   if (value === null || value === undefined) return "";
   if (isRecord(value) && Object.keys(value).length === 0) return "";
   return JSON.stringify(value);
+}
+
+/** A failed or rejected reply. Carries the reply event for inspection. */
+export class ReplyError extends Error {
+  readonly reply: Event;
+
+  constructor(reply: Event) {
+    super(replyErrorMessage(reply));
+    this.name = "ReplyError";
+    this.reply = reply;
+  }
+}
+
+/** The message a failed/rejected reply carries (`error` or `reason`). */
+export function replyErrorMessage(reply: Event): string {
+  const payload = reply.payload ?? {};
+  for (const key of ["error", "reason"]) {
+    const v = payload[key];
+    if (typeof v === "string" && v && v !== "<nil>") return v;
+  }
+  return `reply ${reply.type} without a message`;
 }

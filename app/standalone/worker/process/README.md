@@ -1,4 +1,4 @@
-# app/standalone/worker/process — third-party process runtime
+# worker/process — the third-party process runtime
 
 This subpackage owns the **third-party process side** of the worker subsystem:
 

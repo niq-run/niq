@@ -113,3 +113,46 @@ func EphemeralAddr(addr string) string {
 
 // ValidPort reports whether n is a usable TCP port number.
 func ValidPort(n int) bool { return n > 0 && n <= 65535 }
+
+// LanAddr returns a non-loopback IPv4 address of this machine, preferring a
+// private (RFC 1918) one, or "" when there is none (a host with no network).
+//
+// It exists to print a URL a *remote* operator can actually open: localhost is
+// useless to someone sitting at another computer, and a wildcard bind names no
+// address at all.
+func LanAddr() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	var fallback string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			ip4 := ip.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+				continue
+			}
+			if ip4.IsPrivate() {
+				return ip4.String()
+			}
+			if fallback == "" {
+				fallback = ip4.String()
+			}
+		}
+	}
+	return fallback
+}

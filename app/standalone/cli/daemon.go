@@ -14,10 +14,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,6 +113,13 @@ func clearShellState(pid int) {
 // keeps a recycled pid from doing the same.
 func isRunning(st *shellState) bool {
 	return st != nil && helper.Alive(st.PID) && helper.IsServing(st.Bound)
+}
+
+// gatewayRunning is isRunning for the recorded state on disk: the front-end's
+// "is there anything to decide?" check.
+func gatewayRunning() bool {
+	st, ok := readShellState()
+	return ok && isRunning(st)
 }
 
 // startBackground launches the control plane detached from this terminal.
@@ -351,6 +360,13 @@ func restartControl(withProjects bool) error {
 		} else {
 			clearShellState(st.PID)
 		}
+	} else {
+		// Nothing recorded (after `niq stop`, or a first run): honour the
+		// remembered preference, but never ask — restart means "bring back
+		// what was there", not "decide how to expose it".
+		if saved, err := resolveStartAddr(startRequest{}, nil, authConfigured()); err == nil {
+			addr = saved
+		}
 	}
 	// Credentials survive in ~/.niq/common/auth.json, so a restart needs no
 	// --auth to keep remote access behind the same basic-auth pair.
@@ -424,10 +440,52 @@ func printControlRunning(st *shellState) {
 		state: bracketed("gateway") + " " + stateWord(true) +
 			dim(fmt.Sprintf("  pid %d · since %s", st.PID, shortTime(st.Started))),
 	})
-	fmt.Printf("%s %s\n", label("webui", 8), brand(store.LocalhostURL(st.Bound)))
+	fmt.Printf("%s %s  %s\n", label("webui", 8), brand(store.LocalhostURL(st.Bound)), dim(exposure(st.Bound)))
+	// Say what remote access looks like from here: either the address another
+	// machine would open, or why there is none yet.
+	if u := remoteURL(st.Bound); u != "" {
+		fmt.Printf("%s %s\n", label("remote", 8), brand(u))
+	} else if helper.IsLoopbackBind(st.Bound) && !authConfigured() {
+		fmt.Printf("%s %s\n", label("remote", 8), dim("off — needs auth first: niq --auth user:pass"))
+	}
 	fmt.Printf("%s %s\n", label("log", 8), shortPath(shellLogPath()))
 	fmt.Printf("%s %s\n", label("stop", 8), "niq stop")
 	fmt.Printf("%s %s\n", label("restart", 8), "niq restart")
+}
+
+// exposure names the bind scope in a word or two: loopback is the safe default,
+// so a reader has to be able to recognise it at a glance.
+func exposure(bound string) string {
+	if helper.IsLoopbackBind(bound) {
+		return "loopback only"
+	}
+	host, _, err := net.SplitHostPort(bound)
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		return "all interfaces"
+	}
+	return "on " + host
+}
+
+// remoteURL is the address a different machine would open, or "" when this
+// start is loopback-only (or no reachable address can be determined). A
+// wildcard bind names no host, so a concrete local address stands in.
+func remoteURL(bound string) string {
+	if helper.IsLoopbackBind(bound) {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(bound)
+	if err != nil {
+		return ""
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = helper.LanAddr()
+	}
+	port := helper.Port(bound)
+	if host == "" || port == 0 {
+		return ""
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 func printControlStopped() {

@@ -1,6 +1,7 @@
 import { BaseWorker } from "./baseworker.js";
 import { createEvent } from "./createEvent.js";
 import { newId } from "./id.js";
+import { ReplyError } from "./reply.js";
 import type { HelpFunc } from "./help.js";
 import {
   EventType,
@@ -140,24 +141,7 @@ interface Pending {
 }
 
 /** A failed or rejected reply. Carries the reply event for inspection. */
-export class ReplyError extends Error {
-  readonly reply: Event;
-
-  constructor(reply: Event) {
-    super(replyErrorMessage(reply));
-    this.name = "ReplyError";
-    this.reply = reply;
-  }
-}
-
-function replyErrorMessage(reply: Event): string {
-  const payload = reply.payload ?? {};
-  for (const key of ["error", "reason"]) {
-    const v = payload[key];
-    if (typeof v === "string" && v && v !== "<nil>") return v;
-  }
-  return `reply ${reply.type} without a message`;
-}
+export { ReplyError } from "./reply.js";
 
 interface Subscription {
   fn: (evt: Event) => void;

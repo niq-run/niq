@@ -1,14 +1,16 @@
-package worker
+package workers
 
 import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	providerpkg "github.com/niq-run/niq/app/standalone/provider"
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
@@ -68,7 +70,7 @@ func TestParseMountsParamPathSugar(t *testing.T) {
 // params is rejected before any registry/listener is touched — so a zero
 // BuildContext is safe here.
 func TestBuildNIWSpecRequiresRemoteParams(t *testing.T) {
-	var empty BuildContext
+	var empty builtin.BuildContext
 
 	if _, err := buildNIQSpec(empty, coreworker.WorkerConfig{ID: "peer"}); err == nil {
 		t.Fatal("expected error for missing remote params, got nil")
@@ -100,7 +102,7 @@ func TestBuildNIWSpecRequiresRemoteParams(t *testing.T) {
 // remote_worker_id and recipient from Params (validated before connectivity, so
 // a zero BuildContext is fine — specConnect is not reached past this check).
 func TestBuildNIQSpecReadsParams(t *testing.T) {
-	var empty BuildContext
+	var empty builtin.BuildContext
 	spec, err := buildNIQSpec(empty, coreworker.WorkerConfig{
 		ID: "peer",
 		Params: map[string]any{
@@ -126,18 +128,19 @@ func TestBuildNIQSpecReadsParams(t *testing.T) {
 
 // TestSpawnParamsCoverEveryBuilder is the invariant behind per-type validation:
 // a type that can be built must also declare what its spawn accepts, otherwise
-// a new builder would quietly ship without a check.
+// a new builder would quietly ship without a check. It holds in both directions:
+// every registered builder has a contract, and every contract has a builder.
 func TestSpawnParamsCoverEveryBuilder(t *testing.T) {
 	te := newTestEngine(t)
 
 	for _, typ := range te.types.Types() {
-		if _, ok := SpawnParamsByType[typ]; !ok {
-			t.Errorf("builder type %q has no spawn-parameter contract in SpawnParamsByType", typ)
+		keys, ok := te.types.Accepted(typ)
+		if !ok {
+			t.Errorf("builder type %q registered no spawn-parameter contract", typ)
+			continue
 		}
-	}
-	for typ := range SpawnParamsByType {
-		if !slices.Contains(te.types.Types(), typ) {
-			t.Errorf("SpawnParamsByType declares %q, but no builder is registered for it", typ)
+		if len(keys) == 0 {
+			t.Errorf("builder type %q registered an empty contract", typ)
 		}
 	}
 }
@@ -167,8 +170,8 @@ func TestSpawnRejectsUnknownParams(t *testing.T) {
 // testEngine is the type registry, the manager it feeds, and the build context
 // both need.
 type testEngine struct {
-	types *typeRegistry
-	bc    BuildContext
+	types *builtin.Registry
+	bc    builtin.BuildContext
 	mgr   *workerctl.Manager
 }
 
@@ -202,9 +205,9 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 	}()
 
 	bus := busctl.New(newMemIdentityStore(), registry)
-	types := newTypeRegistry()
+	types := builtin.NewRegistry()
 	mgr := workerctl.New(workerctl.Config{Build: types.Build})
-	bc := BuildContext{
+	bc := builtin.BuildContext{
 		Registry:     registry,
 		Bus:          bus,
 		Listener:     listener,
@@ -212,7 +215,7 @@ func newTestEngineWith(t *testing.T, dir string, registry corebus.IdentityRegist
 		Manager:      mgr,
 		ProviderLoad: func() (*providerpkg.Config, error) { return &providerpkg.Config{}, nil },
 	}
-	registerBuilders(bc, types)
+	Register(bc, types)
 	return &testEngine{types: types, bc: bc, mgr: mgr}
 }
 
@@ -285,7 +288,7 @@ func TestReasonFamilyRejectsUnknownProvider(t *testing.T) {
 	providers := &providerpkg.Config{Providers: []providerpkg.Entry{
 		{Name: "known", Type: "deepseek", APIKey: "k", Model: "m1"},
 	}}
-	bc := BuildContext{ProviderLoad: func() (*providerpkg.Config, error) { return providers, nil }}
+	bc := builtin.BuildContext{ProviderLoad: func() (*providerpkg.Config, error) { return providers, nil }}
 	_, err := resolveReasonFamily(bc, coreworker.WorkerConfig{
 		ID:     "r1",
 		Params: map[string]any{"provider": "typo-name", "model": "m1"},
@@ -304,4 +307,47 @@ func TestReasonFamilyRejectsUnknownProvider(t *testing.T) {
 	if in.pname != "known" || in.pmodel != "m1" {
 		t.Fatalf("resolved %s/%s, want known/m1", in.pname, in.pmodel)
 	}
+}
+
+// memIdentityStore is a test-only bus.Store: identity persistence is exercised
+// by the project's file store, so these tests only need a map.
+type memIdentityStore struct {
+	mu  sync.RWMutex
+	ids map[string]corebus.Identity
+}
+
+func newMemIdentityStore() *memIdentityStore {
+	return &memIdentityStore{ids: map[string]corebus.Identity{}}
+}
+
+func (s *memIdentityStore) Load(id string) (corebus.Identity, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	identity, ok := s.ids[id]
+	return identity, ok, nil
+}
+
+func (s *memIdentityStore) Save(id string, identity corebus.Identity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ids[id] = identity
+	return nil
+}
+
+func (s *memIdentityStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.ids, id)
+	return nil
+}
+
+func (s *memIdentityStore) All() ([]corebus.Identity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]corebus.Identity, 0, len(s.ids))
+	for _, identity := range s.ids {
+		out = append(out, identity)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].WorkerID < out[j].WorkerID })
+	return out, nil
 }

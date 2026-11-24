@@ -1,4 +1,4 @@
-package worker
+package builtin
 
 import (
 	"fmt"
@@ -6,11 +6,11 @@ import (
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 )
 
-// ensureIdentity makes id present in the durable identity store and projected
+// EnsureIdentity makes id present in the durable identity store and projected
 // onto the runtime registry. It is the connect-time entry point: a worker that
 // is already declared and running must reuse the grants already on disk, while
 // a first connect seeds the record with the type's default grant.
-func ensureIdentity(control corebus.Control, id corebus.Identity) error {
+func EnsureIdentity(control corebus.Control, id corebus.Identity) error {
 	if control == nil {
 		return fmt.Errorf("worker %s: no bus control plane", id.WorkerID)
 	}

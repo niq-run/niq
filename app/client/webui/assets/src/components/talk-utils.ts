@@ -415,8 +415,7 @@ const BUILTIN_TYPES = new Set([
   'history',
   'program',
   'niq',
-  'niq',
-  'hiw',
+  'interface',
 ])
 
 export function getWorkerTypeColor(type: string, colors: import('../theme').Palette): string {

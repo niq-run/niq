@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	"github.com/niq-run/niq/core/impl/workerctl"
@@ -30,7 +31,7 @@ type backendConfig struct {
 	// Manager runs live worker instances. Required.
 	Manager *workerctl.Manager
 	// Types resolves worker type → builder. Required.
-	Types *typeRegistry
+	Types *builtin.Registry
 	// Manifests is the manifest store. Required.
 	Manifests ManifestStore
 	// Supervisor supervises managed-process workers. Optional: when nil,
@@ -55,7 +56,7 @@ type backendConfig struct {
 type workerHostBackend struct {
 	projectID  string
 	manager    *workerctl.Manager
-	types      *typeRegistry
+	types      *builtin.Registry
 	manifests  ManifestStore
 	supervisor *process.Supervisor
 	registry   corebus.IdentityRegistry
@@ -206,7 +207,7 @@ func (b *workerHostBackend) validateCreate(spec coreworker.WorkerSpec, placement
 		if err := validateProcessLaunch(spec); err != nil {
 			return err
 		}
-		return ValidateProcessParams(spec.Params)
+		return builtin.ValidateProcessParams(spec.Params)
 	case coreworker.PlacementUnmanagedProcess:
 		if len(spec.Command) > 0 {
 			return fmt.Errorf("placement unmanaged-process must not carry a command: it starts itself")
@@ -355,7 +356,7 @@ func (b *workerHostBackend) validateParams(m Manifest) error {
 		}
 		return nil
 	case coreworker.PlacementManagedProcess:
-		return ValidateProcessParams(m.Params)
+		return builtin.ValidateProcessParams(m.Params)
 	default:
 		if b.types == nil {
 			return fmt.Errorf("worker %s: no type registry to validate params", m.ID)

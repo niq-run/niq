@@ -599,8 +599,8 @@ func (s *memStore) All() ([]corebus.Identity, error) {
 	return out, nil
 }
 
-// lifecycleRig stands up the real thing the lifecycle endpoints talk to: a
-// webui-hiw worker holding a bus channel, a host worker that answers restart,
+// lifecycleRig stands up the real thing the lifecycle endpoints talk to: the
+// webui interface worker holding a bus channel, a host worker that answers restart,
 // and an event log so the server's ask/reply correlation works.
 type lifecycleRig struct {
 	server   *Server

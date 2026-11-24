@@ -21,6 +21,7 @@ import (
 	"github.com/niq-run/niq/app/standalone/store/identity"
 	"github.com/niq-run/niq/app/standalone/store/migrate"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
+	projbuiltin "github.com/niq-run/niq/app/standalone/worker/builtin"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/busctl"
 	"github.com/niq-run/niq/core/impl/eventbus"
@@ -181,7 +182,7 @@ type assemblyOptions struct {
 
 // hostWorkerID is the lifecycle control plane. It is protected: nothing may
 // suspend, restart or destroy it.
-const hostWorkerID = projworker.DefaultHostWorkerID
+const hostWorkerID = projbuiltin.DefaultHostWorkerID
 
 // runAssembly is the core: build the bus, host the workers from the
 // persisted store, and (optionally) expose an HTTP transport bus and a WebUI.
@@ -304,7 +305,7 @@ func runAssembly(opts assemblyOptions) error {
 	// injects the providers and starts/stops it.
 	protected := []string{hostWorkerID}
 	if opts.WebUIAddr != "" {
-		protected = append(protected, projworker.DefaultWebUIID)
+		protected = append(protected, projbuiltin.DefaultWebUIID)
 	}
 	cp := projworker.New(projworker.Config{
 		ProjectID:  opts.ContextInfo.Project,
@@ -318,7 +319,7 @@ func runAssembly(opts assemblyOptions) error {
 		Protect:    protected,
 	})
 
-	buildCtx := projworker.BuildContext{
+	buildCtx := projbuiltin.BuildContext{
 		Registry:      registry,
 		Bus:           busControl,
 		Listener:      listener,
@@ -508,10 +509,10 @@ func joinWebUIWorker(
 	listener *inprocess.InProcListener,
 	cp *projworker.ControlPlane,
 ) (*iface.Worker, error) {
-	id := projworker.DefaultWebUIID
+	id := projbuiltin.DefaultWebUIID
 	identity := corebus.Identity{
 		WorkerID: id,
-		Type:     projworker.TypeInterface,
+		Type:     projbuiltin.TypeInterface,
 		// The human's voice: input, arbitrary worker events, approval decisions,
 		// and the replies to its own asks. `*` is required for the "drive a worker
 		// with one of its declared events" endpoint, whose type is by definition
@@ -561,7 +562,7 @@ func joinWebUIWorker(
 	}
 	w = iface.New(iface.Config{
 		ID:       id,
-		Type:     projworker.TypeInterface,
+		Type:     projbuiltin.TypeInterface,
 		Bus:      ch,
 		Backends: []iface.Backend{app},
 		// The human answers approvals here: the worker declares the capability in

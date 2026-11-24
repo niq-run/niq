@@ -1,20 +1,45 @@
-# app/standalone/worker — the standalone worker control plane
+# worker — the standalone worker control plane
 
 This package is the **complete worker control plane** for the standalone
 deployment form. It owns every worker's manifest and lifecycle, assembles the
-two mechanism libraries it needs, and exposes stable exits for the host worker
-and the WebUI. The assembly injects storage providers once; from then on the
-control plane recovers, runs and stops on its own.
+mechanisms it needs — the type table in `builtin`, the OS-child runtime in
+`process`, and `workerctl` from core — and exposes stable exits for the host
+worker and the WebUI. The assembly injects storage providers once; from then on
+the control plane recovers, runs and stops on its own.
 
+```mermaid
+flowchart TB
+    HOST["host worker · on the bus"]
+    API["project/api · read-only"]
+
+    subgraph plane["app/standalone/worker"]
+        CP["ControlPlane · assemble, recover, stop"]
+        BE["backend · placement, lifecycle, manifest edits"]
+        TYPES["builtin · the type table"]
+        MECH["mechanisms · workerctl and process"]
+        MS["ManifestStore · storage boundary"]
+    end
+
+    HOST -->|"writes · a request on the bus"| BE
+    API -->|"reads · in-process"| BE
+    CP --> BE
+    CP --> MECH
+    CP --> MS
+    BE --> TYPES
+    BE --> MECH
+    BE --> MS
 ```
-core/itfs/worker           Lifecycle / Manifest / Backend / WorkerInfo
-        ▲
-        │
-app/standalone/worker      ControlPlane + backend + builders + manifest model
-        │
-        ├── workerctl     (core/impl) live instances: build/spawn/snapshot/…
-        └── process        OS children: provision + supervise
-```
+
+The picture is about doors, not inventory: the WebUI has only one. It reads the
+roster in-process through the injected `Manifest`, and every write it makes is a
+bus request to the `host` worker — the path an agent's tool call takes.
+`ControlPlane` assembles the backend and the two mechanisms and reads the
+manifest set at recovery; the backend routes each placement to a mechanism, owns
+the manifest edits, and persists through the injected `ManifestStore`.
+
+The package's other inputs — the worker types it builds, `provider`, the
+eventbus, the bus control plane — are inventory rather than shape; they are
+listed in [Plane composition](#plane-composition) and [Files](#files).
 
 ## Plane composition
 
@@ -23,7 +48,7 @@ app/standalone/worker      ControlPlane + backend + builders + manifest model
 | `workerctl.Manager` | live instance lifecycle: build, spawn, suspend (snapshot), resume, restart, destroy, checkpoint | `core/impl/workerctl` |
 | `process.Supervisor` | OS child lifecycle: launch, crash restart with backoff, stop, shutdown kill-tree | `process/` |
 | identity provisioning | mint credentials, register identities with the bus control plane | `process/provision.go` |
-| `typeRegistry` | which types exist, how each is built, which params each reads | `registry.go` |
+| `builtin.Registry` | which types exist, how each is built, which params each reads | `builtin/registry.go` |
 | `ControlPlane` | owns the above, recovers the manifest set, exposes the exits | `controlplane.go` |
 
 Neither library knows about placements. The control plane is what maps a
@@ -46,8 +71,9 @@ type Manifest struct {
     Definition
     Placement Placement       // in-process / managed-process / unmanaged-process
 
-    Label, Description string
-    Tags []string
+    Label       string
+    Tags        []string
+    Description string
 
     Command []string          // managed-process
     Cwd     string            // managed-process
@@ -61,30 +87,30 @@ construction bag:
 
 | placement | params | validation |
 |---|---|---|
-| `in-process` | builder construction params | `SpawnParamsByType` |
+| `in-process` | builder construction params | the type's contract in `builtin` |
 | `managed-process` | the child's **environment** | flat string map, valid env keys, no `NIQ_*` |
 | `unmanaged-process` | not passed | must be empty |
 
 ## Files
 
+Three files, because the package holds three things: how the set is assembled
+and recovered, what a manifest is, and what happens to one.
+
 | File | Responsibility |
 |---|---|
-| `controlplane.go` | `Config` / `ControlPlane`: `New`, `Recover`, `Stop`, `HostBackend`, `Manifest`, app-hosted state helpers. |
-| `declaration.go` | The model, no IO: `Definition` / `Manifest`, `Placement` / `PlacementOf`, display metadata validation, `SanitizeID`, `Instantiate`. |
-| `params.go` | `SpawnConfig` / `Spec` / `ManifestFromSpec`, the per-type spawn contract, `ValidateProcessParams`, and param readers. |
-| `registry.go` | `typeRegistry`: type label → builder + spawn-parameter check. |
-| `builders.go` | `BuildContext`, the type-label constants (`TypeInterface`, `DefaultWebUIID`, `DefaultHostWorkerID`), and one constructor per built-in type; `specConnect` ensures the worker's durable identity. |
-| `identity.go` | `ensureIdentity`: register on first connect, keep an edited grant, seed the type default only once. |
+| `controlplane.go` | `Config` / `ControlPlane`: `New`, `Recover`, `Stop`, `HostBackend`, `Manifest`, the type table (`RegisterBuilders`, `RegisterBuilder`, `Types`), `Manager`, app-hosted state helpers. |
+| `manifest.go` | The model and its storage boundary: `Definition` / `Manifest`, `Placement` / `PlacementOf`, display metadata validation, `SanitizeID`, `Instantiate` / `InstantiateForm`, the lowering to `WorkerConfig` / `WorkerSpec` (`Params`, `SpawnConfig`, `Spec`, `ManifestFromSpec`), and the `ManifestStore` interface. |
 | `backend.go` | `worker.Backend`: placement routing, lifecycle verbs, manifest edits, archive, protected ids, per-id serialization. |
-| `store.go` | `ManifestStore`: the storage boundary `app/standalone/store` implements. |
+| `builtin/` | The type-table framework: the registry, the assembly context, the spawn-parameter contract machinery and the identity a builder ensures. See [its README](builtin/README.md). |
+| `builtin/workers/` | The entries: one file per built-in type (contract + builder + registration). See [its README](builtin/workers/README.md). |
 | `process/` | Third-party process runtime: its own input contract (`spec.go`), provisioning (`provision.go`), supervision (`supervisor.go`), log/state dir naming (`ids.go`), platform shims (unix/windows). |
 
 Runtime state (`state.json` / snapshots) is `workerctl.WorkerStore`, defined in
 `core/impl/workerctl` and implemented by `store.NewState` (`app/standalone/store`).
-The direction is one-way by design: `store` imports this package's *value types*
-(`Manifest`, `WorkerSet`) so it can serialize them, and this package never imports
-`store` — it drives the `ManifestStore` interface declared here and receives a
-`*workerctl.Manager` from the assembly.
+The direction is one-way by design: `store` imports this package's value types
+(`Manifest`) and owns the on-disk container around them (`WorkerSet`), while this
+package never imports `store` — it drives the `ManifestStore` interface declared
+here and receives a `*workerctl.Manager` from the assembly.
 
 ## Where a backend comes from
 
@@ -97,7 +123,7 @@ what it cannot, the assembly injects.**
 | `host` (lifecycle), `niq` (far-side link) | builder, from `params` + ambient services (`WorkerBackend`, `Manager`) | params are the input; the rest is process infrastructure |
 | interface worker (`webui`, type `interface`) | **assembly**, through `iface.Config.Backends` | its backend is a process-local object (the app), which no manifest can express |
 
-Those ten are exactly what `registerBuilders` registers. `type: interface` is the
+Those ten are exactly what `workers.Register` registers. `type: interface` is the
 eleventh label: no builder, not spawnable.
 
 ## Flow
@@ -125,9 +151,20 @@ the WebUI, or startup recovery.
 
 | exit | shape | consumer |
 |---|---|---|
-| `HostBackend()` | `worker.Backend` (Lifecycle + Manifest, no ACL) | the host worker |
-| `Manifest()` | `worker.Manifest` (Get / List / Update over `WorkerInfo`) | the WebUI |
+| `HostBackend()` | `worker.Backend` (Lifecycle + Manifest, no ACL) | the host worker, whose tools are on the bus |
+| `Manifest()` | `worker.Manifest` (Get / List over `WorkerInfo`) | `project/api` — the WebUI's read view |
+| `RegisterBuilders` / `RegisterBuilder` | the type table: one builder plus spawn-parameter check per type | the assembly (built-ins), out-of-tree types |
+| `Manager()` | `*workerctl.Manager` | builders that checkpoint a worker whose durable state changed at runtime |
 | HTTP | — | deferred |
+
+The asymmetry is the design: **reads are in-process, writes are not.** `Manifest`
+reaches `project/api` as an injected interface, so listing the roster costs no
+round trip. Every write — spawn, suspend, resume, restart, destroy, archive, and
+the `update` that edits a declaration — is a bus request to the `host` worker,
+which calls the same backend an agent's tool call reaches. A human action and an
+agent action are therefore one operation, in one event stream; the WebUI has no
+privileged path of its own. ACL edits take neither road: identity is the bus
+control plane's, so they never touch a lifecycle backend.
 
 ## Invariants
 

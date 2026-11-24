@@ -1,10 +1,13 @@
-// Package webui is the standalone form's browser shell: it serves the React
-// SPA and talks to the backend over HTTP and SSE.
+// Package api is one project's data port and its half on the bus.
 //
-// The package still carries the project-scoped HTTP API (workers, events,
-// approvals, programs) because the project runtime hosts it today; that half
-// moves to project/api when the shell is split from the runtime. The shell's
-// own assets live in ./assets.
+// Over HTTP it serves the project's own JSON and SSE — workers, events,
+// approvals, uploads, programs — on a loopback address; the gateway
+// authenticates the operator and serves the bundle, then proxies here. It
+// serves no SPA and performs no auth.
+//
+// The other half is iface.Backend (iface.go): the app is the backend of the
+// project's interface worker, so it speaks to the human over HTTP and to the
+// bus through the handler that worker injects.
 package api
 
 import (
@@ -26,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	projbuiltin "github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/core/impl/eventbus"
 	eventbusapi "github.com/niq-run/niq/core/impl/eventbus/api"
 	"github.com/niq-run/niq/core/impl/iface"
@@ -137,9 +141,6 @@ type Server struct {
 	// The default upload directory is projectDir/uploads.
 	projectDir   string
 	uploadDirCfg string // project.json upload_dir override
-
-	// Optional basic auth: required for requests coming from non-loopback peers.
-	// Localhost (same machine) access stays open. Both must be set to enable.
 }
 
 // New creates a WebUI Server.
@@ -1279,7 +1280,7 @@ func (s *Server) handleWorkerSetProvider(w http.ResponseWriter, r *http.Request)
 	}
 
 	reply, err := s.ask(r.Context(), id,
-		event.New(reasonBase.TypeProviderSwitch, "webui-hiw", map[string]any{
+		event.New(reasonBase.TypeProviderSwitch, projbuiltin.DefaultWebUIID, map[string]any{
 			"provider": body.Provider,
 			"model":    body.Model,
 		}),
@@ -1342,7 +1343,7 @@ func (s *Server) handleWorkerMounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := event.New(workspaceBase.TypeMountList, "webui-hiw", nil)
+	req := event.New(workspaceBase.TypeMountList, projbuiltin.DefaultWebUIID, nil)
 	req.Transient = true // read-only query
 	reply, err := s.ask(r.Context(), id, req,
 		event.TypeRequestCompleted, event.TypeRequestFailed)
@@ -1363,9 +1364,12 @@ func (s *Server) handleWorkerMounts(w http.ResponseWriter, r *http.Request) {
 
 // handleWorkerMountAdd / handleWorkerMountRemove ask a workspace worker to
 // mount / unmount a directory. add is approval-gated worker-side: the
-// workspace's default approver is this UI's HIW (webui-hiw), so a UI request
-// applies directly; a project with a different approver parks it behind an
-// approval and ask() times out — surfaced as a gateway timeout.
+// workspace's default approver is this UI's interface worker
+// (builtin.DefaultWebUIID), so a UI request applies directly; a project with a
+// different approver parks it behind an approval and ask() times out —
+// surfaced as a gateway timeout. The sender id must match that default: a
+// stale id here reads as "some other worker asking" and parks even the UI's
+// own request.
 func (s *Server) handleWorkerMountAdd(w http.ResponseWriter, r *http.Request) {
 	s.workerMountMutate(w, r, workspaceBase.TypeMountAdd)
 }
@@ -1392,7 +1396,7 @@ func (s *Server) workerMountMutate(w http.ResponseWriter, r *http.Request, evtTy
 	}
 
 	reply, err := s.ask(r.Context(), id,
-		event.New(evtType, "webui-hiw", map[string]any{"path": body.Path}),
+		event.New(evtType, projbuiltin.DefaultWebUIID, map[string]any{"path": body.Path}),
 		event.TypeRequestCompleted, event.TypeRequestFailed)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
