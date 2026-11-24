@@ -88,6 +88,11 @@ func ProviderConfigPath() string {
 	return filepath.Join(Root(), "common", "providers", "provider.json")
 }
 
+// ConfigPath returns the shell's start preference: <root>/common/config.json.
+// Only the CLI front-end reads it (see cli/startpref.go); by the time the
+// gateway runs, its address has already been decided and passed as --addr.
+func ConfigPath() string { return filepath.Join(Root(), "common", "config.json") }
+
 // SanitizeID keeps ids path-safe; an id is a directory name, not a path. The
 // rule itself lives in helper.SafeName, the one implementation every id that
 // becomes a directory name shares.
