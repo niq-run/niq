@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -112,6 +113,9 @@ func TestFollowParsesSSE(t *testing.T) {
 		t.Fatalf("Follow: %v", err)
 	}
 	defer st.Close()
+	if got := st.Watermark(); got != "wm-1" {
+		t.Fatalf("watermark = %q, want wm-1", got)
+	}
 
 	e1, err := st.Next()
 	if err != nil {
@@ -129,6 +133,38 @@ func TestFollowParsesSSE(t *testing.T) {
 	}
 	if _, err := st.Next(); err != io.EOF {
 		t.Fatalf("end err = %v, want EOF", err)
+	}
+}
+
+// TestEventsBeforeQueryAndDecode pins the history page request (path, limit and
+// the noise filters) and that the returned order is preserved as the server sent
+// it (newest first).
+func TestEventsBeforeQueryAndDecode(t *testing.T) {
+	var path string
+	var q url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		path = req.URL.EscapedPath()
+		q = req.URL.Query()
+		io.WriteString(w, `[{"id":"e2","type":"worker.input"},{"id":"e1","type":"reason.response"}]`)
+	}))
+	t.Cleanup(srv.Close)
+
+	evs, err := New(srv.URL).EventsBefore(context.Background(), "demo", "anchor-1", HistoryQuery{
+		Exclude:       []string{"request.progressed"},
+		ExcludePrefix: []string{"worker."},
+		Keep:          []string{"worker.input"},
+	}, 7)
+	if err != nil {
+		t.Fatalf("EventsBefore: %v", err)
+	}
+	if path != "/p/demo/api/events/before/anchor-1" {
+		t.Fatalf("path = %q", path)
+	}
+	if q.Get("limit") != "7" || q.Get("exclude_prefix") != "worker." || q.Get("keep") != "worker.input" || q.Get("exclude") != "request.progressed" {
+		t.Fatalf("query = %v", q)
+	}
+	if len(evs) != 2 || evs[0].ID != "e2" || evs[1].ID != "e1" {
+		t.Fatalf("events = %+v", evs)
 	}
 }
 

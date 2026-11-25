@@ -84,7 +84,7 @@ func renderMarkdown(text string, width int) []string {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
 			if inFence {
-				out = append(out, renderCode(fence, fenceLang)...)
+				out = append(out, renderCode(fence, fenceLang, width)...)
 				fence = nil
 				fenceLang = ""
 				inFence = false
@@ -144,7 +144,7 @@ func renderMarkdown(text string, width int) []string {
 		out = append(out, layoutParagraph(line, width, mdPlain)...)
 	}
 	if inFence && len(fence) > 0 {
-		out = append(out, renderCode(fence, fenceLang)...)
+		out = append(out, renderCode(fence, fenceLang, width)...)
 	}
 	for len(out) > 0 && out[len(out)-1] == "" {
 		out = out[:len(out)-1]
@@ -210,12 +210,25 @@ func layoutQuote(content string, width int) []string {
 }
 
 // renderCode renders fenced code lines under a dim bar, syntax-highlighted for
-// langName when it is recognised, otherwise left plain.
-func renderCode(lines []string, langName string) []string {
+// langName when it is recognised, and painted on the code surface so a block
+// reads as a distinct panel.
+func renderCode(lines []string, langName string, width int) []string {
 	hl := newHighlighter(langName)
-	out := make([]string, 0, len(lines))
+	bg := bandCode.bg()
+	body := make([]string, 0, len(lines))
 	for _, l := range lines {
-		out = append(out, dim("│ ")+hl.line(l))
+		body = append(body, dim("│ ")+hl.line(l))
+	}
+	if bg == "" {
+		return body
+	}
+	padded := make([]string, 0, len(body)+2)
+	padded = append(padded, "")
+	padded = append(padded, body...)
+	padded = append(padded, "")
+	out := make([]string, len(padded))
+	for i, ln := range padded {
+		out[i] = bandLine(ln, width, 0, bg)
 	}
 	return out
 }

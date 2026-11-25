@@ -25,6 +25,8 @@ var truecolor = strings.Contains(os.Getenv("COLORTERM"), "truecolor") ||
 	strings.Contains(os.Getenv("COLORTERM"), "24bit") ||
 	strings.Contains(os.Getenv("TERM"), "truecolor")
 
+var color256 = truecolor || strings.Contains(os.Getenv("TERM"), "256color")
+
 func paint(code, s string) string {
 	if !ansi {
 		return s
@@ -44,6 +46,11 @@ func red(s string) string   { return paint("31", s) }
 func underline(s string) string { return paint("4", s) }
 func italic(s string) string    { return paint("3", s) }
 func codeText(s string) string  { return paint("36", s) }
+
+// gray is a muted foreground for thinking: readable but clearly secondary, and
+// not a colour that competes with the transcript.
+func gray(s string) string     { return paint("90", s) }
+func grayBold(s string) string { return paint("1;90", s) }
 
 // Syntax-highlighting colours for fenced code. They are deliberately plain ANSI
 // shades rather than theme-aware, so they read the same on light and dark

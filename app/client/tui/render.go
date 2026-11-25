@@ -16,6 +16,7 @@ package tui
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/niq-run/niq/app/standalone/contract"
@@ -34,10 +35,9 @@ type rendered struct {
 	chat        bool
 	inline      bool
 	markdown    bool
-	// separate asks the view to put a blank line above this block. The human's
-	// turns get one; a worker's answer follows its events directly, so the reply
-	// is not pushed away from the thinking that produced it.
-	separate bool
+	// band is the background surface the block is painted on; bandNone keeps the
+	// terminal's own background.
+	band bandKind
 }
 
 // evKind is the colour family of an event row's bracketed title.
@@ -50,23 +50,27 @@ const (
 	evDanger
 )
 
-// label colours the event title for its kind.
+// label colours the event title for its kind. Thinking is grey (secondary), tool
+// rows plain bold (so they read on the green tool surface), warnings yellow.
 func (k evKind) label(s string) string {
 	switch k {
 	case evThinking:
-		return magentaBold(s)
+		return grayBold(s)
 	case evWarn:
 		return yellowBold(s)
 	case evDanger:
 		return redBold(s)
 	default:
-		return cyanBold(s)
+		return bold(s)
 	}
 }
 
 // body is the detail style for the kind.
 func (k evKind) body() func(string) string {
-	if k == evDanger {
+	switch k {
+	case evThinking:
+		return gray
+	case evDanger:
 		return red
 	}
 	return dim
@@ -166,11 +170,11 @@ func describe(ev contract.Event, width int) (rendered, bool) {
 		return rendered{
 			plainPrefix: plainPrefix,
 			prefix:      prefix,
-			text:        contentText(ev.Payload["content"], ev.Payload["text"]),
-			textStyle:   underline,
+			text:        stripSystemReminder(contentText(ev.Payload["content"], ev.Payload["text"])),
+			textStyle:   plain,
 			chat:        true,
 			inline:      true,
-			separate:    true,
+			band:        bandUser,
 		}, true
 	case "reason.response":
 		// The answer: speaker on its own line, body below as rendered markdown,
@@ -213,8 +217,15 @@ func describe(ev contract.Event, width int) (rendered, bool) {
 // rather than wrapped, so one event can never occupy more than one line.
 func eventLine(label, detail string, kind evKind, width int) rendered {
 	label = strings.TrimSpace(label)
+	band := bandTool
+	switch kind {
+	case evDanger:
+		band = bandError
+	case evThinking, evWarn:
+		band = bandNone
+	}
 	if label == "" {
-		return rendered{plainPrefix: "· ", prefix: dim("· "), text: fitOneLine(detail, width-2), textStyle: dim}
+		return rendered{plainPrefix: "· ", prefix: dim("· "), text: fitOneLine(detail, width-2), textStyle: dim, band: band}
 	}
 	plainPrefix := label + ": "
 	return rendered{
@@ -222,14 +233,8 @@ func eventLine(label, detail string, kind evKind, width int) rendered {
 		prefix:      kind.label(label) + dim(": "),
 		text:        fitOneLine(detail, width-displayWidth(plainPrefix)-1),
 		textStyle:   kind.body(),
+		band:        band,
 	}
-}
-
-// note renders a bare status line of the view's own (a stream note, a send
-// failure). It is not a bus event, so it keeps the plain bullet rather than a
-// bracketed label.
-func note(text string) rendered {
-	return rendered{plainPrefix: "· ", prefix: dim("· "), text: text, textStyle: dim}
 }
 
 // inputRecipients is whom the bus recorded a worker.input as addressed to: the
@@ -244,12 +249,109 @@ func inputRecipients(ev contract.Event) []string {
 	return nil
 }
 
+// matchesFilter reports whether an event belongs in the transcript when the view
+// is scoped to one worker. An empty filter means everything. Otherwise the event
+// counts if that worker sent it, was its single target, or was among the routed
+// recipients — the same envelope rule the WebUI's talk scope uses.
+func matchesFilter(ev contract.Event, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	if ev.WorkerID == filter || ev.TargetWorkerID == filter {
+		return true
+	}
+	for _, r := range ev.Recipients {
+		if r == filter {
+			return true
+		}
+	}
+	return false
+}
+
+// renderEvents lays a chronological event slice out as transcript lines, scoped
+// to filter. It is a pure function of the events and the width, so a filter
+// change just re-renders the retained events instead of re-fetching.
+func renderEvents(events []contract.Event, filter string, width int) []string {
+	type block struct {
+		lines []string
+		band  bandKind
+		chat  bool
+	}
+	var blocks []block
+	for _, ev := range events {
+		if !matchesFilter(ev, filter) {
+			continue
+		}
+		r, ok := describe(ev, width)
+		if !ok {
+			continue
+		}
+		body := blockBody(r, width)
+		if r.chat {
+			blocks = append(blocks, block{lines: body, band: r.band, chat: true})
+			continue
+		}
+		// Consecutive event rows on the same surface form one panel, so a run of
+		// tool calls or a thinking trace is a single box rather than many stripes.
+		if n := len(blocks); n > 0 && !blocks[n-1].chat && blocks[n-1].band == r.band {
+			blocks[n-1].lines = append(blocks[n-1].lines, body...)
+			continue
+		}
+		blocks = append(blocks, block{lines: body, band: r.band})
+	}
+
+	var out []string
+	for i, b := range blocks {
+		if i > 0 {
+			out = append(out, "") // gap between blocks
+		}
+		out = append(out, renderBlock(b.lines, b.band, width)...)
+	}
+	return out
+}
+
+// renderBlock paints one block's lines on its surface. A banded block is inset by
+// one column and padded by one row top and bottom, like pi's Box; a plain block
+// (a worker's markdown) is left on the terminal background.
+func renderBlock(lines []string, band bandKind, width int) []string {
+	bg := band.bg()
+	if bg == "" {
+		return lines
+	}
+	padX := 1
+	if band == bandCode {
+		padX = 0
+	}
+	padded := make([]string, 0, len(lines)+2)
+	padded = append(padded, "")
+	padded = append(padded, lines...)
+	padded = append(padded, "")
+	out := make([]string, len(padded))
+	for i, ln := range padded {
+		out[i] = bandLine(ln, width, padX, bg)
+	}
+	return out
+}
+
 // workerLabel is the speaker name for the left side of a conversation block.
 func workerLabel(id string) string {
 	if id == "" {
 		return "worker"
 	}
 	return id
+}
+
+// reminderRe matches a <system-reminder> block the WebUI inserts into a user
+// turn (interrupt/board notices the human should not see as their own words).
+var reminderRe = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
+
+// stripSystemReminder removes those blocks from a user message before it is
+// shown, leaving only what the human actually typed.
+func stripSystemReminder(s string) string {
+	if !strings.Contains(s, "<system-reminder>") {
+		return s
+	}
+	return strings.TrimSpace(reminderRe.ReplaceAllString(s, ""))
 }
 
 // contentText reads the text out of an event's payload: a structured "content"
@@ -342,11 +444,11 @@ func fitOneLine(text string, max int) string {
 	return truncateCells(text, max-1) + "…"
 }
 
-// blockLines lays one block out as terminal lines. A non-chat row is a single
-// prefixed line. A conversation block either stays inline on the prefix line (the
-// human's short message) or puts the speaker on its own line and starts the body
-// below — plain text, or rendered markdown for a worker's answer.
-func blockLines(r rendered, width int) []string {
+// blockBody lays one block out as terminal lines, unbanded. A non-chat row is a
+// single prefixed line. A conversation block either stays inline on the prefix
+// line (the human's short message) or puts the speaker on its own line and starts
+// the body below — plain text, or rendered markdown for a worker's answer.
+func blockBody(r rendered, width int) []string {
 	if !r.chat {
 		text := fitOneLine(r.text, width-displayWidth(r.plainPrefix)-1)
 		return []string{r.prefix + r.textStyle(text)}

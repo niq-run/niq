@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -103,12 +104,110 @@ func (c *Client) SendInput(projectID string, in Input) error {
 	return c.do("POST", projectPath(projectID, "/api/input"), bytes.NewReader(body), nil)
 }
 
+// HistoryQuery narrows a historical page the same way the live stream is
+// narrowed: worker/role scope, a trace or request correlation, and type
+// include/exclude lists. Zero values mean "no constraint".
+//
+// ExcludePrefix is what keeps lifecycle noise (worker.ready, …) out of paging
+// while Keep carves back the few worker.* types a conversation still shows
+// (worker.input, worker.abort).
+type HistoryQuery struct {
+	Workers       []string
+	Roles         []string
+	Trace         string
+	Request       string
+	Types         []string
+	Exclude       []string
+	ExcludePrefix []string
+	Keep          []string
+}
+
+// EventsBefore returns up to limit persisted events older than anchor, in the
+// order the project's /api/events/before endpoint returns them (newest first).
+// A caller that prepends them to a transcript reverses the slice.
+func (c *Client) EventsBefore(ctx context.Context, projectID, anchor string, q HistoryQuery, limit int) ([]Event, error) {
+	if anchor == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	params := url.Values{}
+	params.Set("limit", strconv.Itoa(limit))
+	for _, w := range q.Workers {
+		params.Add("worker", w)
+	}
+	for _, r := range q.Roles {
+		params.Add("role", r)
+	}
+	if q.Trace != "" {
+		params.Set("trace", q.Trace)
+	}
+	if q.Request != "" {
+		params.Set("request", q.Request)
+	}
+	for _, t := range q.Types {
+		params.Add("type", t)
+	}
+	for _, t := range q.Exclude {
+		params.Add("exclude", t)
+	}
+	for _, t := range q.ExcludePrefix {
+		params.Add("exclude_prefix", t)
+	}
+	for _, t := range q.Keep {
+		params.Add("keep", t)
+	}
+	u := c.BaseURL + projectPath(projectID, "/api/events/before/"+url.PathEscape(anchor)) + "?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gateway %s: %w", c.BaseURL, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(raw))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, nil
+	}
+	var out []Event
+	if err := json.Unmarshal(trimmed, &out); err != nil {
+		return nil, fmt.Errorf("gateway %s: decode history: %w", c.BaseURL, err)
+	}
+	return out, nil
+}
+
 // Stream is a live event subscription to one project's bus, decoded from the
 // project's server-sent-events endpoint. Next returns one event at a time; call
 // Close when done.
 type Stream struct {
-	body io.ReadCloser
-	r    *bufio.Reader
+	body      io.ReadCloser
+	r         *bufio.Reader
+	watermark string
+	pending   *Event
+}
+
+// Watermark is the newest event id at subscription time. Follow reads it before
+// returning, so it is available even when the stream has no new events — it is
+// the anchor for the first page of history.
+func (s *Stream) Watermark() string {
+	if s == nil {
+		return ""
+	}
+	return s.watermark
 }
 
 // Follow opens the project's live event stream. The connection lives until ctx
@@ -138,40 +237,49 @@ func (c *Client) Follow(ctx context.Context, projectID string) (*Stream, error) 
 		}
 		return nil, fmt.Errorf("%s", msg)
 	}
-	return &Stream{body: resp.Body, r: bufio.NewReader(resp.Body)}, nil
+	st := &Stream{body: resp.Body, r: bufio.NewReader(resp.Body)}
+	// Read the opening watermark (or, defensively, the first data frame) so the
+	// caller knows the anchor before it starts paging history. The server flushes
+	// the watermark immediately, so this does not delay the first event.
+	for {
+		name, data, err := st.readFrame()
+		if err != nil {
+			st.body.Close()
+			return nil, err
+		}
+		if name == "watermark" {
+			st.watermark = data
+			break
+		}
+		if data != "" {
+			var ev Event
+			if json.Unmarshal([]byte(data), &ev) == nil {
+				st.pending = &ev
+			}
+			break
+		}
+	}
+	return st, nil
 }
 
-// Next returns the next event, skipping SSE comments, the up-front watermark
-// control frame, and the "event:" names the bus uses for control messages.
-func (s *Stream) Next() (Event, error) {
-	var (
-		data  []string
-		event string
-	)
+// readFrame reads one SSE frame: its event name and its (possibly multi-line)
+// data. Comments and heartbeats are skipped. A frame with no data yields an
+// empty payload and the caller moves on.
+func (s *Stream) readFrame() (string, string, error) {
+	var data []string
+	var event string
 	for {
 		line, err := s.r.ReadString('\n')
 		if err != nil {
-			return Event{}, err
+			return "", "", err
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
-			// A blank line dispatches the frame. A frame with no data is a bare
-			// control (e.g. an event: with no payload) and is skipped.
 			if len(data) == 0 {
 				event = ""
 				continue
 			}
-			payload := strings.Join(data, "\n")
-			name := event
-			data, event = data[:0], ""
-			if name == "watermark" {
-				continue // subscription watermark, not a bus event
-			}
-			var out Event
-			if err := json.Unmarshal([]byte(payload), &out); err != nil {
-				return Event{}, fmt.Errorf("decode event: %w", err)
-			}
-			return out, nil
+			return event, strings.Join(data, "\n"), nil
 		}
 		if strings.HasPrefix(line, ":") {
 			continue // comment / heartbeat
@@ -184,6 +292,34 @@ func (s *Stream) Next() (Event, error) {
 		case "event":
 			event = value
 		}
+	}
+}
+
+// Next returns the next bus event, skipping SSE comments and the watermark
+// control frame (whose id is kept on Watermark).
+func (s *Stream) Next() (Event, error) {
+	if s.pending != nil {
+		ev := *s.pending
+		s.pending = nil
+		return ev, nil
+	}
+	for {
+		name, data, err := s.readFrame()
+		if err != nil {
+			return Event{}, err
+		}
+		if name == "watermark" {
+			s.watermark = data
+			continue
+		}
+		if data == "" {
+			continue
+		}
+		var out Event
+		if err := json.Unmarshal([]byte(data), &out); err != nil {
+			return Event{}, fmt.Errorf("decode event: %w", err)
+		}
+		return out, nil
 	}
 }
 

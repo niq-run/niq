@@ -376,15 +376,23 @@ in the terminal — the same bus the WebUI talks to, from another client. It sen
 a message as the human's interface worker and prints the live event stream as it
 arrives.
 
-The scope is conversation only, for now: the event stream is never filtered by
-worker — every event is appended top to bottom, whoever it is from. The *send
-target* is separate: the message goes to the project's talk partners (the
-`reason` family and `niq` links), starting with the first online one, and `⌃T`
-switches which partner the next (and following) messages are addressed to without
-touching the stream. Start and stop the project from the picker or the WebUI.
+The view is full-screen (the terminal's alternate buffer): the transcript fills
+the frame and scrolls, while the input stays pinned to the bottom. History is
+paged from the project's `/api/events/before` endpoint — an initial page loads on
+connect, and scrolling to the top fetches the next older page. The *worker menu*
+(`⌃T`) scopes the transcript to one worker (any worker, including tools) and, for
+a talk partner, also aims the next message at it; **all** clears the filter. Start
+and stop the project from the picker or the WebUI.
 
-The human's own messages stay inline on the `you › …` line, are underlined, and
-are the one block set off by a blank line above them. A worker's answer puts its
+The scroll window and the mouse selection are standalone components: a small
+`viewport` owns the content length, visible height, first line and whether it
+follows the bottom, and a `selection` maps cell ranges on rendered lines to
+clipboard text. Every scroll path — page keys, line keys, the wheel and a drag
+past either edge — funnels through the viewport, so paging and history loading
+behave the same however they were triggered.
+
+The human's own messages stay inline on the `you › …` line and are the one block
+set off by a blank line above them. A worker's answer puts its
 speaker label on its own line and, with no blank line above it, renders the body
 below as markdown — headings, bold/italic, inline code, links, lists, quotes,
 fenced code (syntax-highlighted for go, python, js/ts, json, shell and rust), pipe
@@ -400,23 +408,38 @@ green, a worker's answer keeps the brand blue, `thinking` is magenta, ordinary
 events (tool calls, request results) are cyan, warnings (`interrupted`, `abort`,
 `timeout`, `cancel`) yellow, and failures red.
 
-A shortcut hint stays pinned above the input line, so the keys are always in
-view however long the transcript grows. It names the current send target
-(`→ <id>`), and each sent message records its addressee on its own line
-(`you → <id> › …`), so it is always clear where a message went.
+Structure comes from surfaces, as in pi: the human's turns sit on a tinted card
+(no underline; injected `<system-reminder>` blocks are hidden), tool calls and
+results on a green surface, and code blocks on a code surface, with the input in
+a docked panel framed by rules and a blank row above it. Thinking is not boxed:
+it shows as one grey line per trace so it recedes. Each surface insets its text
+and pads a row above and below, and one blank row separates adjacent blocks, so
+the transcript reads in layers rather than a wall of text. The target, view scope,
+scroll position and keys are drawn into the dock's top rule (`── … ──`), visible
+without costing the transcript a row. Bands downgrade to 256 colours, or disappear
+under `NO_COLOR` / a 16-colour terminal; the palette follows `COLORFGBG`. The
+wheel scrolls one line per notch; each sent message records its addressee
+(`you → <id> › …`), and a dropped stream is retried on a capped backoff with its
+status shown in the rule.
+
+Because the view owns the mouse (wheel and drag reports), the terminal's own
+selection is off inside it. Dragging over the transcript selects text there and
+releasing copies it — OSC 52 for terminals that support it, plus `pbcopy` on
+macOS or `wl-copy`/`xclip`/`xsel` on Linux when present. Selection is drawn as
+reverse video and survives scrolling.
 
 | Key | Action |
 |---|---|
 | `enter` | send the message |
-| `←` / `→`, `⌃A` / `⌃E` | move the cursor |
+| `←` / `→`, `⌃A` | move the cursor; `⌃A` jumps to the line start |
 | `⌫` / `⌦` | delete before / after the cursor |
-| `⌃U` | clear the line |
-| `⌃T` | pick the send target (`↑` / `↓` then `enter`, `esc` to cancel) |
-| `⌃C` / `⌃D` | leave the conversation |
-
-A dropped stream (a restarting project, a network blip) is retried on a capped
-backoff and reported on its own line, so the conversation does not silently go
-dark.
+| `⌃K` | clear the input line |
+| `⌃U` / `⌃D`, `⌃B` / `⌃F`, `PgUp` / `PgDn` | page the transcript (reaching the top loads more history) |
+| `⌃Y` / `⌃E`, `⌃P` / `⌃N` | scroll one line up / down |
+| mouse wheel | scroll one line per notch |
+| mouse drag | select text; release copies it |
+| `⌃T` | worker menu: scope the view and pick the send target (`↑`/`↓`, `j`/`k`, `⌃P`/`⌃N`, `enter`, `esc`) |
+| `⌃C` | leave the conversation |
 
 ## 4. Server deployment
 
