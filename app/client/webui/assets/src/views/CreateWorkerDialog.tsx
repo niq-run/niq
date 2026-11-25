@@ -103,7 +103,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
   const [result, setResult] = useState<CreateWorkerResult | null>(null)
   const [copied, setCopied] = useState(false)
   // Connect-config format shown for a freshly created remote worker: the
-  // env block niw consumes, or a ready-to-use agent-interface JSON file.
+  // env block niw consumes, or a ready-to-use interface-worker JSON file.
   const [configFormat, setConfigFormat] = useState<'niw' | 'cli'>('niw')
 
   // The permission drafts follow the selected worker kind/type: switching type
@@ -279,7 +279,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
 
   // The connect info is offered in the two shapes a remote worker can consume:
   // niw's env block (the same NIQ_BUS_URL / NIQ_WORKER_ID / NIQ_WORKER_CREDENTIAL
-  // convention the supervisor injects) and an @niq.run/agent-interface-worker credential
+  // convention the supervisor injects) and an @niq.run/interface-worker credential
   // file. Both describe the same identity.
   const busBase = `${window.location.hostname || 'localhost'}:${busPort ?? 'PORT'}`
 
@@ -292,7 +292,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
 
   // A complete credential file (one source named after the worker), so it can
   // be dropped in as ~/.niq/interface.json or merged with `config import`.
-  const agentInterfaceConfig = (): string => {
+  const interfaceConfig = (): string => {
     const id = result?.id || 'worker'
     return JSON.stringify({
       version: 1,
@@ -308,7 +308,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     }, null, 2)
   }
 
-  const activeConfig = (): string => (configFormat === 'cli' ? agentInterfaceConfig() : niwConfig())
+  const activeConfig = (): string => (configFormat === 'cli' ? interfaceConfig() : niwConfig())
 
   const copyConfig = async () => {
     try {
@@ -320,15 +320,15 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
     }
   }
 
-  // Downloading is the agent-interface JSON file, regardless of which format is
+  // Downloading is the interface-worker JSON file, regardless of which format is
   // being previewed: that is the file a machine can drop in or merge.
   const downloadConfig = () => {
     const id = result?.id || 'worker'
-    const blob = new Blob([agentInterfaceConfig()], { type: 'application/json' })
+    const blob = new Blob([interfaceConfig()], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `niq-agent-${id}.json`
+    a.download = `niq-interface-${id}.json`
     a.style.display = 'none'
     document.body.appendChild(a)
     a.click()
@@ -653,7 +653,7 @@ export default function CreateWorkerDialog({ open, onClose, onCreated, busHost, 
 
         {/* Connect configuration for a freshly-created remote worker: a detail
             card with the credential and the connect info in either the niw
-            env-block or the agent-interface JSON shape (the JSON is also
+            env-block or the interface-worker JSON shape (the JSON is also
             downloadable). The form fields are replaced by this block once
             created. */}
         {result && (
