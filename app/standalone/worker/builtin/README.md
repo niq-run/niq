@@ -63,7 +63,7 @@ this package does not ship, and their builders need the same path.
 |---|---|
 | `builtin.go` | The package doc and the three names the assembly references (`TypeInterface`, `DefaultWebUIID`, `DefaultHostWorkerID`). |
 | `registry.go` | `Registry`, `NewRegistry`, `RegisterType`, `RegisterBuilder`, `Build`, `Validate`, `Types`, `Accepted`, and the `SpecFunc` signature a type's builder has. |
-| `build.go` | `BuildContext`: what the assembly injects into a builder — the bus control plane and in-process listener it connects through, the instance manager for checkpoints, the provider loader, the programs root, the event store, and the lifecycle backend the host worker drives. A field is here only if some builder reads it. |
+| `context.go` | `BuildContext`: what the assembly injects into a builder — the bus control plane and in-process listener it connects through, the instance manager for checkpoints, the provider loader, the programs root, the event store, and the lifecycle backend the host worker drives. A field is here only if some builder reads it. |
 | `params.go` | `CheckSpawnParams` + its aliases, `ValidateProcessParams`. |
 | `identity.go` | `EnsureIdentity`. |
 | `identity_test.go` | Seeding vs. an edited grant, and the restore path. |
