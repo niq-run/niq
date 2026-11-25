@@ -27,12 +27,6 @@ func ValidateProcessParams(params map[string]any) error {
 	return nil
 }
 
-var spawnParamAliases = map[string]string{
-	"prompt":        "instruction",
-	"system_prompt": "instruction",
-	"sysprompt":     "instruction",
-}
-
 // CheckSpawnParams returns the validator for one type: it reports every
 // parameter the type does not read, and lists what it does.
 func CheckSpawnParams(typ string, typeParams []string) func(params map[string]any) error {
@@ -59,10 +53,6 @@ func CheckSpawnParams(typ string, typeParams []string) func(params map[string]an
 
 		described := make([]string, 0, len(unknown))
 		for _, k := range unknown {
-			if alias, ok := spawnParamAliases[k]; ok && valid[alias] {
-				described = append(described, fmt.Sprintf("%q (did you mean %q?)", k, alias))
-				continue
-			}
 			described = append(described, fmt.Sprintf("%q", k))
 		}
 		noun := "parameter"

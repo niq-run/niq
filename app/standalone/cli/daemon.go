@@ -436,21 +436,32 @@ func printStatus() error {
 // all print it, so the service always looks the same no matter which command
 // you used to ask.
 func printControlRunning(st *shellState) {
-	printBanner(banner{
-		state: bracketed("gateway") + " " + stateWord(true) +
-			dim(fmt.Sprintf("  pid %d · since %s", st.PID, shortTime(st.Started))),
-	})
-	fmt.Printf("%s %s  %s\n", label("webui", 8), brand(store.LocalhostURL(st.Bound)), dim(exposure(st.Bound)))
+	fmt.Print(controlHeader(st))
+}
+
+// controlHeader renders the running control plane's identity block — the banner,
+// the gateway state, and the webui/remote/log/stop/restart lines — as text. The
+// picker leads with it so `niq i` shows the same basic information as a bare
+// `niq`, rather than only the project list.
+func controlHeader(st *shellState) string {
+	var b strings.Builder
+	w := func(format string, args ...any) { fmt.Fprintf(&b, format, args...) }
+	w("%s\n", versionTag())
+
+	w("\n%s\n", bracketed("gateway")+" "+stateWord(true)+
+		dim(fmt.Sprintf("  pid %d · since %s", st.PID, shortTime(st.Started))))
+	w("%s %s  %s\n", label("webui", 8), brand(store.LocalhostURL(st.Bound)), dim(exposure(st.Bound)))
 	// Say what remote access looks like from here: either the address another
 	// machine would open, or why there is none yet.
 	if u := remoteURL(st.Bound); u != "" {
-		fmt.Printf("%s %s\n", label("remote", 8), brand(u))
+		w("%s %s\n", label("remote", 8), brand(u))
 	} else if helper.IsLoopbackBind(st.Bound) && !authConfigured() {
-		fmt.Printf("%s %s\n", label("remote", 8), dim("off — needs auth first: niq --auth user:pass"))
+		w("%s %s\n", label("remote", 8), dim("off — needs auth first: niq --auth user:pass"))
 	}
-	fmt.Printf("%s %s\n", label("log", 8), shortPath(shellLogPath()))
-	fmt.Printf("%s %s\n", label("stop", 8), "niq stop")
-	fmt.Printf("%s %s\n", label("restart", 8), "niq restart")
+	w("%s %s\n", label("log", 8), shortPath(shellLogPath()))
+	w("%s %s\n", label("stop", 8), "niq stop")
+	w("%s %s\n", label("restart", 8), "niq restart")
+	return b.String()
 }
 
 // exposure names the bind scope in a word or two: loopback is the safe default,

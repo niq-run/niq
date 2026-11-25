@@ -92,6 +92,14 @@ var systemPromptTmpl = template.Must(
 // applied programs. Instruction Programs provide full content; Playbook
 // Programs provide only metadata plus the path that addresses their content.
 func (w *BaseReasonWorker) buildInstruction() string {
+	return renderSystemPrompt(w.promptData())
+}
+
+// promptData collects the applied programs into the template's data shape.
+// Split out from buildInstruction so the context breakdown can render the
+// prompt's parts separately (base template / playbooks / instructions) without
+// re-deriving which program goes where.
+func (w *BaseReasonWorker) promptData() templateData {
 	var data templateData
 	data.WorkerID = w.ID()
 
@@ -122,6 +130,11 @@ func (w *BaseReasonWorker) buildInstruction() string {
 		}
 	}
 
+	return data
+}
+
+// renderSystemPrompt executes the system prompt template with the given data.
+func renderSystemPrompt(data templateData) string {
 	var buf strings.Builder
 	if err := systemPromptTmpl.Execute(&buf, data); err != nil {
 		// Template is fixed at compile time — execution should never fail.

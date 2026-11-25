@@ -521,11 +521,20 @@ func rawArguments(raw json.RawMessage) string {
 	return string(raw)
 }
 
+// usageFromAnthropic normalizes Anthropic's usage into llm.Usage.
+//
+// Anthropic reports cache tokens SEPARATELY from input_tokens, which counts
+// only the uncached part: the real prompt is input + cache_creation +
+// cache_read. InputTokens is therefore summed here, so llm.Usage.InputTokens
+// always means "total prompt tokens" — matching the OpenAI adapters. Both the
+// context-budget ledger (which would otherwise ignore most of a well-cached
+// prompt) and the UI's occupancy/cache-hit-rate math depend on that.
 func usageFromAnthropic(u *anthropicUsage) llm.Usage {
+	input := u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
 	usage := llm.Usage{
-		InputTokens:  u.InputTokens,
+		InputTokens:  input,
 		OutputTokens: u.OutputTokens,
-		TotalTokens:  u.InputTokens + u.OutputTokens,
+		TotalTokens:  input + u.OutputTokens,
 	}
 	if u.CacheCreationInputTokens > 0 {
 		n := u.CacheCreationInputTokens

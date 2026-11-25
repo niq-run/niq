@@ -76,6 +76,8 @@ func Main(spec Spec) {
 	switch {
 	case len(os.Args) > 1 && os.Args[1] == "i":
 		err = runInteractive()
+	case len(os.Args) > 1 && (os.Args[1] == "c" || os.Args[1] == "chat"):
+		err = runChat(os.Args[2:])
 	case len(os.Args) > 1 && os.Args[1] == "w":
 		err = runShell(os.Args[2:], true)
 	case len(os.Args) > 1 && os.Args[1] == "stop":
@@ -100,20 +102,37 @@ func Main(spec Spec) {
 }
 
 // runInteractive opens the terminal shell. Like every other face it needs the
-// gateway: the picker is a client, not a second control path.
+// gateway: the picker is a client, not a second control path. It leads with the
+// same control-plane header a bare `niq` prints, so `niq i` shows the service's
+// basic information above the interactive project list.
 func runInteractive() error {
+	baseURL, err := ensureGatewayForUI()
+	if err != nil {
+		return err
+	}
+	header := ""
+	if st, ok := readShellState(); ok && isRunning(st) {
+		header = controlHeader(st)
+	}
+	return tui.RunPicker(baseURL, header)
+}
+
+// ensureGatewayForUI resolves a running gateway and returns its address, starting
+// one when nothing is up. It is shared by the terminal faces so they agree on
+// how the gateway is reached; the picker's chat action and `niq c` both need the
+// same answer as `niq i` itself.
+func ensureGatewayForUI() (string, error) {
 	st, ok := readShellState()
 	if !ok || !isRunning(st) {
-		var err error
-		// Honor a remembered bind, but do not prompt: `niq i` is a quick picker,
-		// not the place to decide how the plane is exposed.
+		// Honor a remembered bind, but do not prompt: an interface is a quick
+		// start, not the place to decide how the plane is exposed.
 		addr, err := resolveStartAddr(startRequest{}, nil, authConfigured())
 		if err != nil {
-			return err
+			return "", err
 		}
 		st, err = ensureGateway(addr, "", askOnTerminal())
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 	if st == nil {
@@ -122,9 +141,9 @@ func runInteractive() error {
 		}
 	}
 	if st == nil {
-		return fmt.Errorf("the gateway did not report an address")
+		return "", fmt.Errorf("the gateway did not report an address")
 	}
-	return tui.RunPicker(store.LocalhostURL(st.Bound))
+	return store.LocalhostURL(st.Bound), nil
 }
 
 // runDefault makes a bare `niq` idempotent: it starts the control plane when
@@ -286,6 +305,7 @@ func printUsage() {
 		{"niq restart [-p]", "restart the control plane; -p also restarts the running projects"},
 		{"niq update", "install the latest release with npm"},
 		{"niq i", "open the interactive terminal shell"},
+		{"niq c [project]", "chat with a project in the terminal (the only project by default)"},
 		{"niq completion <shell>", "print a completion script: bash, zsh or fish"},
 		{"niq --version", "print the version"},
 	})

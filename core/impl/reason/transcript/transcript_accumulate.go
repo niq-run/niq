@@ -19,46 +19,6 @@ import (
 // the head with a truncation note so one event cannot flood the context.
 const DefaultMaxPayloadBytes = 20 * 1024
 
-// Rough token-estimation constants. Compaction bounds the retained tail by a
-// token budget instead of a fixed message count (a few large tool results can
-// dwarf dozens of small messages), but there is no tokenizer available at
-// commit time (the transcript is provider-agnostic). These constants give a
-// deterministic, byte-driven approximation: ~4 bytes per token for typical
-// text, plus fixed per-message and per-content-block overhead. The estimate is
-// used only for budget sizing, never for billing or wire-format decisions.
-const (
-	bytesPerToken      = 4
-	messageOverhead    = 4 // role + separators + id fields
-	blockOverhead      = 2 // per content block framing
-	imageTokenFloor    = 128
-	imageTokensPerByte = 1024
-)
-
-// estimateMessageTokens returns a rough token estimate for one message: text at
-// ~4 bytes/token plus fixed per-message and per-block overhead. Oversized text
-// (already capped by the payload limiter) and modest images scale the count;
-// the exact value is a heuristic bound, not a provider token count.
-func estimateMessageTokens(m llm.Message) int {
-	n := messageOverhead
-	if m.ToolCallID != "" {
-		n += 2
-	}
-	if m.ToolName != "" {
-		n += len(m.ToolName)/bytesPerToken + 1
-	}
-	for _, b := range m.Content {
-		switch b.Type {
-		case llm.ContentText, llm.ContentThinking:
-			n += blockOverhead + len(b.Text)/bytesPerToken
-		case llm.ContentToolCall:
-			n += blockOverhead + (len(b.ToolName)+len(b.ToolArguments))/bytesPerToken
-		case llm.ContentImage:
-			n += imageTokenFloor + len(b.Data)/imageTokensPerByte
-		}
-	}
-	return n
-}
-
 // AccumulateTranscript holds the working transcript messages. It is
 // concurrency-safe on its own: every method locks internally, and edits
 // (BeginEdit..Commit) run their computation without holding the lock while

@@ -121,6 +121,10 @@ func (w *BaseReasonWorker) prepareReasoning() (traceID string, req *llm.Completi
 	if len(tools) > 0 {
 		req.ToolChoice = llm.ToolChoiceAuto
 	}
+	// Size the prompt's parts while the exact request is in hand: this is the
+	// only moment the transcript state, tool list and program set all match the
+	// bytes about to be sent.
+	w.roundBreakdown = w.contextBreakdown(c)
 	w.mu.Unlock()
 
 	return traceID, req
@@ -820,7 +824,7 @@ func (w *BaseReasonWorker) broadcastResponse(msg llm.Message, traceID string) {
 	// transcript message's Usage (plus the resolved model context window, so the
 	// UI can render an occupancy percentage); omitted when the provider reported
 	// none.
-	if u := usageMeta(msg, w.contextWindow); u != nil {
+	if u := usageMeta(msg, w.contextWindow, w.roundBreakdown); u != nil {
 		payload["meta"] = map[string]any{"usage": u}
 	}
 	evt := event.New(TypeReasonResponse, w.ID(), payload)
@@ -832,9 +836,11 @@ func (w *BaseReasonWorker) broadcastResponse(msg llm.Message, traceID string) {
 // usageMeta renders a completed message's context usage into the reason.response
 // event payload meta shape. contextWindow is the resolved model context window
 // (0 = unknown/disabled) and is carried so the UI can compute an occupancy
-// percentage. Returns nil when the message carries no usage (so the meta field
-// is omitted rather than emitted empty).
-func usageMeta(msg llm.Message, contextWindow int) map[string]any {
+// percentage. breakdown is the round's estimated prompt composition, rescaled
+// to the reported token counts so the UI's parts add up to the headline.
+// Returns nil when the message carries no usage (so the meta field is omitted
+// rather than emitted empty).
+func usageMeta(msg llm.Message, contextWindow int, breakdown []contextSection) map[string]any {
 	if msg.Usage == nil {
 		return nil
 	}
@@ -849,9 +855,30 @@ func usageMeta(msg llm.Message, contextWindow int) map[string]any {
 	}
 	if u.CacheReadTokens != nil {
 		meta["cache_read_tokens"] = *u.CacheReadTokens
+		// Hit rate: how much of the prompt was served from the prefix cache.
+		// Adapters normalize InputTokens to the total prompt (cache read +
+		// cache write + uncached), so this ratio is comparable across providers.
+		// Clamped so a misreporting provider cannot render as >100%.
+		if u.InputTokens > 0 {
+			pct := float64(*u.CacheReadTokens) / float64(u.InputTokens) * 100
+			if pct > 100 {
+				pct = 100
+			}
+			meta["cache_hit_percent"] = pct
+		}
 	}
 	if u.CacheCreationTokens != nil {
 		meta["cache_creation_tokens"] = *u.CacheCreationTokens
+	}
+	// The generated half of the round: what the report calls it. Prefer
+	// total-input when the provider reports a total (keeps the panel's parts
+	// summing to the headline), else the explicit output count.
+	completion := u.OutputTokens
+	if u.TotalTokens > u.InputTokens {
+		completion = u.TotalTokens - u.InputTokens
+	}
+	if b := scaleBreakdown(breakdown, u.InputTokens, completion); len(b) > 0 {
+		meta["breakdown"] = b
 	}
 	return meta
 }

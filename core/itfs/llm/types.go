@@ -90,6 +90,12 @@ func (ToolChoiceNamed) toolChoiceMarker() {}
 func (t ToolChoiceNamed) Code() string    { return "function" }
 
 // Usage records token counts for a completion.
+//
+// InputTokens is the TOTAL prompt size and always INCLUDES cached tokens:
+// adapters normalize providers that report cache read/write separately
+// (Anthropic, where input_tokens is only the uncached part) into that shape.
+// CacheReadTokens / CacheCreationTokens are a breakdown of that total, never an
+// addition to it — so cacheRead/InputTokens is a provider-comparable hit rate.
 type Usage struct {
 	InputTokens         int
 	OutputTokens        int

@@ -457,7 +457,7 @@ func TestUsageMeta(t *testing.T) {
 		TotalTokens:         125,
 		CacheReadTokens:     &cacheRead,
 		CacheCreationTokens: &cacheCreate,
-	}}, 1000)
+	}}, 1000, nil)
 	if m == nil {
 		t.Fatal("usageMeta returned nil for a message with usage")
 	}
@@ -470,14 +470,35 @@ func TestUsageMeta(t *testing.T) {
 	if m["cache_read_tokens"] != 42 || m["cache_creation_tokens"] != 7 {
 		t.Fatalf("unexpected cache tokens: %+v", m)
 	}
+	if pct, ok := m["cache_hit_percent"].(float64); !ok || pct != 42 {
+		t.Fatalf("unexpected cache hit percent (42/100): %+v", m["cache_hit_percent"])
+	}
+
+	// A provider reporting more cached than total prompt tokens is clamped.
+	bigCached := 500
+	if m := usageMeta(llm.Message{Usage: &llm.Usage{InputTokens: 100, CacheReadTokens: &bigCached}}, 1000, nil); m["cache_hit_percent"] != float64(100) {
+		t.Fatalf("cache hit percent should clamp to 100, got %+v", m["cache_hit_percent"])
+	}
+
+	// A provider that reports cache accounting but nothing hit still yields a
+	// 0% rate, so the UI can distinguish it from a provider with no accounting.
+	zeroCached := 0
+	if m := usageMeta(llm.Message{Usage: &llm.Usage{InputTokens: 100, CacheReadTokens: &zeroCached}}, 1000, nil); m["cache_hit_percent"] != float64(0) || m["cache_read_tokens"] != 0 {
+		t.Fatalf("reported zero cached should yield 0%%, got %+v", m)
+	}
+
+	// No cache fields → no hit rate.
+	if m := usageMeta(llm.Message{Usage: &llm.Usage{InputTokens: 100}}, 1000, nil); m["cache_hit_percent"] != nil {
+		t.Fatalf("cache hit percent should be omitted without a cached count, got %+v", m["cache_hit_percent"])
+	}
 
 	// Zero/unknown context window → field omitted.
-	if m := usageMeta(llm.Message{Usage: &llm.Usage{InputTokens: 1}}, 0); m["context_window"] != nil {
+	if m := usageMeta(llm.Message{Usage: &llm.Usage{InputTokens: 1}}, 0, nil); m["context_window"] != nil {
 		t.Fatalf("context_window should be omitted when unknown, got %+v", m["context_window"])
 	}
 
 	// No usage → nil meta (field omitted).
-	if m := usageMeta(llm.Message{}, 1000); m != nil {
+	if m := usageMeta(llm.Message{}, 1000, nil); m != nil {
 		t.Fatalf("usageMeta should be nil without usage, got %+v", m)
 	}
 }

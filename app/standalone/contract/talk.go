@@ -1,0 +1,455 @@
+package contract
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/textproto"
+	"net/url"
+	"strconv"
+	"strings"
+)
+
+// This file is the project-scoped half of the wire contract: the conversation a
+// project's bus speaks, reached through the gateway at /p/<id>/api/…
+//
+// The client in client.go owns the control plane (which projects exist, start,
+// stop). This one owns one project's conversation: who is on its bus, the input
+// a human sends, and the live event stream. Both are plain HTTP over the same
+// gateway, so a terminal is just another client — nothing here knows how a
+// project is laid out on disk or how its bus is wired.
+//
+// Like the rest of the package it imports the standard library only, so any
+// surface (a terminal on another machine, a script) can depend on it without
+// inheriting the single-machine form.
+
+// Worker is one identity a project's bus reports, as GET /p/<id>/api/workers
+// lists it. Only the fields a conversation needs are kept; the rest of the
+// worker view (ACLs, params, supervision) is management data for the WebUI.
+type Worker struct {
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Label  string `json:"label,omitempty"`
+	Online bool   `json:"online"`
+}
+
+// Event is one bus event as the project's SSE stream delivers it. Payload stays
+// an open map: its shape is owned by the event's type (worker.input carries
+// llm-like content blocks, reason.response a content array, and so on), so the
+// wire layer must not narrow it.
+type Event struct {
+	ID             string         `json:"id"`
+	Type           string         `json:"type"`
+	WorkerID       string         `json:"worker_id"`
+	TargetWorkerID string         `json:"target_worker_id,omitempty"`
+	RequestID      string         `json:"request_id,omitempty"`
+	TraceID        string         `json:"trace_id,omitempty"`
+	Timestamp      int64          `json:"timestamp"`
+	Payload        map[string]any `json:"payload,omitempty"`
+	Recipients     []string       `json:"recipients,omitempty"`
+	// Transient marks live-only events (streaming deltas, partial tool output)
+	// the bus never persists. A reader that renders history can skip them.
+	Transient bool `json:"transient,omitempty"`
+}
+
+// Block is one element of a structured input's "content" array — the same
+// llm-like shape the reason worker's input converter understands. Text is the
+// common kind; image carries base64 bytes and file a path on the project's disk,
+// matching what the WebUI sends.
+type Block struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	Name string `json:"name,omitempty"`
+	Mime string `json:"mime,omitempty"`
+	Data string `json:"data,omitempty"`
+	Path string `json:"path,omitempty"`
+	Size int64  `json:"size,omitempty"`
+}
+
+// Input is the body POST /p/<id>/api/input accepts. Targets addresses the
+// message to specific workers (the human's @mentions); Target is the
+// single-target spelling older servers still read, and carries the first
+// target so such a server does not fall back to a broadcast.
+type Input struct {
+	Content   []Block  `json:"content,omitempty"`
+	Targets   []string `json:"targets,omitempty"`
+	Target    string   `json:"target,omitempty"`
+	InputMode string   `json:"input_mode,omitempty"`
+}
+
+// ProviderOption is one selectable LLM provider of a reason worker, as the
+// worker reports it through GET /p/<id>/api/workers/<id>/providers.
+type ProviderOption struct {
+	Name    string   `json:"name"`
+	Default string   `json:"default"`
+	Models  []string `json:"models"`
+}
+
+// ProviderSelection is a provider/model pair — both the worker's current choice
+// and the target of a switch.
+type ProviderSelection struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// ProviderList is what GET /p/<id>/api/workers/<id>/providers returns: the
+// worker's selectable providers and its current choice.
+type ProviderList struct {
+	Providers []ProviderOption  `json:"providers"`
+	Current   ProviderSelection `json:"current"`
+}
+
+// ProviderSwitch is what POST /p/<id>/api/workers/<id>/provider returns. Done is
+// false (with Error set) when the worker refused the switch.
+type ProviderSwitch struct {
+	Done     bool   `json:"done"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Error    string `json:"error,omitempty"`
+}
+
+// WorkerProviders asks a reason worker for its selectable providers and current
+// model. Only reason-family workers answer; others get a 404.
+func (c *Client) WorkerProviders(projectID, workerID string) (ProviderList, error) {
+	var out ProviderList
+	path := projectPath(projectID, "/api/workers/"+url.PathEscape(workerID)+"/providers")
+	if err := c.do("GET", path, nil, &out); err != nil {
+		return ProviderList{}, err
+	}
+	return out, nil
+}
+
+// SetWorkerProvider asks a reason worker to switch its active provider/model.
+// Both are required — the worker rejects an empty model.
+func (c *Client) SetWorkerProvider(projectID, workerID, provider, model string) (ProviderSwitch, error) {
+	body, err := json.Marshal(ProviderSelection{Provider: provider, Model: model})
+	if err != nil {
+		return ProviderSwitch{}, err
+	}
+	var out ProviderSwitch
+	path := projectPath(projectID, "/api/workers/"+url.PathEscape(workerID)+"/provider")
+	if err := c.do("POST", path, bytes.NewReader(body), &out); err != nil {
+		return ProviderSwitch{}, err
+	}
+	return out, nil
+}
+
+// projectPath builds a project-scoped API path under the gateway's /p/<id>/
+// mount. The id is escaped so it cannot widen the route past its one segment.
+func projectPath(id, suffix string) string {
+	return "/p/" + url.PathEscape(id) + suffix
+}
+
+// Workers lists the identities on a project's bus. A stopped project answers
+// with its proxy's 502, surfaced verbatim as an error.
+func (c *Client) Workers(projectID string) ([]Worker, error) {
+	var out []Worker
+	if err := c.do("GET", projectPath(projectID, "/api/workers"), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SendInput publishes a message as the project's interface worker — the human's
+// voice on the bus. The server answers 202 with no body; a refusal (unreachable
+// project, interface worker not on the bus) becomes an error carrying its text.
+func (c *Client) SendInput(projectID string, in Input) error {
+	if len(in.Targets) > 0 && in.Target == "" {
+		in.Target = in.Targets[0]
+	}
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return c.do("POST", projectPath(projectID, "/api/input"), bytes.NewReader(body), nil)
+}
+
+// UploadedFile is what POST /api/upload returns: the file's absolute path on the
+// machine running the project, plus what was stored.
+type UploadedFile struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// Upload writes one file into the project's upload directory through the
+// gateway and returns the path it now has there. A terminal that does not share
+// a disk with the project uses it so a file attachment points at a path the
+// workers can actually read.
+func (c *Client) Upload(ctx context.Context, projectID, name string, data []byte) (UploadedFile, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, strings.ReplaceAll(name, `"`, "")))
+	h.Set("Content-Type", "application/octet-stream")
+	part, err := mw.CreatePart(h)
+	if err != nil {
+		return UploadedFile{}, err
+	}
+	if _, err := part.Write(data); err != nil {
+		return UploadedFile{}, err
+	}
+	if err := mw.Close(); err != nil {
+		return UploadedFile{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		c.BaseURL+projectPath(projectID, "/api/upload"), bytes.NewReader(body.Bytes()))
+	if err != nil {
+		return UploadedFile{}, err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return UploadedFile{}, fmt.Errorf("gateway %s: %w", c.BaseURL, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return UploadedFile{}, err
+	}
+	if resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(raw))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return UploadedFile{}, fmt.Errorf("%s", msg)
+	}
+	var out UploadedFile
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return UploadedFile{}, fmt.Errorf("gateway %s: decode upload: %w", c.BaseURL, err)
+	}
+	return out, nil
+}
+
+// HistoryQuery narrows a historical page the same way the live stream is
+// narrowed: worker/role scope, a trace or request correlation, and type
+// include/exclude lists. Zero values mean "no constraint".
+//
+// ExcludePrefix is what keeps lifecycle noise (worker.ready, …) out of paging
+// while Keep carves back the few worker.* types a conversation still shows
+// (worker.input, worker.abort).
+type HistoryQuery struct {
+	Workers       []string
+	Roles         []string
+	Trace         string
+	Request       string
+	Types         []string
+	Exclude       []string
+	ExcludePrefix []string
+	Keep          []string
+}
+
+// EventsBefore returns up to limit persisted events older than anchor, in the
+// order the project's /api/events/before endpoint returns them (newest first).
+// A caller that prepends them to a transcript reverses the slice.
+func (c *Client) EventsBefore(ctx context.Context, projectID, anchor string, q HistoryQuery, limit int) ([]Event, error) {
+	if anchor == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	params := url.Values{}
+	params.Set("limit", strconv.Itoa(limit))
+	for _, w := range q.Workers {
+		params.Add("worker", w)
+	}
+	for _, r := range q.Roles {
+		params.Add("role", r)
+	}
+	if q.Trace != "" {
+		params.Set("trace", q.Trace)
+	}
+	if q.Request != "" {
+		params.Set("request", q.Request)
+	}
+	for _, t := range q.Types {
+		params.Add("type", t)
+	}
+	for _, t := range q.Exclude {
+		params.Add("exclude", t)
+	}
+	for _, t := range q.ExcludePrefix {
+		params.Add("exclude_prefix", t)
+	}
+	for _, t := range q.Keep {
+		params.Add("keep", t)
+	}
+	u := c.BaseURL + projectPath(projectID, "/api/events/before/"+url.PathEscape(anchor)) + "?" + params.Encode()
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gateway %s: %w", c.BaseURL, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(raw))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, nil
+	}
+	var out []Event
+	if err := json.Unmarshal(trimmed, &out); err != nil {
+		return nil, fmt.Errorf("gateway %s: decode history: %w", c.BaseURL, err)
+	}
+	return out, nil
+}
+
+// Stream is a live event subscription to one project's bus, decoded from the
+// project's server-sent-events endpoint. Next returns one event at a time; call
+// Close when done.
+type Stream struct {
+	body      io.ReadCloser
+	r         *bufio.Reader
+	watermark string
+	pending   *Event
+}
+
+// Watermark is the newest event id at subscription time. Follow reads it before
+// returning, so it is available even when the stream has no new events — it is
+// the anchor for the first page of history.
+func (s *Stream) Watermark() string {
+	if s == nil {
+		return ""
+	}
+	return s.watermark
+}
+
+// Follow opens the project's live event stream. The connection lives until ctx
+// is cancelled or the stream ends, so it uses a client with no overall timeout
+// (the control-plane client's 15 seconds would cut every stream short).
+func (c *Client) Follow(ctx context.Context, projectID string) (*Stream, error) {
+	transport := http.DefaultTransport
+	if c.HTTP != nil && c.HTTP.Transport != nil {
+		transport = c.HTTP.Transport
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+projectPath(projectID, "/api/stream"), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Cache-Control", "no-cache")
+	resp, err := (&http.Client{Transport: transport}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gateway %s: %w", c.BaseURL, err)
+	}
+	if resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		msg := strings.TrimSpace(string(raw))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+	st := &Stream{body: resp.Body, r: bufio.NewReader(resp.Body)}
+	// Read the opening watermark (or, defensively, the first data frame) so the
+	// caller knows the anchor before it starts paging history. The server flushes
+	// the watermark immediately, so this does not delay the first event.
+	for {
+		name, data, err := st.readFrame()
+		if err != nil {
+			st.body.Close()
+			return nil, err
+		}
+		if name == "watermark" {
+			st.watermark = data
+			break
+		}
+		if data != "" {
+			var ev Event
+			if json.Unmarshal([]byte(data), &ev) == nil {
+				st.pending = &ev
+			}
+			break
+		}
+	}
+	return st, nil
+}
+
+// readFrame reads one SSE frame: its event name and its (possibly multi-line)
+// data. Comments and heartbeats are skipped. A frame with no data yields an
+// empty payload and the caller moves on.
+func (s *Stream) readFrame() (string, string, error) {
+	var data []string
+	var event string
+	for {
+		line, err := s.r.ReadString('\n')
+		if err != nil {
+			return "", "", err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if len(data) == 0 {
+				event = ""
+				continue
+			}
+			return event, strings.Join(data, "\n"), nil
+		}
+		if strings.HasPrefix(line, ":") {
+			continue // comment / heartbeat
+		}
+		field, value, _ := strings.Cut(line, ":")
+		value = strings.TrimPrefix(value, " ")
+		switch field {
+		case "data":
+			data = append(data, value)
+		case "event":
+			event = value
+		}
+	}
+}
+
+// Next returns the next bus event, skipping SSE comments and the watermark
+// control frame (whose id is kept on Watermark).
+func (s *Stream) Next() (Event, error) {
+	if s.pending != nil {
+		ev := *s.pending
+		s.pending = nil
+		return ev, nil
+	}
+	for {
+		name, data, err := s.readFrame()
+		if err != nil {
+			return Event{}, err
+		}
+		if name == "watermark" {
+			s.watermark = data
+			continue
+		}
+		if data == "" {
+			continue
+		}
+		var out Event
+		if err := json.Unmarshal([]byte(data), &out); err != nil {
+			return Event{}, fmt.Errorf("decode event: %w", err)
+		}
+		return out, nil
+	}
+}
+
+// Close releases the stream's connection.
+func (s *Stream) Close() error {
+	if s == nil || s.body == nil {
+		return nil
+	}
+	return s.body.Close()
+}

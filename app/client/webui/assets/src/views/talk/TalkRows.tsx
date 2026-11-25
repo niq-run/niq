@@ -10,6 +10,7 @@ import {
 } from '../../components/talk-utils'
 import type { EventPayload } from '../../types'
 import WorkerBadge from './WorkerBadge'
+import ContextUsagePanel, { type UsageAnchor } from '../../components/ContextUsagePanel'
 import type { RowCtx } from './RowCtx'
 import { AT_BOTTOM_PX, TALK_SCROLL_CLASS } from './useChatScroll'
 import { captureElementAnchor, settleScrollAnchor, type ScrollAnchor } from './scrollAnchor'
@@ -63,28 +64,47 @@ function TrailMarker({ workerId, usage, ctx }: { workerId: string; usage?: Usage
   const { colors, t, humanId, isReason, isPartner, onMention, onOpenDetail, onFocusWorker, displayName, bubbleMax, isMobile } = ctx
   const hasLeft = !!usage?.left
   const hasRight = !!usage?.right
+  // The label opens the usage breakdown when the worker reported one; older
+  // responses (or providers without usage) keep the plain tooltip.
+  const meta = usage?.meta
+  const canOpen = !!meta?.breakdown?.length
+  const [anchor, setAnchor] = useState<UsageAnchor | null>(null)
+  const labelRef = useRef<HTMLSpanElement>(null)
+  const openPanel = () => {
+    const r = labelRef.current?.getBoundingClientRect()
+    if (!r || !canOpen) return
+    setAnchor({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })
+  }
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, maxWidth: bubbleMax, margin: '2px 0 16px' }}>
       {usage && (hasLeft || hasRight) && (
         <span
-          title={t('talk.usage.tooltip')}
+          ref={labelRef}
+          // Marks the opener so the panel's outside-click handler does not treat
+          // a tap on it as "dismiss" (that would close then immediately reopen).
+          data-usage-label=""
+          title={canOpen ? t('talk.usage.tooltip') : t('talk.usage.tooltipPlain')}
+          className={canOpen ? 'btn-hover' : undefined}
+          role={canOpen ? 'button' : undefined}
+          onClick={canOpen ? (e) => { e.stopPropagation(); if (anchor) setAnchor(null); else openPanel() } : undefined}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 8,
             fontSize: fontSizes.xs, color: colors.textDimmed, userSelect: 'none',
-            // On phone the trailing usage/context label is trimmed to a single
-            // capped line with an ellipsis instead of forcing full width next to
-            // the trailing avatar (the context line is informational, not
-            // worth squeezing a narrow screen for).
+            cursor: canOpen ? 'pointer' : undefined, borderRadius: 3, padding: '1px 4px',
+            // On phone the trailing label is one short line: the occupancy
+            // (window · percent) is what a glance needs, and the input/output/
+            // cache tail moves into the panel one tap away. Without a known
+            // window the right side is all there is, so it falls back to that.
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             maxWidth: isMobile ? 'calc(100vw - 96px)' : '60%',
             flexShrink: 1, minWidth: 0,
           }}
         >
           {hasLeft && <span>{usage.left}</span>}
-          {hasLeft && hasRight && (
+          {hasLeft && hasRight && !isMobile && (
             <span aria-hidden style={{ width: 1, height: '0.6em', background: colors.textDimmed, opacity: 0.45, alignSelf: 'center', flexShrink: 0 }} />
           )}
-          {hasRight && <span>{usage.right}</span>}
+          {hasRight && (!isMobile || !hasLeft) && <span>{usage.right}</span>}
         </span>
       )}
       <WorkerBadge
@@ -99,6 +119,9 @@ function TrailMarker({ workerId, usage, ctx }: { workerId: string; usage?: Usage
         onFocusWorker={onFocusWorker}
         displayName={displayName}
       />
+      {anchor && meta && (
+        <ContextUsagePanel meta={meta} anchor={anchor} onClose={() => setAnchor(null)} />
+      )}
     </div>
   )
 }

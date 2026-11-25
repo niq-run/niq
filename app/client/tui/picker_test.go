@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -103,16 +104,52 @@ func TestReadKey(t *testing.T) {
 		{"\x0e", keyDown}, {"\x10", keyUp}, // Ctrl+N / Ctrl+P
 		{"\r", keyEnter}, {"\n", keyEnter},
 		{"q", keyQuit}, {"\x03", keyQuit}, // q / Ctrl+C
+		{"\x15", keyUp}, {"\x04", keyDown}, // Ctrl+U / Ctrl+D, as in less
 		{"\x1b[A", keyUp}, {"\x1b[B", keyDown}, // CSI arrows
 		{"\x1bOA", keyUp}, {"\x1bOB", keyDown}, // SS3 arrows
-		{"\x1b", keyQuit},  // lone Esc: the next read hits EOF
-		{"\x1bx", keyQuit}, // Esc then something that is not an arrow
+		{"\x1b[1;5A", keyUp}, {"\x1b[1;5B", keyDown}, // modified arrows
+		{"\x1b[13u", keyEnter}, // Kitty Enter, if a terminal is left in it
+		// A stray Esc is not a quit: an IME cancelling a composition sends one.
+		{"\x1b", keyOther},
+		{"\x1bx", keyOther},
+		{"\x1b[Z", keyOther},
 		{"z", keyOther},
 	} {
 		in := bufio.NewReader(strings.NewReader(tc.in))
 		if got := readKey(in, noDeadline); got != tc.want {
 			t.Errorf("readKey(%q) = %v, want %v", tc.in, got, tc.want)
 		}
+	}
+}
+
+// flakyReader yields a deadline error once before the real bytes, the way a
+// partial multi-byte read can surface.
+type flakyReader struct {
+	erred bool
+	s     string
+	pos   int
+}
+
+func (r *flakyReader) Read(p []byte) (int, error) {
+	if !r.erred {
+		r.erred = true
+		return 0, os.ErrDeadlineExceeded
+	}
+	if r.pos >= len(r.s) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.s[r.pos:])
+	r.pos += n
+	return n, nil
+}
+
+// TestReadKeySurvivesIdleTimeout pins that a read timeout is treated as a wait:
+// the picker keeps listening instead of closing.
+func TestReadKeySurvivesIdleTimeout(t *testing.T) {
+	noDeadline := func(time.Time) error { return nil }
+	in := bufio.NewReader(&flakyReader{s: "j"})
+	if got := readKey(in, noDeadline); got != keyDown {
+		t.Fatalf("after a timeout readKey = %v, want keyDown", got)
 	}
 }
 
