@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/niq-run/niq/app/client/tui/stdin"
 	"github.com/niq-run/niq/app/standalone/contract"
 )
 
@@ -95,8 +96,8 @@ func (m *menu) run() (int, error) {
 	}
 	defer term.Restore(fd, state)
 
-	in := bufio.NewReader(os.Stdin)
-	return m.loop(func() key { return readKey(in, os.Stdin.SetReadDeadline) }, os.Stdout)
+	in := stdin.Stream()
+	return m.loop(func() key { return readKey(in, stdin.SetDeadline) }, os.Stdout)
 }
 
 // loop is run() with the terminal taken out: the key source and the output are
@@ -171,12 +172,21 @@ func (m *menu) height() int {
 }
 
 // readKey maps one keypress (or one arrow-key escape sequence) to a key. The
-// deadline is what tells a lone Esc ("quit") apart from the start of an arrow
-// sequence; it is a parameter so a test can pass a no-op.
+// deadline is what tells a lone Esc apart from the start of an arrow sequence; it
+// is a parameter so a test can pass a no-op.
+//
+// A stray Esc never quits. Switching or cancelling a Chinese IME sends ESC, and
+// treating that as quit closed the picker under the user's hands; only q, Ctrl+C
+// and the end of input quit now. An idle read timeout is a wait, not a key, and
+// is retried for the same reason.
 func readKey(in *bufio.Reader, setDeadline func(time.Time) error) key {
 	b, err := in.ReadByte()
+	for errors.Is(err, os.ErrDeadlineExceeded) {
+		// A timeout, or a partially delivered multi-byte character: keep waiting.
+		b, err = in.ReadByte()
+	}
 	if err != nil {
-		return keyQuit
+		return keyQuit // end of input
 	}
 	switch b {
 	case 3, 'q', 'Q': // Ctrl+C
@@ -185,39 +195,79 @@ func readKey(in *bufio.Reader, setDeadline func(time.Time) error) key {
 		return keyEnter
 	case 'k', 16: // k, Ctrl+P (readline/Emacs "previous")
 		return keyUp
-	case 'j', 14: // j, Ctrl+N
+	case 'j', 14: // j, Ctrl+N (readline/Emacs "next")
+		return keyDown
+	case 21: // Ctrl+U, as in less/vim: move up in the list
+		return keyUp
+	case 4: // Ctrl+D, as in less/vim: move down in the list
 		return keyDown
 	case 0x1b:
-		// Arrows arrive as ESC [ A / ESC [ B in a single burst, but a lone Esc
-		// means quit — wait a moment for the rest before deciding.
-		_ = setDeadline(time.Now().Add(40 * time.Millisecond))
-		next, err := in.ReadByte()
-		_ = setDeadline(time.Time{})
-		if err != nil {
-			return keyQuit
-		}
-		if next != '[' && next != 'O' {
-			return keyQuit
-		}
-		arrow, err := in.ReadByte()
-		if err != nil {
-			return keyOther
-		}
-		switch arrow {
-		case 'A':
-			return keyUp
-		case 'B':
-			return keyDown
-		}
+		return readEscape(in, setDeadline)
 	}
 	return keyOther
 }
 
+// escBurst is how long to wait for the rest of an escape sequence. Arrows arrive
+// as one burst, well inside it.
+const escBurst = 40 * time.Millisecond
+
+// readEscape consumes an escape sequence and maps the keys the picker uses.
+// Anything it does not recognize is ignored rather than treated as a quit: an IME
+// cancelling a composition, or any other program writing ESC, must not close the
+// picker under the user's hands.
+func readEscape(in *bufio.Reader, setDeadline func(time.Time) error) key {
+	_ = setDeadline(time.Now().Add(escBurst))
+	defer func() { _ = setDeadline(time.Time{}) }()
+
+	next, err := in.ReadByte()
+	if err != nil || (next != '[' && next != 'O') {
+		return keyOther // a lone Esc, or something that is not a sequence at all
+	}
+	var params []int
+	cur, have := 0, false
+	for {
+		b, err := in.ReadByte()
+		if err != nil {
+			return keyOther
+		}
+		if b >= '0' && b <= '9' {
+			cur = cur*10 + int(b-'0')
+			have = true
+			continue
+		}
+		if b == ';' || b == ':' {
+			params = append(params, cur)
+			cur, have = 0, false
+			continue
+		}
+		// b is the final byte.
+		if have || len(params) > 0 {
+			params = append(params, cur)
+		}
+		switch b {
+		case 'A':
+			return keyUp
+		case 'B':
+			return keyDown
+		case 'u':
+			// Kitty keyboard protocol, in case a terminal is left in it: Enter
+			// arrives as CSI 13u rather than CR.
+			if len(params) > 0 && (params[0] == 13 || params[0] == 10) {
+				return keyEnter
+			}
+		}
+		return keyOther
+	}
+}
+
 // RunPicker is `niq i`: pick an instance, then an action. baseURL is the
 // gateway the caller resolved, and the address of every project link this
-// prints comes from it. Without a terminal it degrades to the plain table, so
-// piping the command still means something.
-func RunPicker(baseURL string) error {
+// prints comes from it. header is the control-plane identity block the caller
+// renders (the same one a bare `niq` prints); it leads the screen so the picker
+// shows the service's basic information above the list. Empty falls back to the
+// version line. Without a terminal it degrades to the plain table, so piping the
+// command still means something.
+func RunPicker(baseURL, header string) error {
 	// The list stays up after an action: acting on one project is rarely the
 	// whole errand. The block is redrawn in place each round — states reloaded,
 	// cursor kept on the project just acted on — and the result of the last
@@ -225,7 +275,7 @@ func RunPicker(baseURL string) error {
 	// appended, so the screen never scrolls away from the list.
 	client := contract.New(baseURL)
 
-	list := &menu{title: pickerTitle(), keep: true, statusLine: true}
+	list := &menu{title: pickerTitle(header), keep: true, statusLine: true}
 	for {
 		projects, err := client.List()
 		if err != nil {
@@ -243,7 +293,12 @@ func RunPicker(baseURL string) error {
 		list.refresh = func(c int) []string { return projectRows(projects, projectDirCell, c) }
 		chosen, err := list.run()
 		if errors.Is(err, errNotTerminal) {
-			// Nothing to interact with: the table is the whole answer.
+			// Nothing to interact with: the same header then the table is the whole
+			// answer.
+			if top := strings.TrimRight(header, "\n"); top != "" {
+				fmt.Println(top)
+				fmt.Println()
+			}
 			PrintTable(projects, projectDirCell, "")
 			return nil
 		}
@@ -284,11 +339,15 @@ func RunPicker(baseURL string) error {
 	}
 }
 
-// pickerTitle is the block's header: the same identity line every other screen
-// prints, a blank line (the list is the content, not part of the header), then
-// the keys.
-func pickerTitle() string {
-	return versionTag() + "\n\n" +
+// pickerTitle is the block's header: the control-plane identity block the caller
+// passed in (the same basic information a bare `niq` prints — or just the version
+// line when none was given), a blank line, then the keys.
+func pickerTitle(header string) string {
+	top := strings.TrimRight(header, "\n")
+	if top == "" {
+		top = versionTag()
+	}
+	return top + "\n\n" +
 		bold("↑/↓") + dim(", ") + bold("⌃n/⌃p") + dim(" or ") + bold("j/k") +
 		dim(" move · enter select · q quit")
 }
@@ -343,7 +402,7 @@ func actionRows(options []string, disabled []bool, cursor int) []string {
 		case i < len(disabled) && disabled[i]:
 			rows[i] = dim("○ ") + dim("["+opt+"]")
 		case i == cursor:
-			rows[i] = cursorDot(true) + brandBold("["+opt+"]")
+			rows[i] = cursorDot(true) + reverse("["+opt+"]")
 		default:
 			rows[i] = cursorDot(false) + bold("["+opt+"]")
 		}

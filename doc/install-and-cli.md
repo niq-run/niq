@@ -392,32 +392,48 @@ past either edge — funnels through the viewport, so paging and history loading
 behave the same however they were triggered.
 
 The human's own messages stay inline on the `you › …` line and are the one block
-set off by a blank line above them. A worker's answer puts its
-speaker label on its own line and, with no blank line above it, renders the body
-below as markdown — headings, bold/italic, inline code, links, lists, quotes,
+set off by a blank line above them. A worker's answer opens with a rule carrying
+its name at the very left edge (`niq ··········`), a blank row, then the body as
+rendered markdown — headings, bold/italic, inline code, links, lists, quotes,
 fenced code (syntax-highlighted for go, python, js/ts, json, shell and rust), pipe
 tables and rules — wrapped flush left. Tables are fitted to the terminal width,
-shrinking and wrapping cells rather than overflowing. Context rows are compact
-instead: *thinking*, a tool call or a request result is one line — a coloured
-label naming the event, a colon, then a dim detail truncated with an ellipsis
-rather than wrapped. Only the human's `you ›` and a worker's `id ›` keep the arrow;
-event rows use the plainer `label:` form.
+shrinking and wrapping cells rather than overflowing. Context is compact: a
+*thinking* trace is one grey row — a coloured label, a colon, then a dim detail
+truncated with an ellipsis rather than wrapped. A tool call is its own card
+instead, in pi's shape: the first line is the call — the capability, the worker
+it addressed, then the argument payload, ellipsized when it does not fit —
+followed by a blank spacer and at most two rows of the reply in a softer tone.
+The answer is folded into the call, so one call and its reply are one card, never
+a stripe of rows; only the human's `you ›` and a worker's `id ›` keep the arrow,
+and plain event rows use the `label:` form.
 
 Titles are colour-coded so the transcript can be scanned: the human's `you` is
-green, a worker's answer keeps the brand blue, `thinking` is magenta, ordinary
-events (tool calls, request results) are cyan, warnings (`interrupted`, `abort`,
-`timeout`, `cancel`) yellow, and failures red.
+green, a worker's answer keeps the brand blue, `thinking` is grey, warnings
+(`interrupted`, `abort`, `timeout`, `cancel`) are bright yellow on their own
+amber surface, and failures are red on the error surface.
 
 Structure comes from surfaces, as in pi: the human's turns sit on a tinted card
-(no underline; injected `<system-reminder>` blocks are hidden), tool calls and
-results on a green surface, and code blocks on a code surface, with the input in
-a docked panel framed by rules and a blank row above it. Thinking is not boxed:
-it shows as one grey line per trace so it recedes. Each surface insets its text
-and pads a row above and below, and one blank row separates adjacent blocks, so
-the transcript reads in layers rather than a wall of text. The target, view scope,
+(no underline; injected `<system-reminder>` blocks are hidden), each tool call is
+its own green card — a bright call line, a spacer, then the reply in a lighter
+tone, on a deep desaturated green — and code blocks sit on a code surface, with
+the input framed by two rules with a blank row above it (the composer has no
+surface of its own). A worker's
+answer takes no surface of its own; its rule starts at the left edge and its body
+is inset by one cell, so the prose lines up with the text inside those cards.
+Thinking is
+not boxed: it plays in grey, up to ten lines per trace, streaming as it is
+produced — past ten it keeps the first three lines and the newest seven with a
+`··· N lines omitted ···` row between them. Each surface insets
+its text and pads a row above and below, and one blank row separates adjacent
+blocks, so the transcript reads in layers rather than a wall of text. The target,
+view scope,
 scroll position and keys are drawn into the dock's top rule (`── … ──`), visible
 without costing the transcript a row. Bands downgrade to 256 colours, or disappear
-under `NO_COLOR` / a 16-colour terminal; the palette follows `COLORFGBG`. The
+under `NO_COLOR` / a 16-colour terminal. The palette follows the terminal rather
+than a guess: on start niq asks for the background colour (OSC 11) and the colour
+scheme (`CSI ? 997 n`), and subscribes to scheme changes (mode 2031), so a light
+terminal gets the light surfaces and toggling the theme repaints live. Terminals
+that answer none of it fall back to `COLORFGBG`, then to dark. The
 wheel scrolls one line per notch; each sent message records its addressee
 (`you → <id> › …`), and a dropped stream is retried on a capped backoff with its
 status shown in the rule.
@@ -428,18 +444,79 @@ releasing copies it — OSC 52 for terminals that support it, plus `pbcopy` on
 macOS or `wl-copy`/`xclip`/`xsel` on Linux when present. Selection is drawn as
 reverse video and survives scrolling.
 
+The composer is its own component, and it takes the same shapes the WebUI's input
+does. It is multi-line: `shift+enter` (where the terminal speaks the Kitty
+keyboard protocol), `⌃J`, or `⌥enter` starts a new line and `enter` sends. A large
+paste stays one chip on screen — `[pasted text #1 · 24 lines]` — and expands to
+its real text only when the message is sent, so pasting a stack trace does not
+bury the conversation or fight the cursor. Pasting a file path (or dropping a file
+onto the terminal, which most terminals paste as a path) stages it as an
+attachment: images ride inline as base64, other files are referenced by their
+path or uploaded, depending on where the gateway runs (below). Attachments and
+long messages show above the input, capped, and the dock scrolls to keep the
+cursor visible. `⌃X` opens the input-mode picker (default / append / interrupt /
+schedule), the same `input_mode` the WebUI's mode picker sends; the current mode
+and attachment count show in the dock's top rule.
+
+A `file` block is only a *reference*: the reason worker turns it into a note
+naming the path (`[referenced file: … (N bytes)]`) and leaves the bytes alone —
+what reads it is a tool, running where the project runs. So the path has to be
+valid on the gateway's machine, which is exactly why locality matters. When the
+gateway is on this machine (a loopback address, or its hostname) the attachment
+keeps its local path: no copy, and a tool can open it directly. When it is not,
+the file is uploaded through `POST /api/upload` before the message is sent and the
+path the gateway returns is what the message names; the dock shows `(upload)` so
+the difference is visible. `NIQ_ATTACH=upload` or `NIQ_ATTACH=path` overrides the
+decision — an SSH tunnel to a remote gateway looks local, and a shared mount makes
+a remote host behave like a local one. Images are the exception either way: they
+ride inline as base64, which is a real multimodal block the model sees.
+
 | Key | Action |
 |---|---|
+| `q` / `⌃C` | quit (`Esc` is ignored, so an IME cancelling a composition cannot close it) |
+
+The conversation view is modal, like vim. It opens in **insert mode**, where every
+key goes to the message; `esc` switches to **normal mode**, where keys scroll the
+transcript; `i` (or a click in the composer) goes back. The rule above the input
+has the send target, the view scope and the input mode on the left, and the vim
+state plus a `help` entry on the right (shortcut reminders live in the help card,
+not the rule). Every segment of that rule is a click target: `target:`, `view:`
+and `mode:` open the matching picker, `help` opens the keymap, and clicking the vim
+state toggles insert / normal. `?` in normal mode or `⌃?` in either mode also opens
+the keymap. Every popup closes on `esc` or a click outside it (a card closing never
+tears down the conversation, so `⌃C` still needs a second press to leave).
+
+| insert mode | Action |
+|---|---|
 | `enter` | send the message |
-| `←` / `→`, `⌃A` | move the cursor; `⌃A` jumps to the line start |
+| `shift+enter`, `⌃J`, `⌥enter` | insert a newline (multi-line message) |
+| `←` / `→` / `↑` / `↓` | move the cursor |
+| `⌃A` / `⌃E` | line start / end |
+| `⌃B` / `⌃F`, `⌥b` / `⌥f` | char left / right; by word |
+| `⌃P` / `⌃N` | previous / next line |
 | `⌫` / `⌦` | delete before / after the cursor |
-| `⌃K` | clear the input line |
-| `⌃U` / `⌃D`, `⌃B` / `⌃F`, `PgUp` / `PgDn` | page the transcript (reaching the top loads more history) |
-| `⌃Y` / `⌃E`, `⌃P` / `⌃N` | scroll one line up / down |
+| `⌃K` | kill to the end of the line |
+| `⌃W` | kill the previous word |
+| `⌃Y` | yank the last kill |
+| `⌃?` | keybinding help |
+| `esc` | normal mode |
+
+| normal mode | Action |
+|---|---|
+| `j` / `k`, `⌃E` / `⌃Y` | scroll one line down / up |
+| `⌃D` / `⌃U`, `⌃F` / `⌃B`, `PgUp` / `PgDn`, `⌃↑` / `⌃↓` | page the transcript (reaching the top loads more history) |
+| `g` / `G` | jump to the oldest / newest |
+| `i` | insert mode |
+| `?` | keybinding help (a card over the transcript; `esc`, any keyboard key, or a click outside closes it, `⌃C` included) |
+| `shift+↑` / `shift+↓` | scroll one line |
+
+| both modes | Action |
+|---|---|
+| `⌃X` | input-mode picker: default / append / interrupt / schedule |
+| `⌃T` / `⌃V` | target / view pickers, scoped like the WebUI to reason/coding/niq workers (`↑`/`↓`, `j`/`k`, `⌃P`/`⌃N`, `enter`, `esc`; each scrolls when long) |
 | mouse wheel | scroll one line per notch |
 | mouse drag | select text; release copies it |
-| `⌃T` | worker menu: scope the view and pick the send target (`↑`/`↓`, `j`/`k`, `⌃P`/`⌃N`, `enter`, `esc`) |
-| `⌃C` | leave the conversation |
+| `⌃C`, `⌃Q` | leave the conversation |
 
 ## 4. Server deployment
 

@@ -89,6 +89,13 @@ func (v *viewport) followBottom() {
 // line first()+r.
 func (v *viewport) first() int { return v.top }
 
+// toTop jumps to the oldest line in the window, leaving follow.
+func (v *viewport) toTop() {
+	v.follow = false
+	v.top = 0
+	v.clamp()
+}
+
 // atTop reports whether the first content line is visible (the cue to load more
 // history).
 func (v *viewport) atTop() bool { return v.top == 0 }

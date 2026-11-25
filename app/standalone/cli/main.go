@@ -102,13 +102,19 @@ func Main(spec Spec) {
 }
 
 // runInteractive opens the terminal shell. Like every other face it needs the
-// gateway: the picker is a client, not a second control path.
+// gateway: the picker is a client, not a second control path. It leads with the
+// same control-plane header a bare `niq` prints, so `niq i` shows the service's
+// basic information above the interactive project list.
 func runInteractive() error {
 	baseURL, err := ensureGatewayForUI()
 	if err != nil {
 		return err
 	}
-	return tui.RunPicker(baseURL)
+	header := ""
+	if st, ok := readShellState(); ok && isRunning(st) {
+		header = controlHeader(st)
+	}
+	return tui.RunPicker(baseURL, header)
 }
 
 // ensureGatewayForUI resolves a running gateway and returns its address, starting

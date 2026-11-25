@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"bytes"
 	"strings"
 	"testing"
 
@@ -36,14 +37,14 @@ func TestDecodeMouseWheel(t *testing.T) {
 func TestHintShowsTarget(t *testing.T) {
 	c := &chat{width: 120, target: "blank-slate", vp: viewport{follow: true}}
 	h := c.hint()
-	if !strings.Contains(h, "→ blank-slate") {
+	if !strings.Contains(h, "target: blank-slate") {
 		t.Fatalf("hint missing target: %q", h)
 	}
 	if !strings.Contains(h, "view: all") {
 		t.Fatalf("hint missing view: %q", h)
 	}
-	if !strings.Contains(h, "ctrl+u/d") {
-		t.Fatalf("hint missing paging keys: %q", h)
+	if !strings.Contains(h, "insert") {
+		t.Fatalf("hint missing the mode state: %q", h)
 	}
 }
 
@@ -192,6 +193,36 @@ func TestBandLinePads(t *testing.T) {
 	}
 }
 
+// TestDockHasNoSurface pins that the input area carries no background of its own:
+// the two rules frame it, and the composer rows stay on the terminal background.
+// Banded blocks (a tool card here) still paint their own surface.
+func TestDockHasNoSurface(t *testing.T) {
+	oldAnsi, oldTC := ansi, truecolor
+	defer func() { ansi, truecolor = oldAnsi, oldTC }()
+	ansi, truecolor = true, true
+
+	var buf bytes.Buffer
+	scr := newScreen(&buf, 0)
+	c := &chat{
+		scr: scr, width: scr.w, height: scr.h,
+		in: newInput(), partners: []contract.Worker{{ID: "niq", Type: "reason", Online: true}},
+		target: "niq", vp: viewport{follow: true}, seen: map[string]bool{},
+	}
+	c.lines = []string{"\x1b[38;2;226;232;240;48;2;37;65;49m$ read → workspace\x1b[0m"}
+	c.render()
+	c.render() // second frame: the diff renderer only writes changed rows
+
+	out := buf.String()
+	if !strings.Contains(out, "48;2;37;65;49") {
+		t.Fatalf("the tool card lost its surface:\n%q", out)
+	}
+	// Exactly one surface in the frame: the card. The hint, the composer row and
+	// the closing rule all stay on the terminal's own background.
+	if n := strings.Count(out, "48;2;"); n != 1 {
+		t.Fatalf("frame has %d painted surfaces, want only the tool card:\n%q", n, out)
+	}
+}
+
 // TestDockFillsWidth checks the status rule and the closing rule span the row.
 func TestDockFillsWidth(t *testing.T) {
 	c := &chat{width: 60, target: "blank-slate", vp: viewport{follow: true}}
@@ -276,13 +307,175 @@ func TestDescribeConversation(t *testing.T) {
 	reply := contract.Event{Type: "reason.response", WorkerID: "reason", Payload: map[string]any{
 		"content": []any{"line one", "line two"},
 	}}
-	if r, ok := describe(reply, 80); !ok || r.text != "line one\nline two" || !strings.HasPrefix(r.plainPrefix, "reason") || !r.chat {
+	if r, ok := describe(reply, 80); !ok || r.text != "line one\nline two" || !strings.Contains(r.header, "reason") || !r.chat {
 		t.Fatalf("reply = %+v ok=%v", r, ok)
 	}
 }
 
-// TestDescribeDropsNoise pins the events a conversation hides: delivery markers,
-// deltas and lifecycle presence.
+// TestResponseSectionRule pins the response header: a full-width rule with the
+// speaker's name set into it, a few dashes in from the left.
+func TestResponseSectionRule(t *testing.T) {
+	r, ok := describe(contract.Event{Type: "reason.response", WorkerID: "blank-slate",
+		Payload: map[string]any{"content": []any{"hi"}}}, 56)
+	if !ok {
+		t.Fatal("response dropped")
+	}
+	if w := visibleWidth(r.header); w != 56 {
+		t.Fatalf("rule width = %d, want 56: %q", w, r.header)
+	}
+	plain := stripANSI(r.header)
+	if !strings.HasPrefix(plain, "blank-slate ···") {
+		t.Fatalf("rule = %q", plain)
+	}
+	short := sectionRule("x", 9)
+	if w := visibleWidth(short); w != 9 {
+		t.Fatalf("short rule width = %d, want 9: %q", w, short)
+	}
+}
+
+// TestWarnRowsAreBanded checks a warning row (cancel, timeout, abort) now has its
+// own amber surface rather than floating on the terminal background.
+func TestWarnRowsAreBanded(t *testing.T) {
+	for _, typ := range []string{"request.cancel", "timer.timeout", "worker.abort", "reason.interrupted"} {
+		r, ok := describe(contract.Event{Type: typ}, 80)
+		if !ok {
+			t.Fatalf("%s dropped", typ)
+		}
+		if r.band != bandWarn {
+			t.Fatalf("%s band = %v, want bandWarn", typ, r.band)
+		}
+	}
+}
+
+// TestReplyInset checks a worker's answer is unbanded, its rule starts at the left
+// edge, its body is indented like the text in the banded cards, and a blank row
+// separates the two.
+func TestReplyInset(t *testing.T) {
+	oldAnsi, oldTC := ansi, truecolor
+	defer func() { ansi, truecolor = oldAnsi, oldTC }()
+	ansi, truecolor = true, true
+
+	events := []contract.Event{
+		{ID: "t1", Type: "reason.thinking", WorkerID: "niq", Payload: map[string]any{"content": []any{"hmm"}}},
+		{ID: "r1", Type: "reason.response", WorkerID: "niq", Payload: map[string]any{"content": []any{"answer"}}},
+	}
+	lines := renderEvents(events, "", 40)
+
+	var ruled, blank, body bool
+	for _, ln := range lines {
+		if strings.Contains(ln, "48;2;") {
+			t.Fatalf("reply block still banded: %q", ln)
+		}
+		plain := stripANSI(ln)
+		switch {
+		case strings.Contains(plain, "niq ·"):
+			// Flush left and full width.
+			ruled = strings.HasPrefix(plain, "niq ·") && visibleWidth(ln) == 40
+		case ruled && strings.TrimSpace(plain) == "":
+			blank = true
+		case strings.Contains(plain, "answer"):
+			body = strings.HasPrefix(plain, " answer")
+		}
+	}
+	if !ruled || !blank || !body {
+		t.Fatalf("reply section incomplete: rule=%v blank=%v body=%v", ruled, blank, body)
+	}
+}
+
+// TestToolCallCard pins the tool card's shape: the call line (name, target and
+// argument payload), a spacer, then at most two reply rows with the overflow
+// ellipsized. The reply event is folded into the card, not drawn twice.
+func TestToolCallCard(t *testing.T) {
+	call := contract.Event{ID: "c1", Type: "read", WorkerID: "niq",
+		TargetWorkerID: "workspace", RequestID: "r1",
+		Payload: map[string]any{"path": "README.md"}}
+	done := contract.Event{ID: "a1", Type: "request.completed", WorkerID: "workspace",
+		RequestID: "r1", Payload: map[string]any{"result": "alpha\nbeta\ngamma\ndelta"}}
+
+	lines := renderEvents([]contract.Event{call, done}, "", 60)
+	if len(lines) != 4 {
+		t.Fatalf("card lines = %d, want 4: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "read") || !strings.Contains(lines[0], "→ workspace") ||
+		!strings.Contains(lines[0], "README.md") {
+		t.Fatalf("call line = %q", lines[0])
+	}
+	if lines[1] != "" {
+		t.Fatalf("no spacer between call and reply: %q", lines)
+	}
+	if lines[2] != "alpha" || !strings.HasPrefix(lines[3], "beta") || !strings.HasSuffix(lines[3], "…") {
+		t.Fatalf("reply rows = %q", lines[2:])
+	}
+	if strings.Contains(strings.Join(lines, "\n"), "alpha\nalpha") {
+		t.Fatalf("reply drawn twice: %q", lines)
+	}
+}
+
+// TestToolCallCardsStandAlone pins that two calls are two blocks with a gap, not
+// one merged panel.
+func TestToolCallCardsStandAlone(t *testing.T) {
+	events := []contract.Event{
+		{ID: "c1", Type: "read", TargetWorkerID: "workspace", RequestID: "r1"},
+		{ID: "a1", Type: "request.completed", RequestID: "r1", Payload: map[string]any{"result": "one"}},
+		{ID: "c2", Type: "bash", TargetWorkerID: "host", RequestID: "r2"},
+		{ID: "a2", Type: "request.completed", RequestID: "r2", Payload: map[string]any{"result": "two"}},
+	}
+	lines := renderEvents(events, "", 60)
+	// card one: head, spacer, reply; gap; card two: head, spacer, reply.
+	if len(lines) != 7 {
+		t.Fatalf("two cards = %d lines, want 7: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "read") || lines[3] != "" || !strings.Contains(lines[4], "bash") {
+		t.Fatalf("cards not separated: %q", lines)
+	}
+}
+
+// TestToolFailureSurface checks a failed reply paints the card on the error
+// surface and keeps its error text.
+func TestToolFailureSurface(t *testing.T) {
+	call := contract.Event{ID: "c1", Type: "bash", TargetWorkerID: "host", RequestID: "r1"}
+	failed := contract.Event{ID: "a1", Type: "request.failed", RequestID: "r1",
+		Payload: map[string]any{"error": "exit 1: not a git repository"}}
+	r := toolBlock(call, &failed, 60)
+	if r.band != bandError {
+		t.Fatalf("band = %v, want bandError", r.band)
+	}
+	if got := strings.Join(r.body, "\n"); !strings.Contains(got, "not a git repository") {
+		t.Fatalf("error text missing: %q", got)
+	}
+}
+
+// TestToolOrphanAnswer checks a reply whose call is out of view still renders as
+// a row rather than disappearing.
+func TestToolOrphanAnswer(t *testing.T) {
+	done := contract.Event{ID: "a1", Type: "request.completed", RequestID: "gone",
+		Payload: map[string]any{"result": "kept"}}
+	lines := renderEvents([]contract.Event{done}, "", 60)
+	if len(lines) == 0 || !strings.Contains(strings.Join(lines, "\n"), "request.completed") {
+		t.Fatalf("orphan answer dropped: %q", lines)
+	}
+}
+
+// TestWrapMax pins the three-row budget: two rows of reply, ellipsized.
+func TestWrapMax(t *testing.T) {
+	got := wrapMax("aaa\nbbb\nccc", 20, 2)
+	if len(got) != 2 || got[0] != "aaa" || got[1] != "bbb…" {
+		t.Fatalf("wrapMax = %q", got)
+	}
+	if got := wrapMax("", 20, 2); got != nil {
+		t.Fatalf("empty wrapMax = %q", got)
+	}
+	lang := wrapMax(strings.Repeat("x", 50), 10, 3)
+	if len(lang) != 3 {
+		t.Fatalf("long wrap = %d rows, want 3", len(lang))
+	}
+	for _, l := range lang {
+		if displayWidth(l) > 10 {
+			t.Fatalf("row too wide: %q", l)
+		}
+	}
+}
+
 func TestDescribeDropsNoise(t *testing.T) {
 	for _, typ := range []string{"event.delivered", "reason.text_delta", "reason.thinking_delta", "worker.ready", "worker.gone", "request.progressed", "reason.start"} {
 		if _, ok := describe(contract.Event{Type: typ}, 80); ok {
@@ -343,14 +536,15 @@ func TestEventLineIsSingleLine(t *testing.T) {
 }
 
 // TestEventLineLabels covers the label: form the event families produce.
+// TestEventLineLabels covers the label: form the event families produce. Thinking
+// is its own shape now (a grey block, see TestThinkingBlock), so it is not here.
 func TestEventLineLabels(t *testing.T) {
 	for _, tc := range []struct {
 		ev   contract.Event
 		want string
 	}{
-		{contract.Event{Type: "reason.thinking", Payload: map[string]any{"content": []any{"ponder"}}}, "thinking: "},
-		{contract.Event{Type: "worker.abort"}, "abort: "},
-		{contract.Event{Type: "timer.timeout"}, "timeout: "},
+		{contract.Event{Type: "worker.abort"}, "abort"},
+		{contract.Event{Type: "timer.timeout"}, "timeout"},
 		{contract.Event{Type: "request.failed", Payload: map[string]any{"error": "boom"}}, "request.failed: "},
 		{contract.Event{Type: "search", Payload: map[string]any{"q": "x"}}, "search: "},
 	} {
@@ -364,6 +558,34 @@ func TestEventLineLabels(t *testing.T) {
 		if len(blockBody(r, 80)) != 1 {
 			t.Errorf("%s is not one line", tc.ev.Type)
 		}
+	}
+}
+
+// TestTimeoutAndCancelDetails checks the timeout and cancel rows name what
+// happened instead of showing a bare label.
+func TestTimeoutAndCancelDetails(t *testing.T) {
+	// A timer with a purpose names it.
+	r, ok := describe(contract.Event{Type: "timer.timeout", Payload: map[string]any{
+		"result": `{"purpose":"round watchdog","duration_ms":600000}`,
+	}}, 80)
+	if !ok || r.plainPrefix != "timeout: " || r.text != "round watchdog" {
+		t.Fatalf("timeout row = %q / %q", r.plainPrefix, r.text)
+	}
+
+	// With no purpose it falls back to the armed duration.
+	r, _ = describe(contract.Event{Type: "timer.timeout", Payload: map[string]any{
+		"result": `{"duration_ms":600000}`,
+	}}, 80)
+	if r.text != "10m0s" {
+		t.Fatalf("timeout duration = %q", r.text)
+	}
+
+	// A cancel names the timer it cancelled.
+	r, ok = describe(contract.Event{Type: "request.cancel", Payload: map[string]any{
+		"timer_id": "niq_wd_7",
+	}}, 80)
+	if !ok || r.plainPrefix != "cancel: " || r.text != "niq_wd_7" {
+		t.Fatalf("cancel row = %q / %q", r.plainPrefix, r.text)
 	}
 }
 
@@ -563,20 +785,20 @@ func TestEditor(t *testing.T) {
 	e.insert('c')
 	e.left()      // cursor between b and c
 	e.insert('X') // a b X c
-	if e.text() != "abXc" || e.cur != 3 {
-		t.Fatalf("after insert: %q cur=%d", e.text(), e.cur)
+	if e.text() != "abXc" || e.col != 3 {
+		t.Fatalf("after insert: %q col=%d", e.text(), e.col)
 	}
 	e.backspace() // removes X
-	if e.text() != "abc" || e.cur != 2 {
-		t.Fatalf("after backspace: %q cur=%d", e.text(), e.cur)
+	if e.text() != "abc" || e.col != 2 {
+		t.Fatalf("after backspace: %q col=%d", e.text(), e.col)
 	}
 	e.delete() // removes c (at cursor)
-	if e.text() != "ab" || e.cur != 2 {
-		t.Fatalf("after delete: %q cur=%d", e.text(), e.cur)
+	if e.text() != "ab" || e.col != 2 {
+		t.Fatalf("after delete: %q col=%d", e.text(), e.col)
 	}
 	e.home()
-	if e.cur != 0 {
-		t.Fatalf("home cur=%d", e.cur)
+	if e.col != 0 {
+		t.Fatalf("home col=%d", e.col)
 	}
 	e.backspace() // no-op at start
 	e.delete()    // removes a
@@ -584,36 +806,117 @@ func TestEditor(t *testing.T) {
 		t.Fatalf("delete at start: %q", e.text())
 	}
 	e.end()
-	if e.cur != len(e.buf) {
-		t.Fatalf("end cur=%d", e.cur)
+	if e.col != len(e.line()) {
+		t.Fatalf("end col=%d", e.col)
 	}
 	e.clear()
-	if e.text() != "" || e.cur != 0 {
-		t.Fatalf("clear: %q cur=%d", e.text(), e.cur)
+	if e.text() != "" || e.col != 0 || e.row != 0 {
+		t.Fatalf("clear: %q col=%d row=%d", e.text(), e.col, e.row)
 	}
 }
 
-// TestEditorWindow pins the input's horizontal window: the cursor is always
-// inside it, and the shown slice is bounded by avail cells.
-func TestEditorWindow(t *testing.T) {
-	// Cursor at the end of a long line: the window shows the tail, width-bounded.
-	e := &editor{buf: []rune("abcdefghijklmnopqrst"), cur: 20}
-	start, end, cur := e.window(10)
-	if start != 11 || end != 20 || cur != 9 {
-		t.Fatalf("tail window = (%d,%d,%d)", start, end, cur)
+// TestEditorMultiLine pins the line operations: newline splits at the cursor,
+// backspace at a line start joins upward, delete at a line end pulls down, and
+// up/down keep the column when they can.
+func TestEditorMultiLine(t *testing.T) {
+	e := &editor{}
+	for _, r := range "hello" {
+		e.insert(r)
 	}
-	if w := displayWidth(string(e.buf[start:end])); w > 10 {
-		t.Fatalf("window width %d exceeds 10", w)
+	e.col = 2
+	e.newline() // "he" / "llo"
+	if e.row != 1 || e.col != 0 || e.text() != "he\nllo" {
+		t.Fatalf("newline: %q row=%d col=%d", e.text(), e.row, e.col)
 	}
-	// Cursor at the start: the window fills forward.
-	e.cur = 0
-	start, end, cur = e.window(10)
-	if start != 0 || end != 10 || cur != 0 {
-		t.Fatalf("head window = (%d,%d,%d)", start, end, cur)
+	for _, r := range "X" {
+		e.insert(r)
 	}
-	// A short line fits entirely.
-	short := &editor{buf: []rune("hi"), cur: 2}
-	if s, en, c := short.window(10); s != 0 || en != 2 || c != 2 {
-		t.Fatalf("short window = (%d,%d,%d)", s, en, c)
+	if e.text() != "he\nXllo" {
+		t.Fatalf("insert after newline: %q", e.text())
+	}
+	e.left()
+	e.left() // across the line start onto the previous line
+	if e.row != 0 || e.col != 2 {
+		t.Fatalf("left across lines: row=%d col=%d", e.row, e.col)
+	}
+	e.down()
+	if e.row != 1 || e.col != 2 {
+		t.Fatalf("down: row=%d col=%d", e.row, e.col)
+	}
+	e.up()
+	if e.row != 0 || e.col != 2 {
+		t.Fatalf("up: row=%d col=%d", e.row, e.col)
+	}
+	e.backspace() // at start of "he"? no: col=2 is the end, so it deletes 'e'
+	if e.text() != "h\nXllo" {
+		t.Fatalf("backspace: %q", e.text())
+	}
+	e.home()
+	e.backspace() // at the very start: no-op
+	if e.text() != "h\nXllo" {
+		t.Fatalf("backspace at start: %q", e.text())
+	}
+	e.end()
+	e.delete() // end of line 0: pulls the next line up
+	if e.text() != "hXllo" || e.row != 0 || e.col != 1 {
+		t.Fatalf("delete joins down: %q row=%d col=%d", e.text(), e.row, e.col)
+	}
+	e.end()
+	e.delete() // end of the last line: no-op
+	if e.text() != "hXllo" {
+		t.Fatalf("delete at end: %q", e.text())
+	}
+	e.setText("one\ntwo\nthree")
+	if e.text() != "one\ntwo\nthree" || e.row != 2 || e.col != 5 {
+		t.Fatalf("setText: %q row=%d col=%d", e.text(), e.row, e.col)
+	}
+}
+
+// TestWrapAtoms pins the dock's wrap: rows are width-bounded and an atom (a
+// rune, or a whole chip) never splits across them.
+func TestWrapAtoms(t *testing.T) {
+	as := make([]atom, 0, 10)
+	for _, r := range "abcdefghij" {
+		as = append(as, atom{text: string(r), cells: 1, runes: 1})
+	}
+	groups := wrapAtoms(as, 4)
+	if len(groups) != 3 {
+		t.Fatalf("groups = %v", groups)
+	}
+	if groups[0] != [2]int{0, 4} || groups[1] != [2]int{4, 8} || groups[2] != [2]int{8, 10} {
+		t.Fatalf("groups = %v", groups)
+	}
+	if got := wrapAtoms(nil, 10); len(got) != 1 || got[0] != [2]int{0, 0} {
+		t.Fatalf("empty = %v", got)
+	}
+	// A 6-cell chip on its own row is not split.
+	wide := wrapAtoms([]atom{{text: "ab", cells: 2, runes: 1}, {text: "[chip]", cells: 6, runes: 1}}, 4)
+	if len(wide) != 2 {
+		t.Fatalf("chip split: %v", wide)
+	}
+}
+
+// TestInputRows pins the dock layout: the prompt on the first row, continuation
+// rows inset to match, and the cursor mapped onto the right row and column.
+func TestInputRows(t *testing.T) {
+	in := newInput()
+	in.ed.setText("hello world")
+	c := &chat{width: 12, in: in}
+	rows, curRow, curCol := c.inputRows()
+	// avail = 10 cells, so the line wraps after 10 runes.
+	if len(rows) != 2 {
+		t.Fatalf("rows = %q", rows)
+	}
+	if !strings.Contains(rows[0], "hello worl") || !strings.Contains(rows[1], "d") {
+		t.Fatalf("rows = %q", rows)
+	}
+	if curRow != 1 || curCol != 3 {
+		t.Fatalf("cursor = (%d,%d), want (1,3)", curRow, curCol)
+	}
+
+	in.ed.setText("a\nb")
+	rows, curRow, curCol = c.inputRows()
+	if len(rows) != 2 || curRow != 1 || curCol != 3 {
+		t.Fatalf("two lines: rows=%q cur=(%d,%d)", rows, curRow, curCol)
 	}
 }

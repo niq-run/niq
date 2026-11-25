@@ -1,4 +1,4 @@
-package tui
+package clipboard
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 // OSC 52 covers terminals that implement it, but several (macOS Terminal,
 // tmux without its clipboard option) ignore it, so the common helpers are tried
 // too. Failures are silent: the copy is a convenience, not a command.
-func nativeCopy(text string) {
+func Copy(text string) {
 	var candidates [][]string
 	switch runtime.GOOS {
 	case "darwin":

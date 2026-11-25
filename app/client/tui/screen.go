@@ -19,6 +19,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/term"
+
+	"github.com/niq-run/niq/app/client/tui/clipboard"
 )
 
 type screen struct {
@@ -59,8 +61,17 @@ func (s *screen) start() {
 	// Alternate screen, cursor hidden, screen cleared, home; enable button and
 	// drag reporting in SGR form (1000 + 1002 + 1006) so the wheel scrolls and a
 	// left drag can select text. 1000 guarantees press/release; 1002 adds motion
-	// while a button is held, which is the drag that draws a selection.
-	fmt.Fprint(s.out, "\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b[?1000h\x1b[?1002h\x1b[?1006h")
+	// while a button is held, which is the drag that draws a selection. The Kitty
+	// keyboard protocol's disambiguate flag makes shift+enter tell itself apart
+	// from enter; terminals that do not know it ignore the sequence. Bracketed
+	// paste (2004) delivers a paste as one unit, so a large block can become a
+	// chip instead of thousands of keystrokes.
+	fmt.Fprint(s.out, "\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[>1u")
+	// Ask the terminal for its background colour and colour scheme, and subscribe
+	// to scheme changes (mode 2031), so the palette matches a light or dark
+	// terminal and follows a live toggle. Terminals that do not know these report
+	// nothing, and the COLORFGBG/default fallback stands.
+	fmt.Fprint(s.out, "\x1b]11;?\x07\x1b[?997n\x1b[?2031h")
 	s.prev = nil
 	s.active = true
 }
@@ -69,7 +80,7 @@ func (s *screen) stop() {
 	if !s.active {
 		return
 	}
-	fmt.Fprint(s.out, "\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l")
+	fmt.Fprint(s.out, "\x1b[?2031l\x1b[<u\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?25h\x1b[?1049l")
 	s.active = false
 }
 
@@ -81,7 +92,7 @@ func (s *screen) copyToClipboard(text string) {
 		return
 	}
 	fmt.Fprintf(s.out, "\x1b]52;c;%s\x07", base64.StdEncoding.EncodeToString([]byte(text)))
-	go nativeCopy(text)
+	go clipboard.Copy(text)
 }
 
 // setTitle sets the terminal window title, which is where the project identity
@@ -168,4 +179,73 @@ func clipStyled(s string, width int) string {
 		b.WriteString("\x1b[0m")
 	}
 	return b.String()
+}
+
+// csiLen is the byte length of the ANSI escape starting at s[i], or 0 when s[i]
+// does not start one.
+func csiLen(s string, i int) int {
+	if i+1 >= len(s) || s[i] != 0x1b || s[i+1] != '[' {
+		return 0
+	}
+	for j := i + 2; j < len(s); j++ {
+		if s[j] >= 0x40 && s[j] <= 0x7e {
+			return j + 1 - i
+		}
+	}
+	return len(s) - i
+}
+
+// sliceStyled returns the cells [from, to) of a styled line. It replays the SGR
+// state up to from so a colour or background continues across the cut (a banded
+// tool card stays banded), and pads with spaces when the range runs past the
+// line's visible width.
+func sliceStyled(s string, from, to int) string {
+	if to <= from {
+		return ""
+	}
+	width := to - from
+	var state, out strings.Builder
+	cells := 0
+	i := 0
+	// Replay everything before from into state: the last escape in wins is the
+	// colour at the cut.
+	for i < len(s) && cells < from {
+		if n := csiLen(s, i); n > 0 {
+			state.WriteString(s[i : i+n])
+			i += n
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		cells += runeCells(r)
+		i += size
+	}
+	emitted := 0
+	if cells > from { // a wide rune straddled the left edge
+		out.WriteByte(' ')
+		emitted = 1
+	}
+	for i < len(s) && emitted < width {
+		if n := csiLen(s, i); n > 0 {
+			out.WriteString(s[i : i+n])
+			i += n
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		w := runeCells(r)
+		if emitted+w > width {
+			break
+		}
+		out.WriteString(s[i : i+size])
+		emitted += w
+		i += size
+	}
+	for emitted < width {
+		out.WriteByte(' ')
+		emitted++
+	}
+	res := state.String() + out.String()
+	if strings.Contains(res, "\x1b[") {
+		res += "\x1b[0m"
+	}
+	return res
 }

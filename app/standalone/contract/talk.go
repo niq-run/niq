@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -57,10 +59,16 @@ type Event struct {
 
 // Block is one element of a structured input's "content" array — the same
 // llm-like shape the reason worker's input converter understands. Text is the
-// only kind a terminal needs; image/file are left to the browser.
+// common kind; image carries base64 bytes and file a path on the project's disk,
+// matching what the WebUI sends.
 type Block struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+	Name string `json:"name,omitempty"`
+	Mime string `json:"mime,omitempty"`
+	Data string `json:"data,omitempty"`
+	Path string `json:"path,omitempty"`
+	Size int64  `json:"size,omitempty"`
 }
 
 // Input is the body POST /p/<id>/api/input accepts. Targets addresses the
@@ -72,6 +80,63 @@ type Input struct {
 	Targets   []string `json:"targets,omitempty"`
 	Target    string   `json:"target,omitempty"`
 	InputMode string   `json:"input_mode,omitempty"`
+}
+
+// ProviderOption is one selectable LLM provider of a reason worker, as the
+// worker reports it through GET /p/<id>/api/workers/<id>/providers.
+type ProviderOption struct {
+	Name    string   `json:"name"`
+	Default string   `json:"default"`
+	Models  []string `json:"models"`
+}
+
+// ProviderSelection is a provider/model pair — both the worker's current choice
+// and the target of a switch.
+type ProviderSelection struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// ProviderList is what GET /p/<id>/api/workers/<id>/providers returns: the
+// worker's selectable providers and its current choice.
+type ProviderList struct {
+	Providers []ProviderOption  `json:"providers"`
+	Current   ProviderSelection `json:"current"`
+}
+
+// ProviderSwitch is what POST /p/<id>/api/workers/<id>/provider returns. Done is
+// false (with Error set) when the worker refused the switch.
+type ProviderSwitch struct {
+	Done     bool   `json:"done"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Error    string `json:"error,omitempty"`
+}
+
+// WorkerProviders asks a reason worker for its selectable providers and current
+// model. Only reason-family workers answer; others get a 404.
+func (c *Client) WorkerProviders(projectID, workerID string) (ProviderList, error) {
+	var out ProviderList
+	path := projectPath(projectID, "/api/workers/"+url.PathEscape(workerID)+"/providers")
+	if err := c.do("GET", path, nil, &out); err != nil {
+		return ProviderList{}, err
+	}
+	return out, nil
+}
+
+// SetWorkerProvider asks a reason worker to switch its active provider/model.
+// Both are required — the worker rejects an empty model.
+func (c *Client) SetWorkerProvider(projectID, workerID, provider, model string) (ProviderSwitch, error) {
+	body, err := json.Marshal(ProviderSelection{Provider: provider, Model: model})
+	if err != nil {
+		return ProviderSwitch{}, err
+	}
+	var out ProviderSwitch
+	path := projectPath(projectID, "/api/workers/"+url.PathEscape(workerID)+"/provider")
+	if err := c.do("POST", path, bytes.NewReader(body), &out); err != nil {
+		return ProviderSwitch{}, err
+	}
+	return out, nil
 }
 
 // projectPath builds a project-scoped API path under the gateway's /p/<id>/
@@ -102,6 +167,64 @@ func (c *Client) SendInput(projectID string, in Input) error {
 		return err
 	}
 	return c.do("POST", projectPath(projectID, "/api/input"), bytes.NewReader(body), nil)
+}
+
+// UploadedFile is what POST /api/upload returns: the file's absolute path on the
+// machine running the project, plus what was stored.
+type UploadedFile struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// Upload writes one file into the project's upload directory through the
+// gateway and returns the path it now has there. A terminal that does not share
+// a disk with the project uses it so a file attachment points at a path the
+// workers can actually read.
+func (c *Client) Upload(ctx context.Context, projectID, name string, data []byte) (UploadedFile, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, strings.ReplaceAll(name, `"`, "")))
+	h.Set("Content-Type", "application/octet-stream")
+	part, err := mw.CreatePart(h)
+	if err != nil {
+		return UploadedFile{}, err
+	}
+	if _, err := part.Write(data); err != nil {
+		return UploadedFile{}, err
+	}
+	if err := mw.Close(); err != nil {
+		return UploadedFile{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		c.BaseURL+projectPath(projectID, "/api/upload"), bytes.NewReader(body.Bytes()))
+	if err != nil {
+		return UploadedFile{}, err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return UploadedFile{}, fmt.Errorf("gateway %s: %w", c.BaseURL, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return UploadedFile{}, err
+	}
+	if resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(raw))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return UploadedFile{}, fmt.Errorf("%s", msg)
+	}
+	var out UploadedFile
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return UploadedFile{}, fmt.Errorf("gateway %s: decode upload: %w", c.BaseURL, err)
+	}
+	return out, nil
 }
 
 // HistoryQuery narrows a historical page the same way the live stream is

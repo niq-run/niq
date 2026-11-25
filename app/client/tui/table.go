@@ -1,10 +1,11 @@
 // GFM pipe-table rendering for the terminal.
 //
-// A table is drawn with box-drawing separators (│ between columns, ─┼─ under the
-// header) and laid out to the terminal width: columns are sized to their content,
-// then shrunk — widest first — until the table fits. Cell text wraps inside its
-// column, so a long cell grows its row in height rather than pushing the table
-// past the screen. Cells keep inline markdown (bold, code, links).
+// A table is drawn as a full grid — an outer border, a rule between every pair of
+// rows, and a │ between columns — and laid out to the terminal width: columns are
+// sized to their content, then shrunk — widest first — until the table fits. Cell
+// text wraps inside its column, so a long cell grows its row in height rather than
+// pushing the table past the screen. Cells keep inline markdown (bold, code,
+// links).
 package tui
 
 import "strings"
@@ -67,7 +68,8 @@ func alignOf(delim string) []int {
 	return aligns
 }
 
-// renderTable draws header, a rule, then rows, fitted to width.
+// renderTable draws a full grid — an outer border, a rule under the header and
+// between every pair of body rows, and │ between columns — fitted to width.
 func renderTable(header []string, align []int, rows [][]string, width int) []string {
 	n := len(header)
 	if n == 0 {
@@ -99,8 +101,10 @@ func renderTable(header []string, align []int, rows [][]string, width int) []str
 		}
 	}
 
-	// Shrink the widest columns until the table fits the available content width.
-	avail := width - 3*(n-1) // " │ " between columns
+	// Shrink the widest columns until the table fits. The grid spends 3 cells per
+	// internal column gap (" │ ") plus a 2-cell border on each side ("│ … │"), so
+	// the columns share width - (3n + 1).
+	avail := width - (3*n + 1)
 	if avail < n {
 		avail = n
 	}
@@ -122,12 +126,20 @@ func renderTable(header []string, align []int, rows [][]string, width int) []str
 		total--
 	}
 
-	var out []string
+	out := []string{tableBorder(widths, "┌", "┬", "┐")}
 	out = append(out, renderTableRow(hdr, widths, align)...)
-	out = append(out, dim(tableRule(widths)))
+	if len(body) == 0 {
+		out = append(out, tableBorder(widths, "└", "┴", "┘"))
+		return out
+	}
+	out = append(out, tableBorder(widths, "├", "┼", "┤"))
 	for r := range body {
+		if r > 0 {
+			out = append(out, tableBorder(widths, "├", "┼", "┤"))
+		}
 		out = append(out, renderTableRow(body[r], widths, align)...)
 	}
+	out = append(out, tableBorder(widths, "└", "┴", "┘"))
 	return out
 }
 
@@ -143,6 +155,7 @@ func renderTableRow(cells [][]tok, widths []int, align []int) []string {
 	var out []string
 	for li := 0; li < height; li++ {
 		var b strings.Builder
+		b.WriteString(dim("│ "))
 		for k := range cells {
 			if k > 0 {
 				b.WriteString(dim(" │ "))
@@ -153,6 +166,7 @@ func renderTableRow(cells [][]tok, widths []int, align []int) []string {
 			}
 			b.WriteString(padCell(line, widths[k], alignAt(align, k)))
 		}
+		b.WriteString(dim(" │"))
 		out = append(out, b.String())
 	}
 	return out
@@ -184,16 +198,20 @@ func padCell(line []tok, width, align int) string {
 	return strings.Repeat(" ", left) + renderTokens(line) + strings.Repeat(" ", right)
 }
 
-// tableRule is the dim line under the header: dashes per column, ─┼─ between.
-func tableRule(widths []int) string {
+// tableBorder draws one horizontal rule of the grid: the corner/joint runes
+// (top ┌┬┐, middle ├┼┤, bottom └┴┘) joined by a ─ span over each column. A span is
+// w+2 cells, matching the space padding either side of the column's content.
+func tableBorder(widths []int, left, mid, right string) string {
 	var b strings.Builder
+	b.WriteString(left)
 	for k, w := range widths {
 		if k > 0 {
-			b.WriteString("─┼─")
+			b.WriteString(mid)
 		}
-		b.WriteString(strings.Repeat("─", w))
+		b.WriteString(strings.Repeat("─", w+2))
 	}
-	return b.String()
+	b.WriteString(right)
+	return dim(b.String())
 }
 
 func tokensWidth(ts []tok) int {
