@@ -1,7 +1,7 @@
 // Project views and the interactive picker: `niq i` lists every project (state,
 // ports, directory), lets you move with the arrow keys, then offers the actions
-// that make sense for that instance — start when it is stopped, stop or restart
-// when it is running.
+// that make sense for that instance — chat when it is running, start when it is
+// stopped, stop or restart while it is up.
 //
 // Everything here goes through the gateway's HTTP API, so the terminal is just
 // another client: no domain package is imported, and the gateway's address is
@@ -267,6 +267,15 @@ func RunPicker(baseURL string) error {
 		if action == "" {
 			continue
 		}
+		// Chat takes over the terminal for its whole lifetime; when it returns,
+		// the list comes back with fresh state and whatever went wrong on the
+		// status line.
+		if action == "chat" {
+			if err := RunChat(baseURL, p.ID); err != nil {
+				list.status = red(err.Error())
+			}
+			continue
+		}
 		if line, err := runAction(client, baseURL, p, action); err != nil {
 			list.status = red(err.Error())
 		} else {
@@ -284,15 +293,17 @@ func pickerTitle() string {
 		dim(" move · enter select · q quit")
 }
 
-// pickAction asks what to do with one instance. The three actions are always
-// listed in the same order; on a project that is not running, Stop and Restart
-// are dimmed and the cursor steps over them, so the menu reads the same
-// wherever you are. An empty action means the user cancelled.
+// pickAction asks what to do with one instance. The actions are always listed in
+// the same order; on a project that is not running, Chat, Stop and Restart are
+// dimmed and the cursor steps over them, so the menu reads the same wherever you
+// are. The cursor starts on the first action that instance can perform — Chat
+// when it is up, Start when it is not — so Enter always does something sensible.
+// An empty action means the user cancelled.
 func pickAction(p contract.View) (string, error) {
 	running := p.Running
-	options := []string{"Start", "Stop", "Restart"}
-	actions := []string{"start", "stop", "restart"}
-	disabled := []bool{false, !running, !running}
+	options := []string{"Chat", "Start", "Stop", "Restart"}
+	actions := []string{"chat", "start", "stop", "restart"}
+	disabled := []bool{!running, false, !running, !running}
 
 	// No identity line here: this menu replaces the list for a moment, and the
 	// project it is about is the whole heading. The trailing newline is the blank
@@ -302,6 +313,15 @@ func pickAction(p contract.View) (string, error) {
 	if !running {
 		// Only start is on offer, so say what the key does.
 		m.hint = dim("press enter to start the project")
+	}
+	// Start the cursor on the first action that is actually available: on a
+	// stopped project Chat is dimmed, and parking on a disabled row would make
+	// Enter do nothing until the user moved.
+	for i, d := range disabled {
+		if !d {
+			m.cursor = i
+			break
+		}
 	}
 	m.options = actionRows(options, disabled, m.cursor)
 	m.refresh = func(c int) []string { return actionRows(options, disabled, c) }

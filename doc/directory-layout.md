@@ -71,7 +71,7 @@ niq/
 │   │
 │   ├── client/                   # interfaces: every one of them is a gateway client
 │   │   ├── webui/                #   browser interface: assets/ + Assets() (no server)
-│   │   ├── tui/                  #   terminal interface: picker, status table
+│   │   ├── tui/                  #   terminal interface: picker, status table, conversation view
 │   │   └── mac/                  #   macOS interface (today: menu bar): Swift + Info.plist + icon
 │   │
 │   ├── cluster/                  # deployment form: distributed (placeholder, a peer of standalone)

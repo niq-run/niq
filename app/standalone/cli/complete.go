@@ -44,7 +44,7 @@ _niq() {
 	COMPREPLY=()
 
 	if (( COMP_CWORD == 1 )); then
-		COMPREPLY=( $(compgen -W "start stop restart status update i w completion help version" -- "$cur") )
+		COMPREPLY=( $(compgen -W "start stop restart status update i c chat w completion help version" -- "$cur") )
 		return
 	fi
 
@@ -73,6 +73,7 @@ _niq() {
 	commands=(
 		'w:open the browser UI, starting the gateway if needed'
 		'i:open the interactive terminal UI'
+		'c:chat with a project in the terminal'
 		'stop:stop the gateway'
 		'restart:restart the gateway'
 		'status:show the gateway and its projects'

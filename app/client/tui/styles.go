@@ -37,6 +37,32 @@ func dim(s string) string   { return paint("2", s) }
 func green(s string) string { return paint("32", s) }
 func red(s string) string   { return paint("31", s) }
 
+// Conversation and markdown styles. underline marks the human's own messages so
+// they stand out in the transcript; italic, underline again for links, and a
+// distinct colour for inline/block code keep a formatted answer legible without
+// the raw markers.
+func underline(s string) string { return paint("4", s) }
+func italic(s string) string    { return paint("3", s) }
+func codeText(s string) string  { return paint("36", s) }
+
+// Syntax-highlighting colours for fenced code. They are deliberately plain ANSI
+// shades rather than theme-aware, so they read the same on light and dark
+// terminals: keywords bold cyan, strings green, numbers yellow, comments dim.
+func codeKeyword(s string) string { return paint("1;36", s) }
+func codeString(s string) string  { return paint("32", s) }
+func codeNumber(s string) string  { return paint("33", s) }
+func codeComment(s string) string { return paint("2", s) }
+
+// Speaker and event-title colours. They give each kind of line its own hue so a
+// transcript can be scanned without reading every label: the human is green, a
+// worker's answer keeps the brand blue, thinking is magenta, ordinary events are
+// cyan, warnings yellow and failures red.
+func greenBold(s string) string   { return paint("1;32", s) }
+func magentaBold(s string) string { return paint("1;35", s) }
+func cyanBold(s string) string    { return paint("1;36", s) }
+func yellowBold(s string) string  { return paint("1;33", s) }
+func redBold(s string) string     { return paint("1;31", s) }
+
 func brand(s string) string {
 	if !ansi {
 		return s

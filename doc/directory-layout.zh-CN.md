@@ -65,7 +65,7 @@ niq/
 │   │
 │   ├── client/                   # 界面：全部是 gateway 的客户端
 │   │   ├── webui/                #   浏览器界面：assets/ + Assets()（没有服务器）
-│   │   ├── tui/                  #   终端界面：picker、状态表
+│   │   ├── tui/                  #   终端界面：picker、状态表、对话视图
 │   │   └── mac/                  #   macOS 界面（今天是菜单栏）：Swift + Info.plist + 图标
 │   │
 │   ├── cluster/                  # 部署形态：分布式（占位，与 standalone 平级）

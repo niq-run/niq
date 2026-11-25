@@ -195,6 +195,7 @@ start/stop/restart, no terminal needed.
 | `niq` | ensure the gateway is running in the background, then print the status table |
 | `niq w [-f]` | ensure the gateway, open the browser, and print the address as a fallback |
 | `niq i` | ensure the gateway and open the interactive terminal picker |
+| `niq c [project]` | ensure the gateway and chat with a project in the terminal (the only project when one exists) |
 | `niq status [--json\|--ids]` | the gateway and every project instance; reads the local snapshot without starting a daemon |
 | `niq stop [-p]` | stop the gateway (`-p` also stops the running projects) |
 | `niq restart [-p]` | restart it on the address it was started with (`-p` also restarts the running projects) |
@@ -363,10 +364,59 @@ directory per row:
 | Key | Action |
 |---|---|
 | `↑` / `↓`, `⌃p` / `⌃n`, `k` / `j` | move |
-| `enter` | select (then start if stopped, or stop / restart if running) |
+| `enter` | select (then chat when running, or start / stop / restart) |
 | `q`, `Esc`, `⌃C` | quit |
 
 Without a terminal the picker prints the same table instead.
+
+### 3.9 Chat
+
+`niq c` (or the picker's **Chat** action) opens a conversation with one project
+in the terminal — the same bus the WebUI talks to, from another client. It sends
+a message as the human's interface worker and prints the live event stream as it
+arrives.
+
+The scope is conversation only, for now: the event stream is never filtered by
+worker — every event is appended top to bottom, whoever it is from. The *send
+target* is separate: the message goes to the project's talk partners (the
+`reason` family and `niq` links), starting with the first online one, and `⌃T`
+switches which partner the next (and following) messages are addressed to without
+touching the stream. Start and stop the project from the picker or the WebUI.
+
+The human's own messages stay inline on the `you › …` line, are underlined, and
+are the one block set off by a blank line above them. A worker's answer puts its
+speaker label on its own line and, with no blank line above it, renders the body
+below as markdown — headings, bold/italic, inline code, links, lists, quotes,
+fenced code (syntax-highlighted for go, python, js/ts, json, shell and rust), pipe
+tables and rules — wrapped flush left. Tables are fitted to the terminal width,
+shrinking and wrapping cells rather than overflowing. Context rows are compact
+instead: *thinking*, a tool call or a request result is one line — a coloured
+label naming the event, a colon, then a dim detail truncated with an ellipsis
+rather than wrapped. Only the human's `you ›` and a worker's `id ›` keep the arrow;
+event rows use the plainer `label:` form.
+
+Titles are colour-coded so the transcript can be scanned: the human's `you` is
+green, a worker's answer keeps the brand blue, `thinking` is magenta, ordinary
+events (tool calls, request results) are cyan, warnings (`interrupted`, `abort`,
+`timeout`, `cancel`) yellow, and failures red.
+
+A shortcut hint stays pinned above the input line, so the keys are always in
+view however long the transcript grows. It names the current send target
+(`→ <id>`), and each sent message records its addressee on its own line
+(`you → <id> › …`), so it is always clear where a message went.
+
+| Key | Action |
+|---|---|
+| `enter` | send the message |
+| `←` / `→`, `⌃A` / `⌃E` | move the cursor |
+| `⌫` / `⌦` | delete before / after the cursor |
+| `⌃U` | clear the line |
+| `⌃T` | pick the send target (`↑` / `↓` then `enter`, `esc` to cancel) |
+| `⌃C` / `⌃D` | leave the conversation |
+
+A dropped stream (a restarting project, a network blip) is retried on a capped
+backoff and reported on its own line, so the conversation does not silently go
+dark.
 
 ## 4. Server deployment
 
