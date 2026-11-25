@@ -63,8 +63,8 @@ func TestCheckSpawnParamsRejectsUnreadParameters(t *testing.T) {
 	if !strings.Contains(msg, `"prompt"`) {
 		t.Fatalf("error does not name the offending key: %q", msg)
 	}
-	if !strings.Contains(msg, `did you mean "instruction"`) {
-		t.Fatalf("error does not point at the reason-family instruction key: %q", msg)
+	if !strings.Contains(msg, "unknown spawn parameter") {
+		t.Fatalf("error is not the plain unknown-parameter report: %q", msg)
 	}
 	if !strings.Contains(msg, "instruction") || !strings.Contains(msg, "goal") {
 		t.Fatalf("error does not list what the type accepts: %q", msg)
@@ -79,11 +79,7 @@ func TestCheckSpawnParamsRejectsCrossTypeKeys(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `"goal"`) {
 		t.Fatalf("workspace err = %v, want it to reject \"goal\"", err)
 	}
-	// The alias hint must not fire when the suggested key is invalid for the type.
-	if strings.Contains(err.Error(), "did you mean") {
-		t.Fatalf("misleading hint for workspace: %q", err)
-	}
-	// And the mounts/path contract is what it says it accepts.
+	// The contract is what the error says the type accepts.
 	if !strings.Contains(err.Error(), "mounts") || !strings.Contains(err.Error(), "path") {
 		t.Fatalf("error does not list the workspace contract: %q", err)
 	}
