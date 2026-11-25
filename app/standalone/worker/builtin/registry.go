@@ -1,3 +1,17 @@
+// Package builtin is the framework of the standalone form's type table: the
+// registry a type registers into, the assembly context a builder reads, the
+// spawn-parameter contract machinery, and the bus identity a builder ensures.
+//
+// The types themselves are in app/standalone/worker/builtin/workers, one file
+// each. The split is the point: a table is "a registry plus entries", and a
+// different deployment form can keep this framework and ship a different set of
+// entries without touching it.
+//
+// Above this package sits `app/standalone/worker` (the control plane: manifest
+// model, placement routing, lifecycle), which knows a type only as a label it
+// passes down. Below it sit the worker implementations themselves
+// (`core/impl/workers/*`) and `worker/process` for the types that need an OS
+// child.
 package builtin
 
 import (
