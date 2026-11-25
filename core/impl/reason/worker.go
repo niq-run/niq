@@ -579,6 +579,11 @@ type BaseReasonWorker struct {
 	tailTokens      int
 	lastUsageTokens int
 	budgetReminded  bool
+
+	// roundBreakdown is the current round's prompt composition, estimated in
+	// prepareReasoning from the exact request that was sent and carried on the
+	// round's reason.response (see contextbreakdown.go). Guarded by w.mu.
+	roundBreakdown []contextSection
 }
 
 // workerTypeOrDefault returns the worker's announced type, defaulting to the

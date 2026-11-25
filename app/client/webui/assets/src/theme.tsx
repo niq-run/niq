@@ -82,6 +82,18 @@ export interface Palette {
   detailLabel: string
   detailValue: string
   detailBorder: string
+  // Context-usage breakdown: one hue per prompt part, so the stacked bar and
+  // the legend below it read as the same object. Hues are the event-type
+  // family, spread for adjacent-segment contrast and tuned per theme.
+  usage: {
+    system: string
+    program: string
+    tools: string
+    messages: string
+    toolCalls: string
+    thinking: string
+    output: string
+  }
 }
 
 const dark: Palette = {
@@ -125,6 +137,15 @@ const dark: Palette = {
   detailLabel: '#777',
   detailValue: '#ccc',
   detailBorder: '#434343',
+  usage: {
+    system: '#6ea8fe',
+    program: '#a78bfa',
+    tools: '#f2b45c',
+    messages: '#52c49a',
+    toolCalls: '#e8789f',
+    thinking: '#7d8ea8',
+    output: '#c0c0c0',
+  },
 }
 
 const light: Palette = {
@@ -168,6 +189,15 @@ const light: Palette = {
   detailLabel: '#888',
   detailValue: '#444',
   detailBorder: '#c3c3c3',
+  usage: {
+    system: '#2f6fd0',
+    program: '#6b4fd0',
+    tools: '#a86a10',
+    messages: '#1f7a55',
+    toolCalls: '#b03a68',
+    thinking: '#5a6b80',
+    output: '#6f6f6f',
+  },
 }
 
 interface ThemeCtx {

@@ -451,6 +451,15 @@ export { ellipsis }
 
 // ── Context usage meta (reason.response) ──
 
+// UsageSection is one categorized part of a round's prompt, as reported by the
+// reason worker in meta.usage.breakdown. Key is a stable wire identifier the
+// panel maps to a localized label; tokens is that part's share of the round's
+// input (rescaled by the worker so the parts add up to the reported counts).
+export interface UsageSection {
+  key: string
+  tokens: number
+}
+
 // UsageMeta is the context usage a reason worker reports on its response, taken
 // from the meta.usage payload it attaches to reason.response. Absent when the
 // provider reported no usage (or the field is malformed).
@@ -459,10 +468,23 @@ export interface UsageMeta {
   output: number
   total: number
   cacheRead: number
+  cacheCreation: number
+  // cacheReported distinguishes "provider reported cache accounting, and it was
+  // 0" from "provider said nothing about caching". Only the former should
+  // render a 0% row.
+  cacheReported: boolean
+  // cacheHitPercent is 0..100 of cacheRead/total-prompt, computed by the worker
+  // (adapters normalize the prompt count so the ratio is provider-comparable).
+  // 0 when the provider reported no cache read.
+  cacheHitPercent: number
   contextWindow: number
   // contextPercent is 0..100 of total/contextWindow, unrounded so small
   // occupancies survive; 0 when the window is unknown.
   contextPercent: number
+  // breakdown is the prompt's composition (system prompt, programs, tools,
+  // messages, this round's output). Empty when the worker reported none (older
+  // events, or a round with nothing to attribute).
+  breakdown: UsageSection[]
 }
 
 // getUsageMeta extracts the context usage carried in a reason.response event's
@@ -476,11 +498,32 @@ export function getUsageMeta(evt: EventPayload): UsageMeta | undefined {
   const output = Number(u.output_tokens) || 0
   const total = Number(u.total_tokens) || (input + output)
   const cacheRead = Number(u.cache_read_tokens) || 0
+  const cacheCreation = Number(u.cache_creation_tokens) || 0
+  const cacheReported = typeof u.cache_read_tokens === 'number'
+  const cacheHitPercent = Number(u.cache_hit_percent) || 0
   const contextWindow = Number(u.context_window) || 0
   const contextPercent = contextWindow > 0
     ? (total / contextWindow) * 100
     : 0
-  return { input, output, total, cacheRead, contextWindow, contextPercent }
+  return {
+    input, output, total, cacheRead, cacheCreation, cacheReported, cacheHitPercent, contextWindow, contextPercent,
+    breakdown: parseBreakdown(u.breakdown),
+  }
+}
+
+// parseBreakdown decodes the optional sections array, dropping malformed
+// entries rather than showing a broken panel.
+function parseBreakdown(raw: any): UsageSection[] {
+  if (!Array.isArray(raw)) return []
+  const out: UsageSection[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const key = (item as Record<string, any>).key
+    const tokens = Number((item as Record<string, any>).tokens)
+    if (typeof key !== 'string' || !key || !(tokens > 0)) continue
+    out.push({ key, tokens })
+  }
+  return out
 }
 
 // formatCompact abbreviates a token count for display as thousands: 1000+
@@ -492,17 +535,23 @@ export function formatCompact(n: number): string {
 }
 
 // formatPercent renders a 0..100 occupancy without collapsing a small value to
-// "0": below 10% it keeps one decimal (0.3), otherwise it rounds (15).
+// "0": below 10% it keeps one decimal (0.3), otherwise it rounds (15). Exact
+// zero is just "0" (a provider that reports no cache hits should not read
+// "0.0%").
 export function formatPercent(p: number): string {
+  if (p === 0) return '0'
   return p < 10 ? p.toFixed(1) : String(Math.round(p))
 }
 
 // UsageParts is the usage label split ready for rendering with a drawn
 // vertical bar: left = context-window size + occupancy percent, right = this
-// round's input/output token breakdown. Either side may be empty.
+// round's input/output token breakdown. Either side may be empty. meta carries
+// the full usage (with its breakdown) for the detail panel when the label is
+// clicked.
 export interface UsageParts {
   left: string
   right: string
+  meta?: UsageMeta
 }
 
 // getUsageParts renders the context usage of a response as i18n-localized text
@@ -518,8 +567,10 @@ export function getUsageParts(evt: EventPayload, t: (key: any, vars?: Record<str
     t('talk.usage.in', { n: formatCompact(m.input) }),
     t('talk.usage.out', { n: formatCompact(m.output) }),
   ]
-  if (m.cacheRead) right.push(t('talk.usage.cache', { n: formatCompact(m.cacheRead) }))
-  return { left, right: right.join(' · ') }
+  if (m.cacheReported) {
+    right.push(t('talk.usage.cacheHit', { n: formatCompact(m.cacheRead), pct: formatPercent(m.cacheHitPercent) }))
+  }
+  return { left, right: right.join(' · '), meta: m }
 }
 
 // ── Find referenced input event by trace_id ──

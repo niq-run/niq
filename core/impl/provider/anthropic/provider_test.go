@@ -85,7 +85,10 @@ func TestProviderCompleteToolCall(t *testing.T) {
 		resp.Message.Content[1].ToolArguments != `{"path":"a.go"}` {
 		t.Fatalf("tool block = %+v", resp.Message.Content[1])
 	}
-	if resp.Usage.InputTokens != 3 || resp.Usage.OutputTokens != 4 || resp.Usage.CacheReadTokens == nil || *resp.Usage.CacheReadTokens != 2 {
+	// InputTokens is normalized to the TOTAL prompt (uncached 3 + cache read 2),
+	// so budget/occupancy math counts the whole prompt.
+	if resp.Usage.InputTokens != 5 || resp.Usage.OutputTokens != 4 || resp.Usage.TotalTokens != 9 ||
+		resp.Usage.CacheReadTokens == nil || *resp.Usage.CacheReadTokens != 2 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
 }

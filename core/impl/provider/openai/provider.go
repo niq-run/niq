@@ -483,9 +483,25 @@ type chatRespMsg struct {
 }
 
 type usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                  `json:"prompt_tokens"`
+	CompletionTokens    int                  `json:"completion_tokens"`
+	TotalTokens         int                  `json:"total_tokens"`
+	PromptTokensDetails *promptTokensDetails `json:"prompt_tokens_details"`
+	// DeepSeek (and some other OpenAI-compatible servers) report the automatic
+	// prefix-cache split as top-level counters instead of OpenAI's details
+	// block. prompt_tokens is their sum, so hit/prompt_tokens is still the hit
+	// rate. Pointers: "absent" and "reported as 0" must stay distinguishable —
+	// the first means the provider has no cache accounting, the second means it
+	// does and nothing hit (a real, actionable 0%).
+	PromptCacheHitTokens  *int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens *int `json:"prompt_cache_miss_tokens"`
+}
+
+// promptTokensDetails is OpenAI's breakdown of the prompt count. CachedTokens
+// is the part served from the automatic prefix cache (a subset of
+// PromptTokens, not an addition to it).
+type promptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
 }
 
 type modelsListResponse struct {
@@ -552,14 +568,57 @@ func (p *Provider) toCompletionResponse(cr *chatCompletionResponse) *llm.Complet
 	resp := &llm.CompletionResponse{Message: msg}
 
 	if cr.Usage != nil {
-		resp.Usage = llm.Usage{
-			InputTokens:  cr.Usage.PromptTokens,
-			OutputTokens: cr.Usage.CompletionTokens,
-			TotalTokens:  cr.Usage.TotalTokens,
-		}
+		resp.Usage = usageFromChat(cr.Usage)
 	}
 
 	return resp
+}
+
+// usageFromChat normalizes an OpenAI-compatible usage block into llm.Usage.
+// The prompt count already includes cached tokens here (unlike Anthropic, where
+// they are reported on top), so InputTokens is taken as-is and the cached part
+// is carried as a read-cache breakdown.
+//
+// Two cache shapes are accepted, because "OpenAI-compatible" is not one wire
+// format: OpenAI (and servers that mirror it) nest the count under
+// prompt_tokens_details.cached_tokens, while DeepSeek reports
+// prompt_cache_hit_tokens at the top level.
+func usageFromChat(u *usage) llm.Usage {
+	out := llm.Usage{
+		InputTokens:  u.PromptTokens,
+		OutputTokens: u.CompletionTokens,
+		TotalTokens:  u.TotalTokens,
+	}
+	if cached, ok := chatCachedPromptTokens(u); ok {
+		n := cached
+		out.CacheReadTokens = &n
+	}
+	return out
+}
+
+// chatCachedPromptTokens reads the prompt-cache hit count from either wire
+// shape: OpenAI's prompt_tokens_details.cached_tokens or DeepSeek's top-level
+// prompt_cache_hit_tokens (the docs define them as the same number). ok is
+// false when the provider said nothing about caching at all, so a provider
+// without cache accounting does not render a misleading 0% row.
+//
+// When both shapes are present the larger wins: they are documented as equal,
+// so a disagreement means one of them is stale, and under-reporting hits is
+// worse than over-reporting (the UI would claim caching is broken).
+func chatCachedPromptTokens(u *usage) (int, bool) {
+	reported := false
+	cached := 0
+	if u.PromptTokensDetails != nil {
+		reported = true
+		cached = u.PromptTokensDetails.CachedTokens
+	}
+	if u.PromptCacheHitTokens != nil {
+		reported = true
+		if *u.PromptCacheHitTokens > cached {
+			cached = *u.PromptCacheHitTokens
+		}
+	}
+	return cached, reported
 }
 
 // contentPart mirrors a single element in the OpenAI content array.
@@ -754,11 +813,8 @@ func (p *Provider) readStream(body io.ReadCloser, es *llm.EventStream) {
 
 		// Usage arrives in the final chunk when stream_options.include_usage is set.
 		if chunk.Usage != nil {
-			usage = &llm.Usage{
-				InputTokens:  chunk.Usage.PromptTokens,
-				OutputTokens: chunk.Usage.CompletionTokens,
-				TotalTokens:  chunk.Usage.TotalTokens,
-			}
+			u := usageFromChat(chunk.Usage)
+			usage = &u
 		}
 	}
 
