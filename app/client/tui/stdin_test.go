@@ -64,8 +64,8 @@ func TestReadKeysDeliversInterrupt(t *testing.T) {
 	}
 	select {
 	case p := <-out:
-		if p.kind != pressInterrupt {
-			t.Fatalf("ctrl+c decoded as %v, want pressInterrupt", p.kind)
+		if p.Kind != pressInterrupt {
+			t.Fatalf("ctrl+c decoded as %v, want pressInterrupt", p.Kind)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ctrl+c did not reach the key channel")

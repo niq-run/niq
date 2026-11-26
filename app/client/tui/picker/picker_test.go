@@ -1,4 +1,4 @@
-package tui
+package picker
 
 import (
 	"bufio"
@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/niq-run/niq/app/client/tui/term"
 	"github.com/niq-run/niq/app/standalone/contract"
 )
 
@@ -23,6 +24,7 @@ func TestMenuDrawMatchesHeight(t *testing.T) {
 		{title: "line one\nline two", options: []string{"only"}},
 		{title: "heading\n", options: []string{"a", "b", "c"}, hint: "press enter"},
 		{title: "heading\n", options: []string{"a", "b"}, statusLine: true},
+		{title: "heading\n", options: []string{"a", "b"}, statusLine: true, status: "done", foot: "bye"},
 	} {
 		var buf bytes.Buffer
 		m.draw(&buf)
@@ -165,7 +167,7 @@ func TestProjectRowsAlignWideIDs(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows = %v", rows)
 	}
-	if a, b := displayWidth(rows[0]), displayWidth(rows[1]); a != b {
+	if a, b := term.DisplayWidth(rows[0]), term.DisplayWidth(rows[1]); a != b {
 		t.Fatalf("rows have different widths (%d vs %d):\n%s\n%s", a, b, rows[0], rows[1])
 	}
 }

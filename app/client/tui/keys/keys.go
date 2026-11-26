@@ -1,7 +1,9 @@
-// Keys: decoding terminal input (control bytes, CSI sequences, the Kitty and
-// modifyOtherKeys spellings, bracketed paste, mouse, terminal reports) and
-// applying one keypress to the view.
-package tui
+// Package keys decodes terminal input: control bytes, CSI sequences, the Kitty and
+// modifyOtherKeys spellings, bracketed paste, mouse reports and the terminal's
+// colour/scheme replies — one keystroke at a time into a Press. It depends only on
+// ../stdin, so any line-mode terminal app can reuse it; what a Press *means* is
+// left to the caller (the chat view's keymap).
+package keys
 
 import (
 	"bufio"
@@ -26,70 +28,72 @@ const (
 
 // ── Keys ──
 
-type pressKind int
+type PressKind int
 
 const (
-	pressOther pressKind = iota
-	pressRune
-	pressEnter
-	pressNewline
-	pressPaste
-	pressMode
-	pressBackspace
-	pressDelete
-	pressLeft
-	pressRight
-	pressUp
-	pressDown
-	pressHome
-	pressEnd
-	pressPageUp
-	pressPageDown
-	pressLineUp
-	pressLineDown
-	pressKillEnd
-	pressKillWord
-	pressYank
-	pressAlt
-	pressWheelUp
-	pressWheelDown
-	pressClick
-	pressDrag
-	pressRelease
-	pressTerminal
-	pressTarget
-	pressView
-	pressHelp
-	pressEsc
-	pressInterrupt
-	pressTab
-	pressBacktab
+	PressOther PressKind = iota
+	PressRune
+	PressEnter
+	PressNewline
+	PressPaste
+	PressMode
+	PressBackspace
+	PressDelete
+	PressLeft
+	PressRight
+	PressUp
+	PressDown
+	PressHome
+	PressEnd
+	PressPageUp
+	PressPageDown
+	PressLineUp
+	PressLineDown
+	PressKillEnd
+	PressKillWord
+	PressYank
+	PressAlt
+	PressWheelUp
+	PressWheelDown
+	PressClick
+	PressDrag
+	PressRelease
+	PressTerminal
+	PressTarget
+	PressView
+	PressHelp
+	PressEsc
+	PressInterrupt
+	PressTab
+	PressBacktab
+	PressPrevUser
+	PressNextUser
 )
 
-// wheelStep is how many lines one wheel notch moves. One line keeps a trackpad
+// WheelStep is how many lines one wheel notch moves. One line keeps a trackpad
 // or wheel feeling smooth and slow, as pi's does.
-const wheelStep = 1
+const WheelStep = 1
 
-// maxInputRows caps how many dock rows a multi-line message may occupy before it
+// MaxInputRows caps how many dock rows a multi-line message may occupy before it
 // scrolls to keep the cursor visible.
-const maxInputRows = 8
+const MaxInputRows = 8
 
-type press struct {
-	kind pressKind
-	r    rune
-	text string // a bracketed paste's payload, or a terminal colour report
-	x, y int    // terminal cell (1-based) for mouse reports
+type Press struct {
+	Kind PressKind
+	R    rune
+	Text string // a bracketed paste's payload, or a terminal colour report
+	X, Y int    // terminal cell (1-based) for mouse reports
 }
 
-// readKeys decodes stdin keystrokes onto out until the context ends.
-func readKeys(ctx context.Context, out chan<- press) {
-	readKeysFrom(ctx, stdin.Stream(), stdin.SetDeadline, out)
+// ReadKeys decodes stdin keystrokes onto out until the context ends.
+func ReadKeys(ctx context.Context, out chan<- Press) {
+	ReadKeysFrom(ctx, stdin.Stream(), stdin.SetDeadline, out)
 }
 
-// readKeysFrom is readKeys with the reader and deadline hook passed in, so the
+// ReadKeysFrom is ReadKeys with the reader and deadline hook passed in, so the
 // cancellation path can be tested without a terminal. Reads use a short deadline
 // so the loop notices cancellation while idle; a keypress returns immediately.
-func readKeysFrom(ctx context.Context, in *bufio.Reader, setDeadline func(time.Time) error, out chan<- press) {
+func ReadKeysFrom(ctx context.Context, in *bufio.Reader, setDeadline func(time.Time) error, out chan<- Press) {
 	for {
 		if ctx.Err() != nil {
 			return
@@ -108,7 +112,7 @@ func readKeysFrom(ctx context.Context, in *bufio.Reader, setDeadline func(time.T
 			// loop only on EOF or a dead stdin.
 			if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
 				select {
-				case out <- press{kind: pressInterrupt}:
+				case out <- Press{Kind: PressInterrupt}:
 				case <-ctx.Done():
 				}
 				return
@@ -116,7 +120,7 @@ func readKeysFrom(ctx context.Context, in *bufio.Reader, setDeadline func(time.T
 			continue
 		}
 		_ = setDeadline(time.Time{})
-		p := decodePress(in, r)
+		p := DecodePress(in, r)
 		logPress(r, p)
 		select {
 		case out <- p:
@@ -129,7 +133,7 @@ func readKeysFrom(ctx context.Context, in *bufio.Reader, setDeadline func(time.T
 // logPress appends every decoded keypress to the file named by NIQ_TUI_KEYS. It is
 // off unless that variable is set: the point is to answer "is this key even
 // arriving?" from inside a real terminal, where a debugger is not an option.
-func logPress(first rune, p press) {
+func logPress(first rune, p Press) {
 	path := os.Getenv("NIQ_TUI_KEYS")
 	if path == "" {
 		return
@@ -140,97 +144,97 @@ func logPress(first rune, p press) {
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "%s byte=%#x kind=%d rune=%q text=%d\n",
-		time.Now().Format("15:04:05.000"), first, p.kind, p.r, len(p.text))
+		time.Now().Format("15:04:05.000"), first, p.Kind, p.R, len(p.Text))
 }
 
-// decodePress maps one rune to a press, reading the rest of an escape sequence
+// DecodePress maps one rune to a Press, reading the rest of an escape sequence
 // when the rune is Esc. Paging follows vim: ctrl+u/d and ctrl+b/f page, ctrl+y/e
-// scroll one line, ctrl+p/n also step a line; ctrl+k clears the input; ctrl+t
+// scroll one line, ctrl+p/n jump between user messages; ctrl+k clears the input; ctrl+t
 // opens the worker popup; ctrl+? opens the help; ctrl+c leaves. Enter sends and
 // ctrl+j (or shift+enter, where the terminal can spell it) starts a new line.
-func decodePress(in *bufio.Reader, r rune) press {
+func DecodePress(in *bufio.Reader, r rune) Press {
 	switch r {
 	case '\r':
-		return press{kind: pressEnter}
+		return Press{Kind: PressEnter}
 	case '\n':
-		return press{kind: pressNewline}
+		return Press{Kind: PressNewline}
 	case '\t':
-		return press{kind: pressTab}
+		return Press{Kind: PressTab}
 	case 0x7f, 0x08:
-		return press{kind: pressBackspace}
+		return Press{Kind: PressBackspace}
 	case 0x1b:
 		return decodeEscape(in)
 	}
-	if p, ok := controlPress(r); ok {
+	if p, ok := ControlPress(r); ok {
 		return p
 	}
 	if r >= 0x20 && r != 0x7f {
-		return press{kind: pressRune, r: r}
+		return Press{Kind: PressRune, R: r}
 	}
-	return press{kind: pressOther}
+	return Press{Kind: PressOther}
 }
 
-// controlPress maps a C0 byte to the key it stands for, reporting false for the
+// ControlPress maps a C0 byte to the key it stands for, reporting false for the
 // bytes this view does not bind.
-// controlPress maps a C0 byte to the key it stands for, reporting false for the
+// ControlPress maps a C0 byte to the key it stands for, reporting false for the
 // bytes this view does not bind. Inside the text field these are readline/Emacs
 // bindings, which is what hands expect; Ctrl+U / Ctrl+D are the exception and page
 // the transcript, as they do in less and vim. Everything else pages with
 // PgUp/PgDn, ctrl+arrows, shift+arrows and the wheel.
-func controlPress(r rune) (press, bool) {
+func ControlPress(r rune) (Press, bool) {
 	switch r {
 	case 0x03: // Ctrl+C
-		return press{kind: pressInterrupt}, true
+		return Press{Kind: PressInterrupt}, true
 	case 0x11: // Ctrl+Q: an alternate quit, for terminals or IMEs that eat ctrl+c
-		return press{kind: pressInterrupt}, true
+		return Press{Kind: PressInterrupt}, true
 	case 0x01: // Ctrl+A: line start
-		return press{kind: pressHome}, true
+		return Press{Kind: PressHome}, true
 	case 0x05: // Ctrl+E: line end
-		return press{kind: pressEnd}, true
+		return Press{Kind: PressEnd}, true
 	case 0x02: // Ctrl+B: char left
-		return press{kind: pressLeft}, true
+		return Press{Kind: PressLeft}, true
 	case 0x06: // Ctrl+F: char right
-		return press{kind: pressRight}, true
-	case 0x10: // Ctrl+P: line up
-		return press{kind: pressUp}, true
-	case 0x0e: // Ctrl+N: line down
-		return press{kind: pressDown}, true
+		return Press{Kind: PressRight}, true
+	case 0x10: // Ctrl+P: previous user message
+		return Press{Kind: PressPrevUser}, true
+	case 0x0e: // Ctrl+N: next user message
+		return Press{Kind: PressNextUser}, true
 	case 0x04: // Ctrl+D: page the transcript down
-		return press{kind: pressPageDown}, true
+		return Press{Kind: PressPageDown}, true
 	case 0x0b: // Ctrl+K: kill to end of line
-		return press{kind: pressKillEnd}, true
+		return Press{Kind: PressKillEnd}, true
 	case 0x15: // Ctrl+U: page the transcript up
-		return press{kind: pressPageUp}, true
+		return Press{Kind: PressPageUp}, true
 	case 0x17: // Ctrl+W: kill previous word
-		return press{kind: pressKillWord}, true
+		return Press{Kind: PressKillWord}, true
 	case 0x19: // Ctrl+Y: yank
-		return press{kind: pressYank}, true
+		return Press{Kind: PressYank}, true
 	case 0x14: // Ctrl+T
-		return press{kind: pressTarget}, true
+		return Press{Kind: PressTarget}, true
 	case 0x16: // Ctrl+V
-		return press{kind: pressView}, true
+		return Press{Kind: PressView}, true
 	case 0x18: // Ctrl+X
-		return press{kind: pressMode}, true
+		return Press{Kind: PressMode}, true
 	case 0x1f: // Ctrl+? (also ctrl+/ and ctrl+_): the help
-		return press{kind: pressHelp}, true
+		return Press{Kind: PressHelp}, true
 	}
-	return press{}, false
+	return Press{}, false
 }
 
 // decodeEscape classifies an escape sequence. A lone Esc cancels the worker menu;
 // arrows, Home/End/Delete and PageUp/PageDown map to their keys. Shift+Enter
 // reaches us as an escape once the terminal speaks the Kitty keyboard protocol or
 // xterm's modifyOtherKeys, and alt+enter is the portable spelling of a newline.
-func decodeEscape(in *bufio.Reader) press {
+func decodeEscape(in *bufio.Reader) Press {
 	_ = stdin.SetDeadline(time.Now().Add(escRead))
 	defer stdin.SetDeadline(time.Time{})
 	next, _, err := in.ReadRune()
 	if err != nil {
-		return press{kind: pressEsc}
+		return Press{Kind: PressEsc}
 	}
 	switch next {
 	case '\r', '\n':
-		return press{kind: pressNewline}
+		return Press{Kind: PressNewline}
 	case ']':
 		// An OSC string: the reply to our background-colour query, or anything else
 		// the terminal chose to send. It must be consumed here, never typed into the
@@ -239,7 +243,7 @@ func decodeEscape(in *bufio.Reader) press {
 	case 'O':
 		final, _, err := in.ReadRune()
 		if err != nil {
-			return press{kind: pressOther}
+			return Press{Kind: PressOther}
 		}
 		return ss3Press(final)
 	case '[':
@@ -251,29 +255,29 @@ func decodeEscape(in *bufio.Reader) press {
 		// or a terminal reply, then ctrl+c, say). Put it back so the next read
 		// handles it as itself — otherwise ctrl+c would be swallowed as "Esc".
 		_ = in.UnreadRune()
-		return press{kind: pressEsc}
+		return Press{Kind: PressEsc}
 	}
 	// Alt+key arrives as ESC then the key. Word motion uses alt+b / alt+f, as in
 	// readline; everything else alt-typed is ignored rather than read as a quit.
-	return press{kind: pressAlt, r: next}
+	return Press{Kind: PressAlt, R: next}
 }
 
 // decodeCSI parses a control sequence: an optional private prefix, numeric
 // parameters and a final byte. Mouse reports take their own path; the rest are
 // cursor keys, tilde keys, Kitty's `u` form and xterm's modifyOtherKeys form.
-func decodeCSI(in *bufio.Reader) press {
+func decodeCSI(in *bufio.Reader) Press {
 	r, _, err := in.ReadRune()
 	if err != nil {
-		return press{kind: pressOther}
+		return Press{Kind: PressOther}
 	}
 	if r == '<' {
-		return decodeMouse(in)
+		return DecodeMouse(in)
 	}
 	private := rune(0)
 	if r == '?' || r == '>' || r == '=' {
 		private = r
 		if r, _, err = in.ReadRune(); err != nil {
-			return press{kind: pressOther}
+			return Press{Kind: PressOther}
 		}
 	}
 	var params []int
@@ -290,12 +294,12 @@ func decodeCSI(in *bufio.Reader) press {
 			// A control byte inside a sequence means it was truncated (or the user
 			// typed during the wait). Hand the byte back as its own key.
 			_ = in.UnreadRune()
-			return press{kind: pressOther}
+			return Press{Kind: PressOther}
 		default:
 			goto final
 		}
 		if r, _, err = in.ReadRune(); err != nil {
-			return press{kind: pressOther}
+			return Press{Kind: PressOther}
 		}
 	}
 final:
@@ -306,37 +310,37 @@ final:
 		// A colour-scheme report is the one private sequence we act on; the rest
 		// (Kitty flags, device attributes) are consumed and ignored.
 		if r == 'n' && len(params) >= 2 && params[0] == 997 {
-			return press{kind: pressTerminal, text: fmt.Sprintf("997;%d", params[1])}
+			return Press{Kind: PressTerminal, Text: fmt.Sprintf("997;%d", params[1])}
 		}
-		return press{kind: pressOther}
+		return Press{Kind: PressOther}
 	}
 	switch r {
 	case 'A':
-		return arrowPress(params, pressUp, pressLineUp, pressPageUp)
+		return arrowPress(params, PressUp, PressLineUp, PressPageUp)
 	case 'B':
-		return arrowPress(params, pressDown, pressLineDown, pressPageDown)
+		return arrowPress(params, PressDown, PressLineDown, PressPageDown)
 	case 'C':
-		return press{kind: pressRight}
+		return Press{Kind: PressRight}
 	case 'D':
-		return press{kind: pressLeft}
+		return Press{Kind: PressLeft}
 	case 'H':
-		return press{kind: pressHome}
+		return Press{Kind: PressHome}
 	case 'F':
-		return press{kind: pressEnd}
+		return Press{Kind: PressEnd}
 	case 'Z':
 		// CSI Z is shift+tab.
-		return press{kind: pressBacktab}
+		return Press{Kind: PressBacktab}
 	case '~':
 		return tildePress(in, params)
 	case 'u':
 		return csiU(params)
 	}
-	return press{kind: pressOther}
+	return Press{Kind: PressOther}
 }
 
 // arrowPress maps a vertical arrow with modifiers: plain moves the composer's
 // line, shift scrolls the transcript by a line, ctrl pages it.
-func arrowPress(params []int, plain, shifted, ctrled pressKind) press {
+func arrowPress(params []int, plain, shifted, ctrled PressKind) Press {
 	mod := 1
 	if len(params) > 1 && params[1] > 0 {
 		mod = params[1]
@@ -344,45 +348,45 @@ func arrowPress(params []int, plain, shifted, ctrled pressKind) press {
 	bits := mod - 1
 	switch {
 	case bits&4 != 0: // ctrl
-		return press{kind: ctrled}
+		return Press{Kind: ctrled}
 	case bits&1 != 0: // shift
-		return press{kind: shifted}
+		return Press{Kind: shifted}
 	}
-	return press{kind: plain}
+	return Press{Kind: plain}
 }
 
 // csiU decodes a Kitty keyboard-protocol key: `CSI code ; modifiers u`.
-func csiU(params []int) press {
+func csiU(params []int) Press {
 	if len(params) == 0 {
-		return press{kind: pressOther}
+		return Press{Kind: PressOther}
 	}
 	mod := 1
 	if len(params) > 1 && params[1] > 0 {
 		mod = params[1]
 	}
-	return keyPress(params[0], mod)
+	return KeyPress(params[0], mod)
 }
 
 // tildePress decodes the classic `CSI n ~` family, including xterm's
 // modifyOtherKeys form `CSI 27 ; modifiers ; code ~`.
-func tildePress(in *bufio.Reader, params []int) press {
+func tildePress(in *bufio.Reader, params []int) Press {
 	if len(params) == 0 {
-		return press{kind: pressOther}
+		return Press{Kind: PressOther}
 	}
 	switch params[0] {
 	case 1, 7:
-		return press{kind: pressHome}
+		return Press{Kind: PressHome}
 	case 4, 8:
-		return press{kind: pressEnd}
+		return Press{Kind: PressEnd}
 	case 3:
-		return press{kind: pressDelete}
+		return Press{Kind: PressDelete}
 	case 5:
-		return press{kind: pressPageUp}
+		return Press{Kind: PressPageUp}
 	case 6:
-		return press{kind: pressPageDown}
+		return Press{Kind: PressPageDown}
 	case 27:
 		if len(params) >= 3 {
-			return keyPress(params[2], params[1])
+			return KeyPress(params[2], params[1])
 		}
 	case 200:
 		// Bracketed paste: the payload follows verbatim up to the end marker and is
@@ -390,7 +394,7 @@ func tildePress(in *bufio.Reader, params []int) press {
 		_ = stdin.SetDeadline(time.Time{})
 		return decodePaste(in)
 	}
-	return press{kind: pressOther}
+	return Press{Kind: PressOther}
 }
 
 // oscRead bounds how long an OSC string may take; a reply to our query arrives in
@@ -400,30 +404,30 @@ const oscRead = 250 * time.Millisecond
 // decodeOSC consumes an OSC string (ESC ] … BEL or ST) and returns its payload.
 // The only one we ask for is the background colour, but consuming any of them is
 // what keeps a terminal's answer out of the message being typed.
-func decodeOSC(in *bufio.Reader) press {
+func decodeOSC(in *bufio.Reader) Press {
 	_ = stdin.SetDeadline(time.Now().Add(oscRead))
 	defer func() { _ = stdin.SetDeadline(time.Time{}) }()
 	var b strings.Builder
 	for {
 		r, _, err := in.ReadRune()
 		if err != nil {
-			return press{kind: pressTerminal, text: b.String()}
+			return Press{Kind: PressTerminal, Text: b.String()}
 		}
 		if r == 0x07 { // BEL
-			return press{kind: pressTerminal, text: b.String()}
+			return Press{Kind: PressTerminal, Text: b.String()}
 		}
 		if r == 0x1b { // ST: ESC \
 			_, _, _ = in.ReadRune()
-			return press{kind: pressTerminal, text: b.String()}
+			return Press{Kind: PressTerminal, Text: b.String()}
 		}
 		if r < 0x20 {
 			// Any other control byte means this was not an OSC string after all; hand
 			// it back so it is handled as the key it is (ctrl+c included).
 			_ = in.UnreadRune()
-			return press{kind: pressOther}
+			return Press{Kind: PressOther}
 		}
 		if b.Len() > 256 {
-			return press{kind: pressTerminal, text: b.String()}
+			return Press{Kind: PressTerminal, Text: b.String()}
 		}
 		b.WriteRune(r)
 	}
@@ -444,14 +448,14 @@ const (
 // decodePaste reads a bracketed paste's body verbatim, up to the end marker. Each
 // read has a deadline rather than none, so a paste whose end marker never arrives
 // cannot wedge the reader — and a wedged reader would also stop ctrl+c.
-func decodePaste(in *bufio.Reader) press {
+func decodePaste(in *bufio.Reader) Press {
 	var b strings.Builder
 	window := make([]rune, 0, len(pasteEnd))
 	for {
 		_ = stdin.SetDeadline(time.Now().Add(pasteRead))
 		r, _, err := in.ReadRune()
 		if err != nil {
-			return press{kind: pressPaste, text: b.String()}
+			return Press{Kind: PressPaste, Text: b.String()}
 		}
 		b.WriteRune(r)
 		window = append(window, r)
@@ -460,38 +464,38 @@ func decodePaste(in *bufio.Reader) press {
 		}
 		if len(window) == len(pasteEnd) && string(window) == pasteEnd {
 			s := b.String()
-			return press{kind: pressPaste, text: s[:len(s)-len(pasteEnd)]}
+			return Press{Kind: PressPaste, Text: s[:len(s)-len(pasteEnd)]}
 		}
 		if b.Len() > maxPasteBytes {
-			return press{kind: pressPaste, text: b.String()}
+			return Press{Kind: PressPaste, Text: b.String()}
 		}
 	}
 }
 
 // ss3Press handles the ESC O forms the application cursor-key mode uses.
-func ss3Press(final rune) press {
+func ss3Press(final rune) Press {
 	switch final {
 	case 'A':
-		return press{kind: pressUp}
+		return Press{Kind: PressUp}
 	case 'B':
-		return press{kind: pressDown}
+		return Press{Kind: PressDown}
 	case 'C':
-		return press{kind: pressRight}
+		return Press{Kind: PressRight}
 	case 'D':
-		return press{kind: pressLeft}
+		return Press{Kind: PressLeft}
 	case 'H':
-		return press{kind: pressHome}
+		return Press{Kind: PressHome}
 	case 'F':
-		return press{kind: pressEnd}
+		return Press{Kind: PressEnd}
 	case 'M':
-		return press{kind: pressEnter}
+		return Press{Kind: PressEnter}
 	}
-	return press{kind: pressOther}
+	return Press{Kind: PressOther}
 }
 
-// keyPress maps a codepoint and an xterm/Kitty modifier value (1 = none, 2 =
-// shift, 3 = alt, 5 = ctrl, 6 = ctrl+shift, …) to a press.
-func keyPress(code, mod int) press {
+// KeyPress maps a codepoint and an xterm/Kitty modifier value (1 = none, 2 =
+// shift, 3 = alt, 5 = ctrl, 6 = ctrl+shift, …) to a Press.
+func KeyPress(code, mod int) Press {
 	bits := mod - 1
 	shift := bits&1 != 0
 	alt := bits&2 != 0
@@ -499,18 +503,18 @@ func keyPress(code, mod int) press {
 	switch code {
 	case 13, 10:
 		if shift {
-			return press{kind: pressNewline}
+			return Press{Kind: PressNewline}
 		}
-		return press{kind: pressEnter}
+		return Press{Kind: PressEnter}
 	case 27:
-		return press{kind: pressEsc}
+		return Press{Kind: PressEsc}
 	case 127, 8:
-		return press{kind: pressBackspace}
+		return Press{Kind: PressBackspace}
 	case 9: // Tab
 		if shift {
-			return press{kind: pressBacktab}
+			return Press{Kind: PressBacktab}
 		}
-		return press{kind: pressTab}
+		return Press{Kind: PressTab}
 	}
 	if ctrl {
 		if b, ok := controlByte(code); ok {
@@ -518,9 +522,9 @@ func keyPress(code, mod int) press {
 		}
 	}
 	if !ctrl && !alt && code >= 32 {
-		return press{kind: pressRune, r: rune(code)}
+		return Press{Kind: PressRune, R: rune(code)}
 	}
-	return press{kind: pressOther}
+	return Press{Kind: PressOther}
 }
 
 // controlByte is the C0 byte a ctrl+<key> combination produces.
@@ -547,33 +551,33 @@ func controlByte(code int) (rune, bool) {
 }
 
 // controlOr resolves a control byte to its binding, covering the few that are
-// not in controlPress (enter, newline, esc, backspace).
-func controlOr(b rune) press {
-	if p, ok := controlPress(b); ok {
+// not in ControlPress (enter, newline, esc, backspace).
+func controlOr(b rune) Press {
+	if p, ok := ControlPress(b); ok {
 		return p
 	}
 	switch b {
 	case 13:
-		return press{kind: pressEnter}
+		return Press{Kind: PressEnter}
 	case 10:
-		return press{kind: pressNewline}
+		return Press{Kind: PressNewline}
 	case 0x1b:
-		return press{kind: pressEsc}
+		return Press{Kind: PressEsc}
 	case 0x08, 0x7f:
-		return press{kind: pressBackspace}
+		return Press{Kind: PressBackspace}
 	}
-	return press{kind: pressOther}
+	return Press{Kind: PressOther}
 }
 
-// decodeMouse parses the rest of an SGR mouse report (“CSI < b ; x ; y M|m“).
-// The wheel scrolls; a left button press, drag and release drive the transcript's
+// DecodeMouse parses the rest of an SGR mouse report (“CSI < b ; x ; y M|m“).
+// The wheel scrolls; a left button Press, drag and release drive the transcript's
 // text selection so the mouse can select and copy inside the alternate screen.
-func decodeMouse(in *bufio.Reader) press {
+func DecodeMouse(in *bufio.Reader) Press {
 	var vals [3]int
 	field := 0
 	b, err := in.ReadByte()
 	if err != nil {
-		return press{kind: pressOther}
+		return Press{Kind: PressOther}
 	}
 	for {
 		switch {
@@ -586,7 +590,7 @@ func decodeMouse(in *bufio.Reader) press {
 		}
 		b, err = in.ReadByte()
 		if err != nil {
-			return press{kind: pressOther}
+			return Press{Kind: PressOther}
 		}
 	}
 done:
@@ -598,16 +602,16 @@ done:
 	switch {
 	case wheel && !release:
 		if button&1 == 0 {
-			return press{kind: pressWheelUp}
+			return Press{Kind: PressWheelUp}
 		}
-		return press{kind: pressWheelDown}
+		return Press{Kind: PressWheelDown}
 	case wheel, !left:
-		return press{kind: pressOther}
+		return Press{Kind: PressOther}
 	case motion:
-		return press{kind: pressDrag, x: x, y: y}
+		return Press{Kind: PressDrag, X: x, Y: y}
 	case release:
-		return press{kind: pressRelease, x: x, y: y}
+		return Press{Kind: PressRelease, X: x, Y: y}
 	default:
-		return press{kind: pressClick, x: x, y: y}
+		return Press{Kind: PressClick, X: x, Y: y}
 	}
 }

@@ -17,13 +17,13 @@ func TestModelTabFocusOpensPicker(t *testing.T) {
 
 	ctx := context.Background()
 	for i := 0; i < len(c.presentHints()); i++ {
-		c.handleKey(ctx, press{kind: pressTab}, nil)
+		c.handleKey(ctx, press{Kind: pressTab}, nil)
 	}
 	if c.focus != hintModelPick {
 		t.Fatalf("focus = %v after cycling, want hintModelPick", c.focus)
 	}
 
-	c.handleKey(ctx, press{kind: pressEnter}, nil)
+	c.handleKey(ctx, press{Kind: pressEnter}, nil)
 	if c.menu != menuModel {
 		t.Fatalf("enter on the model opened menu %v, want menuModel", c.menu)
 	}

@@ -9,7 +9,7 @@
 //
 // The menu is a few dozen lines of escape codes rather than a TUI dependency:
 // two short blocks, redrawn in place.
-package tui
+package picker
 
 import (
 	"bufio"
@@ -20,9 +20,11 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/term"
+	xterm "golang.org/x/term"
 
+	"github.com/niq-run/niq/app/client/tui"
 	"github.com/niq-run/niq/app/client/tui/stdin"
+	"github.com/niq-run/niq/app/client/tui/term"
 	"github.com/niq-run/niq/app/standalone/contract"
 )
 
@@ -54,6 +56,9 @@ type menu struct {
 	// hint is a dim line under the options, for menus whose one option needs a
 	// word of explanation ("press enter to start").
 	hint string
+	// foot is a standing note printed as the block's last line, one blank row under
+	// everything else (the interactive shell's ctrl+c notice).
+	foot string
 	// disabled marks options that are listed but cannot be chosen — Stop and
 	// Restart on a project that is not running. They stay visible so the menu
 	// always reads the same, and the cursor steps over them.
@@ -87,14 +92,14 @@ func (m *menu) move(delta int) {
 // run returns the chosen index, or -1 when the user quits (q, Esc, Ctrl+C).
 func (m *menu) run() (int, error) {
 	fd := int(os.Stdin.Fd())
-	if !term.IsTerminal(fd) {
+	if !xterm.IsTerminal(fd) {
 		return -1, errNotTerminal
 	}
-	state, err := term.MakeRaw(fd)
+	state, err := xterm.MakeRaw(fd)
 	if err != nil {
 		return -1, err
 	}
-	defer term.Restore(fd, state)
+	defer xterm.Restore(fd, state)
 
 	in := stdin.Stream()
 	return m.loop(func() key { return readKey(in, stdin.SetDeadline) }, os.Stdout)
@@ -145,9 +150,13 @@ func (m *menu) draw(out io.Writer) {
 	if m.hint != "" {
 		fmt.Fprintf(out, "\x1b[2K%s\r\n", m.hint)
 	}
-	if m.statusLine {
+	if m.statusLine && m.status != "" {
 		fmt.Fprintf(out, "\x1b[2K\r\n")             // blank line before the status
 		fmt.Fprintf(out, "\x1b[2K%s\r\n", m.status) // status starts at the left edge
+	}
+	if m.foot != "" {
+		fmt.Fprintf(out, "\x1b[2K\r\n")           // a gap between the list and the note
+		fmt.Fprintf(out, "\x1b[2K%s\r\n", m.foot) // the note is the block's last line
 	}
 }
 
@@ -165,8 +174,11 @@ func (m *menu) height() int {
 	if m.hint != "" {
 		h++
 	}
-	if m.statusLine {
+	if m.statusLine && m.status != "" {
 		h += 2 // blank + status
+	}
+	if m.foot != "" {
+		h += 2 // blank + foot
 	}
 	return h
 }
@@ -275,15 +287,20 @@ func RunPicker(baseURL, header string) error {
 	// appended, so the screen never scrolls away from the list.
 	client := contract.New(baseURL)
 
-	list := &menu{title: pickerTitle(header), keep: true, statusLine: true}
+	list := &menu{
+		title:      pickerTitle(header),
+		keep:       true,
+		statusLine: true,
+		foot:       term.Dim("ctrl+c exits the interactive shell · niq keeps running in the background"),
+	}
 	for {
 		projects, err := client.List()
 		if err != nil {
 			return err
 		}
 		if len(projects) == 0 {
-			fmt.Println(dim("(no projects)"))
-			fmt.Printf("\n%s\n", dim("create one in the web UI: niq w"))
+			fmt.Println(term.Dim("(no projects)"))
+			fmt.Printf("\n%s\n", term.Dim("create one in the web UI: niq w"))
 			return nil
 		}
 		if list.cursor >= len(projects) {
@@ -326,13 +343,13 @@ func RunPicker(baseURL, header string) error {
 		// the list comes back with fresh state and whatever went wrong on the
 		// status line.
 		if action == "chat" {
-			if err := RunChat(baseURL, p.ID); err != nil {
-				list.status = red(err.Error())
+			if err := tui.RunChat(baseURL, p.ID); err != nil {
+				list.status = term.Red(err.Error())
 			}
 			continue
 		}
 		if line, err := runAction(client, baseURL, p, action); err != nil {
-			list.status = red(err.Error())
+			list.status = term.Red(err.Error())
 		} else {
 			list.status = line
 		}
@@ -341,15 +358,16 @@ func RunPicker(baseURL, header string) error {
 
 // pickerTitle is the block's header: the control-plane identity block the caller
 // passed in (the same basic information a bare `niq` prints — or just the version
-// line when none was given), a blank line, then the keys.
+// line when none was given), a blank line, then the keys and a standing note that
+// quitting only closes this shell.
 func pickerTitle(header string) string {
 	top := strings.TrimRight(header, "\n")
 	if top == "" {
 		top = versionTag()
 	}
 	return top + "\n\n" +
-		bold("↑/↓") + dim(", ") + bold("⌃n/⌃p") + dim(" or ") + bold("j/k") +
-		dim(" move · enter select · q quit")
+		term.Bold("↑/↓") + term.Dim(", ") + term.Bold("⌃n/⌃p") + term.Dim(" or ") + term.Bold("j/k") +
+		term.Dim(" move · enter select · q quit")
 }
 
 // pickAction asks what to do with one instance. The actions are always listed in
@@ -367,11 +385,11 @@ func pickAction(p contract.View) (string, error) {
 	// No identity line here: this menu replaces the list for a moment, and the
 	// project it is about is the whole heading. The trailing newline is the blank
 	// line that separates a heading from its options, as in the list.
-	title := fmt.Sprintf("%s %s\n", brandBold("["+p.ID+"]"), stateWord(running))
+	title := fmt.Sprintf("%s %s\n", term.BrandBold("["+p.ID+"]"), stateWord(running))
 	m := &menu{title: title, disabled: disabled}
 	if !running {
 		// Only start is on offer, so say what the key does.
-		m.hint = dim("press enter to start the project")
+		m.hint = term.Dim("press enter to start the project")
 	}
 	// Start the cursor on the first action that is actually available: on a
 	// stopped project Chat is dimmed, and parking on a disabled row would make
@@ -400,11 +418,11 @@ func actionRows(options []string, disabled []bool, cursor int) []string {
 	for i, opt := range options {
 		switch {
 		case i < len(disabled) && disabled[i]:
-			rows[i] = dim("○ ") + dim("["+opt+"]")
+			rows[i] = term.Dim("○ ") + term.Dim("["+opt+"]")
 		case i == cursor:
-			rows[i] = cursorDot(true) + reverse("["+opt+"]")
+			rows[i] = cursorDot(true) + term.Reverse("["+opt+"]")
 		default:
-			rows[i] = cursorDot(false) + bold("["+opt+"]")
+			rows[i] = cursorDot(false) + term.Bold("["+opt+"]")
 		}
 	}
 	return rows
@@ -414,9 +432,9 @@ func actionRows(options []string, disabled []bool, cursor int) []string {
 // for the row under the cursor, a dim ring for the rest.
 func cursorDot(selected bool) string {
 	if selected {
-		return brand("●") + " "
+		return term.Brand("●") + " "
 	}
-	return dim("○") + " "
+	return term.Dim("○") + " "
 }
 
 // runAction performs one action and returns the line the picker shows for it.
@@ -448,16 +466,16 @@ func projectRow(p contract.View, idWidth int, trailing string, cursor int, selec
 	// Every name is bracketed — the brackets are part of the row, not a cursor
 	// — and the selected one alone takes the theme colour. The cell is
 	// idWidth+2 wide either way, so the state and ports stay in one column.
-	name := bold("["+p.ID+"]") + strings.Repeat(" ", idWidth-displayWidth(p.ID))
+	name := term.Bold("["+p.ID+"]") + strings.Repeat(" ", idWidth-term.DisplayWidth(p.ID))
 	if selected {
-		name = brandBold("["+p.ID+"]") + strings.Repeat(" ", idWidth-displayWidth(p.ID))
+		name = term.BrandBold("["+p.ID+"]") + strings.Repeat(" ", idWidth-term.DisplayWidth(p.ID))
 	}
 	row := fmt.Sprintf("%s%s  %s  %s %-5s  %s %-5s  %s",
 		dot,
 		name,
 		stateWord(running),
-		dim("webui"), portCell(p.Ports.WebUI),
-		dim("bus"), portCell(p.Ports.Bus),
+		term.Dim("webui"), portCell(p.Ports.WebUI),
+		term.Dim("bus"), portCell(p.Ports.Bus),
 		trailing,
 	)
 	return strings.TrimRight(row, " ")
@@ -468,7 +486,7 @@ func projectRow(p contract.View, idWidth int, trailing string, cursor int, selec
 func projectRows(projects []contract.View, trailing func(contract.View) string, cursor int) []string {
 	idWidth := 2
 	for _, p := range projects {
-		if w := displayWidth(p.ID); w > idWidth {
+		if w := term.DisplayWidth(p.ID); w > idWidth {
 			idWidth = w
 		}
 	}
@@ -479,7 +497,7 @@ func projectRows(projects []contract.View, trailing func(contract.View) string, 
 	return rows
 }
 
-func projectDirCell(p contract.View) string { return dim(shortPath(p.Dir)) }
+func projectDirCell(p contract.View) string { return term.Dim(shortPath(p.Dir)) }
 
 // PrintTable is the non-interactive view: the picker without a terminal, and
 // the list under `niq status`. note, when set, is printed after the heading —
@@ -503,7 +521,7 @@ func stopProject(c *contract.Client, p contract.View) (string, error) {
 	if err := c.Stop(p.ID); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s %s", bold(p.ID), green("stopped")), nil
+	return fmt.Sprintf("%s %s", term.Bold(p.ID), term.Green("stopped")), nil
 }
 
 func startProject(c *contract.Client, baseURL string, p contract.View) (string, error) {
@@ -511,16 +529,16 @@ func startProject(c *contract.Client, baseURL string, p contract.View) (string, 
 	if err != nil {
 		return "", err
 	}
-	url := brand(contract.ProjectURL(baseURL, p.ID))
+	url := term.Brand(contract.ProjectURL(baseURL, p.ID))
 	if inst.Already {
-		return fmt.Sprintf("%s is %s %s", bold(p.ID), green("already running"), url), nil
+		return fmt.Sprintf("%s is %s %s", term.Bold(p.ID), term.Green("already running"), url), nil
 	}
-	return fmt.Sprintf("%s %s %s", bold(p.ID), green("started"), url), nil
+	return fmt.Sprintf("%s %s %s", term.Bold(p.ID), term.Green("started"), url), nil
 }
 
 func restartProject(c *contract.Client, baseURL string, p contract.View) (string, error) {
 	if _, err := c.Restart(p.ID); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%s %s %s", bold(p.ID), green("restarted"), brand(contract.ProjectURL(baseURL, p.ID))), nil
+	return fmt.Sprintf("%s %s %s", term.Bold(p.ID), term.Green("restarted"), term.Brand(contract.ProjectURL(baseURL, p.ID))), nil
 }

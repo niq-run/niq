@@ -1,8 +1,9 @@
 // The modal lists over the conversation: the target picker (ctrl+t), the view
-// picker (ctrl+v) and the delivery-mode picker (ctrl+x). They are the same card
-// with a different set of rows, so their state, navigation and layout live here.
-// dock.go paints the frame and keymap.go decodes the keys; the card geometry
-// itself is in dialog.go.
+// picker (ctrl+v), the delivery-mode picker (ctrl+x) and the model picker, plus
+// the keybinding page (ctrl+? / ?). The pickers are the same card with a
+// different set of rows, so their state, navigation and layout live here; the
+// help page is the same card with prose rows. dock.go paints the frame and
+// keymap.go decodes the keys; the card geometry itself is in dialog.go.
 package tui
 
 import (
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/niq-run/niq/app/client/tui/ui"
 	"github.com/niq-run/niq/app/standalone/contract"
 )
 
@@ -201,7 +203,7 @@ func (c *chat) applyMenu(ctx context.Context) {
 	case menuView:
 		c.filter = it.value
 		c.linesDirty = true
-		c.vp.followBottom()
+		c.vp.FollowBottom()
 		c.sel.clear()
 		c.status = ""
 	case menuMode:
@@ -221,7 +223,7 @@ func (c *chat) applyMenu(ctx context.Context) {
 // long list scrolls with the highlight.
 func (c *chat) menuCard() ([]string, int) {
 	items := c.menuItems()
-	fit := c.height - 2 - cardOverhead // the card's borders and its frame
+	fit := c.height - 2 - ui.CardOverhead // the card's borders and its frame
 	if fit < 1 {
 		fit = 1
 	}
@@ -264,17 +266,82 @@ func (c *chat) menuCard() ([]string, int) {
 	if len(items) > fit {
 		footer = fmt.Sprintf("%d/%d · ↑/↓ · enter · esc", c.menuCur+1, len(items))
 	}
-	return dialog{title: c.menu.title(), footer: footer, body: body}.lines(c.width, c.height)
+	return ui.Dialog{Title: c.menu.title(), Footer: footer, Body: body}.Lines(c.width, c.height)
 }
 
 // paintMenu overlays the open list on the frame and records its block, so a click
 // outside it closes the list and a click on an option selects it.
 func (c *chat) paintMenu(rows []string) {
 	card, boxW := c.menuCard()
-	c.cardRect = paintCard(rows, card, boxW, c.width)
-	// The card's top border sits frameLineY+frameGapY rows into the framed block;
+	c.cardRect = ui.PaintCard(rows, card, boxW, c.width)
+	// The card's top border sits ui.FrameLineY+ui.FrameGapY rows into the framed block;
 	// the first option is the row just under that border.
-	c.menuTopY = c.cardRect.y0 + frameLineY + frameGapY + 1
-	c.menuX0 = c.cardRect.x0 + frameLineX + frameGapX
-	c.menuX1 = c.cardRect.x1 - frameLineX - frameGapX
+	c.menuTopY = c.cardRect.Y0 + ui.FrameLineY + ui.FrameGapY + 1
+	c.menuX0 = c.cardRect.X0 + ui.FrameLineX + ui.FrameGapX
+	c.menuX1 = c.cardRect.X1 - ui.FrameLineX - ui.FrameGapX
+}
+
+// ── Help page ──
+
+// helpEntry is one line of the page: the keys and what they do.
+type helpEntry struct{ keys, action string }
+
+// helpSections is the content. "any mode" comes first: those are the shortcuts
+// that open the popups, and keeping them at the top means a short terminal still
+// shows them when the page has to be truncated.
+var helpSections = []struct {
+	title   string
+	entries []helpEntry
+}{
+	{"any mode", []helpEntry{
+		{"ctrl+t / ctrl+v", "target / view popups (click, or tab+enter)"},
+		{"ctrl+x", "input mode popup (or click it)"},
+		{"ctrl+? / ?", "this help (or click help)"},
+		{"ctrl+c / ctrl+q", "leave"},
+		{"wheel / drag", "scroll · select/copy · click buttons"},
+	}},
+	{"insert", []helpEntry{
+		{"enter", "send the message"},
+		{"shift+enter", "newline (ctrl+j, alt+enter too)"},
+		{"ctrl+a/e, ctrl+b/f", "line start/end · char left/right"},
+		{"ctrl+p / ctrl+n", "previous / next line"},
+		{"ctrl+k/w, ctrl+y", "kill end/word · yank"},
+		{"esc", "normal mode"},
+	}},
+	{"normal", []helpEntry{
+		{"j/k, ctrl+e/y", "line down / up"},
+		{"ctrl+n / ctrl+p", "next / previous message"},
+		{"ctrl+d/u, ctrl+f/b", "page down / up"},
+		{"g / G, i", "oldest/newest · insert mode"},
+	}},
+}
+
+// helpCard lays the page out as a card. paintHelp places it over the frame.
+func helpCard(width, maxRows int) ([]string, int) {
+	return ui.Dialog{Title: "help", Footer: "esc or click outside", Body: helpBody()}.Lines(width, maxRows)
+}
+
+// paintHelp overlays the keybinding card on the finished frame and records the
+// block it covers, so a click outside it can close the page.
+func (c *chat) paintHelp(rows []string) {
+	card, boxW := helpCard(c.width, c.height)
+	c.cardRect = ui.PaintCard(rows, card, boxW, c.width)
+}
+
+// helpBody renders the sections to card rows, aligning the key column.
+func helpBody() []string {
+	var body []string
+	for _, sec := range helpSections {
+		body = append(body, bold(sec.title))
+		for _, e := range sec.entries {
+			keys := e.keys
+			if w := displayWidth(keys); w > 18 {
+				keys = truncateCells(keys, 18)
+			} else {
+				keys += strings.Repeat(" ", 18-w)
+			}
+			body = append(body, "  "+dim(keys)+" "+e.action)
+		}
+	}
+	return body
 }

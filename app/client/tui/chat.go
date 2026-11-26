@@ -13,17 +13,26 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
 
+	"github.com/niq-run/niq/app/client/tui/layout"
 	"github.com/niq-run/niq/app/client/tui/live"
+	"github.com/niq-run/niq/app/client/tui/screen"
 	"github.com/niq-run/niq/app/client/tui/stdin"
 	"github.com/niq-run/niq/app/client/tui/text"
+	"github.com/niq-run/niq/app/client/tui/ui"
 	"github.com/niq-run/niq/app/standalone/contract"
 )
+
+// errNotTerminal means stdin is not a TTY (piped input, cron, a script), so the
+// interactive view cannot run.
+var errNotTerminal = errors.New("stdin is not a terminal")
 
 const (
 	// initialHistoryLimit is the first page loaded when the stream opens; a
@@ -67,7 +76,7 @@ type providerResult struct {
 // chat is the whole view's state. Rendering is a pure function of it, so the
 // main loop only mutates state and calls render.
 type chat struct {
-	scr       *screen
+	scr       *screen.Screen
 	client    *contract.Client
 	projectID string
 	sends     chan sendResult
@@ -85,10 +94,11 @@ type chat struct {
 	events     []contract.Event
 	seen       map[string]bool
 	lines      []string
+	userLines  []int // transcript line index where each user message starts
 	linesDirty bool
 
-	vp        viewport  // transcript scroll window (standalone component)
-	sel       selection // mouse text selection over the transcript
+	vp        layout.Viewport // transcript scroll window (standalone component)
+	sel       selection       // mouse text selection over the transcript
 	watermark string
 
 	// menu is the modal list currently open (target picker or input mode); menuCur
@@ -105,7 +115,7 @@ type chat struct {
 	spans   []hintSpan
 	// cardRect is the block the open modal covers, so a click outside it closes
 	// the modal.
-	cardRect rect
+	cardRect ui.Rect
 	// normal is vim's normal mode: keys move through the transcript and do not
 	// type. It starts off, so the view opens ready to write; esc enters it, i or a
 	// click in the composer leaves it.
@@ -117,9 +127,15 @@ type chat struct {
 	// focused, Enter activates it instead of sending.
 	focus hintAct
 	// ctxRow is the screen row of the context/model line; ctxModelX0/X1 bracket the
-	// clickable model at its right. -1 when not drawn.
+	// clickable model at its right, ctxPctX0/X1 the clickable context percentage at
+	// its left. -1 when not drawn.
 	ctxRow                 int
 	ctxModelX0, ctxModelX1 int
+	ctxPctX0, ctxPctX1     int
+	// usagePanel is the context-usage detail popup; usageWorker is the worker whose
+	// usage it shows.
+	usagePanel  bool
+	usageWorker string
 	// providers caches each reason worker's selectable providers and current
 	// model, keyed by worker id; modelWorker is the worker the model picker is
 	// switching. provResults carries the async fetch/switch back to the loop.
@@ -165,23 +181,23 @@ func RunChat(baseURL, projectID string) error {
 	}
 	defer term.Restore(fd, state)
 
-	scr := newScreen(os.Stdout, fd)
-	scr.start()
-	defer scr.stop()
-	scr.setTitle("niq chat · " + projectID)
+	scr := screen.NewScreen(os.Stdout, fd)
+	scr.Start()
+	defer scr.Stop()
+	scr.SetTitle("niq chat · " + projectID)
 
 	c := &chat{
 		scr:               scr,
 		client:            client,
 		projectID:         projectID,
-		width:             scr.w,
-		height:            scr.h,
+		width:             scr.W,
+		height:            scr.H,
 		in:                newInput(),
 		partners:          partners,
 		targets:           buildTargets(workers),
 		target:            pickTarget(partners),
 		uploadFiles:       uploadsFiles(baseURL),
-		vp:                viewport{follow: true},
+		vp:                layout.Viewport{Follow: true},
 		seen:              map[string]bool{},
 		providers:         map[string]contract.ProviderList{},
 		fetchingProviders: map[string]bool{},
@@ -239,9 +255,9 @@ loop:
 			c.applyProviderResult(res)
 			c.render()
 		case <-ticker.C:
-			c.scr.measure()
-			if c.scr.w != c.width || c.scr.h != c.height {
-				c.width, c.height = c.scr.w, c.scr.h
+			c.scr.Measure()
+			if c.scr.W != c.width || c.scr.H != c.height {
+				c.width, c.height = c.scr.W, c.scr.H
 				c.linesDirty = true
 				c.sel.clear() // re-wrapping invalidates line indices
 				c.render()
@@ -267,7 +283,7 @@ loop:
 	_ = stdin.SetDeadline(time.Now()) // wake a reader blocked in ReadRune
 	<-readDone
 	_ = stdin.SetDeadline(time.Time{})
-	c.scr.stop()
+	c.scr.Stop()
 	return nil
 }
 
@@ -337,9 +353,9 @@ func (c *chat) applyHistory(res historyResult) {
 	c.mergeHistory(res.events)
 	c.linesDirty = true
 	c.rebuild()
-	if !c.vp.follow {
+	if !c.vp.Follow {
 		// Keep the same content under the cursor when older lines are prepended.
-		c.vp.scrollLines(len(c.lines) - before)
+		c.vp.ScrollLines(len(c.lines) - before)
 	}
 	if len(res.events) < res.limit {
 		c.historyDone = true
@@ -510,7 +526,7 @@ func (c *chat) oldestAnchor() string {
 // its top, so every scroll path (page keys, line keys, wheel, drag) pages history
 // the same way.
 func (c *chat) maybeLoadOlder(ctx context.Context, histories chan<- historyResult) {
-	if c.vp.atTop() && !c.historyDone && !c.loading {
+	if c.vp.AtTop() && !c.historyDone && !c.loading {
 		c.startHistory(ctx, c.oldestAnchor(), historyPageLimit, histories)
 	}
 }
@@ -522,7 +538,7 @@ func (c *chat) cellAt(row, col int) (selPoint, bool) {
 	if len(c.lines) == 0 || row < 0 || row >= c.viewHeight() {
 		return selPoint{}, false
 	}
-	line := c.vp.first() + row
+	line := c.vp.First() + row
 	if line >= len(c.lines) {
 		line = len(c.lines) - 1
 	}
@@ -548,11 +564,11 @@ func (c *chat) dragTo(ctx context.Context, row, col int, histories chan<- histor
 	}
 	vh := c.viewHeight()
 	for row < 0 {
-		c.vp.lineUp()
+		c.vp.LineUp()
 		row++
 	}
 	for row >= vh {
-		c.vp.lineDown()
+		c.vp.LineDown()
 		row--
 	}
 	if p, ok := c.cellAt(row, col); ok {
@@ -566,4 +582,104 @@ func orStr(s, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+// ── Worker roster and routing ──
+
+// talkPartnerTypes are the worker types a terminal can converse with — the ones
+// that consume worker.input and answer in the conversation. This mirrors the
+// WebUI's TALK_PARTNER_TYPES so both interfaces agree on who is addressable.
+var talkPartnerTypes = map[string]bool{"reason": true, "coding": true, "niq": true}
+
+// talkPartners keeps the workers a message can be addressed to, in listing order.
+func talkPartners(workers []contract.Worker) []contract.Worker {
+	out := make([]contract.Worker, 0, len(workers))
+	for _, w := range workers {
+		if talkPartnerTypes[w.Type] {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// pickTarget chooses the worker a message goes to by default: the first online
+// partner, falling back to the first partner when every one of them is offline
+// (a send then surfaces the error). The user can change it at any time with the
+// target selector.
+func pickTarget(partners []contract.Worker) string {
+	for _, w := range partners {
+		if w.Online {
+			return w.ID
+		}
+	}
+	if len(partners) > 0 {
+		return partners[0].ID
+	}
+	return ""
+}
+
+// workerName is a partner's display name: its label when set, else its id.
+func workerName(w contract.Worker) string {
+	if w.Label != "" {
+		return w.Label
+	}
+	return w.ID
+}
+
+// indexOfWorker returns the index of id in ws, or 0 when it is not listed.
+func indexOfWorker(ws []contract.Worker, id string) int {
+	for i, w := range ws {
+		if w.ID == id {
+			return i
+		}
+	}
+	return 0
+}
+
+// toolTarget is whom a call addressed: the single target, or the routed
+// recipients when the bus only recorded those.
+func toolTarget(ev contract.Event) string {
+	if ev.TargetWorkerID != "" {
+		return ev.TargetWorkerID
+	}
+	return strings.Join(ev.Recipients, ", ")
+}
+
+// inputRecipients is whom the bus recorded a worker.input as addressed to: the
+// routed Recipients slice, or the single-target field on older events.
+func inputRecipients(ev contract.Event) []string {
+	if len(ev.Recipients) > 0 {
+		return ev.Recipients
+	}
+	if ev.TargetWorkerID != "" {
+		return []string{ev.TargetWorkerID}
+	}
+	return nil
+}
+
+// matchesFilter reports whether an event belongs in the transcript when the view
+// is scoped to one worker. An empty filter means everything. Otherwise the event
+// counts if that worker sent it, was its single target, or was among the routed
+// recipients — the same envelope rule the WebUI's talk scope uses.
+func matchesFilter(ev contract.Event, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	if ev.WorkerID == filter || ev.TargetWorkerID == filter {
+		return true
+	}
+	for _, r := range ev.Recipients {
+		if r == filter {
+			return true
+		}
+	}
+	return false
+}
+
+// workerLabel is the speaker name for the left side of a conversation block.
+func workerLabel(id string) string {
+	if id == "" {
+		return "worker"
+	}
+	return id
 }

@@ -24,7 +24,7 @@ func TestMenuClickSelectsOption(t *testing.T) {
 
 	// Click the third option row (press coordinates are 1-based).
 	row := c.menuTopY + 2
-	c.handleKey(context.Background(), press{kind: pressClick, x: c.menuX0 + 1, y: row + 1}, nil)
+	c.handleKey(context.Background(), press{Kind: pressClick, X: c.menuX0 + 1, Y: row + 1}, nil)
 	if c.menu != menuNone {
 		t.Fatalf("menu still open after selecting an option (%v)", c.menu)
 	}
@@ -42,7 +42,7 @@ func TestMenuClickOutsideCloses(t *testing.T) {
 	c.openMenu(menuTarget)
 	c.render()
 
-	c.handleKey(context.Background(), press{kind: pressClick, x: 1, y: 1}, nil)
+	c.handleKey(context.Background(), press{Kind: pressClick, X: 1, Y: 1}, nil)
 	if c.menu != menuNone {
 		t.Fatal("click outside did not close the menu")
 	}

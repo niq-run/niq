@@ -6,9 +6,13 @@
 // language is just a comment syntax, a string-quote set and a keyword list. When
 // a fence names no language (or an unknown one), a generic spec still picks up
 // the C-style `//` and shell `#` comments, quoted strings and numbers.
-package tui
+package render
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/niq-run/niq/app/client/tui/term"
+)
 
 // langSpec is what distinguishes one language's highlighting from another.
 type langSpec struct {
@@ -108,12 +112,12 @@ func (h *highlighter) line(s string) string {
 			if idx := strings.Index(s[i:], h.spec.blockClose); idx >= 0 {
 				end := i + idx + len(h.spec.blockClose)
 				flush()
-				b.WriteString(codeComment(s[i:end]))
+				b.WriteString(term.CodeComment(s[i:end]))
 				i = end
 				h.inBlock = false
 			} else {
 				flush()
-				b.WriteString(codeComment(s[i:]))
+				b.WriteString(term.CodeComment(s[i:]))
 				i = len(s)
 			}
 			continue
@@ -131,7 +135,7 @@ func (h *highlighter) line(s string) string {
 		for _, lc := range h.spec.lineComments {
 			if strings.HasPrefix(s[i:], lc) {
 				flush()
-				b.WriteString(codeComment(s[i:]))
+				b.WriteString(term.CodeComment(s[i:]))
 				i = len(s)
 				hit = true
 				break
@@ -160,7 +164,7 @@ func (h *highlighter) line(s string) string {
 				j = len(s)
 			}
 			flush()
-			b.WriteString(codeString(s[i:j]))
+			b.WriteString(term.CodeString(s[i:j]))
 			i = j
 			continue
 		}
@@ -172,7 +176,7 @@ func (h *highlighter) line(s string) string {
 				j++
 			}
 			flush()
-			b.WriteString(codeNumber(s[i:j]))
+			b.WriteString(term.CodeNumber(s[i:j]))
 			i = j
 			continue
 		}
@@ -186,7 +190,7 @@ func (h *highlighter) line(s string) string {
 			word := s[i:j]
 			if h.spec.keywords[word] {
 				flush()
-				b.WriteString(codeKeyword(word))
+				b.WriteString(term.CodeKeyword(word))
 			} else {
 				plain.WriteString(word)
 			}

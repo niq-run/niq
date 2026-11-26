@@ -77,7 +77,7 @@ func TestLiveThinkingRenders(t *testing.T) {
 	events := []contract.Event{
 		{ID: "r1", Type: "reason.response", WorkerID: "niq", Payload: map[string]any{"content": []any{"done"}}},
 	}
-	lines := renderTranscript(events, "", 40, "still thinking", "niq")
+	lines, _ := renderTranscript(events, "", 40, "still thinking", "niq")
 	joined := stripANSI(strings.Join(lines, "\n"))
 	if !strings.Contains(joined, "still thinking") {
 		t.Fatalf("live thinking missing:\n%s", joined)
@@ -87,7 +87,8 @@ func TestLiveThinkingRenders(t *testing.T) {
 	}
 
 	// A filter for another worker hides it.
-	if got := stripANSI(strings.Join(renderTranscript(events, "other", 40, "x", "niq"), "\n")); strings.Contains(got, "thinking") {
+	filtered, _ := renderTranscript(events, "other", 40, "x", "niq")
+	if got := stripANSI(strings.Join(filtered, "\n")); strings.Contains(got, "thinking") {
 		t.Fatalf("live thinking leaked through a filter:\n%s", got)
 	}
 

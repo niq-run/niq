@@ -17,7 +17,7 @@ func TestEmacsC0Keys(t *testing.T) {
 	}{
 		{0x01, pressHome}, {0x05, pressEnd},
 		{0x02, pressLeft}, {0x06, pressRight},
-		{0x10, pressUp}, {0x0e, pressDown},
+		{0x10, pressPrevUser}, {0x0e, pressNextUser},
 		{0x0b, pressKillEnd}, {0x17, pressKillWord},
 		{0x19, pressYank},
 		// Ctrl+U / Ctrl+D page the transcript, as in less and vim.
@@ -27,13 +27,13 @@ func TestEmacsC0Keys(t *testing.T) {
 	}
 	for _, c := range cases {
 		got, ok := controlPress(c.r)
-		if !ok || got.kind != c.want {
-			t.Errorf("controlPress(%#x) = %v, %v; want %v", c.r, got.kind, ok, c.want)
+		if !ok || got.Kind != c.want {
+			t.Errorf("controlPress(%#x) = %v, %v; want %v", c.r, got.Kind, ok, c.want)
 		}
 	}
 	// Only Ctrl+U / Ctrl+D page; the emacs editing keys stay with the editor.
 	for _, r := range []rune{0x06, 0x02, 0x19, 0x05, 0x01, 0x0b} {
-		if p, ok := controlPress(r); ok && (p.kind == pressPageUp || p.kind == pressPageDown) {
+		if p, ok := controlPress(r); ok && (p.Kind == pressPageUp || p.Kind == pressPageDown) {
 			t.Errorf("controlPress(%#x) pages but should edit", r)
 		}
 	}
@@ -55,14 +55,14 @@ func TestModifiedArrows(t *testing.T) {
 	for _, c := range cases {
 		r := bufio.NewReader(strings.NewReader(c.seq))
 		first, _, _ := r.ReadRune()
-		if got := decodePress(r, first); got.kind != c.want {
-			t.Errorf("%q => %v, want %v", c.seq, got.kind, c.want)
+		if got := decodePress(r, first); got.Kind != c.want {
+			t.Errorf("%q => %v, want %v", c.seq, got.Kind, c.want)
 		}
 	}
 	// alt+b / alt+f are word motions.
 	r := bufio.NewReader(strings.NewReader("\x1bb"))
 	first, _, _ := r.ReadRune()
-	if got := decodePress(r, first); got.kind != pressAlt || got.r != 'b' {
+	if got := decodePress(r, first); got.Kind != pressAlt || got.R != 'b' {
 		t.Errorf("alt+b => %+v", got)
 	}
 }

@@ -5,6 +5,8 @@ package tui
 
 import (
 	"strings"
+
+	"github.com/niq-run/niq/app/client/tui/render"
 )
 
 // fitOneLine collapses any whitespace run (including newlines) to a single space
@@ -84,7 +86,7 @@ func blockBody(r rendered, width int) []string {
 		return addFooter(lines)
 	}
 	if r.markdown {
-		for _, ln := range renderMarkdown(r.text, inner) {
+		for _, ln := range render.RenderMarkdown(r.text, inner) {
 			lines = append(lines, pad+ln)
 		}
 		return addFooter(lines)

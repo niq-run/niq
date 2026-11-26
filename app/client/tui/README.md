@@ -6,17 +6,24 @@ The terminal client: a picker (`niq i`) and a full-screen conversation view
 Everything here is hand-written escape codes over `golang.org/x/term`. There is
 no TUI framework — no bubbletea, no tcell — because the two screens are small and
 the rendering model (a full frame, diffed row by row) is what pi does and what
-keeps a keystroke cheap. The only import from this repo is
-`app/standalone/contract`: the same HTTP client the WebUI's data comes from, so a
-terminal is just another client of a project's bus.
+keeps a keystroke cheap. The only data import is `app/standalone/contract`: the
+same HTTP client the WebUI's data comes from, so a terminal is just another client
+of a project's bus.
 
 ## Files, bottom layer first
 
-The few layers that stand on their own are subpackages, each with its own tests:
+The reusable layers are subpackages, each with its own tests:
 
 | Package | Responsibility |
 |---|---|
 | `clipboard/` | native clipboard fallback next to OSC 52 |
+| `term/` | the styling foundation: ANSI styles, the dark/light palette and band surfaces, cell measurement, ANSI-aware clip/slice |
+| `screen/` | the alternate-screen framebuffer: line diffing, clipping |
+| `keys/` | raw input decoding (C0, CSI, Kitty, modifyOtherKeys, paste, mouse, reports) and the key reader |
+| `layout/` | the layout layer: the transcript's scroll viewport |
+| `render/` | the renderers: the markdown viewer (with GFM tables) and the code highlighter |
+| `ui/` | the reusable small controls: the modal card the pickers drape over |
+| `picker/` | the `niq i` picker app: its own menu, key reader and table output |
 | `live/` | the live subscription pump and its reconnect backoff |
 | `stdin/` | the stdin pump and its userspace read deadlines |
 | `text/` | event-payload reading, control/ANSI sanitising |
@@ -25,32 +32,24 @@ The conversation view itself, grouped by responsibility:
 
 | File | Responsibility |
 |---|---|
-| `cells.go` | cell measurement: display/visible width, wide runes, truncation |
-| `styles.go` | ANSI styling (`dim`, `brand`, …), the version tag |
-| `theme.go` | dark/light palettes, band surfaces, terminal colour reporting |
-| `workers.go` | the roster: who is addressable, target choice, naming, routing |
-| `viewport.go` | the transcript's scroll window: content length, height, follow |
-| `selection.go` | mouse selection: cell ranges on rendered lines → clipboard text |
-| `screen.go` | the alternate-screen framebuffer: line diffing, clipping |
-| `layout.go` | text → lines: wrapping, inline/answer shapes, section rules |
-| `render.go` | event → block: what each event means, tool cards, filters |
-| `usage.go` | the context-usage numbers a reason.response carries, formatted |
-| `transcript.go` | blocks → lines: grouping, gaps between blocks, surfaces |
-| `picker.go` | the `niq i` menu |
-| `dialog.go` | the bordered card layout and the frame splice that overlays it |
-| `menu.go` | the modal lists: target, view and input-mode pickers |
-| `help.go` | the keybinding page, drawn as a card over the transcript |
-| `dock.go` | the pinned bottom area: status/mode rule, composer rows, closing rule |
-| `input.go` | the composer: paste chips, attachments, delivery mode, its rows |
-| `editor.go` | the message buffer behind the composer: lines, cursor, kill/yank |
-| `keys.go` | raw input decoding and the key reader |
-| `stdin/` | the stdin pump and the userspace read deadlines |
+| `styles.go` | thin forwarders onto `term`, so the view keeps reading `dim(…)`, `brand(…)`, `displayWidth(…)` |
+| `keys_shim.go` | thin aliases/readers onto `keys`, so keymap keeps naming presses `press` / `pressXxx` |
+| `blocks.go` | text → lines: wrapping, inline/answer shapes, section rules |
+| `render.go` | event → block (what each event means, tool cards, filters) and the transcript (blocks → lines, gaps, surfaces) |
+| `usage.go` | the context-usage numbers a reason.response carries, formatted, and their detail panel |
+| `selection.go` | the mouse text selection over the transcript, mapping cell ranges back to clipboard text (the scroll window is `layout.Viewport`) |
 | `keymap.go` | what a decoded key means in each mode (insert / normal / help) |
-| `chat.go` | the session: state, event loop, sending, history paging |
+| `input.go` | the composer: paste chips, attachments, delivery mode, its rows, and the line-editor buffer underneath |
+| `dock.go` | the pinned bottom area: status/mode rule, composer rows, context/model line |
+| `menu.go` | the modal lists: target, view, input-mode and model pickers, plus the keybinding page |
+| `chat.go` | the session: state, event loop, sending, history paging, worker roster/routing |
 
-The rest of the split is a convention, not a compile boundary. One package keeps
-the render helpers unexported and free to move together; the next seams to cut
-along are `styles`+`theme`, `screen`, `viewport`+`selection` and `input`.
+The split is a convention, not a compile boundary. The genuinely reusable pieces
+are lifted into `term/` (styling + cells), `screen/` (framebuffer), `keys/`
+(input decoding), `render/` (markdown + highlight), `layout/` (scroll viewport),
+`ui/` (the modal card) and `picker/` (the whole `niq i` app). The one stateful
+widget left in this package — `selection` — is app plumbing: the session pokes its
+fields directly. It moves only when a second consumer wants it.
 
 ## The frame
 

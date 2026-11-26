@@ -22,7 +22,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/niq-run/niq/app/client/tui"
+	"github.com/niq-run/niq/app/client/tui/picker"
 	"github.com/niq-run/niq/app/standalone/gateway"
 	"github.com/niq-run/niq/app/standalone/launcher"
 	"github.com/niq-run/niq/app/standalone/store"
@@ -47,7 +47,7 @@ var (
 // Main runs the CLI with the given spec.
 func Main(spec Spec) {
 	version, buildTime, ui = spec.Version, spec.BuildTime, spec.UI
-	tui.Version = version
+	picker.Version = version
 	// The launcher's private child entry: this process is a project runtime,
 	// not the CLI. Dispatch before anything else so the CLI never sees it.
 	if launcher.IsChild(os.Args) {
@@ -114,7 +114,7 @@ func runInteractive() error {
 	if st, ok := readShellState(); ok && isRunning(st) {
 		header = controlHeader(st)
 	}
-	return tui.RunPicker(baseURL, header)
+	return picker.RunPicker(baseURL, header)
 }
 
 // ensureGatewayForUI resolves a running gateway and returns its address, starting
@@ -154,6 +154,7 @@ func ensureGatewayForUI() (string, error) {
 func runDefault() error {
 	if st, ok := readShellState(); ok && isRunning(st) {
 		err := printStatus()
+		printInteractiveHint()
 		checkForUpdate()
 		return err
 	}
@@ -170,6 +171,12 @@ func runDefault() error {
 	}
 	checkForUpdate()
 	return nil
+}
+
+// printInteractiveHint ends a bare `niq` run with the way into the interactive
+// shell, mirroring the picker's own dim ctrl+c footer.
+func printInteractiveHint() {
+	fmt.Printf("\n%s\n", dim("`niq i` opens the interactive terminal UI"))
 }
 
 func runShell(args []string, openBrowser bool) error {

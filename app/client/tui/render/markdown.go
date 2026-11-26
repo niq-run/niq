@@ -1,18 +1,22 @@
 // A small markdown renderer for a worker's answer: enough of the block and inline
 // syntax that a formatted reply reads as formatting in the terminal instead of
 // raw markers. It is not CommonMark — it handles headings, emphasis, inline code,
-// links, list items, block quotes, fenced code and horizontal rules, which is what
-// the reasoning workers actually emit.
+// links, list items, block quotes, fenced code, GFM pipe tables and horizontal
+// rules, which is what the reasoning workers actually emit.
 //
 // Wrapping happens on plain tokens and styling is applied afterward, so the
 // column math counts cells, not the ANSI bytes the styles add. Each rune carries
 // its style, so emphasis that spans a line break keeps working on both lines.
-package tui
+// Fenced code is handed to highlight.go's lexer; tables are laid out in the second
+// half of this file.
+package render
 
 import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/niq-run/niq/app/client/tui/term"
 )
 
 // mdStyle is an inline text style. It is an enum rather than a function so two
@@ -29,21 +33,24 @@ const (
 	mdHeading
 )
 
+// plain is the identity style for text that carries no markup.
+func plain(s string) string { return s }
+
 // styleFn maps a markdown style to its ANSI wrapper.
 func styleFn(st mdStyle) func(string) string {
 	switch st {
 	case mdBold:
-		return bold
+		return term.Bold
 	case mdItalic:
-		return italic
+		return term.Italic
 	case mdCode:
-		return codeText
+		return term.CodeText
 	case mdDim:
-		return dim
+		return term.Dim
 	case mdLink:
-		return underline
+		return term.Underline
 	case mdHeading:
-		return brandBold
+		return term.BrandBold
 	default:
 		return plain
 	}
@@ -68,9 +75,9 @@ var (
 	blockquoteRe = regexp.MustCompile(`^\s*>\s?(.*)$`)
 )
 
-// renderMarkdown turns a worker's markdown answer into styled, width-wrapped
+// RenderMarkdown turns a worker's markdown answer into styled, width-wrapped
 // lines. width is the full column budget (the body is flush left).
-func renderMarkdown(text string, width int) []string {
+func RenderMarkdown(text string, width int) []string {
 	if width < 8 {
 		width = 8
 	}
@@ -122,7 +129,7 @@ func renderMarkdown(text string, width int) []string {
 			continue
 		}
 		if isRule(trimmed) {
-			out = append(out, dim(strings.Repeat("─", width)))
+			out = append(out, term.Dim(strings.Repeat("─", width)))
 			continue
 		}
 		if m := headingRe.FindStringSubmatch(line); m != nil {
@@ -173,7 +180,7 @@ func layoutParagraph(text string, width int, base mdStyle) []string {
 // layoutItem renders a list item: a bullet (or "1. ") then the item text, with
 // continuation lines aligned under the text. bullet includes any leading indent.
 func layoutItem(content, bullet string, width int) []string {
-	bw := displayWidth(bullet)
+	bw := term.DisplayWidth(bullet)
 	first := width - bw
 	if first < 4 {
 		first = 4
@@ -201,10 +208,10 @@ func layoutQuote(content string, width int) []string {
 	wrapped := wrapTokens(ts, width-2, width-2)
 	out := make([]string, 0, len(wrapped))
 	for _, ln := range wrapped {
-		out = append(out, dim("│ ")+renderTokens(ln))
+		out = append(out, term.Dim("│ ")+renderTokens(ln))
 	}
 	if len(out) == 0 {
-		out = []string{dim("│ ")}
+		out = []string{term.Dim("│ ")}
 	}
 	return out
 }
@@ -214,10 +221,10 @@ func layoutQuote(content string, width int) []string {
 // reads as a distinct panel.
 func renderCode(lines []string, langName string, width int) []string {
 	hl := newHighlighter(langName)
-	bg := bandCode.bg()
+	bg := term.BandCode.Bg()
 	body := make([]string, 0, len(lines))
 	for _, l := range lines {
-		body = append(body, dim("│ ")+hl.line(l))
+		body = append(body, term.Dim("│ ")+hl.line(l))
 	}
 	if bg == "" {
 		return body
@@ -228,7 +235,7 @@ func renderCode(lines []string, langName string, width int) []string {
 	padded = append(padded, "")
 	out := make([]string, len(padded))
 	for i, ln := range padded {
-		out[i] = bandLine(ln, width, 0, bg)
+		out[i] = term.BandLine(ln, width, 0, bg)
 	}
 	return out
 }
@@ -322,7 +329,7 @@ func wrapTokens(ts []tok, firstWidth, restWidth int) [][]tok {
 	for len(ts) > 0 {
 		cells, end, lastSpace := 0, 0, -1
 		for end < len(ts) {
-			cw := runeCells(ts[end].r)
+			cw := term.RuneCells(ts[end].r)
 			if cells+cw > w {
 				break
 			}
@@ -340,7 +347,7 @@ func wrapTokens(ts []tok, firstWidth, restWidth int) [][]tok {
 			end = 1
 		}
 		cut := end
-		if next := ts[end].r; next != ' ' && !isWide(next) && lastSpace > 0 {
+		if next := ts[end].r; next != ' ' && !term.IsWide(next) && lastSpace > 0 {
 			cut = lastSpace
 		}
 		out = append(out, trimTrailingSpace(ts[:cut]))
@@ -411,4 +418,246 @@ func indentOf(ws string) string {
 		}
 	}
 	return strings.Repeat("  ", n/2)
+}
+
+// ── GFM pipe tables ──
+
+// A table is drawn as a full grid — an outer border, a rule between every pair of
+// rows, and a │ between columns — and laid out to the terminal width: columns are
+// sized to their content, then shrunk — widest first — until the table fits. Cell
+// text wraps inside its column, so a long cell grows its row in height rather than
+// pushing the table past the screen. Cells keep inline markdown (bold, code,
+// links).
+
+// isDelimRow reports whether s is a GFM table delimiter row: pipe-separated cells
+// of dashes, optionally with alignment colons.
+func isDelimRow(s string) bool {
+	if !strings.Contains(s, "|") || !strings.Contains(s, "-") {
+		return false
+	}
+	cells := splitRow(s)
+	if len(cells) == 0 {
+		return false
+	}
+	for _, c := range cells {
+		c = strings.TrimSpace(c)
+		c = strings.TrimPrefix(c, ":")
+		c = strings.TrimSuffix(c, ":")
+		if c == "" {
+			return false
+		}
+		for _, r := range c {
+			if r != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// splitRow splits a table row into trimmed cells, tolerating the optional leading
+// and trailing pipes.
+func splitRow(s string) []string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "|")
+	s = strings.TrimSuffix(s, "|")
+	parts := strings.Split(s, "|")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
+}
+
+// alignOf reads a delimiter row's alignment colons into per-column codes:
+// 0 left, 1 center, 2 right.
+func alignOf(delim string) []int {
+	cells := splitRow(delim)
+	aligns := make([]int, len(cells))
+	for i, c := range cells {
+		c = strings.TrimSpace(c)
+		left := strings.HasPrefix(c, ":")
+		right := strings.HasSuffix(c, ":")
+		switch {
+		case left && right:
+			aligns[i] = 1
+		case right:
+			aligns[i] = 2
+		}
+	}
+	return aligns
+}
+
+// renderTable draws a full grid — an outer border, a rule under the header and
+// between every pair of body rows, and │ between columns — fitted to width.
+func renderTable(header []string, align []int, rows [][]string, width int) []string {
+	n := len(header)
+	if n == 0 {
+		return nil
+	}
+	norm := func(r []string) []string {
+		out := make([]string, n)
+		copy(out, r)
+		return out
+	}
+	header = norm(header)
+	for i := range rows {
+		rows[i] = norm(rows[i])
+	}
+
+	// Header cells are bold; data cells keep their own inline styles.
+	hdr := make([][]tok, n)
+	widths := make([]int, n)
+	for k := 0; k < n; k++ {
+		hdr[k] = tokensFromRuns(inlineRuns(header[k]), mdBold)
+		widths[k] = tokensWidth(hdr[k])
+	}
+	body := make([][][]tok, len(rows))
+	for r := range rows {
+		body[r] = make([][]tok, n)
+		for k := 0; k < n; k++ {
+			body[r][k] = tokensFromRuns(inlineRuns(rows[r][k]), mdPlain)
+			widths[k] = maxInt(widths[k], tokensWidth(body[r][k]))
+		}
+	}
+
+	// Shrink the widest columns until the table fits. The grid spends 3 cells per
+	// internal column gap (" │ ") plus a 2-cell border on each side ("│ … │"), so
+	// the columns share width - (3n + 1).
+	avail := width - (3*n + 1)
+	if avail < n {
+		avail = n
+	}
+	total := 0
+	for _, w := range widths {
+		total += w
+	}
+	for total > avail {
+		idx := -1
+		for k, w := range widths {
+			if w > 1 && (idx < 0 || w > widths[idx]) {
+				idx = k
+			}
+		}
+		if idx < 0 {
+			break
+		}
+		widths[idx]--
+		total--
+	}
+
+	out := []string{tableBorder(widths, "┌", "┬", "┐")}
+	out = append(out, renderTableRow(hdr, widths, align)...)
+	if len(body) == 0 {
+		out = append(out, tableBorder(widths, "└", "┴", "┘"))
+		return out
+	}
+	out = append(out, tableBorder(widths, "├", "┼", "┤"))
+	for r := range body {
+		if r > 0 {
+			out = append(out, tableBorder(widths, "├", "┼", "┤"))
+		}
+		out = append(out, renderTableRow(body[r], widths, align)...)
+	}
+	out = append(out, tableBorder(widths, "└", "┴", "┘"))
+	return out
+}
+
+// renderTableRow wraps each cell to its column width and stacks the physical
+// lines (a row is as tall as its tallest wrapped cell).
+func renderTableRow(cells [][]tok, widths []int, align []int) []string {
+	wrapped := make([][][]tok, len(cells))
+	height := 1
+	for k := range cells {
+		wrapped[k] = wrapTokens(cells[k], widths[k], widths[k])
+		height = maxInt(height, len(wrapped[k]))
+	}
+	var out []string
+	for li := 0; li < height; li++ {
+		var b strings.Builder
+		b.WriteString(term.Dim("│ "))
+		for k := range cells {
+			if k > 0 {
+				b.WriteString(term.Dim(" │ "))
+			}
+			var line []tok
+			if li < len(wrapped[k]) {
+				line = wrapped[k][li]
+			}
+			b.WriteString(padCell(line, widths[k], alignAt(align, k)))
+		}
+		b.WriteString(term.Dim(" │"))
+		out = append(out, b.String())
+	}
+	return out
+}
+
+func alignAt(align []int, k int) int {
+	if k < len(align) {
+		return align[k]
+	}
+	return 0
+}
+
+// padCell renders one cell line styled and padded to width, honouring alignment.
+func padCell(line []tok, width, align int) string {
+	if w := tokensWidth(line); w > width {
+		line = truncateTokens(line, width)
+	}
+	pad := width - tokensWidth(line)
+	if pad < 0 {
+		pad = 0
+	}
+	left, right := 0, pad
+	switch align {
+	case 1:
+		left, right = pad/2, pad-pad/2
+	case 2:
+		left, right = pad, 0
+	}
+	return strings.Repeat(" ", left) + renderTokens(line) + strings.Repeat(" ", right)
+}
+
+// tableBorder draws one horizontal rule of the grid: the corner/joint runes
+// (top ┌┬┐, middle ├┼┤, bottom └┴┘) joined by a ─ span over each column. A span is
+// w+2 cells, matching the space padding either side of the column's content.
+func tableBorder(widths []int, left, mid, right string) string {
+	var b strings.Builder
+	b.WriteString(left)
+	for k, w := range widths {
+		if k > 0 {
+			b.WriteString(mid)
+		}
+		b.WriteString(strings.Repeat("─", w+2))
+	}
+	b.WriteString(right)
+	return term.Dim(b.String())
+}
+
+func tokensWidth(ts []tok) int {
+	w := 0
+	for _, t := range ts {
+		w += term.RuneCells(t.r)
+	}
+	return w
+}
+
+func truncateTokens(ts []tok, width int) []tok {
+	out := make([]tok, 0, len(ts))
+	w := 0
+	for _, t := range ts {
+		cw := term.RuneCells(t.r)
+		if w+cw > width {
+			break
+		}
+		w += cw
+		out = append(out, t)
+	}
+	return out
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

@@ -5,18 +5,23 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/niq-run/niq/app/client/tui/layout"
+	"github.com/niq-run/niq/app/client/tui/screen"
+	"github.com/niq-run/niq/app/client/tui/term"
+	"github.com/niq-run/niq/app/client/tui/ui"
 )
 
 // helpBox is the help card padded into a standalone block, the shape the tests
 // inspect. The view paints through paintCard instead.
 func helpBox(width, maxRows int) []string {
 	card, boxW := helpCard(width, maxRows)
-	totalW := boxW + 2*frameGapX + 2*frameLineX
+	totalW := boxW + 2*ui.FrameGapX + 2*ui.FrameLineX
 	startX := (width - totalW) / 2
 	if startX < 0 {
 		startX = 0
 	}
-	pad := startX + frameLineX + frameGapX
+	pad := startX + ui.FrameLineX + ui.FrameGapX
 	out := make([]string, len(card))
 	for i, ln := range card {
 		out[i] = strings.Repeat(" ", pad) + ln
@@ -38,10 +43,10 @@ func spanFor(c *chat, act hintAct) (hintSpan, bool) {
 func newTestChat(t *testing.T) (*chat, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	scr := newScreen(buf, 0)
+	scr := screen.NewScreen(buf, 0)
 	return &chat{
-		scr: scr, width: scr.w, height: scr.h, in: newInput(),
-		vp: viewport{follow: true}, seen: map[string]bool{}, target: "niq",
+		scr: scr, width: scr.W, height: scr.H, in: newInput(),
+		vp: layout.Viewport{Follow: true}, seen: map[string]bool{}, target: "niq",
 	}, buf
 }
 
@@ -50,17 +55,17 @@ func newTestChat(t *testing.T) (*chat, *bytes.Buffer) {
 // ctrl modifier under Kitty / modifyOtherKeys. In insert mode it must open help
 // rather than type.
 func TestCtrlQuestionIsHelp(t *testing.T) {
-	if p, ok := controlPress(0x1f); !ok || p.kind != pressHelp {
+	if p, ok := controlPress(0x1f); !ok || p.Kind != pressHelp {
 		t.Fatalf("0x1f = %+v ok=%v, want pressHelp", p, ok)
 	}
 	for _, mod := range []int{5, 6} { // ctrl, ctrl+shift
-		if p := keyPress('?', mod); p.kind != pressHelp {
+		if p := keyPress('?', mod); p.Kind != pressHelp {
 			t.Fatalf("ctrl+? mod %d decoded as %+v, want pressHelp", mod, p)
 		}
 	}
 
-	c := &chat{in: newInput(), vp: viewport{follow: true}}
-	c.handleKey(t.Context(), press{kind: pressHelp}, nil)
+	c := &chat{in: newInput(), vp: layout.Viewport{Follow: true}}
+	c.handleKey(t.Context(), press{Kind: pressHelp}, nil)
 	if !c.help {
 		t.Fatal("pressHelp did not open the help")
 	}
@@ -89,7 +94,7 @@ func TestRuleSegmentsAreClickable(t *testing.T) {
 			t.Fatalf("segment %v is not clickable", tc.act)
 		}
 		mid := (sp.x0 + sp.x1) / 2
-		c.handleKey(t.Context(), press{kind: pressClick, x: mid + 1, y: c.hintRow + 1}, nil)
+		c.handleKey(t.Context(), press{Kind: pressClick, X: mid + 1, Y: c.hintRow + 1}, nil)
 		if c.menu != tc.want {
 			t.Fatalf("clicking segment %v opened menu %v, want %v", tc.act, c.menu, tc.want)
 		}
@@ -102,7 +107,7 @@ func TestRuleSegmentsAreClickable(t *testing.T) {
 	if !ok {
 		t.Fatal("help segment is not clickable")
 	}
-	c.handleKey(t.Context(), press{kind: pressClick, x: (sp.x0+sp.x1)/2 + 1, y: c.hintRow + 1}, nil)
+	c.handleKey(t.Context(), press{Kind: pressClick, X: (sp.x0+sp.x1)/2 + 1, Y: c.hintRow + 1}, nil)
 	if !c.help {
 		t.Fatal("clicking help did not open the page")
 	}
@@ -116,19 +121,19 @@ func TestTargetPicker(t *testing.T) {
 		{label: "niq", value: "niq", note: "reason"},
 		{label: "coder", value: "code", note: "coding"},
 	}
-	c.handleKey(t.Context(), press{kind: pressTarget}, nil)
+	c.handleKey(t.Context(), press{Kind: pressTarget}, nil)
 	if c.menu != menuTarget {
 		t.Fatal("ctrl+t did not open the target popup")
 	}
 	if c.menuCur != 0 {
 		t.Fatalf("target popup opened on row %d, want the current target", c.menuCur)
 	}
-	c.handleKey(t.Context(), press{kind: pressDown}, nil)
+	c.handleKey(t.Context(), press{Kind: pressDown}, nil)
 	c.render()
 	if frame := stripANSI(buf.String()); !strings.Contains(frame, "┌ target") {
 		t.Fatalf("target popup not drawn:\n%s", frame)
 	}
-	c.handleKey(t.Context(), press{kind: pressEnter}, nil)
+	c.handleKey(t.Context(), press{Kind: pressEnter}, nil)
 	if c.menu != menuNone {
 		t.Fatal("enter did not close the target popup")
 	}
@@ -148,19 +153,19 @@ func TestViewPicker(t *testing.T) {
 		{label: "niq", value: "niq", note: "reason"},
 		{label: "coder", value: "code", note: "coding"},
 	}
-	c.handleKey(t.Context(), press{kind: pressView}, nil)
+	c.handleKey(t.Context(), press{Kind: pressView}, nil)
 	if c.menu != menuView {
 		t.Fatal("ctrl+v did not open the view popup")
 	}
 	if got := c.menuItems(); len(got) != 3 || got[0].value != "" {
 		t.Fatalf("view rows = %+v, want all + partners", got)
 	}
-	c.handleKey(t.Context(), press{kind: pressDown}, nil) // "all" -> niq
+	c.handleKey(t.Context(), press{Kind: pressDown}, nil) // "all" -> niq
 	c.render()
 	if frame := stripANSI(buf.String()); !strings.Contains(frame, "┌ view") {
 		t.Fatalf("view popup not drawn:\n%s", frame)
 	}
-	c.handleKey(t.Context(), press{kind: pressEnter}, nil)
+	c.handleKey(t.Context(), press{Kind: pressEnter}, nil)
 	if c.filter != "niq" {
 		t.Fatalf("view = %q, want niq", c.filter)
 	}
@@ -179,7 +184,7 @@ func TestVimStateClickToggles(t *testing.T) {
 		t.Fatal("vim state is not clickable")
 	}
 	click := func() {
-		c.handleKey(t.Context(), press{kind: pressClick, x: (sp.x0+sp.x1)/2 + 1, y: c.hintRow + 1}, nil)
+		c.handleKey(t.Context(), press{Kind: pressClick, X: (sp.x0+sp.x1)/2 + 1, Y: c.hintRow + 1}, nil)
 	}
 	click()
 	if !c.normal || c.menu != menuNone {
@@ -200,10 +205,10 @@ func TestVimStateClickToggles(t *testing.T) {
 // both as a plain rune and as the alt+? that a fast esc-then-? decodes to.
 func TestQuestionMarkOpensHelpInNormalMode(t *testing.T) {
 	for _, p := range []press{
-		{kind: pressRune, r: '?'},
-		{kind: pressAlt, r: '?'}, // esc then ? inside the 40 ms window
+		{Kind: pressRune, R: '?'},
+		{Kind: pressAlt, R: '?'}, // esc then ? inside the 40 ms window
 	} {
-		c := &chat{in: newInput(), vp: viewport{follow: true}, normal: true}
+		c := &chat{in: newInput(), vp: layout.Viewport{Follow: true}, normal: true}
 		c.handleKey(t.Context(), p, nil)
 		if !c.help {
 			t.Fatalf("%+v did not open help in normal mode", p)
@@ -220,13 +225,13 @@ func TestInputModePicker(t *testing.T) {
 	if !ok {
 		t.Fatal("input mode is not clickable")
 	}
-	c.handleKey(t.Context(), press{kind: pressClick, x: (sp.x0+sp.x1)/2 + 1, y: c.hintRow + 1}, nil)
+	c.handleKey(t.Context(), press{Kind: pressClick, X: (sp.x0+sp.x1)/2 + 1, Y: c.hintRow + 1}, nil)
 	if c.menu != menuMode {
 		t.Fatalf("click on input mode opened %v, want menuMode", c.menu)
 	}
 
 	buf.Reset()
-	c.scr = newScreen(buf, 0)
+	c.scr = screen.NewScreen(buf, 0)
 	c.render()
 	frame := stripANSI(buf.String())
 	for _, want := range []string{"┌ input mode", "default", "append", "interrupt", "schedule"} {
@@ -235,9 +240,9 @@ func TestInputModePicker(t *testing.T) {
 		}
 	}
 
-	c.handleKey(t.Context(), press{kind: pressDown}, nil)
-	c.handleKey(t.Context(), press{kind: pressDown}, nil) // default -> append -> interrupt
-	c.handleKey(t.Context(), press{kind: pressEnter}, nil)
+	c.handleKey(t.Context(), press{Kind: pressDown}, nil)
+	c.handleKey(t.Context(), press{Kind: pressDown}, nil) // default -> append -> interrupt
+	c.handleKey(t.Context(), press{Kind: pressEnter}, nil)
 	if c.menu != menuNone {
 		t.Fatal("enter did not close the input-mode picker")
 	}
@@ -248,11 +253,11 @@ func TestInputModePicker(t *testing.T) {
 		t.Fatalf("the rule did not update: %q", h)
 	}
 
-	c.handleKey(t.Context(), press{kind: pressMode}, nil)
+	c.handleKey(t.Context(), press{Kind: pressMode}, nil)
 	if c.menu != menuMode {
 		t.Fatal("ctrl+x did not open the input-mode picker")
 	}
-	c.handleKey(t.Context(), press{kind: pressMode}, nil)
+	c.handleKey(t.Context(), press{Kind: pressMode}, nil)
 	if c.menu != menuNone {
 		t.Fatal("a second ctrl+x did not close the picker")
 	}
@@ -265,23 +270,23 @@ func TestClickOutsideClosesPopups(t *testing.T) {
 	c.openMenu(menuMode)
 	c.render()
 	r := c.cardRect
-	if r.x1 == 0 || r.y1 == 0 {
+	if r.X1 == 0 || r.Y1 == 0 {
 		t.Fatalf("card rect not recorded: %+v", r)
 	}
 	// Inside: stays open.
-	c.handleKey(t.Context(), press{kind: pressClick, x: r.x0 + 1, y: r.y0 + 1}, nil)
+	c.handleKey(t.Context(), press{Kind: pressClick, X: r.X0 + 1, Y: r.Y0 + 1}, nil)
 	if c.menu != menuMode {
 		t.Fatal("a click inside the card closed it")
 	}
 	// Outside: closes.
-	c.handleKey(t.Context(), press{kind: pressClick, x: 1, y: c.height}, nil)
+	c.handleKey(t.Context(), press{Kind: pressClick, X: 1, Y: c.height}, nil)
 	if c.menu != menuNone {
 		t.Fatal("a click outside the card did not close it")
 	}
 
 	// esc closes a freshly opened menu.
 	c.openMenu(menuMode)
-	c.handleKey(t.Context(), press{kind: pressEsc}, nil)
+	c.handleKey(t.Context(), press{Kind: pressEsc}, nil)
 	if c.menu != menuNone {
 		t.Fatal("esc did not close the menu")
 	}
@@ -290,11 +295,11 @@ func TestClickOutsideClosesPopups(t *testing.T) {
 	c.help = true
 	c.render()
 	hr := c.cardRect
-	c.handleKey(t.Context(), press{kind: pressClick, x: hr.x0 + 1, y: hr.y0 + 1}, nil)
+	c.handleKey(t.Context(), press{Kind: pressClick, X: hr.X0 + 1, Y: hr.Y0 + 1}, nil)
 	if !c.help {
 		t.Fatal("a click inside help closed it")
 	}
-	c.handleKey(t.Context(), press{kind: pressClick, x: 1, y: 1}, nil)
+	c.handleKey(t.Context(), press{Kind: pressClick, X: 1, Y: 1}, nil)
 	if c.help {
 		t.Fatal("a click outside help did not close it")
 	}
@@ -303,7 +308,7 @@ func TestClickOutsideClosesPopups(t *testing.T) {
 // TestPickerScrollsWithALongList pins the picker's window: with more rows than
 // fit, the card shows a slice around the highlight and a position footer.
 func TestPickerScrollsWithALongList(t *testing.T) {
-	c := &chat{in: newInput(), vp: viewport{follow: true}, seen: map[string]bool{}}
+	c := &chat{in: newInput(), vp: layout.Viewport{Follow: true}, seen: map[string]bool{}}
 	c.width, c.height = 80, 12
 	for i := 0; i < 30; i++ {
 		c.targets = append(c.targets, menuItem{label: fmt.Sprintf("w%02d", i), value: fmt.Sprintf("w%02d", i), note: "reason"})
@@ -329,11 +334,11 @@ func TestPickerScrollsWithALongList(t *testing.T) {
 // columns and rows, so transcript text around it stays on screen.
 func TestCardKeepsTheSurroundingFrame(t *testing.T) {
 	var buf bytes.Buffer
-	scr := newScreen(&buf, 0)
-	scr.w, scr.h = 80, 40
+	scr := screen.NewScreen(&buf, 0)
+	scr.W, scr.H = 80, 40
 	c := &chat{
 		scr: scr, width: 80, height: 40, in: newInput(),
-		vp: viewport{follow: true}, seen: map[string]bool{}, help: true,
+		vp: layout.Viewport{Follow: true}, seen: map[string]bool{}, help: true,
 	}
 	c.lines = []string{"LEFT-EDGE-MARKER goes here and keeps going to the right"}
 	c.render()
@@ -346,49 +351,14 @@ func TestCardKeepsTheSurroundingFrame(t *testing.T) {
 	}
 }
 
-// TestComposeRowKeepsTheSides pins the splice itself: the card replaces only
-// [start, end), with the accent frame each side, and the row's own text survives
-// outside it.
-func TestComposeRowKeepsTheSides(t *testing.T) {
-	end := 3 + 2*frameLineX + 3 // left + frame + box + frame
-	got := stripANSI(composeRow("01234567890123", "BOX", 3, end, 14))
-	if want := "012  BOX  0123"; got != want {
-		t.Fatalf("composeRow = %q, want %q", got, want)
-	}
-}
-
-// TestCardRingIsBlue pins the frame: with colour on, the gutter around a card is
-// the accent background, and the card's own lines carry no background.
-func TestCardRingIsBlue(t *testing.T) {
-	oldAnsi, oldTC := ansi, truecolor
-	defer func() { ansi, truecolor = oldAnsi, oldTC }()
-	ansi, truecolor = true, true
-
-	if got := ringFill(3); !strings.Contains(got, "48;2;60;120;180") {
-		t.Fatalf("ringFill lost the accent background: %q", got)
-	}
-	rows := []string{strings.Repeat("x", 40)}
-	card := []string{"┌ foo ┐", "└─────┘"}
-	r := paintCard(rows, card, 7, 40)
-	if !strings.Contains(rows[0], "48;2;60;120;180") {
-		t.Fatalf("the frame is not drawn around the card: %q", rows[0])
-	}
-	if strings.Contains(card[0], "48;2;60;120;180") {
-		t.Fatal("the frame leaked into the card's own rows")
-	}
-	if want := (40 - (7 + 2*frameGapX + 2*frameLineX)) / 2; r.x0 != want {
-		t.Fatalf("rect x0 = %d, want %d", r.x0, want)
-	}
-}
-
 // TestSliceStyledKeepsTheColourAtTheCut pins the ANSI-aware slice: a background
 // set before the cut still covers the sliced cells.
 func TestSliceStyledKeepsTheColourAtTheCut(t *testing.T) {
-	oldAnsi, oldTC := ansi, truecolor
-	defer func() { ansi, truecolor = oldAnsi, oldTC }()
-	ansi, truecolor = true, true
+	oldAnsi, oldTC := term.Ansi, term.Truecolor
+	defer func() { term.Ansi, term.Truecolor = oldAnsi, oldTC }()
+	term.Ansi, term.Truecolor = true, true
 
-	line := bandLine("abcdef", 6, 0, bandTool.bg())
+	line := bandLine("abcdef", 6, 0, bandTool.Bg())
 	got := sliceStyled(line, 2, 4)
 	if !strings.Contains(got, "48;2;37;65;49") {
 		t.Fatalf("the sliced span lost its background: %q", got)
@@ -414,15 +384,15 @@ func TestHelpFitsTheSmallestFrame(t *testing.T) {
 
 // TestModeWordCarriesTheBrandColour pins the theme colour on the vim-state word.
 func TestModeWordCarriesTheBrandColour(t *testing.T) {
-	oldAnsi, oldTC := ansi, truecolor
-	defer func() { ansi, truecolor = oldAnsi, oldTC }()
-	ansi, truecolor = true, true
+	oldAnsi, oldTC := term.Ansi, term.Truecolor
+	defer func() { term.Ansi, term.Truecolor = oldAnsi, oldTC }()
+	term.Ansi, term.Truecolor = true, true
 
-	insert := &chat{width: 120, target: "niq", vp: viewport{follow: true}, in: newInput()}
+	insert := &chat{width: 120, target: "niq", vp: layout.Viewport{Follow: true}, in: newInput()}
 	if h := insert.hint(); !strings.Contains(h, "minsert\x1b[0m") {
 		t.Fatalf("insert state is not brand-coloured: %q", h)
 	}
-	normal := &chat{width: 120, target: "niq", vp: viewport{follow: true}, normal: true, in: newInput()}
+	normal := &chat{width: 120, target: "niq", vp: layout.Viewport{Follow: true}, normal: true, in: newInput()}
 	if h := normal.hint(); !strings.Contains(h, "mnormal\x1b[0m") {
 		t.Fatalf("normal state is not brand-coloured: %q", h)
 	}

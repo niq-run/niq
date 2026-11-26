@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"strings"
 	"testing"
+
+	"github.com/niq-run/niq/app/client/tui/layout"
 )
 
 // TestInterruptedEscapeHandsBackKey pins the fix for ctrl+c being swallowed: a
@@ -28,8 +30,8 @@ func TestInterruptedEscapeHandsBackKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: ctrl+c was swallowed: %v", c.name, err)
 		}
-		if got := decodePress(r, second); got.kind != pressInterrupt {
-			t.Fatalf("%s: second key = %v, want interrupt", c.name, got.kind)
+		if got := decodePress(r, second); got.Kind != pressInterrupt {
+			t.Fatalf("%s: second key = %v, want interrupt", c.name, got.Kind)
 		}
 	}
 }
@@ -39,11 +41,11 @@ func TestInterruptedEscapeHandsBackKey(t *testing.T) {
 // a page, so ctrl+c quits rather than only closing it).
 func TestOneInterruptLeavesTheChat(t *testing.T) {
 	for _, c := range []*chat{
-		{in: newInput(), vp: viewport{follow: true}},
-		{in: newInput(), vp: viewport{follow: true}, normal: true},
-		{in: newInput(), vp: viewport{follow: true}, menu: menuMode},
+		{in: newInput(), vp: layout.Viewport{Follow: true}},
+		{in: newInput(), vp: layout.Viewport{Follow: true}, normal: true},
+		{in: newInput(), vp: layout.Viewport{Follow: true}, menu: menuMode},
 	} {
-		if !c.handleKey(t.Context(), press{kind: pressInterrupt}, nil) {
+		if !c.handleKey(t.Context(), press{Kind: pressInterrupt}, nil) {
 			t.Fatal("ctrl+c did not ask to leave")
 		}
 	}
@@ -56,7 +58,7 @@ func TestPasteKeepsControlBytes(t *testing.T) {
 	r := bufio.NewReader(strings.NewReader("\x1b[200~" + body + "\x1b[201~"))
 	first, _, _ := r.ReadRune()
 	got := decodePress(r, first)
-	if got.kind != pressPaste || got.text != body {
+	if got.Kind != pressPaste || got.Text != body {
 		t.Fatalf("paste = %+v, want %q", got, body)
 	}
 }
