@@ -275,6 +275,25 @@ func toolOut(s string) string {
 	return paint("38;5;151", s)
 }
 
+// toolReply is the dimmest card tone: the reply rows under a call, a step below
+// toolOut so the call line leads and the reply recedes. On the light surface it
+// goes lighter (toward the background); on the dark one, greyer.
+func toolReply(s string) string {
+	if !ansi {
+		return s
+	}
+	if truecolor {
+		if lightTheme {
+			return "\x1b[38;2;112;126;118m" + s + "\x1b[0m"
+		}
+		return "\x1b[38;2;150;168;160m" + s + "\x1b[0m"
+	}
+	if lightTheme {
+		return paint("38;5;243", s)
+	}
+	return paint("38;5;145", s)
+}
+
 // toolFail is the reply tone for a failed or rejected call: readable red rather
 // than the terminal's default, which is too dark on the error surface.
 func toolFail(s string) string {

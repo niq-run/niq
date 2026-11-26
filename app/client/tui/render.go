@@ -350,7 +350,7 @@ func toolBlock(ev contract.Event, ans *contract.Event, width int) rendered {
 				if failed {
 					body = append(body, toolFail(ln))
 				} else {
-					body = append(body, toolOut(ln))
+					body = append(body, toolReply(ln))
 				}
 			}
 		}
