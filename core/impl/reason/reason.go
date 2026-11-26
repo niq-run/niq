@@ -492,6 +492,11 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// (soft: remind, hard: emit the context.compress convention event).
 	// Expects w.mu held. Runs after the placeholders above, so its inline
 	// soft reminder is always the round's final transcript write.
+	//
+	// The accounting is recorded first and unconditionally (even with no window
+	// configured): it is what context.status reports, and it must count
+	// tool-call rounds too, which never publish a reason.response.
+	w.recordContextUsage(finalMsg)
 	w.handleContextBudget(ctx, finalMsg)
 	if len(thinkingBlocks) > 0 {
 		log.Printf("[reason %s] publishing %d thinking block(s)", w.ID(), len(thinkingBlocks))
@@ -858,26 +863,18 @@ func usageMeta(msg llm.Message, contextWindow int, breakdown []contextSection) m
 		// Hit rate: how much of the prompt was served from the prefix cache.
 		// Adapters normalize InputTokens to the total prompt (cache read +
 		// cache write + uncached), so this ratio is comparable across providers.
-		// Clamped so a misreporting provider cannot render as >100%.
-		if u.InputTokens > 0 {
-			pct := float64(*u.CacheReadTokens) / float64(u.InputTokens) * 100
-			if pct > 100 {
-				pct = 100
-			}
+		if pct, ok := cacheHitPercent(u.CacheReadTokens, u.InputTokens); ok {
 			meta["cache_hit_percent"] = pct
 		}
 	}
 	if u.CacheCreationTokens != nil {
 		meta["cache_creation_tokens"] = *u.CacheCreationTokens
 	}
-	// The generated half of the round: what the report calls it. Prefer
-	// total-input when the provider reports a total (keeps the panel's parts
-	// summing to the headline), else the explicit output count.
-	completion := u.OutputTokens
-	if u.TotalTokens > u.InputTokens {
-		completion = u.TotalTokens - u.InputTokens
-	}
-	if b := scaleBreakdown(breakdown, u.InputTokens, completion); len(b) > 0 {
+	// The round's prompt and generated halves: the parts are rescaled to them so
+	// they add up to the headline. Shared with context.status, so the event and
+	// the response never disagree.
+	prompt, completion := promptAndCompletion(u)
+	if b := scaleBreakdown(breakdown, prompt, completion); len(b) > 0 {
 		meta["breakdown"] = b
 	}
 	return meta

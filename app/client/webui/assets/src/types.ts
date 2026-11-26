@@ -154,6 +154,35 @@ export interface ProviderSwitchResult {
   error?: string
 }
 
+// ContextSection is one part of a prompt's composition, as the reason worker
+// reports it (context.status and reason.response's meta.usage.breakdown).
+// The keys are the worker's stable identifiers; the UI maps them to labels.
+export interface ContextSection {
+  key: string
+  tokens: number
+}
+
+// WorkerContextStatus is what GET /api/workers/{id}/context returns: the
+// reason worker's ContextStatus snapshot (see core/impl/reason/contextstatus.go).
+// Usage fields are absent until the worker completes its first round.
+export interface WorkerContextStatus {
+  context_window: number
+  transcript_tokens: number
+  messages: number
+  budget_soft: number
+  budget_hard: number
+  rounds: number
+  used_tokens?: number
+  input_tokens?: number
+  output_tokens?: number
+  total_tokens?: number
+  cache_read_tokens?: number
+  cache_creation_tokens?: number
+  cache_hit_percent?: number
+  breakdown?: ContextSection[]
+  last_round_at?: number
+}
+
 // ApprovalDecision is the approver's verdict on one approval request.
 export interface ApprovalDecision {
   approved: boolean
@@ -294,4 +323,6 @@ export interface ProjectStartResult {
 
 // WorkerDetailTab names one tab of the worker detail panel. Deep links (e.g.
 // the talk badge's "Readme" menu entry) also use it to open a specific tab.
-export type WorkerDetailTab = 'info' | 'readme' | 'events' | 'perms'
+// 'context' holds a reason worker's context accounting and its model/provider
+// configuration; it is only offered for reason-family workers.
+export type WorkerDetailTab = 'info' | 'readme' | 'context' | 'events' | 'perms'

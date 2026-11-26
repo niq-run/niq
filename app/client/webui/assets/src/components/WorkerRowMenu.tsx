@@ -17,6 +17,9 @@ interface WorkerRowMenuProps {
   onDetail?: () => void
   // Deep-links the detail panel's Readme tab (same entry the talk badge menu has).
   onReadme?: () => void
+  // Deep-links the detail panel's Context tab (usage + model/provider). Passed
+  // only for reason-family workers, whose detail panel has that tab.
+  onContext?: () => void
   // Rename (备注名): turns the row's name into an inline input.
   onRename?: () => void
   onTogglePin: () => void
@@ -29,7 +32,7 @@ interface WorkerRowMenuProps {
 // (sleep) for a worker row. The view entries read exactly like the talk badge
 // menu's, so right-clicking the same worker means the same thing in both places.
 // Closes on outside click / Escape.
-export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMention, onDetail, onReadme, onRename, onTogglePin, onToggleSleep, onClose }: WorkerRowMenuProps) {
+export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMention, onDetail, onReadme, onContext, onRename, onTogglePin, onToggleSleep, onClose }: WorkerRowMenuProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
@@ -78,6 +81,11 @@ export default function WorkerRowMenu({ x, y, pinned, slept, mentionable, onMent
       {onReadme && (
         <div className="btn-hover" style={item} onClick={() => { onReadme(); onClose() }}>
           {t('badge.menu.readme')}
+        </div>
+      )}
+      {onContext && (
+        <div className="btn-hover" style={item} onClick={() => { onContext(); onClose() }}>
+          {t('badge.menu.context')}
         </div>
       )}
       {onRename && (

@@ -14,6 +14,7 @@ import type {
   ProviderListResult,
   ProviderSwitchResult,
   PublishPattern,
+  WorkerContextStatus,
   WorkerInfo,
 } from '../types'
 
@@ -420,6 +421,15 @@ export async function sendWorkerEvent(
 export async function fetchWorkerProviders(id: string, signal?: AbortSignal): Promise<ProviderListResult> {
   const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/providers`), { signal })
   if (!res.ok) throw new Error((await res.text()).trim() || 'providers failed: ' + res.status)
+  return res.json()
+}
+
+// fetchWorkerContext asks a reason worker for its context state over the bus
+// (context.status): the last round's usage and cache accounting, the prompt's
+// composition, the live transcript size and the compression budgets.
+export async function fetchWorkerContext(id: string, signal?: AbortSignal): Promise<WorkerContextStatus> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/context`), { signal })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'context failed: ' + res.status)
   return res.json()
 }
 

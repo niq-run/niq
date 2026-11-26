@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
-import { isTalkPartnerType, type WorkerInfo, type WorkerDetailTab, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
+import { isTalkPartnerType, isReasonFamilyType, type WorkerInfo, type WorkerDetailTab, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 import WorkerPickerModal from '../components/WorkerPickerModal'
 import WorkerRowMenu from '../components/WorkerRowMenu'
 import ContextMenuSurface from '../components/ContextMenuSurface'
@@ -163,6 +163,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     if (!rowMenu) return false
     const w = workers.find(x => x.id === rowMenu.id)
     return !!w && isTalkPartnerType(w.type)
+  })()
+  // Only reason-family workers have the detail panel's Context tab, so only
+  // they get the menu's deep link to it.
+  const rowMenuHasContext = (() => {
+    if (!rowMenu) return false
+    const w = workers.find(x => x.id === rowMenu.id)
+    return !!w && isReasonFamilyType(w.type)
   })()
   // Inline rename: the row label turns into an input. The edit is display
   // metadata only (the id stays the identity), so it is saved to the worker's
@@ -1273,6 +1280,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           onMention={() => onMention?.(rowMenu.id)}
           onDetail={onOpenDetail ? () => onOpenDetail(rowMenu.id) : undefined}
           onReadme={onOpenDetail ? () => onOpenDetail(rowMenu.id, 'readme') : undefined}
+          onContext={onOpenDetail && rowMenuHasContext ? () => onOpenDetail(rowMenu.id, 'context') : undefined}
           onRename={() => startRename(rowMenu.id)}
           onTogglePin={() => togglePinned(rowMenu.id)}
           onToggleSleep={() => toggleSlept(rowMenu.id)}

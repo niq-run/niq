@@ -186,6 +186,10 @@ func New(el *eventbusapi.EventLog, engine *eventbus.Engine, catalog worker.Manif
 	mux.HandleFunc("GET /api/workers/{id}/providers", s.handleWorkerProviders)
 	mux.HandleFunc("POST /api/workers/{id}/provider", s.handleWorkerSetProvider)
 
+	// Context state: a reason worker's own accounting of its context window
+	// (context.status) — usage, cache, composition, transcript size, budgets.
+	mux.HandleFunc("GET /api/workers/{id}/context", s.handleWorkerContext)
+
 	// Mounts: read and mutate a workspace worker's mounted directories over
 	// the bus (mount.list / mount.add / mount.remove), same ask-reply pattern
 	// as the provider endpoints.
@@ -1249,6 +1253,44 @@ func (s *Server) handleWorkerProviders(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
+}
+
+// handleWorkerContext serves GET /api/workers/{id}/context: it asks a reason
+// worker for its context state (the context.status event) and passes the
+// worker's JSON snapshot through unchanged. The shape belongs to the reason
+// worker (see core/impl/reason/contextstatus.go); the server is a transport,
+// so a field added there reaches the UI without a change here.
+func (s *Server) handleWorkerContext(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	online, wtype := s.workerOnline(id)
+	if !online {
+		http.Error(w, "worker "+id+" is offline", http.StatusServiceUnavailable)
+		return
+	}
+	if !isReasonFamilyType(wtype) {
+		http.Error(w, "worker "+id+" has no context state (only reason-family workers report it)", http.StatusNotFound)
+		return
+	}
+
+	req := event.New(reasonBase.TypeContextStatus, "", nil)
+	req.Transient = true // read-only query
+	reply, err := s.ask(r.Context(), id, req,
+		event.TypeRequestCompleted, event.TypeRequestFailed)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusGatewayTimeout)
+		return
+	}
+	if reply.Type == event.TypeRequestFailed {
+		http.Error(w, "context.status rejected", http.StatusBadGateway)
+		return
+	}
+
+	res := replyResultText(reply)
+	if res == "" {
+		res = "{}"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(res))
 }
 
 // handleWorkerSetProvider asks a reason worker to switch its active

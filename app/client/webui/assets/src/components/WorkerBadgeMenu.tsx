@@ -13,6 +13,9 @@ interface WorkerBadgeMenuProps {
   // Optional: land on the worker's Readme tab (a first-level shortcut to the
   // detail panel's tab).
   onReadme?: () => void
+  // Optional: land on the worker's Context tab (usage + model/provider). Passed
+  // only for reason-family workers, whose detail panel has that tab.
+  onContext?: () => void
   // Optional: add the worker to the watched/filtered set. Omitted by callers
   // that have no such action.
   onAddFilter?: () => void
@@ -25,7 +28,7 @@ interface WorkerBadgeMenuProps {
 // Responsive: on phone (long-press) it renders a full-width bottom sheet with
 // large tap targets and a dimmed backdrop; on desktop it is the small menu
 // anchored at the cursor. Closes on outside click / backdrop / Escape.
-export default function WorkerBadgeMenu({ x, y, workerId, onDetail, onFocus, onReadme, onAddFilter, onClose }: WorkerBadgeMenuProps) {
+export default function WorkerBadgeMenu({ x, y, workerId, onDetail, onFocus, onReadme, onContext, onAddFilter, onClose }: WorkerBadgeMenuProps) {
   const { colors } = useTheme()
   const { t } = useI18n()
   const isMobile = useIsMobile()
@@ -72,6 +75,11 @@ export default function WorkerBadgeMenu({ x, y, workerId, onDetail, onFocus, onR
               {t('badge.menu.readme')}
             </div>
           )}
+          {onContext && (
+            <div className="btn-hover" style={{ ...item, borderTop: '1px solid ' + colors.border }} onClick={() => { onContext(); onClose() }}>
+              {t('badge.menu.context')}
+            </div>
+          )}
           {onAddFilter && (
             <div className="btn-hover" style={{ ...item, borderTop: '1px solid ' + colors.border }} onClick={() => { onAddFilter(); onClose() }}>
               {t('badge.menu.addFilter')}
@@ -94,9 +102,9 @@ export default function WorkerBadgeMenu({ x, y, workerId, onDetail, onFocus, onR
       onClick={(e) => e.stopPropagation()}
       style={{
         position: 'fixed', left: Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : x) - 160),
-        // Four rows now (details / readme / filter / focus); keep the panel's
-        // bottom inside the viewport when the click lands near the edge.
-        top: Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : y) - 120),
+        // Five rows now (details / readme / context / filter / focus); keep the
+        // panel's bottom inside the viewport when the click lands near the edge.
+        top: Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : y) - 150),
         zIndex: 300, background: colors.bgLight, border: '1px solid ' + colors.border,
         borderRadius: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.18)', padding: '3px 0',
       }}
@@ -104,6 +112,9 @@ export default function WorkerBadgeMenu({ x, y, workerId, onDetail, onFocus, onR
       <div className="btn-hover" style={itemDesktop} onClick={() => { onDetail(); onClose() }}>{t('badge.menu.detail')}</div>
       {onReadme && (
         <div className="btn-hover" style={itemDesktop} onClick={() => { onReadme(); onClose() }}>{t('badge.menu.readme')}</div>
+      )}
+      {onContext && (
+        <div className="btn-hover" style={itemDesktop} onClick={() => { onContext(); onClose() }}>{t('badge.menu.context')}</div>
       )}
       {onAddFilter && (
         <div className="btn-hover" style={itemDesktop} onClick={() => { onAddFilter(); onClose() }}>{t('badge.menu.addFilter')}</div>

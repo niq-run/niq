@@ -47,7 +47,7 @@ func TestContextBreakdownParts(t *testing.T) {
 
 	got := make(map[string]int, len(w.roundBreakdown))
 	for _, s := range w.roundBreakdown {
-		got[s.key] = s.tokens
+		got[s.Key] = s.Tokens
 	}
 	// Every part of the prompt must be attributed.
 	for _, key := range []string{
@@ -99,8 +99,8 @@ func TestContextBreakdownParts(t *testing.T) {
 // breakdown yields nil rather than an empty array.
 func TestScaleBreakdownClampsToActual(t *testing.T) {
 	sections := []contextSection{
-		{key: breakdownSystem, tokens: 4000},
-		{key: breakdownMessagesUser, tokens: 1000},
+		{Key: breakdownSystem, Tokens: 4000},
+		{Key: breakdownMessagesUser, Tokens: 1000},
 	}
 	got := scaleBreakdown(sections, 250, 0)
 	if len(got) != 2 {

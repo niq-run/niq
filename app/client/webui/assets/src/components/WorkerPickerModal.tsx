@@ -2,7 +2,7 @@ import { useState, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { isTalkPartnerType, type WorkerInfo, type WorkerDetailTab } from '../types'
+import { isTalkPartnerType, isReasonFamilyType, type WorkerInfo, type WorkerDetailTab } from '../types'
 import TagFilterDropdown from './TagFilterDropdown'
 import WorkerRowMenu from './WorkerRowMenu'
 import ContextMenuSurface from './ContextMenuSurface'
@@ -76,6 +76,12 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
     if (!menu) return false
     const w = workers.find(x => x.id === menu.id)
     return !!w && isTalkPartnerType(w.type)
+  })()
+  // Only reason-family workers have the detail panel's Context tab.
+  const menuHasContext = (() => {
+    if (!menu) return false
+    const w = workers.find(x => x.id === menu.id)
+    return !!w && isReasonFamilyType(w.type)
   })()
 
   // All distinct tags present across the selectable set (stable options for
@@ -443,6 +449,7 @@ export default function WorkerPickerModal({ title, workers, selected, onToggle, 
           onMention={() => onMention?.(menu.id)}
           onDetail={onOpenDetail ? () => onOpenDetail(menu.id) : undefined}
           onReadme={onOpenDetail ? () => onOpenDetail(menu.id, 'readme') : undefined}
+          onContext={onOpenDetail && menuHasContext ? () => onOpenDetail(menu.id, 'context') : undefined}
           onTogglePin={() => togglePinned(menu.id)}
           onToggleSleep={() => toggleSlept(menu.id)}
           onClose={() => setMenu(null)}

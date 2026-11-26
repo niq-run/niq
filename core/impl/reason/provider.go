@@ -105,6 +105,10 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 	// Self-description (worker.readme + worker.readme.update): every reason-family
 	// worker can be asked what it is for and can revise that answer.
 	w.registerReadme()
+
+	// Context accounting (context.status): how full the window is and what it is
+	// made of. Read-only, and part of the persisted state (see contextstatus.go).
+	w.registerContextStatus()
 }
 
 // setActiveProvider switches this worker's active LLM provider. It must be
