@@ -51,6 +51,7 @@ const (
 	PressLineDown
 	PressKillEnd
 	PressKillWord
+	PressKillStart
 	PressYank
 	PressAlt
 	PressWheelUp
@@ -500,6 +501,7 @@ func KeyPress(code, mod int) Press {
 	shift := bits&1 != 0
 	alt := bits&2 != 0
 	ctrl := bits&4 != 0
+	super := bits&8 != 0 // Cmd on macOS
 	switch code {
 	case 13, 10:
 		if shift {
@@ -508,7 +510,12 @@ func KeyPress(code, mod int) Press {
 		return Press{Kind: PressEnter}
 	case 27:
 		return Press{Kind: PressEsc}
-	case 127, 8:
+	case 127, 8: // Backspace
+		// Cmd+Backspace (macOS) and Ctrl+Backspace (Windows/Linux) delete from the
+		// cursor to the start of the line; a bare Backspace deletes one character.
+		if ctrl || super {
+			return Press{Kind: PressKillStart}
+		}
 		return Press{Kind: PressBackspace}
 	case 9: // Tab
 		if shift {

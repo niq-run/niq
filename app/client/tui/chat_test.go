@@ -331,7 +331,7 @@ func TestResponseSectionRule(t *testing.T) {
 	if !strings.HasPrefix(plain, "blank-slate ···") {
 		t.Fatalf("rule = %q", plain)
 	}
-	short := sectionRule("x", 9)
+	short := sectionRule("x", 9, 0)
 	if w := visibleWidth(short); w != 9 {
 		t.Fatalf("short rule width = %d, want 9: %q", w, short)
 	}

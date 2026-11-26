@@ -98,6 +98,7 @@ normal (the two states need no popup).
 | `⌃P` / `⌃N` | previous / next line |
 | `⌫` / `⌦` | delete before / after the cursor |
 | `⌃K` / `⌃W` | kill to end of line / previous word |
+| `⌘⌫` (macOS) / `⌃⌫` (Win/Linux) | kill to line start |
 | `⌃Y` | yank the last kill |
 | `⌃?` | keybinding help |
 | `esc` | normal mode |

@@ -18,7 +18,8 @@ func (c *chat) viewHeight() int {
 	if n < 1 {
 		n = 1
 	}
-	bottom := 4 + n // spacer + status rule + input rows + divider rule + context line
+	bottom := 4 + n              // spacer + status rule + input rows + divider rule + context line
+	bottom += c.inlineDockRows() // option/command rows + the operation-hint row
 	v := c.height - bottom
 	if v < 1 {
 		v = 1
@@ -93,10 +94,35 @@ func (c *chat) render() {
 			break
 		}
 		rows[idx] = line
-		if i == inCurRow && c.menu == menuNone {
+		if i == inCurRow && c.menu == menuNone && c.palette == menuNone {
 			curRow, curCol = idx, inCurCol
 		}
 		idx++
+	}
+	// The inline list (a slash-command option palette, or the live command menu)
+	// sits directly under the composer, then a blank row and a hint row: the input
+	// rises as it opens, because the dock grew by these rows.
+	if opts, footer, keepCursor, ok := c.inlineMenu(); ok {
+		for _, line := range opts {
+			if idx >= c.height {
+				break
+			}
+			rows[idx] = line
+			idx++
+		}
+		if idx < c.height {
+			rows[idx] = "" // a blank row sets the hint apart from the list
+			idx++
+		}
+		if idx < c.height {
+			// Two cells in, past the "› " / "  " marker, so the hint lines up with
+			// the option labels above it rather than hugging the left edge.
+			rows[idx] = "  " + dim(footer)
+			idx++
+		}
+		if !keepCursor {
+			curRow = -1 // hide the text cursor while a choice is held
+		}
 	}
 	if idx < c.height {
 		rows[idx] = c.rule()

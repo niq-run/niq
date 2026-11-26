@@ -5,6 +5,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/niq-run/niq/app/client/tui/render"
 )
@@ -284,7 +285,7 @@ func wrapMax(text string, width, maxLines int) []string {
 // rather than a border, and dim so it does not compete with the answer. It is
 // built at the full width and not indented, so it starts at the left edge; the
 // body below keeps its one-cell inset.
-func sectionRule(name string, width int) string {
+func sectionRule(name string, width int, ts int64) string {
 	if width <= 0 {
 		return ""
 	}
@@ -292,11 +293,27 @@ func sectionRule(name string, width int) string {
 		return brandBold(truncateCells(name, width))
 	}
 	name = truncateCells(name, width-2)
-	fill := width - displayWidth(name) - 1
-	if fill < 1 {
-		fill = 1
+	nameW := displayWidth(name)
+	space := width - nameW - 1 // cells after "name " for the dots and the date
+	date := ""
+	if ts > 0 {
+		date = time.Unix(ts, 0).Format("2006-01-02 15:04")
 	}
-	return brandBold(name) + dim(" "+dotRule(fill))
+	dateW := displayWidth(date)
+	if date == "" || dateW+2 > space {
+		fill := space
+		if fill < 1 {
+			fill = 1
+		}
+		return brandBold(name) + dim(" "+dotRule(fill))
+	}
+	// Center the date in the space right of the name, one space beside it. The
+	// name already shifted that field, so the left and right dot runs are equal
+	// and the date reads as centered against the worker name and the full width.
+	mid := space - dateW - 2
+	left := mid / 2
+	right := mid - left
+	return brandBold(name) + dim(" "+dotRule(left)+" "+date+" "+dotRule(right))
 }
 
 // dotRule is fill cells of dots. One dot per cell, so the rule reads as a light

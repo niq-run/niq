@@ -82,8 +82,12 @@ func modeMenuItems() []menuItem {
 }
 
 // menuItems is the open menu's rows.
-func (c *chat) menuItems() []menuItem {
-	switch c.menu {
+func (c *chat) menuItems() []menuItem { return c.itemsFor(c.menu) }
+
+// itemsFor is the rows of the list of kind k — shared by the modal menu and the
+// inline slash-command palette.
+func (c *chat) itemsFor(k menuKind) []menuItem {
+	switch k {
 	case menuTarget:
 		return c.targets
 	case menuView:
@@ -194,8 +198,14 @@ func (c *chat) applyMenu(ctx context.Context) {
 		c.closeMenu()
 		return
 	}
-	it := items[c.menuCur]
-	switch c.menu {
+	c.applyChoice(ctx, c.menu, items[c.menuCur])
+	c.closeMenu()
+}
+
+// applyChoice applies one row of a list of kind k — shared by the modal menu and
+// the inline slash-command palette.
+func (c *chat) applyChoice(ctx context.Context, k menuKind, it menuItem) {
+	switch k {
 	case menuTarget:
 		if it.value != "" {
 			c.target = it.value
@@ -216,34 +226,30 @@ func (c *chat) applyMenu(ctx context.Context) {
 			c.startSwitch(ctx, c.modelWorker, parts[0], parts[1], c.provResults)
 		}
 	}
-	c.closeMenu()
 }
 
-// menuCard lays the open list out as a card, windowing to the frame height so a
-// long list scrolls with the highlight.
-func (c *chat) menuCard() ([]string, int) {
-	items := c.menuItems()
-	fit := c.height - 2 - ui.CardOverhead // the card's borders and its frame
+// windowRange is the slice [start,end) of n rows to show around cur so at most
+// fit rows appear, keeping the highlight visible and the window in bounds.
+func windowRange(n, cur, fit int) (start, end int) {
 	if fit < 1 {
 		fit = 1
 	}
-	start := 0
-	if len(items) > fit {
-		start = c.menuCur - fit/2
-		if start < 0 {
-			start = 0
-		}
-		if start+fit > len(items) {
-			start = len(items) - fit
-		}
+	if n <= fit {
+		return 0, n
 	}
-	end := start + fit
-	if end > len(items) {
-		end = len(items)
+	start = cur - fit/2
+	if start < 0 {
+		start = 0
 	}
-	// Remember the window so a click can map a screen row back to an item.
-	c.menuStart, c.menuCount = start, end-start
+	if start+fit > n {
+		start = n - fit
+	}
+	return start, start + fit
+}
 
+// optionBody renders one window [start,end) of a list, the highlighted row in
+// reverse video, every label padded to the widest so the notes line up.
+func optionBody(items []menuItem, cur, start, end int) []string {
 	w := 0
 	for _, it := range items {
 		if lw := displayWidth(it.label); lw > w {
@@ -254,14 +260,27 @@ func (c *chat) menuCard() ([]string, int) {
 	for i := start; i < end; i++ {
 		it := items[i]
 		pad := strings.Repeat(" ", w-displayWidth(it.label))
-		if i == c.menuCur {
-			// The selected row is a filled block (the label's blue turned into a
-			// background), matching the rule's keyboard focus.
+		if i == cur {
 			body = append(body, reverse("› "+it.label+pad)+" "+dim(it.note))
 		} else {
 			body = append(body, "  "+it.label+pad+" "+dim(it.note))
 		}
 	}
+	return body
+}
+
+// menuCard lays the open list out as a card, windowing to the frame height so a
+// long list scrolls with the highlight.
+func (c *chat) menuCard() ([]string, int) {
+	items := c.menuItems()
+	fit := c.height - 2 - ui.CardOverhead // the card's borders and its frame
+	if fit < 1 {
+		fit = 1
+	}
+	start, end := windowRange(len(items), c.menuCur, fit)
+	// Remember the window so a click can map a screen row back to an item.
+	c.menuStart, c.menuCount = start, end-start
+	body := optionBody(items, c.menuCur, start, end)
 	footer := "↑/↓ · enter · esc"
 	if len(items) > fit {
 		footer = fmt.Sprintf("%d/%d · ↑/↓ · enter · esc", c.menuCur+1, len(items))
@@ -281,6 +300,112 @@ func (c *chat) paintMenu(rows []string) {
 	c.menuX1 = c.cardRect.X1 - ui.FrameLineX - ui.FrameGapX
 }
 
+// ── Slash-command palette ──
+//
+// A slash command (/target, /view, /model, …) is confirmed in the composer, then
+// its options are shown inline under the input instead of in the centred card.
+// The palette shares itemsFor/applyChoice with the modal menu; it only differs in
+// where and how it renders (dock rows, no border).
+
+// maxPaletteRows caps the inline list so a long model list still leaves the input
+// and its hint visible.
+const maxPaletteRows = 8
+
+// openPalette raises the inline list of kind k on its current value, fetching the
+// model list first when k is the model picker.
+func (c *chat) openPalette(ctx context.Context, k menuKind) {
+	if k == menuModel {
+		w := c.contextWorker()
+		if w == "" {
+			c.flash("no worker to switch")
+			return
+		}
+		c.modelWorker = w
+		c.startProviders(ctx, w, c.provResults)
+	}
+	c.palette = k
+	c.paletteCur = c.menuIndex(k)
+}
+
+func (c *chat) closePalette() { c.palette = menuNone; c.paletteCur = 0 }
+
+// movePalette steps the highlight, wrapping.
+func (c *chat) movePalette(d int) {
+	n := len(c.itemsFor(c.palette))
+	if n == 0 {
+		return
+	}
+	c.paletteCur = (c.paletteCur + d + n) % n
+}
+
+// applyPalette commits the highlighted row and closes the list.
+func (c *chat) applyPalette(ctx context.Context) {
+	items := c.itemsFor(c.palette)
+	if c.paletteCur >= 0 && c.paletteCur < len(items) {
+		c.applyChoice(ctx, c.palette, items[c.paletteCur])
+	}
+	c.closePalette()
+	if c.in != nil {
+		c.in.clear()
+	}
+}
+
+// paletteView is the visible slice of the palette and how many rows it fills.
+func (c *chat) paletteView() ([]string, int) {
+	items := c.itemsFor(c.palette)
+	start, end := windowRange(len(items), c.paletteCur, maxPaletteRows)
+	return optionBody(items, c.paletteCur, start, end), end - start
+}
+
+// paletteRows is the number of option rows the palette adds to the dock.
+func (c *chat) paletteRows() int {
+	if c.palette == menuNone {
+		return 0
+	}
+	start, end := windowRange(len(c.itemsFor(c.palette)), c.paletteCur, maxPaletteRows)
+	return end - start
+}
+
+// inlineMenu is the list shown under the composer: the option palette when one is
+// open, else the live command menu when the draft is a /command. keepCursor is
+// true for the command menu, which is typed into, so the composer keeps the text
+// cursor; the option palette holds a choice and hides it. ok is false when
+// neither is shown.
+func (c *chat) inlineMenu() (opts []string, footer string, keepCursor, ok bool) {
+	if c.help || c.usagePanel || c.menu != menuNone {
+		return nil, "", false, false
+	}
+	if c.palette != menuNone {
+		opts, _ = c.paletteView()
+		return opts, "↑/↓ move · enter select · esc cancel", false, true
+	}
+	m := c.commandList()
+	if m == nil {
+		return nil, "", false, false
+	}
+	if c.cmdCur < 0 || c.cmdCur >= len(m) {
+		c.cmdCur = 0
+	}
+	start, end := windowRange(len(m), c.cmdCur, maxPaletteRows)
+	return optionBody(m, c.cmdCur, start, end), "↑/↓ move · tab select · esc cancel", true, true
+}
+
+// inlineDockRows is how many rows inlineMenu adds to the dock (its rows, a blank
+// row and the footer), or 0 when no list is shown.
+func (c *chat) inlineDockRows() int {
+	if c.help || c.usagePanel || c.menu != menuNone {
+		return 0
+	}
+	if c.palette != menuNone {
+		return c.paletteRows() + 2 // option rows + blank + hint
+	}
+	if m := c.commandList(); m != nil {
+		start, end := windowRange(len(m), c.cmdCur, maxPaletteRows)
+		return (end - start) + 2 // option rows + blank + hint
+	}
+	return 0
+}
+
 // ── Help page ──
 
 // helpEntry is one line of the page: the keys and what they do.
@@ -296,8 +421,8 @@ var helpSections = []struct {
 	{"any mode", []helpEntry{
 		{"ctrl+t / ctrl+v", "target / view popups (click, or tab+enter)"},
 		{"ctrl+x", "input mode popup (or click it)"},
-		{"ctrl+? / ?", "this help (or click help)"},
-		{"ctrl+c / ctrl+q", "leave"},
+		{"type /", "command menu: type filters, tab picks"},
+		{"ctrl+? / ?", "this help · ctrl+c/q leave"},
 		{"wheel / drag", "scroll · select/copy · click buttons"},
 	}},
 	{"insert", []helpEntry{

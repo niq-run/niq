@@ -11,6 +11,47 @@ import (
 
 // handleKey applies one keystroke. It returns true when the user asked to leave.
 func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyResult) bool {
+	if c.palette != menuNone {
+		// The inline slash-command list owns the keys: it moves, commits or cancels,
+		// and the composer beneath it stays untouched until a choice is applied.
+		switch p.Kind {
+		case pressTerminal:
+			c.reportTerminal(p)
+			return false
+		case pressInterrupt:
+			return true
+		case pressEsc:
+			c.closePalette()
+			if c.in != nil {
+				c.in.clear()
+			}
+			return false
+		case pressUp, pressLineUp, pressPrevUser:
+			c.movePalette(-1)
+			return false
+		case pressDown, pressLineDown, pressNextUser:
+			c.movePalette(+1)
+			return false
+		case pressTab:
+			c.movePalette(+1)
+			return false
+		case pressBacktab:
+			c.movePalette(-1)
+			return false
+		case pressEnter:
+			c.applyPalette(ctx)
+			return false
+		case pressRune:
+			switch p.R {
+			case 'k':
+				c.movePalette(-1)
+			case 'j':
+				c.movePalette(+1)
+			}
+			return false
+		}
+		return false
+	}
 	if c.help {
 		// The help page is dismissed by any key except a click inside it: closing a
 		// page should never tear down the conversation. Pressing ctrl+c twice (once to
@@ -89,6 +130,12 @@ func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyR
 		case p.Kind == pressEnter:
 			c.applyMenu(ctx)
 		}
+		return false
+	}
+
+	// The slash-command menu owns navigation, commit and cancel while the draft is
+	// a /command, but lets typing through so the composer keeps filtering it.
+	if c.handleCommandKey(ctx, p) {
 		return false
 	}
 
@@ -188,6 +235,7 @@ func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyR
 		}
 	case pressPaste:
 		c.in.paste(p.Text)
+		c.cmdCur = 0
 	case pressTerminal:
 		c.reportTerminal(p)
 	case pressMode:
@@ -259,10 +307,13 @@ func (c *chat) insertKey(ctx context.Context, p press, histories chan<- historyR
 		c.in.ed.newline()
 	case pressRune:
 		c.in.insert(p.R)
+		c.cmdCur = 0
 	case pressBackspace:
 		c.in.ed.backspace()
+		c.cmdCur = 0
 	case pressDelete:
 		c.in.ed.delete()
+		c.cmdCur = 0
 	case pressLeft:
 		c.in.ed.left()
 	case pressRight:
@@ -283,6 +334,9 @@ func (c *chat) insertKey(ctx context.Context, p press, histories chan<- historyR
 		c.in.killEnd()
 	case pressKillWord:
 		c.in.killWord()
+	case pressKillStart:
+		c.in.killStart()
+		c.cmdCur = 0
 	case pressYank:
 		c.in.yank()
 	case pressHelp:

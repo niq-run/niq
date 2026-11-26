@@ -151,7 +151,7 @@ func describe(ev contract.Event, width int) (rendered, bool) {
 		// round's context occupancy trails it as a dim footer, like the WebUI's.
 		label := workerLabel(ev.WorkerID)
 		r := rendered{
-			header:    sectionRule(label, width),
+			header:    sectionRule(label, width, ev.Timestamp),
 			inset:     replyInset,
 			text:      text.ContentText(ev.Payload["content"], nil),
 			textStyle: plain,

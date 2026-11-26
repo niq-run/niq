@@ -98,6 +98,65 @@ func TestEditorKillYank(t *testing.T) {
 	}
 }
 
+// TestKillStartKeys pins that Cmd+Backspace (macOS) and Ctrl+Backspace
+// (Windows/Linux) decode to the delete-to-line-start key, while a bare backspace
+// still deletes one character. KitTy encodes the modifiers in `CSI 127;mod u` and
+// modifyOtherKeys in `CSI 27;mod;127 ~`; mod is bits+1, super=8 so Cmd=9, ctrl=4
+// so Ctrl=5.
+func TestKillStartKeys(t *testing.T) {
+	for _, mod := range []int{5, 9} { // ctrl+backspace, cmd+backspace
+		if p := keyPress(127, mod); p.Kind != pressKillStart {
+			t.Errorf("keyPress(127,%d) = %v, want killStart", mod, p.Kind)
+		}
+		if p := keyPress(8, mod); p.Kind != pressKillStart {
+			t.Errorf("keyPress(8,%d) = %v, want killStart", mod, p.Kind)
+		}
+	}
+	if p := keyPress(127, 1); p.Kind != pressBackspace {
+		t.Errorf("plain backspace decoded as %v, want pressBackspace", p.Kind)
+	}
+	// KitTy and modifyOtherKeys wire spellings.
+	for _, seq := range []string{"\x1b[127;9u", "\x1b[27;9;127~"} {
+		r := bufio.NewReader(strings.NewReader(seq))
+		first, _, _ := r.ReadRune()
+		if got := decodePress(r, first); got.Kind != pressKillStart {
+			t.Errorf("%q => %v, want killStart", seq, got.Kind)
+		}
+	}
+}
+
+// TestKillStartEdits pins the editor move itself and the end-to-end key: the
+// draft's line is cleared up to the cursor and ctrl+y puts it back.
+func TestKillStartEdits(t *testing.T) {
+	in := newInput()
+	in.ed.setText("alpha beta")
+	in.ed.end()
+	in.killStart()
+	if in.ed.text() != "" || in.kill != "alpha beta" {
+		t.Fatalf("killStart: text=%q kill=%q", in.ed.text(), in.kill)
+	}
+	in.yank()
+	if in.ed.text() != "alpha beta" {
+		t.Fatalf("yank after killStart: %q", in.ed.text())
+	}
+
+	// Only the part before the cursor goes.
+	in.ed.setText("one two three")
+	in.ed.home()
+	in.ed.col = 7 // "one two"
+	if got := in.ed.killToStart(); got != "one two" || in.ed.text() != " three" {
+		t.Fatalf("killToStart mid-line: removed=%q text=%q", got, in.ed.text())
+	}
+
+	// Through the keymap: the composer clears, not just one rune.
+	c, _ := newTestChat(t)
+	c.in.setDraft("hello")
+	c.handleKey(t.Context(), press{Kind: pressKillStart}, nil)
+	if c.in.text() != "" {
+		t.Fatalf("kill-start key left %q", c.in.text())
+	}
+}
+
 // TestWordMotions pins alt+b / alt+f movement over letters, digits and underscore.
 func TestWordMotions(t *testing.T) {
 	in := newInput()

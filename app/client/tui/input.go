@@ -292,6 +292,10 @@ func (in *input) text() string {
 func (in *input) killEnd()  { in.kill = in.ed.killToEnd() }
 func (in *input) killWord() { in.kill = in.ed.killWord() }
 
+// killStart deletes from the start of the line to the cursor (Cmd+Backspace on
+// macOS, Ctrl+Backspace on Windows/Linux), yankable like the other kills.
+func (in *input) killStart() { in.kill = in.ed.killToStart() }
+
 // yank inserts the last killed text at the cursor.
 func (in *input) yank() {
 	if in.kill != "" {
@@ -643,6 +647,21 @@ func (e *editor) killWord() string {
 	ln := e.lines[e.row]
 	killed := string(ln[e.col:saved])
 	e.lines[e.row] = append(ln[:e.col], ln[saved:]...)
+	return killed
+}
+
+// killToStart removes from the start of the line to the cursor and returns what
+// it removed: the Cmd+Backspace move. With the cursor already at the line start
+// (or on an empty line) there is nothing to take.
+func (e *editor) killToStart() string {
+	e.norm()
+	if e.col == 0 {
+		return ""
+	}
+	ln := e.lines[e.row]
+	killed := string(ln[:e.col])
+	e.lines[e.row] = append([]rune(nil), ln[e.col:]...)
+	e.col = 0
 	return killed
 }
 

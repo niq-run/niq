@@ -39,6 +39,7 @@ const (
 	pressLineDown  = keys.PressLineDown
 	pressKillEnd   = keys.PressKillEnd
 	pressKillWord  = keys.PressKillWord
+	pressKillStart = keys.PressKillStart
 	pressYank      = keys.PressYank
 	pressAlt       = keys.PressAlt
 	pressWheelUp   = keys.PressWheelUp

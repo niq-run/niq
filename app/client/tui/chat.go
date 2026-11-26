@@ -109,6 +109,13 @@ type chat struct {
 	menuCur                  int
 	menuStart, menuCount     int
 	menuTopY, menuX0, menuX1 int
+	// palette is the inline slash-command list (menuNone = closed), raised under
+	// the composer by a confirmed /command; paletteCur is its highlighted row.
+	palette    menuKind
+	paletteCur int
+	// cmdCur is the highlighted row of the live command menu (the list shown while
+	// the draft is a /command), an index into the filtered command list.
+	cmdCur int
 	// hintRow is the screen row of the status rule; spans is the clickable
 	// segments on it, recorded by the last render.
 	hintRow int
