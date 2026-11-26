@@ -451,6 +451,12 @@ func (w *BaseReasonWorker) finishReasoning(ctx context.Context, traceID string, 
 	// included); handleToolCalls dispatches those calls as ordinary tools. There
 	// is no "meta" variant anymore: every tool call, including self-editing
 	// context ops, flows through the same placeholder + dispatch lifecycle.
+	//
+	// Stamp the producing model before the message enters the transcript, so the
+	// stored history (and the event's meta) keep their provenance after a
+	// provider switch. It is the CONFIGURED selection, not whatever model name
+	// the provider echoes back.
+	finalMsg.Model = w.activeModel()
 	appliedMsg := finalMsg
 	// Guarantee every tool call carries a stable id before it enters the
 	// transcript. Some models omit the tool_call id; an empty id makes the
@@ -854,6 +860,12 @@ func usageMeta(msg llm.Message, contextWindow int, breakdown []contextSection) m
 		"input_tokens":  u.InputTokens,
 		"output_tokens": u.OutputTokens,
 		"total_tokens":  u.TotalTokens,
+	}
+	// The model that produced the round. It rides with the rest of the round's
+	// accounting, so a reason.response is self-describing about which model it
+	// came from (and survives a later provider switch).
+	if msg.Model != "" {
+		meta["model"] = msg.Model
 	}
 	if contextWindow > 0 {
 		meta["context_window"] = contextWindow

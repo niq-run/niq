@@ -477,6 +477,9 @@ export interface UsageMeta {
   // (adapters normalize the prompt count so the ratio is provider-comparable).
   // 0 when the provider reported no cache read.
   cacheHitPercent: number
+  // model is the model that produced the round ("" when unknown). It rides in
+  // the same usage payload, so a response is self-describing about its origin.
+  model: string
   contextWindow: number
   // contextPercent is 0..100 of total/contextWindow, unrounded so small
   // occupancies survive; 0 when the window is unknown.
@@ -501,12 +504,13 @@ export function getUsageMeta(evt: EventPayload): UsageMeta | undefined {
   const cacheCreation = Number(u.cache_creation_tokens) || 0
   const cacheReported = typeof u.cache_read_tokens === 'number'
   const cacheHitPercent = Number(u.cache_hit_percent) || 0
+  const model = typeof u.model === 'string' ? u.model : ''
   const contextWindow = Number(u.context_window) || 0
   const contextPercent = contextWindow > 0
     ? (total / contextWindow) * 100
     : 0
   return {
-    input, output, total, cacheRead, cacheCreation, cacheReported, cacheHitPercent, contextWindow, contextPercent,
+    input, output, total, cacheRead, cacheCreation, cacheReported, cacheHitPercent, model, contextWindow, contextPercent,
     breakdown: parseBreakdown(u.breakdown),
   }
 }
@@ -560,9 +564,12 @@ export interface UsageParts {
 export function getUsageParts(evt: EventPayload, t: (key: any, vars?: Record<string, string | number>) => string): UsageParts {
   const m = getUsageMeta(evt)
   if (!m) return { left: '', right: '' }
-  const left = m.contextWindow > 0
+  const windowText = m.contextWindow > 0
     ? t('talk.usage.window', { window: formatCompact(m.contextWindow), pct: formatPercent(m.contextPercent) })
     : ''
+  // The model goes LAST: on a narrow screen the label ellipsizes from the right,
+  // so the occupancy survives and the model (also in the panel) is what gives.
+  const left = [windowText, m.model].filter(Boolean).join(' \u00b7 ')
   const right = [
     t('talk.usage.in', { n: formatCompact(m.input) }),
     t('talk.usage.out', { n: formatCompact(m.output) }),

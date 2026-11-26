@@ -457,7 +457,7 @@ func TestUsageMeta(t *testing.T) {
 		TotalTokens:         125,
 		CacheReadTokens:     &cacheRead,
 		CacheCreationTokens: &cacheCreate,
-	}}, 1000, nil)
+	}, Model: "m1"}, 1000, nil)
 	if m == nil {
 		t.Fatal("usageMeta returned nil for a message with usage")
 	}
@@ -469,6 +469,14 @@ func TestUsageMeta(t *testing.T) {
 	}
 	if m["cache_read_tokens"] != 42 || m["cache_creation_tokens"] != 7 {
 		t.Fatalf("unexpected cache tokens: %+v", m)
+	}
+	if m["model"] != "m1" {
+		t.Fatalf("meta should carry the producing model, got %+v", m["model"])
+	}
+
+	// No model stamped → the field is omitted rather than reported empty.
+	if m := usageMeta(llm.Message{Usage: &llm.Usage{InputTokens: 1}}, 1000, nil); m["model"] != nil {
+		t.Fatalf("model should be omitted when unknown, got %+v", m["model"])
 	}
 	if pct, ok := m["cache_hit_percent"].(float64); !ok || pct != 42 {
 		t.Fatalf("unexpected cache hit percent (42/100): %+v", m["cache_hit_percent"])
@@ -873,5 +881,52 @@ func TestModelSupportsImages(t *testing.T) {
 				t.Errorf("modelSupportsImages() = %v, want %v", got, tc.expect)
 			}
 		})
+	}
+}
+
+// TestRoundStampsModel verifies a completed round records the producing model:
+// on the assistant message that enters the transcript (provenance survives a
+// later provider switch) and in the reason.response meta the UI reads.
+func TestRoundStampsModel(t *testing.T) {
+	prov := &staticProvider{msg: llm.Message{
+		Role: llm.RoleAssistant, StopReason: "stop",
+		Usage:   &llm.Usage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+		Content: []llm.ContentBlock{{Type: llm.ContentText, Text: "hi"}},
+	}}
+	ch := newTestChannel()
+	w := NewBaseReasonWorker(Config{
+		ID:              "r1",
+		Provider:        prov,
+		Bus:             ch,
+		ProviderSources: windowSources(prov, 1000),
+		ProviderName:    "p",
+		ProviderModel:   "m",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Stop(); cancel() })
+
+	ch.in <- event.New(event.TypeWorkerInput, "hiw", map[string]any{"text": "go", "input_mode": "default"})
+	waitCond(t, testTimeout, func() bool {
+		return len(ch.eventsOf(TypeReasonResponse)) > 0
+	}, "a completed round")
+
+	var stamped string
+	for _, m := range w.Messages() {
+		if m.Role == llm.RoleAssistant {
+			stamped = m.Model
+		}
+	}
+	if stamped != "m" {
+		t.Fatalf("assistant message model = %q, want %q", stamped, "m")
+	}
+
+	evts := ch.eventsOf(TypeReasonResponse)
+	meta, _ := evts[len(evts)-1].Payload["meta"].(map[string]any)
+	usage, _ := meta["usage"].(map[string]any)
+	if usage["model"] != "m" {
+		t.Fatalf("reason.response meta.usage model = %v, want %q", usage["model"], "m")
 	}
 }

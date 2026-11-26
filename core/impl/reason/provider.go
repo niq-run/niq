@@ -197,6 +197,26 @@ func (w *BaseReasonWorker) resolveMaxOutput() {
 	}
 }
 
+// activeModel returns the model this worker's next round goes to: the explicit
+// selection, or the provider's declared default when none is set. Empty means
+// unknown (no sources and no configured model), which callers omit rather than
+// guess. Expects w.mu held.
+func (w *BaseReasonWorker) activeModel() string {
+	if w.providerSources == nil {
+		return w.providerModel
+	}
+	for _, info := range w.providerSources.List() {
+		if info.Name != w.providerName {
+			continue
+		}
+		if w.providerModel != "" {
+			return w.providerModel
+		}
+		return info.Default
+	}
+	return w.providerModel
+}
+
 // handleSetLLMProvider applies a provider.switch request: it builds the named
 // provider with an explicit model from the configured sources and atomically
 // rebinds this worker's active provider under the lock. Both provider and

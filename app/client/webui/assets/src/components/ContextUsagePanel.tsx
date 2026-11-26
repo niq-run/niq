@@ -63,9 +63,20 @@ export default function ContextUsagePanel({ meta, anchor, onClose }: ContextUsag
       onClick={(e) => e.stopPropagation()}
       style={{ padding: isMobile ? '10px 14px 8px' : '14px 16px 12px', display: 'flex', flexDirection: 'column', gap: isMobile ? 8 : 10 }}
     >
-      {/* Header: title + close */}
+      {/* Header: title + producing model + close */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: fontSizes.base, color: colors.text }}>{t('talk.usage.title')}</span>
+        <span style={{ fontSize: fontSizes.base, color: colors.text, flexShrink: 0 }}>{t('talk.usage.title')}</span>
+        {meta.model && (
+          <span
+            title={meta.model}
+            style={{
+              fontSize: fontSizes.xs, color: colors.textDimmed, minWidth: 0,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >
+            {meta.model}
+          </span>
+        )}
         <button
           onClick={onClose}
           aria-label={t('talk.usage.close')}
