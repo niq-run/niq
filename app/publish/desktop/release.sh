@@ -242,11 +242,16 @@ macos)
 		# subcomponent: Contents/MacOS/niq"). Nested code first, the bundle last.
 		for bin in "$app/Contents/MacOS"/* "$app/Contents/Frameworks"/*; do
 			[ -f "$bin" ] || continue
-			codesign --force --sign - "$bin" >/dev/null 2>&1 || \
-				echo "release: could not sign $(basename "$bin")" >&2
+			if ! codesign --force --sign - "$bin" >/dev/null 2>&1; then
+				echo "release: could not sign $(basename "$bin") — refusing to ship a bundle that will not verify" >&2
+				exit 1
+			fi
 		done
+		# The signature is the difference between "unidentified developer" and
+		# "app is damaged", so a bundle that does not verify is not an artifact.
 		if ! codesign --force --sign - "$app" || ! codesign -v "$app"; then
-			echo "release: could not sign the bundle ad-hoc" >&2
+			echo "release: the bundle does not verify after signing — refusing to ship it" >&2
+			exit 1
 		fi
 		cp "$here/INSTALL.txt" "$out/$name.INSTALL.txt"
 		echo "release: $out/$name.INSTALL.txt"
