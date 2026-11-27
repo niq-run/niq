@@ -94,6 +94,17 @@ app/client/desktop/
 
 ## Notes
 
+- **Network.** The first build downloads crates from crates.io. On a network where
+  that is blocked, point cargo at a mirror in `~/.cargo/config.toml` (never in
+  this repo):
+
+  ```toml
+  [source.crates-io]
+  replace-with = "mirror"
+  [source.mirror]
+  registry = "sparse+https://<your-mirror>/index/"
+  ```
+
 - The sidecar name in `capabilities/default.json` is `binaries/niq` — the
   `externalBin` string, **not** the file name with the triple.
 - The splash ships the WebUI's own logo font subset (`ui/assets`), so the boot

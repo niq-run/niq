@@ -14,12 +14,18 @@ set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)              # app/client/desktop
 root=$(cd "$here/../../.." && pwd)                  # repository root
 
-if ! command -v rustc >/dev/null 2>&1; then
+# A GUI-launched or CI shell may not have ~/.cargo/bin on PATH, so resolve the
+# toolchain explicitly before giving up.
+if command -v rustc >/dev/null 2>&1; then
+	rustc_bin=rustc
+elif [ -x "$HOME/.cargo/bin/rustc" ]; then
+	rustc_bin="$HOME/.cargo/bin/rustc"
+else
 	echo "prepare-sidecar: rustc is required — install Rust first (https://rustup.rs)" >&2
 	exit 1
 fi
 
-triple=$(rustc --print host-tuple 2>/dev/null || rustc -Vv | sed -n 's/host: //p')
+triple=$("$rustc_bin" --print host-tuple 2>/dev/null || "$rustc_bin" -Vv | sed -n 's/host: //p')
 if [ -z "$triple" ]; then
 	echo "prepare-sidecar: cannot determine the target triple from rustc" >&2
 	exit 1

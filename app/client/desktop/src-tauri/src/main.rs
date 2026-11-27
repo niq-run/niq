@@ -34,12 +34,16 @@ fn flush(app: &AppHandle) {
         return;
     }
     let Some(window) = app.get_webview_window("main") else { return };
-    if let Some(error) = state.error.lock().unwrap().clone() {
+    // Take copies out of the guards first: keeping the guard alive inside the
+    // `if let` would outlive `state` at the end of the function.
+    let error = state.error.lock().unwrap().clone();
+    if let Some(error) = error {
         // `window.niqFailed` is defined by the splash page.
         let _ = window.eval(&format!("window.niqFailed({error:?})"));
         return;
     }
-    if let Some(url) = state.url.lock().unwrap().clone() {
+    let url = state.url.lock().unwrap().clone();
+    if let Some(url) = url {
         let _ = window.eval(&format!("window.location.replace({url:?})"));
     }
 }

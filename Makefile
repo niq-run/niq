@@ -73,13 +73,25 @@ niq:
 # The installable desktop shell: bundles ./bin/niq as a Tauri sidecar and opens
 # the gateway's own WebUI. Packaging lives with it (app/client/desktop); these
 # targets are the familiar entry points. Needs Go + Rust + the Tauri CLI.
+# The Tauri CLI comes in two flavours: `cargo tauri` (cargo install tauri-cli)
+# or a standalone `tauri` (npm i -g @tauri-apps/cli, prebuilt — much faster).
+# Both are resolved past PATH, because a GUI-launched make may not have
+# ~/.cargo/bin or the npm global bin on it.
+CARGO ?= $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
+TAURI ?= $(shell command -v tauri 2>/dev/null)
+
 desktop: niq
-	@command -v cargo >/dev/null 2>&1 || { \
-		echo "desktop: cargo is required — install Rust (https://rustup.rs)"; exit 1; }
-	@cargo tauri --version >/dev/null 2>&1 || { \
-		echo "desktop: the Tauri CLI is required — cargo install tauri-cli --locked"; exit 1; }
+	@test -x "$(CARGO)" || { echo "desktop: cargo is required — install Rust (https://rustup.rs)"; exit 1; }
 	@cd app/client/desktop && ./scripts/prepare-sidecar.sh
-	@cd app/client/desktop && cargo tauri build
+	@if [ -n "$(TAURI)" ]; then \
+		echo "desktop: using $(TAURI)"; \
+		cd app/client/desktop && "$(TAURI)" build; \
+	elif "$(CARGO)" tauri --version >/dev/null 2>&1; then \
+		echo "desktop: using cargo tauri"; \
+		cd app/client/desktop && "$(CARGO)" tauri build; \
+	else \
+		echo "desktop: the Tauri CLI is required — npm i -g @tauri-apps/cli"; exit 1; \
+	fi
 
 # Stage the sidecar without building the bundle (fast check that the CLI is
 # picked up).

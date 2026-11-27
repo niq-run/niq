@@ -1,5 +1,5 @@
 # Rust build output.
-/target/
+target/
 
 # The sidecar copied in by scripts/prepare-sidecar.sh (it is a build artifact,
 # named per target triple).
