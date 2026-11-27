@@ -15,7 +15,8 @@ import { dirname, join } from "node:path";
 export interface DurableStore {
   /** Return the last saved text, or undefined when nothing was ever saved. */
   load(): Promise<string | undefined>;
-  /** Replace the saved text. Implementations must be atomic (no torn reads). */
+  /** Replace the saved text. Implementations must be atomic (no torn reads),
+   * and concurrent saves must land in call order so the newest snapshot wins. */
   save(data: string): Promise<void>;
 }
 
@@ -30,10 +31,16 @@ export interface DurableStore {
  *
  * Writes go to a temporary sibling and are renamed into place, so a crash
  * mid-write leaves the previous state intact rather than a truncated file.
+ * Saves are also serialized: a worker that saves on every handled event must
+ * not lose the newer snapshot to a slower older write, so each save is chained
+ * after the previous one and lands in call order.
  */
 export class FileDurableStore implements DurableStore {
   readonly dir: string;
   readonly fileName: string;
+
+  /** Tail of the write chain; keeps saves applied in call order. */
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(dir: string, fileName = "state.json") {
     this.dir = dir;
@@ -54,7 +61,15 @@ export class FileDurableStore implements DurableStore {
     }
   }
 
-  async save(data: string): Promise<void> {
+  save(data: string): Promise<void> {
+    // Chain onto the previous write so the last call wins, not the last to
+    // finish. A failed write must not poison the chain for later saves.
+    const write = this.queue.then(() => this.writeNow(data));
+    this.queue = write.catch(() => {});
+    return write;
+  }
+
+  private async writeNow(data: string): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true });
     // A per-write suffix: two concurrent saves must not share a temp file.
     const tmp = `${this.path}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;

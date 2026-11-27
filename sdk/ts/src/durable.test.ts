@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -48,6 +48,24 @@ describe("FileDurableStore", () => {
     const store = new FileDurableStore(dir);
     await store.save("x");
     expect(await readdir(dir)).toEqual(["state.json"]);
+  });
+
+  it("applies concurrent saves in call order", async () => {
+    const store = new FileDurableStore(await tempDir());
+    // A worker saving on every event fires these without awaiting: the newest
+    // snapshot must win, not whichever write happens to finish last.
+    await Promise.all([store.save("1"), store.save("2"), store.save("3")]);
+    expect(await store.load()).toBe("3");
+  });
+
+  it("reports a write failure to the caller", async () => {
+    const parent = await tempDir();
+    const asFile = join(parent, "not-a-directory");
+    await writeFile(asFile, "x");
+    // The store's directory is a regular file, so creating the temp sibling
+    // fails — and the caller must see it rather than a silent no-op.
+    const store = new FileDurableStore(asFile);
+    await expect(store.save("boom")).rejects.toBeTruthy();
   });
 });
 
