@@ -3,8 +3,9 @@
 #
 # The app itself is built by its own project (app/client/desktop, a Tauri crate).
 # This script is the *distribution* half: stamp a version, stage the CLI as a
-# sidecar (lipo'd for a universal macOS build), run the bundle build, and collect
-# the artifacts under dist/ with stable, platform-suffixed names.
+# sidecar (one per architecture for a universal macOS build), run the bundle
+# build, and collect the artifacts under dist/ with stable, platform-suffixed
+# names.
 #
 #   release.sh                          build for this machine
 #   release.sh --universal              macOS only: arm64 + x86_64 in one bundle
@@ -152,15 +153,19 @@ echo "release: version $app_version"
 mkdir -p "$client/src-tauri/binaries"
 
 if [ "$universal" = "1" ]; then
-	echo "release: building a universal CLI sidecar…"
+	# Tauri builds each architecture for its own triple and then bundles both into
+	# one app, so it needs all three names: one sidecar per triple while each arch
+	# compiles, plus the lipo'd binary the bundling step copies in.
+	echo "release: building the per-architecture CLI sidecars…"
 	rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
-	tmp=$(mktemp -d)
-	trap 'rm -rf "$tmp"' EXIT
-	(cd "$root" && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o "$tmp/niq-arm64" ./app/publish/cmd/)
-	(cd "$root" && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o "$tmp/niq-amd64" ./app/publish/cmd/)
+	(cd "$root" && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' \
+		-o "$client/src-tauri/binaries/niq-aarch64-apple-darwin" ./app/publish/cmd/)
+	(cd "$root" && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags='-s -w' \
+		-o "$client/src-tauri/binaries/niq-x86_64-apple-darwin" ./app/publish/cmd/)
 	lipo -create -output "$client/src-tauri/binaries/niq-universal-apple-darwin" \
-		"$tmp/niq-arm64" "$tmp/niq-amd64"
-	echo "release: sidecar → binaries/niq-universal-apple-darwin"
+		"$client/src-tauri/binaries/niq-aarch64-apple-darwin" \
+		"$client/src-tauri/binaries/niq-x86_64-apple-darwin"
+	echo "release: sidecars → binaries/niq-{aarch64,x86_64,universal}-apple-darwin"
 elif [ -x "$root/bin/niq" ]; then
 	(cd "$client" && NIQ_BIN="$root/bin/niq" ./scripts/prepare-sidecar.sh)
 else
@@ -231,7 +236,16 @@ macos)
 		# that is what macOS reports as a damaged app. Signing the bundle
 		# ad-hoc seals Resources and makes the signature consistent.
 		echo "release: ad-hoc build — signing the bundle and shipping INSTALL.txt"
-		if ! codesign --force --sign - "$app" >/dev/null 2>&1; then
+		# Sign from the inside out: the CLI sidecar in Contents/MacOS is a Mach-O
+		# with no signature of its own, and codesign refuses the bundle while a
+		# subcomponent is unsigned ("code object is not signed at all / In
+		# subcomponent: Contents/MacOS/niq"). Nested code first, the bundle last.
+		for bin in "$app/Contents/MacOS"/* "$app/Contents/Frameworks"/*; do
+			[ -f "$bin" ] || continue
+			codesign --force --sign - "$bin" >/dev/null 2>&1 || \
+				echo "release: could not sign $(basename "$bin")" >&2
+		done
+		if ! codesign --force --sign - "$app" || ! codesign -v "$app"; then
 			echo "release: could not sign the bundle ad-hoc" >&2
 		fi
 		cp "$here/INSTALL.txt" "$out/$name.INSTALL.txt"
