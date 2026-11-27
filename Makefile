@@ -74,6 +74,10 @@ niq:
 # the gateway's own WebUI. Packaging lives with it (app/client/desktop); these
 # targets are the familiar entry points. Needs Go + Rust + the Tauri CLI.
 desktop: niq
+	@command -v cargo >/dev/null 2>&1 || { \
+		echo "desktop: cargo is required — install Rust (https://rustup.rs)"; exit 1; }
+	@cargo tauri --version >/dev/null 2>&1 || { \
+		echo "desktop: the Tauri CLI is required — cargo install tauri-cli --locked"; exit 1; }
 	@cd app/client/desktop && ./scripts/prepare-sidecar.sh
 	@cd app/client/desktop && cargo tauri build
 

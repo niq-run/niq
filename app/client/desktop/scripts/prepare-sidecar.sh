@@ -14,9 +14,14 @@ set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)              # app/client/desktop
 root=$(cd "$here/../../.." && pwd)                  # repository root
 
+if ! command -v rustc >/dev/null 2>&1; then
+	echo "prepare-sidecar: rustc is required — install Rust first (https://rustup.rs)" >&2
+	exit 1
+fi
+
 triple=$(rustc --print host-tuple 2>/dev/null || rustc -Vv | sed -n 's/host: //p')
 if [ -z "$triple" ]; then
-	echo "prepare-sidecar: cannot determine the target triple (is rustc installed?)" >&2
+	echo "prepare-sidecar: cannot determine the target triple from rustc" >&2
 	exit 1
 fi
 
