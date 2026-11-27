@@ -80,6 +80,7 @@ niq/
 │   └── publish/                  # distribution: decides which UIs ship and whether the binary is bundled
 │       ├── cmd/                  #   the niq CLI: thin main + install.sh + .goreleaser.yaml
 │       ├── npm/                  #   npm package and publish scripts
+│       ├── desktop/              #   the desktop channel: release.sh (stamp, sidecar, sign, dist/) + its README
 │       └── releases/             #   per-version archive + LATEST.md (the current draft)
 │
 ├── sdk/ts/                       # out-of-process TypeScript SDK (HTTP client + InterfaceWorker)

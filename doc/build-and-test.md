@@ -39,7 +39,7 @@ change.
 ## 3. Make targets
 
 ```sh
-make build              # everything this machine can build: webui, niq
+make build              # everything this machine can build: webui, niq, desktop (with Rust)
 make build webui        # just the bundle
 make build niq          # just the CLI, embedding the bundle as it is
 make build niq webui    # the bundle, then the CLI — order of the words does not matter
@@ -53,12 +53,13 @@ together the bundle is built first regardless of the order typed.
 
 | Target | Output | Notes |
 |---|---|---|
-| `make build` | everything below | `webui niq` |
+| `make build` | everything below | `webui niq`, plus `desktop` when Rust + the Tauri CLI are installed |
 | `make webui` | `app/client/webui/assets/dist` | `npm ci` then `tsc -b && vite build`; the result is committed |
 | `make niq` | `./bin/niq` | injects `-X main.version` (from `git describe`) and `main.buildTime` |
 | `make desktop` | a Tauri bundle under `app/client/desktop/src-tauri/target/release/bundle/` | the installable shell: bundles `./bin/niq` and opens the gateway's WebUI; needs Go + Rust + the Tauri CLI |
+| `make dist-desktop` | `dist/niq-desktop_<version>_<arch>.{dmg,app.zip}` | release artifacts; `UNIVERSAL=1` for both architectures (`app/publish/desktop/release.sh`) |
 | `make desktop-sidecar` | `app/client/desktop/src-tauri/binaries/niq-<triple>` | stages the CLI without building the bundle |
-| `make install` | symlinks in `$(PREFIX)` (default `~/.local/bin`) | links `./bin/niq`, then installs completion |
+| `make install` | `$(PREFIX)/niq` symlink + `niq.app` in `$(APP_DIR)` (default `/Applications`) | links the CLI, installs completion, and copies the built app if there is one (`APP_DIR=$HOME/Applications` for a no-sudo install) |
 | `make snapshot` | `dist/` | full release dry run, no upload (see §7) |
 | `make npm-publish` | npm packages | `DRY=--dry-run` to preview; needs a built `dist/` |
 

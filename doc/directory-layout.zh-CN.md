@@ -75,6 +75,7 @@ niq/
 │       ├── cmd/                  #   niq CLI：薄 main + install.sh + .goreleaser.yaml
 │       ├── npm/                  #   npm 包（CLI）
 │       ├── npm/                  #   npm 包与发布脚本
+│       ├── desktop/              #   桌面分发通道：release.sh（戳版本、sidecar、签名、dist/）+ 说明
 │       └── releases/             #   每版本归档 + LATEST.md（当前草稿）
 │
 ├── sdk/ts/                       # 进程外 TypeScript SDK（HTTP 客户端 + InterfaceWorker）

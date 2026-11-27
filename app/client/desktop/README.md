@@ -32,6 +32,7 @@ supervision, nothing else. (A client that wants its own screens belongs in the
 ```sh
 # from the repository root
 make desktop          # builds ./bin/niq, stages the sidecar, runs `cargo tauri build`
+make dist-desktop     # release artifacts (dmg + zipped app) under dist/
 
 # or by hand
 cd app/client/desktop
