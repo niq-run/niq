@@ -126,6 +126,11 @@ app/client/desktop/
   `tray-icon` draws it at 18 pt. At 18 pt the 3D mark's dark faces disappear, so
   the menu bar uses a flat one instead — three squares in the 品 arrangement,
   which stays legible at that size. The app icon keeps the shaded cubes.
+- **Closing the window does not quit.** The close is intercepted
+  (`WindowEvent::CloseRequested` → `prevent_close` + `hide`), so the shell keeps
+  running with the window put away, and the WebUI keeps its state. Quitting is
+  explicit: ⌘Q or 退出 in the menu bar item. The window comes back from 显示窗口
+  or by clicking the Dock icon (`RunEvent::Reopen`, macOS only).
 - A release build needs code signing + notarisation on macOS and signing on
   Windows; the config here is unsigned for local use.
 - **Size.** The release profile optimises the shell for size (`lto`, one codegen
