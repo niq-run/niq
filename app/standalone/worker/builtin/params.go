@@ -12,6 +12,40 @@ import (
 // Registry.RegisterType turns that list into the check. TestSpawnParamsCoverEveryBuilder
 // fails when a builder type has no contract, or a contract has no builder.
 
+// ParamSpec is one spawn parameter a type accepts. Secret marks a param that
+// carries a credential: the control plane seals a literal value into the vault
+// and stores only a `vault:` reference, so the token never lands in
+// workers.json.
+//
+// The contract is a single declaration — accepted keys and their secrecy — so a
+// new credential param cannot be added without its secrecy being decided in the
+// same edit.
+type ParamSpec struct {
+	Name   string
+	Secret bool
+}
+
+// Names returns the accepted parameter names of a contract, in declaration order.
+func Names(specs []ParamSpec) []string {
+	out := make([]string, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// SecretNames returns the names of the credential-bearing params, in declaration
+// order. It is empty when the type has none.
+func SecretNames(specs []ParamSpec) []string {
+	var out []string
+	for _, s := range specs {
+		if s.Secret {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
 func ValidateProcessParams(params map[string]any) error {
 	for k, v := range params {
 		if k == "" || strings.ContainsAny(k, "=\x00") {
@@ -29,8 +63,8 @@ func ValidateProcessParams(params map[string]any) error {
 
 // CheckSpawnParams returns the validator for one type: it reports every
 // parameter the type does not read, and lists what it does.
-func CheckSpawnParams(typ string, typeParams []string) func(params map[string]any) error {
-	accepted := append([]string(nil), typeParams...)
+func CheckSpawnParams(typ string, specs []ParamSpec) func(params map[string]any) error {
+	accepted := Names(specs)
 	sort.Strings(accepted)
 
 	valid := make(map[string]bool, len(accepted))

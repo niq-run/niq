@@ -22,6 +22,9 @@ export default function MentionTarget({ id, ctx }: { id: string; ctx: RowCtx }) 
   // non-partner ids (e.g. a workspace target) are labels only.
   const mentionable = id !== humanId && isPartner(id) && !!onMention
   const hasMenu = !!(onOpenDetail || onAddFilter || onFocusWorker)
+  // The Context tab is a reason-family feature; other targets (e.g. a niq link)
+  // do not have one, so their menu omits the entry.
+  const hasContextTab = ctx.isReason(id)
   const contextMenu = useContextMenu((pos) => { if (hasMenu) setMenu(pos) })
 
   return (
@@ -56,6 +59,7 @@ export default function MentionTarget({ id, ctx }: { id: string; ctx: RowCtx }) 
           workerId={id}
           onDetail={onOpenDetail ? () => onOpenDetail(id) : () => {}}
           onReadme={onOpenDetail ? () => onOpenDetail(id, 'readme') : undefined}
+          onContext={onOpenDetail && hasContextTab ? () => onOpenDetail(id, 'context') : undefined}
           onFocus={onFocusWorker ? () => onFocusWorker(id) : () => {}}
           onAddFilter={onAddFilter ? () => onAddFilter(id) : undefined}
           onClose={() => setMenu(null)}

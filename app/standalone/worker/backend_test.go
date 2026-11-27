@@ -212,7 +212,7 @@ func newTestRig(t *testing.T, protect ...string) *testRig {
 			return &fakeWorker{BaseWorker: baseworker.NewBaseWorker(id, ch)}
 		}
 		return coreworker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
-	}, builtin.CheckSpawnParams("fake", []string{"name"}))
+	}, builtin.CheckSpawnParams("fake", []builtin.ParamSpec{{Name: "name"}, {Name: "note"}}))
 
 	return &testRig{cp: cp, backend: cp.backend, manager: cp.Manager(), supervisor: sup, manifests: manifests, registry: registry, bus: bus}
 }
@@ -484,13 +484,14 @@ func TestCreateUnmanagedProcessRejectsParams(t *testing.T) {
 // TestManagedProcessParamsBecomeEnv verifies a managed-process spec's params are
 // lowered into the child environment (and secret references are resolved).
 func TestManagedProcessParamsBecomeEnv(t *testing.T) {
+	rig := newTestRig(t)
 	d := Manifest{
 		Definition: Definition{ID: "p", Type: "probe", Params: map[string]any{"TOKEN": "env:SEP5_TOKEN", "ROOT": "/data"}},
 		Placement:  coreworker.PlacementManagedProcess,
 		Command:    []string{"x"},
 	}
 	t.Setenv("SEP5_TOKEN", "resolved")
-	env := launchSpec(d, "cred").Env
+	env := rig.backend.launchSpec(d, "cred").Env
 	if env["TOKEN"] != "resolved" || env["ROOT"] != "/data" {
 		t.Fatalf("env = %+v", env)
 	}
@@ -568,11 +569,25 @@ func TestUpdateEditsDeclarationOnly(t *testing.T) {
 	if d.Label != "值班" || d.Description != "note" || d.Params["name"] != "b" {
 		t.Fatalf("partial edit lost a field: %+v", d)
 	}
-	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Params: map[string]any{}}); err != nil {
-		t.Fatalf("Update clear params: %v", err)
+	// A params patch MERGES: an unrelated key survives, an empty patch is a no-op
+	// (omission must not delete), and a nil value clears exactly that key.
+	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Params: map[string]any{"note": "keep"}}); err != nil {
+		t.Fatalf("Update add param: %v", err)
 	}
-	if d, _, _ = rig.manifests.Get("w1"); d.Params != nil {
-		t.Fatalf("params = %+v, want nil", d.Params)
+	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Params: map[string]any{}}); err != nil {
+		t.Fatalf("Update empty params: %v", err)
+	}
+	if d, _, _ = rig.manifests.Get("w1"); d.Params["name"] != "b" || d.Params["note"] != "keep" {
+		t.Fatalf("empty patch cleared params: %+v", d.Params)
+	}
+	if _, err := rig.backend.Update(ctx, "w1", coreworker.WorkerPatch{Params: map[string]any{"name": nil}}); err != nil {
+		t.Fatalf("Update clear key: %v", err)
+	}
+	if d, _, _ = rig.manifests.Get("w1"); d.Params["note"] != "keep" {
+		t.Fatalf("null cleared more than its key: %+v", d.Params)
+	}
+	if _, ok := d.Params["name"]; ok {
+		t.Fatalf("null did not clear the key: %+v", d.Params)
 	}
 
 	// Validation runs on the result: an invalid label is refused and nothing is

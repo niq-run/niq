@@ -35,6 +35,9 @@ export default function WorkerBadge({ id, show, humanId, isReason, isPartner, on
   const isHuman = id === humanId
   const partner = isPartner ? isPartner(id) : isReason(id)
   const mentionable = !isHuman && partner && !!onMention
+  // Context tab deep link: only reason-family workers have one (their detail
+  // panel's context.status view), so other partners keep the original menu.
+  const hasContextTab = isReason(id)
   return (
     <span
       onClick={(e) => { e.stopPropagation(); if (mentionable) onMention?.(id) }}
@@ -67,6 +70,7 @@ export default function WorkerBadge({ id, show, humanId, isReason, isPartner, on
           workerId={id}
           onDetail={onOpenDetail ? () => onOpenDetail(id) : () => {}}
           onReadme={onOpenDetail ? () => onOpenDetail(id, 'readme') : undefined}
+          onContext={onOpenDetail && hasContextTab ? () => onOpenDetail(id, 'context') : undefined}
           onFocus={onFocusWorker ? () => onFocusWorker(id) : () => {}}
           onAddFilter={onAddFilter ? () => onAddFilter(id) : undefined}
           onClose={() => setMenu(null)}

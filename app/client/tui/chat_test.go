@@ -3,39 +3,43 @@ package tui
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/niq-run/niq/app/client/tui/layout"
+	"github.com/niq-run/niq/app/client/tui/screen"
+	"github.com/niq-run/niq/app/client/tui/term"
 	"github.com/niq-run/niq/app/standalone/contract"
 )
 
 // TestDecodeMouseWheel checks SGR wheel reports map to scrolling and the left
 // button maps to the selection gesture.
 func TestDecodeMouseWheel(t *testing.T) {
-	if k := decodeMouse(bufio.NewReader(strings.NewReader("64;10;5M"))); k.kind != pressWheelUp {
-		t.Fatalf("wheel up = %v", k.kind)
+	if k := decodeMouse(bufio.NewReader(strings.NewReader("64;10;5M"))); k.Kind != pressWheelUp {
+		t.Fatalf("wheel up = %v", k.Kind)
 	}
-	if k := decodeMouse(bufio.NewReader(strings.NewReader("65;10;5M"))); k.kind != pressWheelDown {
-		t.Fatalf("wheel down = %v", k.kind)
+	if k := decodeMouse(bufio.NewReader(strings.NewReader("65;10;5M"))); k.Kind != pressWheelDown {
+		t.Fatalf("wheel down = %v", k.Kind)
 	}
-	if k := decodeMouse(bufio.NewReader(strings.NewReader("0;10;5M"))); k.kind != pressClick || k.x != 10 || k.y != 5 {
+	if k := decodeMouse(bufio.NewReader(strings.NewReader("0;10;5M"))); k.Kind != pressClick || k.X != 10 || k.Y != 5 {
 		t.Fatalf("left click = %+v, want click at 10,5", k)
 	}
-	if k := decodeMouse(bufio.NewReader(strings.NewReader("32;12;6M"))); k.kind != pressDrag || k.x != 12 || k.y != 6 {
+	if k := decodeMouse(bufio.NewReader(strings.NewReader("32;12;6M"))); k.Kind != pressDrag || k.X != 12 || k.Y != 6 {
 		t.Fatalf("left drag = %+v", k)
 	}
-	if k := decodeMouse(bufio.NewReader(strings.NewReader("0;12;6m"))); k.kind != pressRelease {
+	if k := decodeMouse(bufio.NewReader(strings.NewReader("0;12;6m"))); k.Kind != pressRelease {
 		t.Fatalf("left release = %+v", k)
 	}
-	if k := decodeMouse(bufio.NewReader(strings.NewReader("2;10;5M"))); k.kind != pressOther {
-		t.Fatalf("right click = %v, want other", k.kind)
+	if k := decodeMouse(bufio.NewReader(strings.NewReader("2;10;5M"))); k.Kind != pressOther {
+		t.Fatalf("right click = %v, want other", k.Kind)
 	}
 }
 
 // TestHintShowsTarget checks the pinned hint names the send target, the view
 // scope, and the paging keys.
 func TestHintShowsTarget(t *testing.T) {
-	c := &chat{width: 120, target: "blank-slate", vp: viewport{follow: true}}
+	c := &chat{width: 120, target: "blank-slate", vp: layout.Viewport{Follow: true}}
 	h := c.hint()
 	if !strings.Contains(h, "target: blank-slate") {
 		t.Fatalf("hint missing target: %q", h)
@@ -51,31 +55,31 @@ func TestHintShowsTarget(t *testing.T) {
 // TestViewportPaging pins the chat's scroll wiring: a page up unfollows and
 // moves a full viewport; paging down past the bottom re-follows.
 func TestViewportPaging(t *testing.T) {
-	c := &chat{height: 12, vp: viewport{follow: true}}
+	c := &chat{height: 12, vp: layout.Viewport{Follow: true}}
 	c.lines = make([]string, 100)
-	c.vp.resize(c.viewHeight())
-	c.vp.setTotal(len(c.lines))
-	vh := c.vp.visibleHeight()
+	c.vp.Resize(c.viewHeight())
+	c.vp.SetTotal(len(c.lines))
+	vh := c.vp.VisibleHeight()
 
-	c.vp.pageUp()
-	if c.vp.follow || c.vp.top != 100-2*vh {
-		t.Fatalf("pageUp: top=%d follow=%v (vh=%d)", c.vp.top, c.vp.follow, vh)
+	c.vp.PageUp()
+	if c.vp.Follow || c.vp.Top != 100-2*vh {
+		t.Fatalf("pageUp: top=%d follow=%v (vh=%d)", c.vp.Top, c.vp.Follow, vh)
 	}
 	for i := 0; i < 20; i++ {
-		c.vp.pageUp()
+		c.vp.PageUp()
 	}
-	if c.vp.top != 0 {
-		t.Fatalf("pageUp clamp: top=%d", c.vp.top)
+	if c.vp.Top != 0 {
+		t.Fatalf("pageUp clamp: top=%d", c.vp.Top)
 	}
-	c.vp.pageDown()
-	if c.vp.top != vh || c.vp.follow {
-		t.Fatalf("pageDown: top=%d follow=%v", c.vp.top, c.vp.follow)
+	c.vp.PageDown()
+	if c.vp.Top != vh || c.vp.Follow {
+		t.Fatalf("pageDown: top=%d follow=%v", c.vp.Top, c.vp.Follow)
 	}
 	for i := 0; i < 20; i++ {
-		c.vp.pageDown()
+		c.vp.PageDown()
 	}
-	if !c.vp.follow || c.vp.top != 100-vh {
-		t.Fatalf("pageDown clamp: top=%d follow=%v", c.vp.top, c.vp.follow)
+	if !c.vp.Follow || c.vp.Top != 100-vh {
+		t.Fatalf("pageDown clamp: top=%d follow=%v", c.vp.Top, c.vp.Follow)
 	}
 }
 
@@ -172,11 +176,11 @@ func stripANSI(s string) string {
 // TestBandLinePads checks a band fills the row exactly, keeps its inner margin,
 // and carries the background sequence, with inner SGR resets re-applying it.
 func TestBandLinePads(t *testing.T) {
-	oldA, oldT := ansi, truecolor
-	ansi, truecolor = true, true
-	defer func() { ansi, truecolor = oldA, oldT }()
+	oldA, oldT := term.Ansi, term.Truecolor
+	term.Ansi, term.Truecolor = true, true
+	defer func() { term.Ansi, term.Truecolor = oldA, oldT }()
 
-	bg := bandUser.bg()
+	bg := bandUser.Bg()
 	line := bandLine(bold("hi")+" there", 20, 1, bg)
 	if w := visibleWidth(line); w != 20 {
 		t.Fatalf("band width = %d, want 20", w)
@@ -197,16 +201,16 @@ func TestBandLinePads(t *testing.T) {
 // the two rules frame it, and the composer rows stay on the terminal background.
 // Banded blocks (a tool card here) still paint their own surface.
 func TestDockHasNoSurface(t *testing.T) {
-	oldAnsi, oldTC := ansi, truecolor
-	defer func() { ansi, truecolor = oldAnsi, oldTC }()
-	ansi, truecolor = true, true
+	oldAnsi, oldTC := term.Ansi, term.Truecolor
+	defer func() { term.Ansi, term.Truecolor = oldAnsi, oldTC }()
+	term.Ansi, term.Truecolor = true, true
 
 	var buf bytes.Buffer
-	scr := newScreen(&buf, 0)
+	scr := screen.NewScreen(&buf, 0)
 	c := &chat{
-		scr: scr, width: scr.w, height: scr.h,
+		scr: scr, width: scr.W, height: scr.H,
 		in: newInput(), partners: []contract.Worker{{ID: "niq", Type: "reason", Online: true}},
-		target: "niq", vp: viewport{follow: true}, seen: map[string]bool{},
+		target: "niq", vp: layout.Viewport{Follow: true}, seen: map[string]bool{},
 	}
 	c.lines = []string{"\x1b[38;2;226;232;240;48;2;37;65;49m$ read → workspace\x1b[0m"}
 	c.render()
@@ -225,14 +229,14 @@ func TestDockHasNoSurface(t *testing.T) {
 
 // TestDockFillsWidth checks the status rule and the closing rule span the row.
 func TestDockFillsWidth(t *testing.T) {
-	c := &chat{width: 60, target: "blank-slate", vp: viewport{follow: true}}
+	c := &chat{width: 60, target: "blank-slate", vp: layout.Viewport{Follow: true}}
 	if w := visibleWidth(c.hint()); w != 60 {
 		t.Fatalf("hint width = %d, want 60", w)
 	}
 	if w := visibleWidth(c.rule()); w != 60 {
 		t.Fatalf("rule width = %d, want 60", w)
 	}
-	narrow := &chat{width: 20, target: "blank-slate", vp: viewport{follow: true}}
+	narrow := &chat{width: 20, target: "blank-slate", vp: layout.Viewport{Follow: true}}
 	if w := visibleWidth(narrow.hint()); w > 20 {
 		t.Fatalf("narrow hint width = %d, want <= 20", w)
 	}
@@ -241,9 +245,9 @@ func TestDockFillsWidth(t *testing.T) {
 // TestUserBlockBandedWidth checks a user block is painted as a full-width card
 // with a top/bottom padding row (every line spans the row).
 func TestUserBlockBandedWidth(t *testing.T) {
-	oldA, oldT := ansi, truecolor
-	ansi, truecolor = true, true
-	defer func() { ansi, truecolor = oldA, oldT }()
+	oldA, oldT := term.Ansi, term.Truecolor
+	term.Ansi, term.Truecolor = true, true
+	defer func() { term.Ansi, term.Truecolor = oldA, oldT }()
 
 	r, _ := describe(contract.Event{Type: "worker.input", Recipients: []string{"niq"}, Payload: map[string]any{"content": []any{"hello there friend"}}}, 40)
 	lines := renderBlock(blockBody(r, 40), r.band, 40)
@@ -327,7 +331,7 @@ func TestResponseSectionRule(t *testing.T) {
 	if !strings.HasPrefix(plain, "blank-slate ···") {
 		t.Fatalf("rule = %q", plain)
 	}
-	short := sectionRule("x", 9)
+	short := sectionRule("x", 9, 0)
 	if w := visibleWidth(short); w != 9 {
 		t.Fatalf("short rule width = %d, want 9: %q", w, short)
 	}
@@ -351,9 +355,9 @@ func TestWarnRowsAreBanded(t *testing.T) {
 // edge, its body is indented like the text in the banded cards, and a blank row
 // separates the two.
 func TestReplyInset(t *testing.T) {
-	oldAnsi, oldTC := ansi, truecolor
-	defer func() { ansi, truecolor = oldAnsi, oldTC }()
-	ansi, truecolor = true, true
+	oldAnsi, oldTC := term.Ansi, term.Truecolor
+	defer func() { term.Ansi, term.Truecolor = oldAnsi, oldTC }()
+	term.Ansi, term.Truecolor = true, true
 
 	events := []contract.Event{
 		{ID: "t1", Type: "reason.thinking", WorkerID: "niq", Payload: map[string]any{"content": []any{"hmm"}}},
@@ -663,119 +667,6 @@ func TestStripSystemReminder(t *testing.T) {
 	}
 }
 
-// TestMarkdownRendering checks that a formatted answer loses its raw markers and
-// gains structure: headings, list bullets, a quote/code bar, and no leftover **,
-// backticks or link URLs. It also pins that no line exceeds the width.
-func TestMarkdownRendering(t *testing.T) {
-	src := strings.Join([]string{
-		"## 职责",
-		"主 reasoning worker，负责：",
-		"",
-		"- **任务推进与拆解**：把长任务切成可以推进的小步",
-		"- 使用 `run_program` 执行脚本",
-		"1. 第一步",
-		"2. 第二步",
-		"",
-		"> 引用一句",
-		"",
-		"```go",
-		`fmt.Println("hi")`,
-		"```",
-		"",
-		"[链接](https://example.com)",
-	}, "\n")
-	lines := renderMarkdown(src, 50)
-	t.Logf("\n%s", strings.Join(lines, "\n"))
-
-	joined := strings.Join(lines, "\n")
-	for _, bad := range []string{"**", "`", "##", "https://example.com"} {
-		if strings.Contains(joined, bad) {
-			t.Errorf("markdown marker %q survived:\n%s", bad, joined)
-		}
-	}
-	for _, want := range []string{"职责", "任务推进与拆解", "run_program", "• ", "1. 第一步", "│ 引用一句", "│ fmt.Println", "链接"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("missing %q in:\n%s", want, joined)
-		}
-	}
-	for i, ln := range lines {
-		if w := displayWidth(ln); w > 50 {
-			t.Errorf("line %d is %d cells, want <= 50: %q", i, w, ln)
-		}
-	}
-}
-
-// TestMarkdownTable checks a pipe table is drawn with box separators, no raw
-// pipes remain, alignment is preserved, and every line fits the width.
-func TestMarkdownTable(t *testing.T) {
-	src := strings.Join([]string{
-		"| 名称 | 值 |",
-		"|:-----|----:|",
-		"| alpha | 1 |",
-		"| 很长的一个单元格 | 2222 |",
-	}, "\n")
-	lines := renderMarkdown(src, 40)
-	t.Logf("\n%s", strings.Join(lines, "\n"))
-
-	joined := strings.Join(lines, "\n")
-	if strings.Contains(joined, "|") {
-		t.Errorf("raw pipe survived:\n%s", joined)
-	}
-	for _, want := range []string{"名称", "值", "alpha", "2222", "│", "┼"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("missing %q in:\n%s", want, joined)
-		}
-	}
-	for i, ln := range lines {
-		if w := displayWidth(ln); w > 40 {
-			t.Errorf("table line %d is %d cells, want <= 40: %q", i, w, ln)
-		}
-	}
-}
-
-// TestCodeBlockRendering checks a fenced block is rendered under a bar with the
-// language recognised (text preserved when colour is off in tests).
-func TestCodeBlockRendering(t *testing.T) {
-	src := "before\n\n```go\nfunc main() {\n\tprintln(41 + 1)\n}\n```\n\nafter"
-	lines := renderMarkdown(src, 60)
-	joined := strings.Join(lines, "\n")
-	if strings.Contains(joined, "```") {
-		t.Fatalf("fence survived:\n%s", joined)
-	}
-	if !strings.Contains(joined, "│ func main() {") {
-		t.Fatalf("code not rendered under a bar:\n%s", joined)
-	}
-	if !strings.Contains(joined, "println(41 + 1)") {
-		t.Fatalf("code text lost:\n%s", joined)
-	}
-}
-
-// TestCodeHighlightStyles enables colour and checks the four token classes get
-// distinct ANSI sequences, then restores the colour flag for other tests.
-func TestCodeHighlightStyles(t *testing.T) {
-	old := ansi
-	ansi = true
-	defer func() { ansi = old }()
-
-	hl := newHighlighter("go")
-	if out := hl.line(`func main() { s := "hi" }`); !strings.Contains(out, "\x1b[1;36m") || !strings.Contains(out, "\x1b[32m") {
-		t.Fatalf("keyword/string not highlighted: %q", out)
-	}
-	if out := newHighlighter("go").line(`x := 42`); !strings.Contains(out, "\x1b[33m") {
-		t.Fatalf("number not highlighted: %q", out)
-	}
-	if out := newHighlighter("go").line(`// a comment`); !strings.Contains(out, "\x1b[2m") {
-		t.Fatalf("comment not highlighted: %q", out)
-	}
-
-	// A block comment carries across lines.
-	block := newHighlighter("go")
-	block.line(`/* start`)
-	if out := block.line(`middle`); !strings.Contains(out, "\x1b[2m") {
-		t.Fatalf("block comment continuation not highlighted: %q", out)
-	}
-}
-
 // TestEditor covers insertion at the cursor, deletion either side, movement, and
 // clear.
 func TestEditor(t *testing.T) {
@@ -918,5 +809,32 @@ func TestInputRows(t *testing.T) {
 	rows, curRow, curCol = c.inputRows()
 	if len(rows) != 2 || curRow != 1 || curCol != 3 {
 		t.Fatalf("two lines: rows=%q cur=(%d,%d)", rows, curRow, curCol)
+	}
+}
+
+// TestJumpUserMessages pins ctrl+n / ctrl+p in normal mode: from the bottom, prev
+// lands on the last user message, prev again steps back one, next steps forward,
+// and asking past an end flashes instead of moving.
+func TestJumpUserMessages(t *testing.T) {
+	c := &chat{userLines: []int{0, 10, 25}, vp: layout.Viewport{Follow: true}}
+	c.vp.Resize(5)
+	c.vp.SetTotal(40) // follow pins the top to the last screenful (35)
+
+	c.jumpUser(context.Background(), nil, -1)
+	if got := c.vp.First(); got != 25 {
+		t.Fatalf("prev = %d, want 25", got)
+	}
+	c.jumpUser(context.Background(), nil, -1)
+	if got := c.vp.First(); got != 10 {
+		t.Fatalf("prev = %d, want 10", got)
+	}
+	c.jumpUser(context.Background(), nil, +1)
+	if got := c.vp.First(); got != 25 {
+		t.Fatalf("next = %d, want 25", got)
+	}
+	// Past the last message: no move, just a flash.
+	c.jumpUser(context.Background(), nil, +1)
+	if got := c.vp.First(); got != 25 {
+		t.Fatalf("next past the end moved to %d", got)
 	}
 }

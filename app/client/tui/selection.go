@@ -3,12 +3,12 @@
 // The alternate screen captures the mouse, so the terminal's own drag-select no
 // longer works. This replaces it: a press anchors a point, drags extend it, and
 // the release copies the covered cells. Points are absolute transcript
-// coordinates (line index + cell column), not screen rows, so a selection
-// survives scrolling and re-wrapping.
+// coordinates (line index + cell column), not screen rows, so a selection survives
+// scrolling and re-wrapping.
 //
 // It knows nothing about events, workers or the keyboard: it maps cell ranges on
 // styled lines and extracts their plain text, so the cell math can be tested on
-// its own.
+// its own. The scroll window it sits over is layout.Viewport.
 package tui
 
 import (
@@ -50,7 +50,7 @@ func (s *selection) extend(p selPoint) {
 // clear forgets the selection.
 func (s *selection) clear() { *s = selection{} }
 
-// range returns the normalized endpoints: from is inclusive, to is exclusive.
+// bounds returns the normalized endpoints: from is inclusive, to is exclusive.
 func (s *selection) bounds() (from, to selPoint) {
 	if s.anchor.line < s.cursor.line ||
 		(s.anchor.line == s.cursor.line && s.anchor.col <= s.cursor.col) {

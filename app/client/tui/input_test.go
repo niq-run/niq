@@ -121,7 +121,7 @@ func TestDecodePaste(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := decodePress(r, first)
-	if k.kind != pressPaste || k.text != body {
+	if k.Kind != pressPaste || k.Text != body {
 		t.Fatalf("paste = %+v, want %q", k, body)
 	}
 }
@@ -147,8 +147,8 @@ func TestDecodeNewlineKeys(t *testing.T) {
 			t.Fatalf("%q: %v", c.seq, err)
 		}
 		k := decodePress(r, first)
-		if k.kind != c.want {
-			t.Fatalf("%q => kind %v, want %v", c.seq, k.kind, c.want)
+		if k.Kind != c.want {
+			t.Fatalf("%q => kind %v, want %v", c.seq, k.Kind, c.want)
 		}
 	}
 }
@@ -159,24 +159,24 @@ func TestDecodeKittyAndModifyOtherKeys(t *testing.T) {
 	for _, seq := range []string{"\x1b[99;5u", "\x1b[27;5;99~"} {
 		r := bufio.NewReader(strings.NewReader(seq))
 		first, _, _ := r.ReadRune()
-		if k := decodePress(r, first); k.kind != pressInterrupt {
-			t.Fatalf("%q => %v, want interrupt", seq, k.kind)
+		if k := decodePress(r, first); k.Kind != pressInterrupt {
+			t.Fatalf("%q => %v, want interrupt", seq, k.Kind)
 		}
 	}
 	r := bufio.NewReader(strings.NewReader("\x1b[65;2u"))
 	first, _, _ := r.ReadRune()
-	if k := decodePress(r, first); k.kind != pressRune || k.r != 'A' {
+	if k := decodePress(r, first); k.Kind != pressRune || k.R != 'A' {
 		t.Fatalf("shift+a => %+v", k)
 	}
 	r = bufio.NewReader(strings.NewReader("\x1b[127u"))
 	first, _, _ = r.ReadRune()
-	if k := decodePress(r, first); k.kind != pressBackspace {
-		t.Fatalf("kitty backspace => %v", k.kind)
+	if k := decodePress(r, first); k.Kind != pressBackspace {
+		t.Fatalf("kitty backspace => %v", k.Kind)
 	}
 	r = bufio.NewReader(strings.NewReader("\x1b[27u"))
 	first, _, _ = r.ReadRune()
-	if k := decodePress(r, first); k.kind != pressEsc {
-		t.Fatalf("kitty escape => %v", k.kind)
+	if k := decodePress(r, first); k.Kind != pressEsc {
+		t.Fatalf("kitty escape => %v", k.Kind)
 	}
 }
 

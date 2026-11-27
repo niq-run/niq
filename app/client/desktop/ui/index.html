@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>niq</title>
+<style>
+  /* The wordmark subset bundled with the WebUI (n / i / p only). */
+  @font-face {
+    font-family: 'Sometype Mono Logo';
+    src: url('./assets/SometypeMono-Logo.woff2') format('woff2');
+    font-weight: 400 700;
+    font-display: swap;
+  }
+
+  :root {
+    --bg: #ebebeb;
+    --fg: #1a1a1a;
+    --dim: #666;
+    --faint: #909090;
+    --border: #c3c3c3;
+    --accent: #3c78b4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e1e;
+      --fg: #e0e0e0;
+      --dim: #888;
+      --faint: #707070;
+      --border: #3a3a3a;
+      --accent: #3c78b4;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.6 -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  main { width: min(420px, 80vw); text-align: left; }
+
+  .wordmark {
+    font-family: 'Sometype Mono Logo', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 700;
+    font-size: 44px;
+    line-height: 1;
+    color: var(--accent);
+    display: inline-flex;
+    margin-left: -3px;
+  }
+  /* The subset has n / i / p; each glyph mirrored reads "niq" (the WebUI does
+     exactly this). */
+  .wordmark span { display: inline-block; transform: scaleX(-1); }
+
+  .status {
+    margin-top: 18px;
+    color: var(--dim);
+    font-size: 13px;
+    min-height: 22px;
+  }
+  .bar {
+    margin-top: 10px;
+    height: 2px;
+    background: var(--border);
+    overflow: hidden;
+  }
+  .bar::before {
+    content: "";
+    display: block;
+    width: 35%;
+    height: 100%;
+    background: var(--accent);
+    animation: slide 1.15s ease-in-out infinite;
+  }
+  @keyframes slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(320%); }
+  }
+
+  .detail {
+    margin-top: 14px;
+    color: var(--faint);
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  button {
+    margin-top: 16px;
+    display: none;
+    appearance: none;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 6px 14px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+
+  body.failed .bar { display: none; }
+  body.failed button { display: inline-block; }
+</style>
+</head>
+<body>
+<main>
+  <div class="wordmark" aria-label="niq"><span>n</span><span>i</span><span>p</span></div>
+  <div class="status" id="status">正在启动 niq 网关…</div>
+  <div class="bar"></div>
+  <div class="detail" id="detail"></div>
+  <button id="retry" type="button">重试</button>
+</main>
+
+<script>
+  const status = document.getElementById('status');
+  const detail = document.getElementById('detail');
+
+  // Called by the Rust side when the gateway could not be reached.
+  window.niqFailed = (message) => {
+    document.body.classList.add('failed');
+    status.textContent = '启动失败';
+    detail.textContent = message || '';
+  };
+
+  document.getElementById('retry').addEventListener('click', () => {
+    document.body.classList.remove('failed');
+    detail.textContent = '';
+    status.textContent = '正在重试…';
+    window.__TAURI__.core.invoke('retry_gateway').catch((e) => window.niqFailed(String(e)));
+  });
+
+  // Tell the shell the splash is on screen; it navigates to the WebUI as soon
+  // as the gateway answers.
+  window.addEventListener('DOMContentLoaded', () => {
+    if (window.__TAURI__) {
+      window.__TAURI__.core.invoke('ui_ready').catch(() => {});
+    }
+  });
+</script>
+</body>
+</html>

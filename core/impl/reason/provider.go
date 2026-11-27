@@ -105,6 +105,10 @@ func (w *BaseReasonWorker) registerBaseExtensions() {
 	// Self-description (worker.readme + worker.readme.update): every reason-family
 	// worker can be asked what it is for and can revise that answer.
 	w.registerReadme()
+
+	// Context accounting (context.status): how full the window is and what it is
+	// made of. Read-only, and part of the persisted state (see contextstatus.go).
+	w.registerContextStatus()
 }
 
 // setActiveProvider switches this worker's active LLM provider. It must be
@@ -191,6 +195,26 @@ func (w *BaseReasonWorker) resolveMaxOutput() {
 			}
 		}
 	}
+}
+
+// activeModel returns the model this worker's next round goes to: the explicit
+// selection, or the provider's declared default when none is set. Empty means
+// unknown (no sources and no configured model), which callers omit rather than
+// guess. Expects w.mu held.
+func (w *BaseReasonWorker) activeModel() string {
+	if w.providerSources == nil {
+		return w.providerModel
+	}
+	for _, info := range w.providerSources.List() {
+		if info.Name != w.providerName {
+			continue
+		}
+		if w.providerModel != "" {
+			return w.providerModel
+		}
+		return info.Default
+	}
+	return w.providerModel
 }
 
 // handleSetLLMProvider applies a provider.switch request: it builds the named

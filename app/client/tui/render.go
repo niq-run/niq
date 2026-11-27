@@ -1,6 +1,7 @@
 // Conversation rendering for the terminal: how one bus event becomes a block of
-// text, and how that text is laid out. Everything here is a pure function over an
-// event, so the layout rules can be tested without a TTY.
+// text, how that text is laid out, and how a chronological event slice becomes
+// the transcript. Everything here is a pure function over an event or slice, so
+// the layout rules can be tested without a TTY.
 //
 // Two shapes only:
 //
@@ -150,7 +151,7 @@ func describe(ev contract.Event, width int) (rendered, bool) {
 		// round's context occupancy trails it as a dim footer, like the WebUI's.
 		label := workerLabel(ev.WorkerID)
 		r := rendered{
-			header:    sectionRule(label, width),
+			header:    sectionRule(label, width, ev.Timestamp),
 			inset:     replyInset,
 			text:      text.ContentText(ev.Payload["content"], nil),
 			textStyle: plain,
@@ -350,7 +351,7 @@ func toolBlock(ev contract.Event, ans *contract.Event, width int) rendered {
 				if failed {
 					body = append(body, toolFail(ln))
 				} else {
-					body = append(body, toolOut(ln))
+					body = append(body, toolReply(ln))
 				}
 			}
 		}
@@ -427,3 +428,125 @@ const (
 	thinkingHead    = 3
 	thinkingTail    = 7
 )
+
+// ── Transcript assembly ──
+
+// renderEvents lays a chronological event slice out as transcript lines, scoped
+// to filter. It is a pure function of the events and the width, so a filter
+// change just re-renders the retained events instead of re-fetching.
+//
+// A tool call and its terminal answer are one card: the call on the first line,
+// a blank spacer, then the reply. Cards always stand alone — unlike thinking
+// traces, two calls are two panels with a gap between them.
+func renderEvents(events []contract.Event, filter string, width int) []string {
+	lines, _ := renderTranscript(events, filter, width, "", "")
+	return lines
+}
+
+// renderTranscript is renderEvents plus the reasoning streamed but not yet final:
+// it is live-only text, so it is drawn as one more block at the end rather than
+// stored in the event list.
+func renderTranscript(events []contract.Event, filter string, width int, liveThinking, liveWorker string) ([]string, []int) {
+	// Index calls and answers by request id so a card is assembled in one pass.
+	calls := map[string]contract.Event{}
+	answers := map[string]contract.Event{}
+	for _, ev := range events {
+		if ev.RequestID == "" {
+			continue
+		}
+		if terminalAnswer(ev.Type) {
+			answers[ev.RequestID] = ev
+		} else if toolLike(ev) {
+			calls[ev.RequestID] = ev
+		}
+	}
+
+	type block struct {
+		lines []string
+		band  bandKind
+		chat  bool
+		solo  bool
+		user  bool
+	}
+	var blocks []block
+	for _, ev := range events {
+		if !matchesFilter(ev, filter) {
+			continue
+		}
+		if toolLike(ev) {
+			var ans *contract.Event
+			if a, ok := answers[ev.RequestID]; ok && ev.RequestID != "" {
+				ans = &a
+			}
+			r := toolBlock(ev, ans, width)
+			blocks = append(blocks, block{lines: r.body, band: r.band, solo: true})
+			continue
+		}
+		if terminalAnswer(ev.Type) && ev.RequestID != "" {
+			// Already drawn inside its call's card — unless that call is filtered
+			// out of this view, in which case the reply stands on its own.
+			if inv, ok := calls[ev.RequestID]; ok && matchesFilter(inv, filter) {
+				continue
+			}
+		}
+		r, ok := describe(ev, width)
+		if !ok {
+			continue
+		}
+		body := blockBody(r, width)
+		if r.chat {
+			blocks = append(blocks, block{lines: body, band: r.band, chat: true, user: r.band == bandUser})
+			continue
+		}
+		// Consecutive plain event rows on the same surface form one panel, so a
+		// thinking trace is one block rather than a stripe per line.
+		if n := len(blocks); n > 0 && !blocks[n-1].chat && !blocks[n-1].solo && blocks[n-1].band == r.band {
+			blocks[n-1].lines = append(blocks[n-1].lines, body...)
+			continue
+		}
+		blocks = append(blocks, block{lines: body, band: r.band})
+	}
+
+	if liveThinking != "" && (filter == "" || filter == liveWorker) {
+		r := thinkingBlock(liveThinking, width)
+		blocks = append(blocks, block{lines: r.body, band: r.band})
+	}
+
+	var out []string
+	var userLines []int
+	for i, b := range blocks {
+		if i > 0 {
+			out = append(out, "") // gap between blocks
+		}
+		if b.user {
+			// Record where this message's block begins, so ctrl+n/p can jump to it.
+			userLines = append(userLines, len(out))
+		}
+		out = append(out, renderBlock(b.lines, b.band, width)...)
+	}
+	return out, userLines
+}
+
+// renderBlock paints one block's lines on its surface. A banded block is inset by
+// one column and padded by one row top and bottom, like pi's Box; a plain block
+// (a thinking trace or a worker's answer) is left on the terminal background.
+func renderBlock(lines []string, band bandKind, width int) []string {
+	bg := band.Bg()
+	if bg == "" {
+		return lines
+	}
+	bg = blockSurface(band)
+	padX := 1
+	if band == bandCode {
+		padX = 0
+	}
+	padded := make([]string, 0, len(lines)+2)
+	padded = append(padded, "")
+	padded = append(padded, lines...)
+	padded = append(padded, "")
+	out := make([]string, len(padded))
+	for i, ln := range padded {
+		out[i] = bandLine(ln, width, padX, bg)
+	}
+	return out
+}

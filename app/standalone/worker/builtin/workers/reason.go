@@ -53,11 +53,12 @@ func buildReasonSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (cor
 //
 // What this type accepts. It is registered with the builder above, so the
 // contract and the implementation are one edit.
-var spawnParamsReason = []string{
-	"instruction", "goal", "brief", "programs", "events", "readme",
-	"provider", "model", "collaborators",
-	"budget_soft", "budget_hard",
-	"tail_tokens", "keep_tail", "compact_directive",
+var spawnParamsReason = []builtin.ParamSpec{
+	{Name: "instruction"}, {Name: "goal"}, {Name: "brief"},
+	{Name: "programs"}, {Name: "events"}, {Name: "readme"},
+	{Name: "provider"}, {Name: "model"}, {Name: "collaborators"},
+	{Name: "budget_soft"}, {Name: "budget_hard"},
+	{Name: "tail_tokens"}, {Name: "keep_tail"}, {Name: "compact_directive"},
 }
 
 func registerReason(ctx builtin.BuildContext, reg *builtin.Registry) {

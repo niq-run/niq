@@ -49,6 +49,12 @@ type Message struct {
 	Cost       *Cost          `json:"cost,omitempty"`
 	StopReason string         `json:"stop_reason,omitempty"` // stop / length / tool_calls / error
 
+	// Model names the model that produced this assistant message. The reason
+	// worker stamps it when it applies the round (the configured selection, not
+	// whatever the provider echoes back), so a stored transcript keeps its
+	// provenance across a later provider switch. Empty = unknown.
+	Model string `json:"model,omitempty"`
+
 	// For tool_result messages
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	ToolName   string `json:"tool_name,omitempty"`

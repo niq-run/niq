@@ -1,5 +1,13 @@
 name: Release
 
+# Tag push: goreleaser publishes the CLI archives and creates the GitHub
+# Release; the jobs after it add the desktop app (one bundle per platform) and
+# the npm packages to that same release.
+#
+# A platform whose bundle fails does not remove the release or the other
+# artifacts — re-run the failed job from the Actions tab. `fail-fast: false` is
+# what keeps the remaining platforms going.
+
 on:
   push:
     tags:
@@ -51,12 +59,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # The macOS app is Swift and the npm package carries it, so both happen on a
-  # Mac — goreleaser runs on linux and cannot build either. The CLI archives
-  # are fetched back from the release it just published.
-  mac:
+  # The installable desktop shell: the bundled `niq` CLI plus a webview that
+  # loads the gateway's own WebUI. One job per platform because each needs a
+  # native toolchain, and the sidecar has to be built for that platform's
+  # target triple. The build logic lives in app/publish/desktop/release.sh, so
+  # CI and a local run produce identical artifacts.
+  desktop:
+    name: desktop (${{ matrix.platform }})
     needs: release
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Universal covers both Apple silicon and Intel in one bundle, which
+          # keeps the download list short.
+          - platform: macos
+            os: macos-14
+            args: --universal
+          - platform: windows
+            os: windows-latest
+            args: ''
+          - platform: linux
+            os: ubuntu-22.04
+            args: ''
     steps:
       - uses: actions/checkout@v4
 
@@ -67,24 +94,64 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          registry-url: https://registry.npmjs.org
 
-      - name: Build the macOS app (universal)
-        run: make dist-miq
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Attach it to the release
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/client/desktop/src-tauri
+
+      # Tauri's Linux webview toolchain.
+      - name: Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install the Tauri CLI
+        run: npm install -g @tauri-apps/cli
+
+      # `shell: bash` on every platform: the release script is POSIX sh, and Git
+      # Bash is what the Windows runner provides.
+      - name: Build the bundle
+        shell: bash
+        env:
+          # macOS signing/notarisation. Absent secrets simply produce an ad-hoc
+          # signed bundle, which is fine for a dry run but not for users.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # linuxdeploy is an AppImage itself; let it run without FUSE in CI.
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: ./app/publish/desktop/release.sh ${{ matrix.args }} --version "${GITHUB_REF_NAME#v}"
+
+      - name: Attach the artifacts to the release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/niq_mac_darwin_universal.zip --clobber
+        run: gh release upload "$GITHUB_REF_NAME" dist/niq-desktop_* --clobber
+
+  # The npm package: a JS shim plus one binary subpackage per platform, built
+  # from the CLI archives the release already carries.
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: https://registry.npmjs.org
 
       - name: Fetch the CLI archives
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release download "$GITHUB_REF_NAME" --dir dist --pattern 'niq_*' --clobber
 
-      # Subpackages first, then the main package — which now carries miq and
-      # niq.app alongside the JS shim.
-      - name: Publish npm packages
+      - name: Publish
         run: ./app/publish/npm/publish-npm.sh "${GITHUB_REF_NAME#v}" ./dist
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

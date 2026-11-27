@@ -43,15 +43,16 @@ the third belongs to whoever runs it.
 
 ## Tools
 
-- spawn { type, id?, placement?, ... } — create a worker and start it. Returns
+- spawn { type, id?, placement?, params } — create a worker and start it. Returns
   ` + "`{worker_id, status: \"created\", type, placement}`" + `. The ` + "`worker_id`" + ` is the id
   actually used — a builder may derive one (a workspace from its path), so never
   assume the id you passed is the id you got.
-  Type-specific arguments are top-level properties next to ` + "`type`" + `, e.g. a
-  reason worker's ` + "`goal`" + `, ` + "`brief`" + ` and ` + "`programs`" + `.
+  Type-specific arguments go in ` + "`params`" + `, the same bag the declaration stores:
+  a reason worker's ` + "`goal`" + `, ` + "`brief`" + ` and ` + "`programs`" + `, a workspace's
+  ` + "`path`" + ` or ` + "`mounts`" + `. Anything outside it (other than the fixed fields)
+  is rejected rather than ignored.
   For ` + "`managed-process`" + `: ` + "`command`" + ` (argv array, required) and ` + "`cwd`" + ` (must
-  exist). Every other argument becomes the child's environment variable; those
-  keys are rejected for the other placements.
+  exist). Every ` + "`params`" + ` key becomes the child's environment variable.
 - suspend { worker_id } — stop it. An in-process worker is snapshotted first; a
   managed-process worker's process is stopped (it persists its own state).
 - resume { worker_id } — start a worker that is declared but not running.

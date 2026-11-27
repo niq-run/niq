@@ -12,6 +12,7 @@ package baseworker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -45,6 +46,14 @@ type BaseWorker struct {
 	// durability is the durable-change signal (see durable.go). Behind a
 	// pointer for the same reason as extensions: copies share one channel.
 	durability *durability
+
+	// patchConfig applies a partial edit to this worker's own DECLARATION
+	// (its params). Injected by the assembly at construction, which is what
+	// keeps the write with its owner: the worker asks, the assembly's control
+	// plane validates and persists. Nil means this host has no declaration
+	// store (embedded use, tests); PatchConfig then reports
+	// ErrConfigUnavailable and the worker decides whether that is fatal.
+	patchConfig func(patch map[string]any) error
 }
 
 // NewBaseWorker creates a BaseWorker with the given id and worker-side
@@ -59,6 +68,36 @@ func NewBaseWorker(id string, ch corebus.WorkerSideChannel) BaseWorker {
 }
 
 func (w *BaseWorker) ID() string { return w.id }
+
+// ErrConfigUnavailable reports that the host did not wire a declaration writer,
+// so PatchConfig cannot persist anything. Callers that can degrade (keep the
+// change in memory for this process) test for it with errors.Is.
+var ErrConfigUnavailable = errors.New("config updates are not available for this worker")
+
+// SetConfigPatcher injects the operation that writes this worker's declaration.
+// Called by the assembly at construction; a worker never invents its own.
+func (w *BaseWorker) SetConfigPatcher(patch func(patch map[string]any) error) {
+	w.patchConfig = patch
+}
+
+// PatchConfig applies a partial edit to this worker's own declaration.
+//
+// This is an internal capability, not a tool on the bus: a worker that needs to
+// change its own construction params (a niq worker repointing its link) calls it
+// directly. The value is a MERGE patch — only the given keys change, and a nil
+// value removes that key — because a worker repointing one field must not have
+// to restate (and risk clobbering) the rest.
+//
+// The write is the assembly's: this method only forwards to the injected
+// provider, which owns validation, locking, persistence and the "applies on the
+// next start" contract. It returns ErrConfigUnavailable when no provider was
+// injected and whatever the provider returns otherwise.
+func (w *BaseWorker) PatchConfig(patch map[string]any) error {
+	if w.patchConfig == nil {
+		return fmt.Errorf("%w: %s", ErrConfigUnavailable, w.id)
+	}
+	return w.patchConfig(patch)
+}
 
 // Start is a no-op stub. Embedding workers should override.
 func (w *BaseWorker) Start(ctx context.Context) error {

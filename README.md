@@ -59,7 +59,7 @@ Go alone builds, vets and tests the backend — the WebUI bundle is committed an
 ```sh
 go build ./... && go vet ./...
 go test ./...            # ~6 s
-make build               # ./bin/niq, plus the app on macOS
+make build               # ./bin/niq (the desktop shell is `make desktop`)
 ```
 
 [doc/build-and-test.md](doc/build-and-test.md) has the make targets, how to run

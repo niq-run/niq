@@ -39,7 +39,7 @@ change.
 ## 3. Make targets
 
 ```sh
-make build              # everything this machine can build: webui, niq, (miq on macOS)
+make build              # everything this machine can build: webui, niq, desktop (with Rust)
 make build webui        # just the bundle
 make build niq          # just the CLI, embedding the bundle as it is
 make build niq webui    # the bundle, then the CLI — order of the words does not matter
@@ -47,19 +47,19 @@ make install            # link what is already built into $(PREFIX); never build
 ```
 
 The word after `build` is a **target, not an argument** — make runs all of them
-— so `make niq`, `make webui` and `make miq` work on their own too, and
+— so `make niq` and `make webui` work on their own too, and
 `make build` alone still means everything. When `niq` and `webui` are named
 together the bundle is built first regardless of the order typed.
 
 | Target | Output | Notes |
 |---|---|---|
-| `make build` | everything below | `webui niq` on Linux, `webui niq miq` on macOS |
+| `make build` | everything below | `webui niq`, plus `desktop` when Rust + the Tauri CLI are installed |
 | `make webui` | `app/client/webui/assets/dist` | `npm ci` then `tsc -b && vite build`; the result is committed |
 | `make niq` | `./bin/niq` | injects `-X main.version` (from `git describe`) and `main.buildTime` |
-| `make miq` | `dist/niq.app`, `./bin/miq` | macOS only; packaging is `app/publish/mac/build.sh` |
-| `make miq-universal` | `dist/niq.app` (arm64 + x86_64) | macOS only |
-| `make dist-miq` | `dist/niq_mac_darwin_universal.zip` | what a release ships |
-| `make install` | symlinks in `$(PREFIX)` (default `~/.local/bin`) | links `./bin/niq` (and `./bin/miq` if built), then installs completion |
+| `make desktop` | a Tauri bundle under `app/client/desktop/src-tauri/target/release/bundle/` | the installable shell: bundles `./bin/niq` and opens the gateway's WebUI; needs Go + Rust + the Tauri CLI |
+| `make dist-desktop` | `dist/niq-desktop_<version>_<arch>.{dmg,app.zip}` | release artifacts; `UNIVERSAL=1` for both architectures (`app/publish/desktop/release.sh`) |
+| `make desktop-sidecar` | `app/client/desktop/src-tauri/binaries/niq-<triple>` | stages the CLI without building the bundle |
+| `make install` | `$(PREFIX)/niq` symlink + `niq.app` in `$(APP_DIR)` (default `/Applications`) | links the CLI, installs completion, and copies the built app if there is one (`APP_DIR=$HOME/Applications` for a no-sudo install) |
 | `make snapshot` | `dist/` | full release dry run, no upload (see §7) |
 | `make npm-publish` | npm packages | `DRY=--dry-run` to preview; needs a built `dist/` |
 

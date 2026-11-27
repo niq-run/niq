@@ -26,6 +26,7 @@ package niq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -71,8 +72,17 @@ type Config struct {
 	RemoteURL string
 	// RemoteWorkerID is the identity this worker presents there.
 	RemoteWorkerID string
-	// RemoteCredential is the credential the far side issued for RemoteWorkerID.
+	// RemoteCredential is the credential the far side issued for RemoteWorkerID,
+	// as configured: it may be a secret reference (`env:NAME`, `file:PATH`)
+	// resolved through ResolveCredential. The raw value is what gets persisted
+	// when a dial repoints the link, so a reference never degrades to plaintext.
 	RemoteCredential string
+
+	// ResolveCredential turns a configured credential value into the token used
+	// to dial (e.g. expanding `env:` / `file:` references). Nil means the value
+	// is the token itself. Injected by the host so this package stays free of
+	// the standalone form's secret conventions.
+	ResolveCredential func(raw string) string
 
 	// OnDurableChange is invoked when a binding changed and must survive a
 	// restart. Nil leaves signalling off.
@@ -86,6 +96,11 @@ type ToolHost interface {
 	RegisterReadme(description string, text func() string, params map[string]any)
 	ReplyCompleted(callerID, callID string, result any, traceID string)
 	ReplyFailed(callerID, callID, errMsg, traceID string)
+	// PatchConfig persists a merge patch to this worker's own declaration
+	// (baseworker.PatchConfig). It is the sanctioned way for a worker to change
+	// its config: the assembly injected the writer, so the control plane keeps
+	// ownership, validation and the "next start" contract.
+	PatchConfig(patch map[string]any) error
 }
 
 // Backend is the far side of a niq worker: the link to another niq instance.
@@ -121,25 +136,42 @@ type Backend struct {
 }
 
 // remoteTarget is the far-side endpoint the link dials.
+//
+// credRaw is the configured form (possibly an `env:` / `file:` reference) and
+// cred is what is presented on the wire; keeping both means a repoint that only
+// changes the URL persists the reference rather than the resolved secret.
 type remoteTarget struct {
 	url      string
 	workerID string
+	credRaw  string
 	cred     string
+}
+
+// resolveCredential expands the configured credential value.
+func (b *Backend) resolveCredential(raw string) string {
+	if b.cfg.ResolveCredential != nil {
+		return b.cfg.ResolveCredential(raw)
+	}
+	return raw
 }
 
 // New builds the backend. It is pure construction: nothing dials until Start.
 func New(cfg Config) *Backend {
-	return &Backend{
+	b := &Backend{
 		id:              cfg.ID,
 		cfg:             cfg,
 		onDurableChange: cfg.OnDurableChange,
 		dialCh:          make(chan struct{}, 1),
 		localRecip:      cfg.Recipient,
 		remoteRecip:     cfg.RemoteRecipient,
-		target: remoteTarget{
-			url: cfg.RemoteURL, workerID: cfg.RemoteWorkerID, cred: cfg.RemoteCredential,
-		},
 	}
+	b.target = remoteTarget{
+		url:      cfg.RemoteURL,
+		workerID: cfg.RemoteWorkerID,
+		credRaw:  cfg.RemoteCredential,
+	}
+	b.target.cred = b.resolveCredential(b.target.credRaw)
+	return b
 }
 
 // ID is the worker id this backend belongs to.
@@ -191,6 +223,12 @@ type bindingsState struct {
 
 // Snapshot returns the recipient bindings: the only thing this backend owns that
 // must survive a restart.
+//
+// The dial target is deliberately NOT here. It is configuration, not runtime
+// state: a repoint is written back through Config.SaveTarget (the worker's
+// declaration), where a credential may stay a `env:` / `file:` reference. The
+// state file is plain JSON on disk, so persisting the resolved token here would
+// be a secret leak.
 func (b *Backend) Snapshot() ([]byte, error) {
 	l, r := b.bindings()
 	return json.Marshal(bindingsState{Local: l, Remote: r})
@@ -573,7 +611,7 @@ func (b *Backend) RegisterTools(host ToolHost) {
 	host.Register(baseworker.Extension{
 		Event:       TypeDial,
 		Response:    baseworker.StringSchema("connection outcome"),
-		Description: "Actively connect/reconnect the link to the far side. Optionally repoint it with remote_url / remote_worker_id / remote_credential.",
+		Description: "Connect/reconnect the link to the far side. A repoint with remote_url / remote_worker_id / remote_credential is saved to this worker's config, so it survives a restart.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -624,25 +662,62 @@ func (b *Backend) handleStatus(evt event.Event, host ToolHost) {
 }
 
 // handleDial actively (re)establishes the far-side link.
+//
+// A repoint is persistent by default: the merged target is written back through
+// Config.SaveTarget *before* it is applied. A dial that reconnects now but is
+// forgotten at the next restart is a trap for an agent that provisioned the
+// link itself, so persistence is the normal path and a failed write leaves the
+// old target in place (reported as a failure) rather than splitting memory and
+// disk.
 func (b *Backend) handleDial(tc baseworker.ToolCall, host ToolHost) {
 	url, _ := tc.Args["remote_url"].(string)
 	workerID, _ := tc.Args["remote_worker_id"].(string)
-	cred, _ := tc.Args["remote_credential"].(string)
-	repoint := url != "" || workerID != ""
+	credRaw, _ := tc.Args["remote_credential"].(string)
 
-	tgt := b.currentTarget()
+	// Merge over the current target: only the given fields change, so a caller
+	// can rotate the credential or move the URL without restating the rest.
+	next := b.currentTarget()
+	if url != "" {
+		next.url = url
+	}
+	if workerID != "" {
+		next.workerID = workerID
+	}
+	if credRaw != "" {
+		next.credRaw = credRaw
+	}
+	repoint := next != b.currentTarget()
+
+	saved := false
 	if repoint {
-		// Merge over the existing target: optional fields only replace when given.
+		next.cred = b.resolveCredential(next.credRaw)
+
+		// Persist through the worker's own declaration writer. It is a MERGE
+		// patch of only the keys this call changed, so an unrelated param edited
+		// elsewhere is not clobbered; a nil value would clear a key.
+		patch := map[string]any{}
 		if url != "" {
-			tgt.url = url
+			patch["remote_url"] = url
 		}
 		if workerID != "" {
-			tgt.workerID = workerID
+			patch["remote_worker_id"] = workerID
 		}
-		if cred != "" {
-			tgt.cred = cred
+		if credRaw != "" {
+			patch["remote_credential"] = credRaw
 		}
-		b.setTarget(tgt)
+
+		switch err := host.PatchConfig(patch); {
+		case err == nil:
+			saved = true
+		case errors.Is(err, baseworker.ErrConfigUnavailable):
+			// No declaration store on this host (embedded use): the repoint lives
+			// for this process only, and the reply says so below.
+		default:
+			host.ReplyFailed(tc.CallerID, tc.CallID,
+				"dial not applied: could not save the target ("+err.Error()+")", tc.TraceID)
+			return
+		}
+		b.setTarget(next)
 	}
 
 	connected := b.remoteNow() != nil
@@ -657,12 +732,21 @@ func (b *Backend) handleDial(tc baseworker.ToolCall, host ToolHost) {
 		connected = false
 	}
 
+	suffix := ""
+	switch {
+	case saved:
+		suffix = " (saved to the worker config)"
+	case repoint:
+		// Be explicit: a caller that provisioned the link must not assume the
+		// repoint survives a restart when the host has no config store.
+		suffix = " (not saved: this host has no config store)"
+	}
 	if connected {
-		host.ReplyCompleted(tc.CallerID, tc.CallID, "already connected to "+tgt.url, tc.TraceID)
+		host.ReplyCompleted(tc.CallerID, tc.CallID, "already connected to "+next.url+suffix, tc.TraceID)
 		return
 	}
-	host.ReplyCompleted(tc.CallerID, tc.CallID, "dialing "+tgt.url, tc.TraceID)
-	log.Printf("[niq %s] manual dial requested by %s -> %s", b.id, tc.CallerID, tgt.url)
+	host.ReplyCompleted(tc.CallerID, tc.CallID, "dialing "+next.url+suffix, tc.TraceID)
+	log.Printf("[niq %s] manual dial requested by %s -> %s (saved=%t)", b.id, tc.CallerID, next.url, saved)
 }
 
 // readmeDescription is the one-line presence text for worker.readme.

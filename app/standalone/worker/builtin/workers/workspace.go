@@ -88,7 +88,7 @@ func buildWorkspaceSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (
 }
 
 // ── spawn contract ──
-var spawnParamsWorkspace = []string{"mounts", "path", "approver"}
+var spawnParamsWorkspace = []builtin.ParamSpec{{Name: "mounts"}, {Name: "path"}, {Name: "approver"}}
 
 func registerWorkspace(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("workspace", spawnParamsWorkspace, ctx, buildWorkspaceSpec)

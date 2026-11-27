@@ -53,12 +53,13 @@ func buildCodingSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (cor
 }
 
 // ── spawn contract ──
-var spawnParamsCoding = []string{
-	"instruction", "goal", "brief", "programs", "events", "readme",
-	"provider", "model", "collaborators",
-	"budget_soft", "budget_hard",
-	"tail_tokens", "keep_tail", "compact_directive",
-	"tool_mode",
+var spawnParamsCoding = []builtin.ParamSpec{
+	{Name: "instruction"}, {Name: "goal"}, {Name: "brief"},
+	{Name: "programs"}, {Name: "events"}, {Name: "readme"},
+	{Name: "provider"}, {Name: "model"}, {Name: "collaborators"},
+	{Name: "budget_soft"}, {Name: "budget_hard"},
+	{Name: "tail_tokens"}, {Name: "keep_tail"}, {Name: "compact_directive"},
+	{Name: "tool_mode"},
 }
 
 func registerCoding(ctx builtin.BuildContext, reg *builtin.Registry) {

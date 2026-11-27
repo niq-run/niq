@@ -15,6 +15,8 @@ func TestDisplayWidth(t *testing.T) {
 		{"a值班", 5},
 		{"パネル", 6},
 		{"🚀", 2},
+		{"✅", 2}, // BMP emoji presentation (U+2705), two cells
+		{"⭐", 2}, // BMP emoji presentation (U+2B50), two cells
 		{"a-b_c", 5},
 	} {
 		if got := displayWidth(tc.in); got != tc.want {

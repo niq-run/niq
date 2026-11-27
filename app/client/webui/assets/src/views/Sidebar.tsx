@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useTheme, fontSizes, VIEW_HEADER_HEIGHT, type Palette } from '../theme'
 import { useI18n } from '../i18n'
-import { isTalkPartnerType, type WorkerInfo, type WorkerDetailTab, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
+import { isTalkPartnerType, isReasonFamilyType, type WorkerInfo, type WorkerDetailTab, type ViewMode, type ViewSettings, type ViewSettingKey } from '../types'
 import WorkerPickerModal from '../components/WorkerPickerModal'
 import WorkerRowMenu from '../components/WorkerRowMenu'
 import ContextMenuSurface from '../components/ContextMenuSurface'
@@ -12,6 +12,10 @@ import type { NotifyPermission } from '../hooks/useApprovalNotifications'
 import { getPinnedWorkers, setPinnedWorker, getSleptWorkers, setSleptWorker, orderWithPinned, moveWorkerOrder } from '../pinnedWorkers'
 import pinSvg from '../assets/pin.svg'
 import pinwSvg from '../assets/pinw.svg'
+
+// The management surfaces the resources section navigates to. Mirrors App's
+// Panel type.
+type Panel = 'projects' | 'templates' | 'providers' | 'vault'
 
 interface SidebarProps {
   view: ViewMode
@@ -37,8 +41,8 @@ interface SidebarProps {
   onProjectStop?: () => void
   onProjectRestart?: () => void
   archived: Set<string>
-  panel: 'projects' | 'templates' | 'providers' | null
-  onSelectPanel: (p: 'projects' | 'templates' | 'providers') => void
+  panel: Panel | null
+  onSelectPanel: (p: Panel) => void
   // Mobile drawer mode: the sidebar slides in from the left and overlays the
   // main area; open toggles it, onNavigate is called after any navigation so
   // the caller can close the drawer.
@@ -163,6 +167,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     if (!rowMenu) return false
     const w = workers.find(x => x.id === rowMenu.id)
     return !!w && isTalkPartnerType(w.type)
+  })()
+  // Only reason-family workers have the detail panel's Context tab, so only
+  // they get the menu's deep link to it.
+  const rowMenuHasContext = (() => {
+    if (!rowMenu) return false
+    const w = workers.find(x => x.id === rowMenu.id)
+    return !!w && isReasonFamilyType(w.type)
   })()
   // Inline rename: the row label turns into an input. The edit is display
   // metadata only (the id stays the identity), so it is saved to the worker's
@@ -295,6 +306,13 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
     transition: 'background 0.12s',
   })
 
+  // One text color for every sidebar nav row, whichever surface it opens: the
+  // agent views and the management panels (projects/templates/providers/vault)
+  // must read at the same weight, so the resources group no longer looks paler
+  // than a project's nav. The active row still takes the accent; the muted tone
+  // stays for secondary text (ids, counts, hints).
+  const navColor = (active: boolean) => (active ? colors.accent : colors.text)
+
   // View labels must be computed inside the component (not module-level) so
   // they re-render when the language changes.
   const VIEW_LABELS: Record<ViewMode, string> = {
@@ -312,6 +330,20 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
   const PROJECT_VIEW_MODES: ViewMode[] = ['talk', 'events', 'approvals']
   const PROJECT_RESOURCE_MODES: ViewMode[] = ['workers', 'mcp', 'programs']
 
+  // The management panels, in sidebar order. Labels are computed in the
+  // component so they follow the language switch.
+  const PANELS: Panel[] = ['projects', 'templates', 'providers', 'vault']
+  const PANEL_LABELS: Record<Panel, string> = {
+    projects: t('sidebar.projects'),
+    templates: t('sidebar.templates'),
+    providers: t('sidebar.providers'),
+    vault: t('sidebar.vault'),
+  }
+  // Which row reads as active. In control mode an unset panel still shows the
+  // projects list, so 项目 is the current surface even before it is clicked;
+  // inside a project an unset panel means a project view, so no panel is active.
+  const activePanel: Panel | null = panel ?? (mode !== 'project' ? 'projects' : null)
+
   // One navigable view row. Shared by both groups so they cannot drift apart.
   // The last row keeps its full padding (so its hover band is the same height
   // as every other row) and cancels it with a negative bottom margin: the
@@ -323,7 +355,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       onClick={() => { setView(v); onNavigate() }}
       onMouseEnter={() => setHoverId('view:' + v)}
       onMouseLeave={() => setHoverId(null)}
-      style={{ ...hoverStyle('view:' + v), ...(last ? { marginBottom: -6 } : null), cursor: 'pointer', color: view === v ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
+      style={{ ...hoverStyle('view:' + v), ...(last ? { marginBottom: -6 } : null), cursor: 'pointer', color: navColor(view === v), fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
     >
       <span style={{ flex: 1 }}>{VIEW_LABELS[v]}{view === v ? ' \u25C9' : ''}</span>
       {v === 'approvals' && pendingApprovals > 0 && (
@@ -1069,30 +1101,17 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
       ))}
       {sectionHeader('resources', t('sidebar.resources'), mode === 'project' ? 0 : 16)}
       {sectionOpen('resources') && (<>
-      <div
-        onClick={() => { onSelectPanel('projects'); onNavigate() }}
-        onMouseEnter={() => setHoverId('projects')}
-        onMouseLeave={() => setHoverId(null)}
-        style={{ ...hoverStyle('projects'), cursor: 'pointer', color: panel === 'projects' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
-      >
-        {t('sidebar.projects')}{panel === 'projects' ? ' \u25C9' : ''}
-      </div>
-      <div
-        onClick={() => { onSelectPanel('templates'); onNavigate() }}
-        onMouseEnter={() => setHoverId('templates')}
-        onMouseLeave={() => setHoverId(null)}
-        style={{ ...hoverStyle('templates'), cursor: 'pointer', color: panel === 'templates' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
-      >
-        {t('sidebar.templates')}{panel === 'templates' ? ' \u25C9' : ''}
-      </div>
-      <div
-        onClick={() => { onSelectPanel('providers'); onNavigate() }}
-        onMouseEnter={() => setHoverId('providers')}
-        onMouseLeave={() => setHoverId(null)}
-        style={{ ...hoverStyle('providers'), marginBottom: -6, cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
-      >
-        {t('sidebar.providers')}{panel === 'providers' ? ' \u25C9' : ''}
-      </div>
+      {PANELS.map((p, i, all) => (
+        <div
+          key={p}
+          onClick={() => { onSelectPanel(p); onNavigate() }}
+          onMouseEnter={() => setHoverId(p)}
+          onMouseLeave={() => setHoverId(null)}
+          style={{ ...hoverStyle(p), ...(i === all.length - 1 ? { marginBottom: -6 } : null), cursor: 'pointer', color: navColor(activePanel === p), fontSize: optSize, lineHeight: optLine, display: 'flex', alignItems: 'center' }}
+        >
+          <span style={{ flex: 1 }}>{PANEL_LABELS[p]}{activePanel === p ? ' \u25C9' : ''}</span>
+        </div>
+      ))}
       </>)}
 
       </div>
@@ -1273,6 +1292,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
           onMention={() => onMention?.(rowMenu.id)}
           onDetail={onOpenDetail ? () => onOpenDetail(rowMenu.id) : undefined}
           onReadme={onOpenDetail ? () => onOpenDetail(rowMenu.id, 'readme') : undefined}
+          onContext={onOpenDetail && rowMenuHasContext ? () => onOpenDetail(rowMenu.id, 'context') : undefined}
           onRename={() => startRename(rowMenu.id)}
           onTogglePin={() => togglePinned(rowMenu.id)}
           onToggleSleep={() => toggleSlept(rowMenu.id)}

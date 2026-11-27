@@ -1,11 +1,12 @@
 package workers
 
 import (
+	"context"
 	"fmt"
 	"log"
 
+	"github.com/niq-run/niq/app/standalone/vault"
 	"github.com/niq-run/niq/app/standalone/worker/builtin"
-	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/iface"
 	"github.com/niq-run/niq/core/impl/workers/niq"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -28,13 +29,20 @@ func buildNIQSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (corewo
 	}
 	remoteURL, _ := p["remote_url"].(string)
 	remoteWorkerID, _ := p["remote_worker_id"].(string)
+	// Keep the credential as configured (it may be `env:` / `file:`): the core
+	// resolves it for dialing and re-persists the same reference on a repoint.
 	remoteCredRaw, _ := p["remote_credential"].(string)
-	remoteCred := projprocess.ResolveSecret(remoteCredRaw)
 	// recipient seeds the LOCAL binding, remote_recipient the REMOTE one. Both
 	// are runtime properties (set via niq.recipient.*); the seeds just avoid a
 	// bootstrap control event.
 	recipient, _ := p["recipient"].(string)
 	remoteRecipient, _ := p["remote_recipient"].(string)
+	// The secret provider is injected so a dedicated `vault:` implementation can
+	// replace the default env/file one without touching this builder.
+	var secrets vault.Provider = vault.Fallback{}
+	if ctx.Secrets != nil {
+		secrets = ctx.Secrets
+	}
 	if remoteURL == "" || remoteWorkerID == "" {
 		return coreworker.SpawnSpec{}, fmt.Errorf("niq %s: params remote_url and remote_worker_id are required", id)
 	}
@@ -58,23 +66,36 @@ func buildNIQSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (corewo
 		// A re-bound recipient must survive a restart; the assembly layer
 		// checkpoints the worker the same way it does any worker with state.
 		backend := niq.New(niq.Config{
-			ID:               id,
-			Recipient:        recipient,
-			RemoteRecipient:  remoteRecipient,
-			RemoteURL:        remoteURL,
-			RemoteWorkerID:   remoteWorkerID,
-			RemoteCredential: remoteCred,
+			ID:                id,
+			Recipient:         recipient,
+			RemoteRecipient:   remoteRecipient,
+			RemoteURL:         remoteURL,
+			RemoteWorkerID:    remoteWorkerID,
+			RemoteCredential:  remoteCredRaw,
+			ResolveCredential: secrets.Resolve,
 			OnDurableChange: func() {
 				if err := ctx.Manager.Checkpoint(id); err != nil {
 					log.Printf("[project] checkpoint %s: %v", id, err)
 				}
 			},
 		})
+		// The declaration writer the worker uses for a dial repoint. It is the
+		// control plane's own Update: merge semantics, validation, locking and
+		// the "applies on the next start" contract all stay with its owner.
+		var patchConfig func(map[string]any) error
+		if ctx.WorkerBackend != nil {
+			patchConfig = func(patch map[string]any) error {
+				_, err := ctx.WorkerBackend.Update(context.Background(), id,
+					coreworker.WorkerPatch{Params: patch})
+				return err
+			}
+		}
 		w := iface.New(iface.Config{
-			ID:       id,
-			Type:     niq.Type,
-			Bus:      ch,
-			Backends: []iface.Backend{backend},
+			ID:          id,
+			Type:        niq.Type,
+			Bus:         ch,
+			Backends:    []iface.Backend{backend},
+			PatchConfig: patchConfig,
 		})
 		// The builder is the only place that knows both halves, so it is where a
 		// backend's tools get attached to the worker that serves them.
@@ -91,7 +112,15 @@ func buildNIQSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (corewo
 }
 
 // ── spawn contract ──
-var spawnParamsNiq = []string{"remote_url", "remote_worker_id", "remote_credential", "recipient", "remote_recipient"}
+var spawnParamsNiq = []builtin.ParamSpec{
+	{Name: "remote_url"},
+	{Name: "remote_worker_id"},
+	// The far-side credential is a secret: a literal passed to Create/update is
+	// sealed into the vault, and the declaration keeps only `vault:<name>`.
+	{Name: "remote_credential", Secret: true},
+	{Name: "recipient"},
+	{Name: "remote_recipient"},
+}
 
 func registerNiq(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("niq", spawnParamsNiq, ctx, buildNIQSpec)

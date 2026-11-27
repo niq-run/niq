@@ -5,6 +5,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/niq-run/niq/app/client/tui/ui"
 )
 
 // ── Rendering ──
@@ -16,7 +18,8 @@ func (c *chat) viewHeight() int {
 	if n < 1 {
 		n = 1
 	}
-	bottom := 4 + n // spacer + status rule + input rows + divider rule + context line
+	bottom := 4 + n              // spacer + status rule + input rows + divider rule + context line
+	bottom += c.inlineDockRows() // option/command rows + the operation-hint row
 	v := c.height - bottom
 	if v < 1 {
 		v = 1
@@ -28,10 +31,10 @@ func (c *chat) viewHeight() int {
 // It is the only place that walks the event list, so live events and filter
 // changes cost one render rather than one per event.
 func (c *chat) rebuild() {
-	c.lines = renderTranscript(c.events, c.filter, c.width, c.liveThinking, c.liveThinkingWorker)
+	c.lines, c.userLines = renderTranscript(c.events, c.filter, c.width, c.liveThinking, c.liveThinkingWorker)
 	c.linesDirty = false
-	c.vp.resize(c.viewHeight())
-	c.vp.setTotal(len(c.lines))
+	c.vp.Resize(c.viewHeight())
+	c.vp.SetTotal(len(c.lines))
 }
 
 // render paints one full frame: the visible transcript window, then the dock — a
@@ -48,13 +51,14 @@ func (c *chat) render() {
 	c.spans = nil
 	c.ctxRow = -1
 	c.ctxModelX0, c.ctxModelX1 = -1, -1
-	c.cardRect = rect{}
+	c.ctxPctX0, c.ctxPctX1 = -1, -1
+	c.cardRect = ui.Rect{}
 	inRows, inCurRow, inCurCol := c.inputRows()
 	c.inputN = len(inRows)
 	vh := c.viewHeight()
-	c.vp.resize(vh)
-	c.vp.setTotal(len(c.lines))
-	start, _ := c.vp.window()
+	c.vp.Resize(vh)
+	c.vp.SetTotal(len(c.lines))
+	start, _ := c.vp.Window()
 
 	rows := make([]string, c.height)
 	for i := 0; i < vh && i < c.height; i++ {
@@ -90,10 +94,35 @@ func (c *chat) render() {
 			break
 		}
 		rows[idx] = line
-		if i == inCurRow && c.menu == menuNone {
+		if i == inCurRow && c.menu == menuNone && c.palette == menuNone {
 			curRow, curCol = idx, inCurCol
 		}
 		idx++
+	}
+	// The inline list (a slash-command option palette, or the live command menu)
+	// sits directly under the composer, then a blank row and a hint row: the input
+	// rises as it opens, because the dock grew by these rows.
+	if opts, footer, keepCursor, ok := c.inlineMenu(); ok {
+		for _, line := range opts {
+			if idx >= c.height {
+				break
+			}
+			rows[idx] = line
+			idx++
+		}
+		if idx < c.height {
+			rows[idx] = "" // a blank row sets the hint apart from the list
+			idx++
+		}
+		if idx < c.height {
+			// Two cells in, past the "› " / "  " marker, so the hint lines up with
+			// the option labels above it rather than hugging the left edge.
+			rows[idx] = "  " + dim(footer)
+			idx++
+		}
+		if !keepCursor {
+			curRow = -1 // hide the text cursor while a choice is held
+		}
 	}
 	if idx < c.height {
 		rows[idx] = c.rule()
@@ -110,11 +139,14 @@ func (c *chat) render() {
 	case c.help:
 		c.paintHelp(rows)
 		curRow = -1
+	case c.usagePanel:
+		c.paintUsage(rows)
+		curRow = -1
 	case c.menu != menuNone:
 		c.paintMenu(rows)
 		curRow = -1
 	}
-	c.scr.render(rows, curRow, curCol)
+	c.scr.Render(rows, curRow, curCol)
 }
 
 // hintAct is what a clickable segment of the status rule opens.
@@ -128,6 +160,7 @@ const (
 	hintInputModePick
 	hintVimPick
 	hintModelPick
+	hintUsagePick
 )
 
 // hintSpan is a clickable segment of the status rule. x0/x1 are 0-based columns.
@@ -269,8 +302,9 @@ func (c *chat) hintAction(row, col int) (hintAct, bool) {
 	return hintNone, false
 }
 
-// focusHints is the order Tab visits the buttons and the model, left to right.
-var focusHints = []hintAct{hintTargetPick, hintViewPick, hintInputModePick, hintVimPick, hintHelp, hintModelPick}
+// focusHints is the order Tab visits the rule's buttons, the context percentage
+// and the model, left to right.
+var focusHints = []hintAct{hintTargetPick, hintViewPick, hintInputModePick, hintVimPick, hintHelp, hintUsagePick, hintModelPick}
 
 // presentHints returns the focusable targets currently drawn, in focus order, so
 // Tab skips the ones a narrow terminal dropped.
@@ -279,8 +313,11 @@ func (c *chat) presentHints() []hintAct {
 	for _, s := range c.spans {
 		present[s.act] = true
 	}
-	// The model lives on the context line under the rule, not on the rule itself,
-	// so it counts as present whenever that line drew a model region.
+	// The context percentage and the model live on the line under the rule, not on
+	// the rule itself, so they count as present whenever those regions were drawn.
+	if c.ctxPctX1 > c.ctxPctX0 {
+		present[hintUsagePick] = true
+	}
 	if c.ctxModelX1 > c.ctxModelX0 {
 		present[hintModelPick] = true
 	}
@@ -383,7 +420,18 @@ func (c *chat) contextLine() string {
 		left.WriteString(dim("ctx "))
 		left.WriteString("[" + c.workerDisplay(worker) + "]")
 		if u, ok := c.usageFor(worker); ok {
-			left.WriteString(dim(" " + u.percent()))
+			// The percentage is clickable (blue) and a Tab stop; focused, it shows as
+			// a filled block like the model.
+			base := visibleWidth(left.String())
+			pct := u.percent()
+			left.WriteString(" ")
+			if c.focus == hintUsagePick {
+				left.WriteString(reverse(pct))
+			} else {
+				left.WriteString(brand(pct))
+			}
+			c.ctxPctX0 = base + 1
+			c.ctxPctX1 = base + 1 + visibleWidth(pct)
 		}
 	}
 
@@ -411,6 +459,13 @@ func (c *chat) contextLine() string {
 			lw = visibleWidth(ls)
 		} else {
 			return clipStyled(ls, c.width)
+		}
+		// Keep the percentage's click region inside what actually survived.
+		if c.ctxPctX1 > lw {
+			c.ctxPctX1 = lw
+		}
+		if c.ctxPctX0 >= c.ctxPctX1 {
+			c.ctxPctX0, c.ctxPctX1 = -1, -1
 		}
 	}
 	fill := c.width - lw - rw
@@ -455,8 +510,8 @@ func (c *chat) statusBits() []string {
 		}
 		bits = append(bits, b)
 	}
-	if !c.vp.follow {
-		above, below := c.vp.offset()
+	if !c.vp.Follow {
+		above, below := c.vp.Offset()
 		bits = append(bits, fmt.Sprintf("↑%d ↓%d", above, below))
 	} else if c.loading {
 		bits = append(bits, "loading…")

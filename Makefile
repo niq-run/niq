@@ -1,4 +1,5 @@
 PREFIX ?= $(HOME)/.local/bin
+APP_DIR ?= /Applications
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo 0.0.0-dev)
 BUILDTIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 WEBUI := app/client/webui/assets
@@ -7,27 +8,34 @@ WEBUI := app/client/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build niq miq webui miq-universal dist-miq app snapshot npm-publish e2e e2e-cli e2e-bus e2e-worker
+.PHONY: install build niq webui desktop desktop-sidecar dist-desktop app snapshot npm-publish e2e e2e-cli e2e-bus e2e-worker
 
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-BUILD_PARTS := webui niq miq
-else
-BUILD_PARTS := webui niq
-endif
+# The Tauri CLI comes in two flavours: `cargo tauri` (cargo install tauri-cli) or
+# a standalone `tauri` (npm i -g @tauri-apps/cli, prebuilt — much faster). Both
+# are resolved past PATH, because a GUI-launched make may not have ~/.cargo/bin
+# or the npm global bin on it.
+CARGO ?= $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
+TAURI ?= $(shell command -v tauri 2>/dev/null)
+
+# The desktop shell needs Go + Rust + the Tauri CLI. `make build` includes it
+# whenever that toolchain is present and quietly skips it otherwise, so a
+# CLI-only machine still builds. `make desktop` always tries.
+DESKTOP_TOOLCHAIN := $(shell { test -x "$(CARGO)" && { test -n "$(TAURI)" || "$(CARGO)" tauri --version >/dev/null 2>&1; }; } >/dev/null 2>&1 && echo yes)
+BUILD_PARTS := webui niq $(if $(DESKTOP_TOOLCHAIN),desktop)
 
 # `make build` on its own is everything this machine can build. make has no
 # notion of a subcommand — a word after `build` is another goal, not an argument
 # — so `build` contributes prerequisites only when it stands alone, and each
 # part is a target of its own:
 #
-#	make build              webui, then the CLI, then the app
+#	make build              webui, the CLI, and (with Rust) the desktop app
 #	make build webui        just the bundle
 #	make build niq          just the CLI, embedding the bundle as it is
 #	make build niq webui    the bundle, then the CLI
-#	make build miq          the menu bar app
+#	make build desktop      just the installable app
 #
-# `make niq` / `make miq` / `make webui` mean the same without the prefix.
+# `make niq` / `make webui` / `make desktop` mean the same without the prefix.
+# The native macOS app lives in the clients repository.
 ifneq (,$(strip $(filter-out build,$(MAKECMDGOALS))))
 BUILD_PREREQ :=
 WANT := $(filter-out build,$(MAKECMDGOALS))
@@ -64,7 +72,7 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 	@echo "webui: building the bundle (tsc -b && vite build)…"
 	cd $(WEBUI) && npm run build
 
-GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
+GO_BUILD = go build -trimpath -ldflags "-s -w -X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
 
 # The CLI. It embeds whatever bundle is in app/client/webui/assets/dist, so this does
 # not rebuild the SPA — `make build webui` (or plain `make build`) is that step.
@@ -72,16 +80,47 @@ niq:
 	@echo "go: building ./bin/niq…"
 	$(GO_BUILD)
 
-# The macOS distribution. Packaging lives with it (app/publish/mac/build.sh);
-# these targets are the familiar entry points.
-miq:
-	@app/publish/mac/build.sh
+# The installable desktop shell: bundles the CLI as a Tauri sidecar and opens the
+# gateway's own WebUI. The project lives in app/client/desktop; releasing it is
+# app/publish/desktop.
+DESKTOP_APP := app/client/desktop/src-tauri/target/release/bundle/macos/niq.app
 
-miq-universal:
-	@app/publish/mac/build.sh universal
+desktop: niq
+	@test -x "$(CARGO)" || { echo "desktop: cargo is required — install Rust (https://rustup.rs)"; exit 1; }
+	@cd app/client/desktop && NIQ_BIN="$(CURDIR)/bin/niq" ./scripts/prepare-sidecar.sh
+	@if [ -n "$(TAURI)" ]; then \
+		echo "desktop: using $(TAURI)"; \
+		cd app/client/desktop && PATH="$(dir $(CARGO)):$$PATH" "$(TAURI)" build; \
+	elif "$(CARGO)" tauri --version >/dev/null 2>&1; then \
+		echo "desktop: using cargo tauri"; \
+		cd app/client/desktop && "$(CARGO)" tauri build; \
+	else \
+		echo "desktop: the Tauri CLI is required — npm i -g @tauri-apps/cli"; exit 1; \
+	fi
+	@# Tauri leaves only the linker's signature on the Mach-O, which is not a
+	@# bundle signature: `codesign -v` rejects it. Sign the bundle ad-hoc so the
+	@# copy in /Applications verifies (and is not "damaged" if handed to someone
+	@# else). Tauri already signed it properly when an identity is configured.
+	@if [ "$$(uname -s)" = "Darwin" ] && [ -z "$${APPLE_SIGNING_IDENTITY:-}" ] && command -v codesign >/dev/null 2>&1; then \
+		echo "desktop: signing the bundle ad-hoc"; \
+		codesign --force --sign - "$(DESKTOP_APP)"; \
+	fi
 
-dist-miq:
-	@app/publish/mac/build.sh zip
+# Stage the sidecar without building the bundle (fast check that the CLI is
+# picked up).
+desktop-sidecar: niq
+	@cd app/client/desktop && NIQ_BIN="$(CURDIR)/bin/niq" ./scripts/prepare-sidecar.sh
+
+# Release artifacts for the desktop channel (dmg + zipped app under dist/).
+#   make dist-desktop                    host build
+#   make dist-desktop UNIVERSAL=1        universal (lipo'd CLI + app)
+dist-desktop:
+	@./app/publish/desktop/release.sh $(if $(UNIVERSAL),--universal,)
+
+# Note: the native macOS app is no longer part of this repository. It lives in
+# the clients repository (github.com/niq-run/clients), together with the other
+# third-party clients — this repo ships the CLI, the WebUI, the TUI and the
+# desktop shell above.
 
 # Full local test of the release pipeline (no upload, no publish).
 # End-to-end suites: black-box tests that build the CLI and drive it the way a
@@ -118,10 +157,25 @@ define install_steps
 	@echo "install: linking $(PREFIX)/niq → $(shell pwd)/bin/niq"
 	mkdir -p $(PREFIX)
 	ln -sf "$(shell pwd)/bin/niq" $(PREFIX)/niq
-	-@if [ -x "$(shell pwd)/bin/miq" ]; then ln -sf "$(shell pwd)/bin/miq" $(PREFIX)/miq; echo "install: $(PREFIX)/miq → $(shell pwd)/bin/miq"; fi
 	-@if [ "$$NIQ_NO_COMPLETION" != "1" ]; then "$(PREFIX)/niq" completion install; fi
 	@echo "niq installed → $(PREFIX)/niq"
 	@echo "Make sure $(PREFIX) is in your PATH"
+endef
+
+# The desktop app is copied (not linked): LaunchServices, Spotlight and the
+# quarantine/upgrade paths all want a real bundle. APP_DIR is overridable for a
+# no-sudo, per-user install: make install APP_DIR=$$HOME/Applications
+define install_app_steps
+	@if [ -d "$(DESKTOP_APP)" ]; then \
+		mkdir -p "$(APP_DIR)" && \
+		echo "install: copying $(DESKTOP_APP) → $(APP_DIR)/niq.app" && \
+		rm -rf "$(APP_DIR)/niq.app" && \
+		ditto "$(DESKTOP_APP)" "$(APP_DIR)/niq.app" && \
+		echo "niq.app installed → $(APP_DIR)/niq.app" || { \
+			echo "install: could not write $(APP_DIR) — retry with APP_DIR=$$HOME/Applications"; exit 1; }; \
+	else \
+		echo "install: niq.app not built — run 'make desktop' (or 'make build') first"; \
+	fi
 endef
 
 # install never builds: it links what is already there, and says what is missing
@@ -130,3 +184,4 @@ install:
 	@if [ ! -x "$(shell pwd)/bin/niq" ]; then \
 		echo "install: ./bin/niq is missing — run 'make build' first"; exit 1; fi
 	$(install_steps)
+	$(install_app_steps)

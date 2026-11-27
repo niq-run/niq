@@ -221,6 +221,35 @@ func TestHandleGetProgramContentOffline(t *testing.T) {
 	}
 }
 
+// TestHandleWorkerContextOffline verifies GET /api/workers/{id}/context reports
+// an unknown/offline worker as 503 without waiting on the bus — the same
+// contract the provider endpoint keeps.
+func TestHandleWorkerContextOffline(t *testing.T) {
+	registry, err := eventbus.NewFileIdentityRegistry(filepath.Join(t.TempDir(), "identities.json"))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	engine := eventbus.NewEngine(registry, eventbus.NewMemoryEventStore())
+	s := New(nil, engine, &stubCatalog{}, registry, ":0", false)
+	addr, err := s.Bind()
+	if err != nil {
+		t.Fatalf("Bind: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	resp, err := http.Get("http://" + addr + "/api/workers/nope/context")
+	if err != nil {
+		t.Fatalf("GET context: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d (worker offline)", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+}
+
 func TestWebUIServeOnBoundListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := New(nil, nil, nil, nil, ":0", false)

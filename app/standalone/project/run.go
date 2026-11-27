@@ -20,6 +20,7 @@ import (
 	eventstore "github.com/niq-run/niq/app/standalone/store/event"
 	"github.com/niq-run/niq/app/standalone/store/identity"
 	"github.com/niq-run/niq/app/standalone/store/migrate"
+	"github.com/niq-run/niq/app/standalone/vault"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projbuiltin "github.com/niq-run/niq/app/standalone/worker/builtin"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
@@ -307,6 +308,12 @@ func runAssembly(opts assemblyOptions) error {
 	if opts.WebUIAddr != "" {
 		protected = append(protected, projbuiltin.DefaultWebUIID)
 	}
+	// One secret provider for the whole assembly: the control plane expands
+	// references when it turns params into a process environment, and builders
+	// resolve them when they construct a worker. Swapping in a `vault:` provider
+	// is a change here and nowhere else.
+	secrets := vault.New(store.VaultDir())
+
 	cp := projworker.New(projworker.Config{
 		ProjectID:  opts.ContextInfo.Project,
 		Manifests:  manifests,
@@ -317,6 +324,7 @@ func runAssembly(opts assemblyOptions) error {
 		Engine:     engine,
 		Supervisor: supervisor,
 		Protect:    protected,
+		Secrets:    secrets,
 	})
 
 	buildCtx := projbuiltin.BuildContext{
@@ -327,6 +335,7 @@ func runAssembly(opts assemblyOptions) error {
 		EventStore:    evtStore,
 		ProviderLoad:  store.LoadProvider,
 		ProgramsRoot:  opts.ProgramsRoot,
+		Secrets:       secrets,
 	}
 	cp.RegisterBuilders(buildCtx)
 

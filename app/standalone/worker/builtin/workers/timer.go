@@ -51,7 +51,7 @@ func buildTimerSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (core
 }
 
 // ── spawn contract ──
-var spawnParamsTimer = []string{"readme", "readme_append"}
+var spawnParamsTimer = []builtin.ParamSpec{{Name: "readme"}, {Name: "readme_append"}}
 
 func registerTimer(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("timer", spawnParamsTimer, ctx, buildTimerSpec)

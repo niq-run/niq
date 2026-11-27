@@ -97,11 +97,13 @@ Therefore:
 
 `host__spawn` with at least:
 
-- `type` — `reason` / `coding` / `workspace` / `timer` / `program` / `mcp` / `niw`
+- `type` — `reason` / `coding` / `workspace` / `timer` / `program` / `mcp` / `niq`
 - `id` — stable identity (all addressing uses it)
 - `description` — what it is for (display metadata for humans)
-- plus type-specific fields: `path`/`mounts` for workspace, `provider`/`model` for
-  a reason worker that should not use the shared provider config, and so on.
+- `params` — the type-specific arguments, all inside this one object:
+  `path`/`mounts` for workspace, `provider`/`model` for a reason worker that
+  should not use the shared provider config, and so on. Anything outside `params`
+  (other than the fixed fields above) is rejected rather than ignored.
 
 After creating it: check its contract with `request(directory, "describe", {worker})` and its
 self-description with `request(<id>, "worker.readme")`, then hand it a first,

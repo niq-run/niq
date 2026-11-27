@@ -2,13 +2,16 @@
 // the same numbers the WebUI's ContextUsagePanel draws: the prompt/output token
 // counts, the cache hit, and the model's context window. The worker attaches
 // this per round (see the reason worker's contextbreakdown.go), so a response
-// carries the occupancy it ran at.
+// carries the occupancy it ran at. The detail panel behind the dock's percentage
+// (the popup) lives in the same file.
 package tui
 
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/niq-run/niq/app/client/tui/ui"
 )
 
 // usageInfo is a reason.response's context accounting.
@@ -17,9 +20,18 @@ type usageInfo struct {
 	output        int
 	total         int
 	cacheRead     int
+	cacheCreation int
 	cacheHitPct   float64
 	contextWindow int
 	hasCache      bool
+	breakdown     []usageSection
+}
+
+// usageSection is one keyed slice of the round's prompt (system, tools.builtin,
+// messages.user, …), as the reason worker reports it on meta.usage.breakdown.
+type usageSection struct {
+	key    string
+	tokens int
 }
 
 // fraction is total tokens as a percentage of the context window (0 when the
@@ -54,7 +66,22 @@ func parseUsage(payload map[string]any) (usageInfo, bool) {
 		out.hasCache = true
 	}
 	out.cacheHitPct = numFloat(u["cache_hit_percent"])
+	out.cacheCreation = numInt(u["cache_creation_tokens"])
 	out.contextWindow = numInt(u["context_window"])
+	if raw, ok := u["breakdown"].([]any); ok {
+		for _, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			key, _ := m["key"].(string)
+			tokens := numInt(m["tokens"])
+			if key == "" || tokens <= 0 {
+				continue
+			}
+			out.breakdown = append(out.breakdown, usageSection{key: key, tokens: tokens})
+		}
+	}
 	return out, true
 }
 
@@ -140,6 +167,33 @@ func (u usageInfo) percent() string {
 	return compactTokens(u.total)
 }
 
+// share is a slice's tokens as a percentage of the window, or the raw count when
+// the window is unknown.
+func (u usageInfo) share(tokens int) string {
+	if u.contextWindow > 0 && tokens > 0 {
+		return formatPercent(float64(tokens)/float64(u.contextWindow)*100) + "%"
+	}
+	return compactTokens(tokens)
+}
+
+// cacheFooter is the detail panel's closing line: cache hit and the window size.
+func (u usageInfo) cacheFooter() string {
+	var parts []string
+	if u.hasCache {
+		parts = append(parts, "cache "+formatPercent(u.cacheHitPct)+"%")
+	}
+	if u.cacheRead > 0 {
+		parts = append(parts, "read "+compactTokens(u.cacheRead))
+	}
+	if u.cacheCreation > 0 {
+		parts = append(parts, "write "+compactTokens(u.cacheCreation))
+	}
+	if u.contextWindow > 0 {
+		parts = append(parts, "window "+compactTokens(u.contextWindow))
+	}
+	return strings.Join(parts, " · ")
+}
+
 // footer is the dim label a response carries at its end: occupancy plus the
 // round's input/output split and cache hit.
 func (u usageInfo) footer() string {
@@ -154,4 +208,99 @@ func (u usageInfo) footer() string {
 		parts = append(parts, "cache "+formatPercent(u.cacheHitPct)+"%")
 	}
 	return strings.Join(parts, " · ")
+}
+
+// ── Detail panel ──
+
+// usageGroupDefs is the WebUI's grouping of the worker's fine-grained breakdown
+// keys (per tool source, per message kind) into the rows worth showing, in order.
+var usageGroupDefs = []struct {
+	label string
+	keys  []string
+}{
+	{"system", []string{"system"}},
+	{"program", []string{"program.instructions", "program.playbooks"}},
+	{"tools", []string{"tools.builtin", "tools.program", "tools.mcp", "tools.workers", "tools.other"}},
+	{"messages", []string{"messages.user", "messages.assistant"}},
+	{"tool calls", []string{"messages.tool_calls", "messages.tool_results"}},
+	{"thinking", []string{"messages.thinking"}},
+	{"output", []string{"output"}},
+}
+
+// usageGroup is one legend row: a label and the tokens attributed to it.
+type usageGroup struct {
+	label  string
+	tokens int
+}
+
+// groups aggregates the fine-grained breakdown into the display rows, dropping
+// empty ones.
+func (u usageInfo) groups() []usageGroup {
+	sum := make(map[string]int, len(u.breakdown))
+	for _, s := range u.breakdown {
+		sum[s.key] += s.tokens
+	}
+	var out []usageGroup
+	for _, d := range usageGroupDefs {
+		t := 0
+		for _, k := range d.keys {
+			t += sum[k]
+		}
+		if t > 0 {
+			out = append(out, usageGroup{label: d.label, tokens: t})
+		}
+	}
+	return out
+}
+
+// usageCard lays the detail out as a modal card.
+func (c *chat) usageCard() ([]string, int) {
+	worker := c.usageWorker
+	u, ok := c.usageFor(worker)
+	title := "context"
+	var body []string
+	if !ok {
+		body = append(body, dim("no usage reported for this worker yet"))
+		return ui.Dialog{Title: title, Footer: "esc or click outside", Body: body}.Lines(c.width, c.height)
+	}
+
+	title = "context · " + c.workerDisplay(worker)
+	headline := brandBold(u.percent())
+	if u.contextWindow > 0 {
+		headline += dim(fmt.Sprintf("  %s / %s", compactTokens(u.total), compactTokens(u.contextWindow)))
+	} else {
+		headline += dim("  " + compactTokens(u.total) + " tokens")
+	}
+	body = append(body, headline, "")
+
+	if groups := u.groups(); len(groups) > 0 {
+		for _, g := range groups {
+			label := fmt.Sprintf("%-12s", g.label)
+			body = append(body, label+fmt.Sprintf("%7s", compactTokens(g.tokens))+"  "+dim(fmt.Sprintf("%6s", u.share(g.tokens))))
+		}
+	} else {
+		body = append(body, dim("no breakdown reported"))
+	}
+
+	if footer := u.cacheFooter(); footer != "" {
+		body = append(body, "", dim(footer))
+	}
+	return ui.Dialog{Title: title, Footer: "esc or click outside", Body: body}.Lines(c.width, c.height)
+}
+
+// paintUsage overlays the detail card on the frame and records its block, so a
+// click outside it closes it.
+func (c *chat) paintUsage(rows []string) {
+	card, boxW := c.usageCard()
+	c.cardRect = ui.PaintCard(rows, card, boxW, c.width)
+}
+
+// openUsage raises the detail card for the dock's bound worker.
+func (c *chat) openUsage() {
+	w := c.contextWorker()
+	if w == "" {
+		return
+	}
+	c.usageWorker = w
+	c.usagePanel = true
 }

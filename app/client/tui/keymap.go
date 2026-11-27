@@ -11,29 +11,87 @@ import (
 
 // handleKey applies one keystroke. It returns true when the user asked to leave.
 func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyResult) bool {
+	if c.palette != menuNone {
+		// The inline slash-command list owns the keys: it moves, commits or cancels,
+		// and the composer beneath it stays untouched until a choice is applied.
+		switch p.Kind {
+		case pressTerminal:
+			c.reportTerminal(p)
+			return false
+		case pressInterrupt:
+			return true
+		case pressEsc:
+			c.closePalette()
+			if c.in != nil {
+				c.in.clear()
+			}
+			return false
+		case pressUp, pressLineUp, pressPrevUser:
+			c.movePalette(-1)
+			return false
+		case pressDown, pressLineDown, pressNextUser:
+			c.movePalette(+1)
+			return false
+		case pressTab:
+			c.movePalette(+1)
+			return false
+		case pressBacktab:
+			c.movePalette(-1)
+			return false
+		case pressEnter:
+			c.applyPalette(ctx)
+			return false
+		case pressRune:
+			switch p.R {
+			case 'k':
+				c.movePalette(-1)
+			case 'j':
+				c.movePalette(+1)
+			}
+			return false
+		}
+		return false
+	}
 	if c.help {
 		// The help page is dismissed by any key except a click inside it: closing a
 		// page should never tear down the conversation. Pressing ctrl+c twice (once to
 		// close, once to leave) is the cost of that, and it beats losing the chat.
-		switch p.kind {
+		switch p.Kind {
 		case pressTerminal:
 			c.reportTerminal(p)
 			return false
 		case pressPaste, pressWheelUp, pressWheelDown, pressDrag, pressRelease, pressOther:
 			return false
 		case pressClick:
-			if c.cardRect.contains(p.x-1, p.y-1) {
+			if c.cardRect.Contains(p.X-1, p.Y-1) {
 				return false
 			}
 		}
 		c.help = false
 		return false
 	}
+	if c.usagePanel {
+		// The usage detail is a read-only card: any key closes it, a click outside it
+		// too, and a click inside it keeps it up (so a drag to copy does not dismiss).
+		switch p.Kind {
+		case pressTerminal:
+			c.reportTerminal(p)
+			return false
+		case pressPaste, pressWheelUp, pressWheelDown, pressDrag, pressRelease, pressOther:
+			return false
+		case pressClick:
+			if c.cardRect.Contains(p.X-1, p.Y-1) {
+				return false
+			}
+		}
+		c.usagePanel = false
+		return false
+	}
 	if c.menu != menuNone {
-		if p.kind == pressClick {
-			x, y := p.x-1, p.y-1
+		if p.Kind == pressClick {
+			x, y := p.X-1, p.Y-1
 			// A click outside the card closes the list, like every other popup.
-			if !c.cardRect.contains(x, y) {
+			if !c.cardRect.Contains(x, y) {
 				c.closeMenu()
 				return false
 			}
@@ -52,33 +110,39 @@ func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyR
 			return false
 		}
 		switch {
-		case p.kind == pressInterrupt:
+		case p.Kind == pressInterrupt:
 			return true
-		case p.kind == pressEsc:
+		case p.Kind == pressEsc:
 			c.closeMenu()
-		case (p.kind == pressTarget && c.menu == menuTarget) ||
-			(p.kind == pressView && c.menu == menuView) ||
-			(p.kind == pressMode && c.menu == menuMode):
+		case (p.Kind == pressTarget && c.menu == menuTarget) ||
+			(p.Kind == pressView && c.menu == menuView) ||
+			(p.Kind == pressMode && c.menu == menuMode):
 			// The key that opened a list closes it again.
 			c.closeMenu()
-		case p.kind == pressUp || (p.kind == pressRune && p.r == 'k'):
+		case p.Kind == pressUp || (p.Kind == pressRune && p.R == 'k'):
 			c.moveMenu(-1)
-		case p.kind == pressDown || (p.kind == pressRune && p.r == 'j'):
+		case p.Kind == pressDown || (p.Kind == pressRune && p.R == 'j'):
 			c.moveMenu(+1)
-		case p.kind == pressTab:
+		case p.Kind == pressTab:
 			c.moveMenu(+1)
-		case p.kind == pressBacktab:
+		case p.Kind == pressBacktab:
 			c.moveMenu(-1)
-		case p.kind == pressEnter:
+		case p.Kind == pressEnter:
 			c.applyMenu(ctx)
 		}
+		return false
+	}
+
+	// The slash-command menu owns navigation, commit and cancel while the draft is
+	// a /command, but lets typing through so the composer keeps filtering it.
+	if c.handleCommandKey(ctx, p) {
 		return false
 	}
 
 	// Tab / Shift+Tab move keyboard focus across the rule's clickable buttons; while
 	// one is focused, Enter activates it (instead of sending or scrolling). Any
 	// other key drops the focus and is handled normally, so typing resumes.
-	switch p.kind {
+	switch p.Kind {
 	case pressTab:
 		c.cycleFocus(+1)
 		return false
@@ -87,16 +151,19 @@ func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyR
 		return false
 	}
 	if c.focus != hintNone {
-		switch p.kind {
+		switch p.Kind {
 		case pressEsc:
 			c.focus = hintNone
 			return false
 		case pressEnter:
 			act := c.focus
 			c.focus = hintNone
-			if act == hintModelPick {
+			switch act {
+			case hintModelPick:
 				c.openModelMenu(ctx)
-			} else {
+			case hintUsagePick:
+				c.openUsage()
+			default:
 				c.activateHint(act)
 			}
 			return false
@@ -104,7 +171,7 @@ func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyR
 		c.focus = hintNone
 	}
 
-	switch p.kind {
+	switch p.Kind {
 	case pressInterrupt:
 		return true
 	case pressEsc:
@@ -122,10 +189,10 @@ func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyR
 		c.openMenu(menuTarget)
 		return false
 	case pressWheelUp:
-		c.vp.scrollLines(-wheelStep)
+		c.vp.ScrollLines(-wheelStep)
 		c.maybeLoadOlder(ctx, histories)
 	case pressWheelDown:
-		c.vp.scrollLines(wheelStep)
+		c.vp.ScrollLines(wheelStep)
 	case pressClick:
 		// Every segment of the rule is a popup: target, view, input mode, vim mode
 		// and help. The model on the context line under the composer is a popup too
@@ -133,23 +200,27 @@ func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyR
 		// picks the mode by where it landed: the transcript is normal, the composer
 		// insert.
 		c.sel.clear()
-		if y, x := p.y-1, p.x-1; y == c.ctxRow && x >= c.ctxModelX0 && x < c.ctxModelX1 {
+		if y, x := p.Y-1, p.X-1; y == c.ctxRow && x >= c.ctxModelX0 && x < c.ctxModelX1 {
 			c.openModelMenu(ctx)
 			return false
 		}
-		if act, ok := c.hintAction(p.y-1, p.x-1); ok {
+		if y, x := p.Y-1, p.X-1; y == c.ctxRow && c.ctxPctX0 >= 0 && x >= c.ctxPctX0 && x < c.ctxPctX1 {
+			c.openUsage()
+			return false
+		}
+		if act, ok := c.hintAction(p.Y-1, p.X-1); ok {
 			c.focus = hintNone
 			c.activateHint(act)
 			return false
 		}
-		if pt, ok := c.cellAt(p.y-1, p.x-1); ok {
+		if pt, ok := c.cellAt(p.Y-1, p.X-1); ok {
 			c.sel.begin(pt)
 			c.normal = true
 		} else {
 			c.normal = false
 		}
 	case pressDrag:
-		c.dragTo(ctx, p.y-1, p.x-1, histories)
+		c.dragTo(ctx, p.Y-1, p.X-1, histories)
 	case pressRelease:
 		if !c.sel.active {
 			return false
@@ -159,11 +230,12 @@ func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyR
 			return false
 		}
 		if text := selectionText(c.lines, &c.sel); text != "" {
-			c.scr.copyToClipboard(text)
+			c.scr.CopyToClipboard(text)
 			c.status = fmt.Sprintf("copied %d chars", utf8.RuneCountInString(text))
 		}
 	case pressPaste:
-		c.in.paste(p.text)
+		c.in.paste(p.Text)
+		c.cmdCur = 0
 	case pressTerminal:
 		c.reportTerminal(p)
 	case pressMode:
@@ -185,7 +257,7 @@ func (c *chat) handleKey(ctx context.Context, p press, histories chan<- historyR
 // reportTerminal applies a terminal colour/scheme report. A change means every
 // painted line is stale, so the transcript is rebuilt.
 func (c *chat) reportTerminal(p press) {
-	if terminalReport(p.text) {
+	if terminalReport(p.Text) {
 		c.linesDirty = true
 	}
 }
@@ -218,27 +290,30 @@ func (c *chat) activateHint(act hintAct) {
 // Paging stays available (ctrl+u/d are the classic pair), so the composer keeps
 // the reading keys too.
 func (c *chat) insertKey(ctx context.Context, p press, histories chan<- historyResult) {
-	switch p.kind {
+	switch p.Kind {
 	case pressEnter:
 		c.sendDraft(ctx)
 	case pressPageUp:
-		c.nudge(c.vp.pageUp, -1)
+		c.nudge(c.vp.PageUp, -1)
 		c.maybeLoadOlder(ctx, histories)
 	case pressPageDown:
-		c.nudge(c.vp.pageDown, +1)
+		c.nudge(c.vp.PageDown, +1)
 	case pressLineUp:
-		c.nudge(c.vp.lineUp, -1)
+		c.nudge(c.vp.LineUp, -1)
 		c.maybeLoadOlder(ctx, histories)
 	case pressLineDown:
-		c.nudge(c.vp.lineDown, +1)
+		c.nudge(c.vp.LineDown, +1)
 	case pressNewline:
 		c.in.ed.newline()
 	case pressRune:
-		c.in.insert(p.r)
+		c.in.insert(p.R)
+		c.cmdCur = 0
 	case pressBackspace:
 		c.in.ed.backspace()
+		c.cmdCur = 0
 	case pressDelete:
 		c.in.ed.delete()
+		c.cmdCur = 0
 	case pressLeft:
 		c.in.ed.left()
 	case pressRight:
@@ -246,6 +321,10 @@ func (c *chat) insertKey(ctx context.Context, p press, histories chan<- historyR
 	case pressUp:
 		c.in.ed.up()
 	case pressDown:
+		c.in.ed.down()
+	case pressPrevUser:
+		c.in.ed.up()
+	case pressNextUser:
 		c.in.ed.down()
 	case pressHome:
 		c.in.ed.home()
@@ -255,12 +334,15 @@ func (c *chat) insertKey(ctx context.Context, p press, histories chan<- historyR
 		c.in.killEnd()
 	case pressKillWord:
 		c.in.killWord()
+	case pressKillStart:
+		c.in.killStart()
+		c.cmdCur = 0
 	case pressYank:
 		c.in.yank()
 	case pressHelp:
 		c.help = true
 	case pressAlt:
-		switch p.r {
+		switch p.R {
 		case 'b':
 			c.in.ed.wordLeft()
 		case 'f':
@@ -273,21 +355,21 @@ func (c *chat) insertKey(ctx context.Context, p press, histories chan<- historyR
 // so keys scroll and navigate, and nothing types. This is the vim half of the two
 // modes; insertKey is the other.
 func (c *chat) normalKey(ctx context.Context, p press, histories chan<- historyResult) {
-	switch p.kind {
+	switch p.Kind {
 	case pressEnter, pressDown, pressLineDown:
-		c.nudge(c.vp.lineDown, +1)
+		c.nudge(c.vp.LineDown, +1)
 	case pressRune:
-		switch p.r {
+		switch p.R {
 		case 'j':
-			c.nudge(c.vp.lineDown, +1)
+			c.nudge(c.vp.LineDown, +1)
 		case 'k':
-			c.nudge(c.vp.lineUp, -1)
+			c.nudge(c.vp.LineUp, -1)
 			c.maybeLoadOlder(ctx, histories)
 		case 'g':
-			c.vp.toTop()
+			c.vp.ToTop()
 			c.maybeLoadOlder(ctx, histories)
 		case 'G':
-			c.vp.followBottom()
+			c.vp.FollowBottom()
 		case 'i', 'a':
 			c.normal = false
 		case '?':
@@ -298,29 +380,72 @@ func (c *chat) normalKey(ctx context.Context, p press, histories chan<- historyR
 			c.flash("normal mode · press i to type")
 		}
 	case pressUp, pressLineUp:
-		c.nudge(c.vp.lineUp, -1)
+		c.nudge(c.vp.LineUp, -1)
 		c.maybeLoadOlder(ctx, histories)
+	case pressPrevUser:
+		c.jumpUser(ctx, histories, -1)
+	case pressNextUser:
+		c.jumpUser(ctx, histories, +1)
 	case pressPageUp, pressLeft: // ctrl+u / ctrl+b / pgup
-		c.nudge(c.vp.pageUp, -1)
+		c.nudge(c.vp.PageUp, -1)
 		c.maybeLoadOlder(ctx, histories)
 	case pressPageDown, pressRight: // ctrl+d / ctrl+f / pgdn
-		c.nudge(c.vp.pageDown, +1)
+		c.nudge(c.vp.PageDown, +1)
 	case pressHome: // ctrl+a
-		c.vp.toTop()
+		c.vp.ToTop()
 		c.maybeLoadOlder(ctx, histories)
 	case pressEnd: // ctrl+e, as in vim: one line down
-		c.nudge(c.vp.lineDown, +1)
+		c.nudge(c.vp.LineDown, +1)
 	case pressYank: // ctrl+y, as in vim: one line up
-		c.nudge(c.vp.lineUp, -1)
+		c.nudge(c.vp.LineUp, -1)
 		c.maybeLoadOlder(ctx, histories)
 	case pressHelp: // ctrl+? (or ? below)
 		c.help = true
 	case pressAlt:
 		// `esc` then `?` inside the 40 ms ESC window arrives as alt+?; normal mode has
 		// no alt bindings, so read it as the help key the user meant to press.
-		if p.r == '?' {
+		if p.R == '?' {
 			c.help = true
 		}
+	}
+}
+
+// jumpUser scrolls so the next (dir>0) or previous (dir<0) user message is at the
+// top of the view. Ctrl+N / Ctrl+P drive it in normal mode — the fast way to move
+// between turns of a long conversation.
+func (c *chat) jumpUser(ctx context.Context, histories chan<- historyResult, dir int) {
+	if len(c.userLines) == 0 {
+		c.flash("no messages")
+		return
+	}
+	top := c.vp.First()
+	target := -1
+	if dir > 0 {
+		for _, ln := range c.userLines {
+			if ln > top {
+				target = ln
+				break
+			}
+		}
+	} else {
+		for i := len(c.userLines) - 1; i >= 0; i-- {
+			if c.userLines[i] < top {
+				target = c.userLines[i]
+				break
+			}
+		}
+	}
+	if target < 0 {
+		if dir > 0 {
+			c.flash("last message")
+		} else {
+			c.flash("first message")
+		}
+		return
+	}
+	c.vp.ScrollTo(target)
+	if dir < 0 {
+		c.maybeLoadOlder(ctx, histories)
 	}
 }
 
@@ -328,13 +453,13 @@ func (c *chat) normalKey(ctx context.Context, p press, histories chan<- historyR
 // rule. A pager key that silently does nothing reads as a broken key, and the
 // usual reason is that the whole transcript already fits on screen.
 func (c *chat) nudge(move func(), dir int) {
-	before := c.vp.first()
+	before := c.vp.First()
 	move()
-	if c.vp.first() != before {
+	if c.vp.First() != before {
 		return
 	}
 	switch {
-	case c.vp.maxTop() == 0:
+	case c.vp.MaxTop() == 0:
 		c.flash("everything fits the screen")
 	case dir < 0:
 		c.flash("top")

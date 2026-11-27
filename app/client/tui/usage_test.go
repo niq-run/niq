@@ -148,7 +148,7 @@ func TestModelClickOpensPicker(t *testing.T) {
 		t.Fatalf("context line not drawn: row=%d x0=%d", c.ctxRow, c.ctxModelX0)
 	}
 	// press coordinates are 1-based.
-	c.handleKey(context.Background(), press{kind: pressClick, x: c.ctxModelX0 + 1, y: c.ctxRow + 1}, nil)
+	c.handleKey(context.Background(), press{Kind: pressClick, X: c.ctxModelX0 + 1, Y: c.ctxRow + 1}, nil)
 	if c.menu != menuModel {
 		t.Fatalf("click on model opened menu %v, want menuModel", c.menu)
 	}

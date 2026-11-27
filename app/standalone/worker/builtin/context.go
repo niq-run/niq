@@ -2,6 +2,7 @@ package builtin
 
 import (
 	providerpkg "github.com/niq-run/niq/app/standalone/provider"
+	"github.com/niq-run/niq/app/standalone/vault"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/workerctl"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -38,4 +39,8 @@ type BuildContext struct {
 	// WorkerBackend is the control plane the host worker drives: the same
 	// instance the assembly uses for recovery and shutdown.
 	WorkerBackend coreworker.Backend
+	// Secrets resolves `env:` / `file:` (and, later, `vault:`) credential
+	// references for a builder. Injected so a dedicated provider can replace the
+	// default without changing worker code; nil means the env/file default.
+	Secrets vault.Provider
 }

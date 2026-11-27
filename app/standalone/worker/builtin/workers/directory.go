@@ -46,7 +46,7 @@ func buildDirectorySpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (
 }
 
 // ── spawn contract ──
-var spawnParamsDirectory = []string{"readme", "readme_append"}
+var spawnParamsDirectory = []builtin.ParamSpec{{Name: "readme"}, {Name: "readme_append"}}
 
 func registerDirectory(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("directory", spawnParamsDirectory, ctx, buildDirectorySpec)

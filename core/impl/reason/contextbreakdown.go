@@ -67,10 +67,12 @@ var breakdownOrder = []string{
 }
 
 // contextSection is one line of the breakdown: a stable key plus the estimated
-// tokens the prompt spends on it.
+// tokens the prompt spends on it. Fields are exported and tagged because the
+// section list is part of the persisted worker state (and of the context.status
+// reply), not just a transient value.
 type contextSection struct {
-	key    string
-	tokens int
+	Key    string `json:"key"`
+	Tokens int    `json:"tokens"`
 }
 
 // contextBreakdown sizes the parts of a built request. Called once per round
@@ -112,7 +114,7 @@ func (w *BaseReasonWorker) contextBreakdown(c *llm.Context) []contextSection {
 	out := make([]contextSection, 0, len(sections))
 	for _, key := range breakdownOrder {
 		if n := sections[key]; n > 0 {
-			out = append(out, contextSection{key: key, tokens: n})
+			out = append(out, contextSection{Key: key, Tokens: n})
 		}
 	}
 	return out
@@ -174,7 +176,7 @@ func messageSectionKey(kind transcript.Kind) string {
 func scaleBreakdown(sections []contextSection, input, output int) []map[string]any {
 	var estimated int
 	for _, s := range sections {
-		estimated += s.tokens
+		estimated += s.Tokens
 	}
 	if estimated <= 0 {
 		return nil
@@ -186,7 +188,7 @@ func scaleBreakdown(sections []contextSection, input, output int) []map[string]a
 	tokens := make([]int, len(sections))
 	sum, largest := 0, 0
 	for i, s := range sections {
-		t := int(math.Round(float64(s.tokens) * scale))
+		t := int(math.Round(float64(s.Tokens) * scale))
 		if t < 1 {
 			t = 1
 		}
@@ -209,7 +211,7 @@ func scaleBreakdown(sections []contextSection, input, output int) []map[string]a
 		if tokens[i] <= 0 {
 			continue
 		}
-		out = append(out, map[string]any{"key": s.key, "tokens": tokens[i]})
+		out = append(out, map[string]any{"key": s.Key, "tokens": tokens[i]})
 	}
 	if output > 0 {
 		out = append(out, map[string]any{"key": "output", "tokens": output})

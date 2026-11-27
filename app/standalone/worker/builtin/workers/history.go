@@ -47,7 +47,10 @@ func buildHistorySpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (co
 }
 
 // ── spawn contract ──
-var spawnParamsHistory = []string{"max_list_events", "max_list_item_bytes", "readme", "readme_append"}
+var spawnParamsHistory = []builtin.ParamSpec{
+	{Name: "max_list_events"}, {Name: "max_list_item_bytes"},
+	{Name: "readme"}, {Name: "readme_append"},
+}
 
 func registerHistory(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("history", spawnParamsHistory, ctx, buildHistorySpec)

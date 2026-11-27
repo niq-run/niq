@@ -14,6 +14,7 @@ import type {
   ProviderListResult,
   ProviderSwitchResult,
   PublishPattern,
+  WorkerContextStatus,
   WorkerInfo,
 } from '../types'
 
@@ -136,6 +137,42 @@ export async function fetchProviders(): Promise<any> {
   const res = await fetch(CONTROL + '/api/providers')
   if (!res.ok) throw new Error('fetch providers failed: ' + res.status)
   return res.json()
+}
+
+// ── Vault ──
+//
+// The credential store is shared by every project (standalone level), so these
+// calls go to the control plane. The list endpoint NEVER returns a value: the
+// UI shows that an entry exists and lets the user replace it.
+
+export interface VaultEntry {
+  name: string
+  size: number
+  updated_at: string
+}
+
+export async function fetchVault(): Promise<{ entries: VaultEntry[] }> {
+  const res = await fetch(CONTROL + '/api/vault')
+  if (!res.ok) throw new Error('fetch vault failed: ' + res.status)
+  return res.json()
+}
+
+export async function putVault(name: string, value: string): Promise<void> {
+  const res = await fetch(CONTROL + '/api/vault/' + encodeURIComponent(name).replace(/%2F/gi, '/'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  })
+  if (!res.ok) throw new Error((await res.text()) || 'save credential failed: ' + res.status)
+}
+
+export async function deleteVault(name: string): Promise<void> {
+  const res = await fetch(CONTROL + '/api/vault/' + encodeURIComponent(name).replace(/%2F/gi, '/'), {
+    method: 'DELETE',
+  })
+  if (!res.ok && res.status !== 404) {
+    throw new Error((await res.text()) || 'delete credential failed: ' + res.status)
+  }
 }
 
 // providersUsable mirrors provider.Configured on the backend: at least one
@@ -420,6 +457,15 @@ export async function sendWorkerEvent(
 export async function fetchWorkerProviders(id: string, signal?: AbortSignal): Promise<ProviderListResult> {
   const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/providers`), { signal })
   if (!res.ok) throw new Error((await res.text()).trim() || 'providers failed: ' + res.status)
+  return res.json()
+}
+
+// fetchWorkerContext asks a reason worker for its context state over the bus
+// (context.status): the last round's usage and cache accounting, the prompt's
+// composition, the live transcript size and the compression budgets.
+export async function fetchWorkerContext(id: string, signal?: AbortSignal): Promise<WorkerContextStatus> {
+  const res = await fetch(p(`/api/workers/${encodeURIComponent(id)}/context`), { signal })
+  if (!res.ok) throw new Error((await res.text()).trim() || 'context failed: ' + res.status)
   return res.json()
 }
 

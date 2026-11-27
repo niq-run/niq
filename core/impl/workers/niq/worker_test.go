@@ -3,6 +3,8 @@ package niq
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -101,9 +103,11 @@ func (nopSub) Close() {}
 
 // host captures tool replies.
 type host struct {
-	mu   sync.Mutex
-	reps []map[string]any
-	fail []string
+	mu       sync.Mutex
+	reps     []map[string]any
+	fail     []string
+	patches  []map[string]any
+	patchErr error
 }
 
 func (h *host) Register(baseworker.Extension, baseworker.ExtensionHandler) {}
@@ -117,6 +121,20 @@ func (h *host) ReplyFailed(_, callID, msg, _ string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.fail = append(h.fail, msg)
+}
+
+// PatchConfig records the merge patch the backend asked to persist. patchErr
+// simulates a host whose declaration write fails.
+func (h *host) PatchConfig(patch map[string]any) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.patchErr != nil {
+		return h.patchErr
+	}
+	if patch != nil {
+		h.patches = append(h.patches, patch)
+	}
+	return nil
 }
 
 // newBackend builds a backend with the given seeds and a wired local handle.
@@ -344,6 +362,109 @@ func TestDialRepointsAndReports(t *testing.T) {
 	if msg, _ := h.reps[0]["result"].(string); !strings.Contains(msg, "dialing") {
 		t.Fatalf("dial reply = %v", h.reps[0]["result"])
 	}
+}
+
+// TestDialPersistsTarget verifies that a repoint is persisted by default: the
+// changed keys reach the worker's declaration writer, and the reply says saved.
+func TestDialPersistsTarget(t *testing.T) {
+	b, _ := newBackend(t, Config{
+		ID: "niq-a", RemoteURL: "http://a", RemoteWorkerID: "id-a", RemoteCredential: "old",
+	})
+	h := &host{}
+
+	evt := event.New(TypeDial, "reason.x", map[string]any{"remote_url": "http://b", "remote_credential": "new"})
+	evt.RequestId = "dial-1"
+	b.handleDial(baseworker.ParseToolCall(evt), h)
+
+	if len(h.patches) != 1 {
+		t.Fatalf("patches = %+v, want one", h.patches)
+	}
+	// Only the changed keys are sent: a merge patch, so other params survive.
+	want := map[string]any{"remote_url": "http://b", "remote_credential": "new"}
+	if len(h.patches[0]) != len(want) || h.patches[0]["remote_url"] != want["remote_url"] || h.patches[0]["remote_credential"] != want["remote_credential"] {
+		t.Fatalf("patch = %+v, want %+v", h.patches[0], want)
+	}
+	if tgt := b.currentTarget(); tgt.url != "http://b" || tgt.cred != "new" {
+		t.Fatalf("target = %+v, want the repointed values", tgt)
+	}
+	if msg, _ := h.reps[0]["result"].(string); !strings.Contains(msg, "saved") {
+		t.Fatalf("dial reply = %v, want it to mention saving", h.reps[0]["result"])
+	}
+}
+
+// TestDialPersistsCredentialReference keeps an `env:` reference a reference: a
+// repoint that only moves the URL must not turn the resolved token into
+// plaintext in the worker config.
+func TestDialPersistsCredentialReference(t *testing.T) {
+	b, _ := newBackend(t, Config{
+		ID: "niq-a", RemoteURL: "http://a", RemoteWorkerID: "id-a",
+		RemoteCredential:  "env:FAR_TOKEN",
+		ResolveCredential: func(raw string) string { return "resolved-" + raw },
+	})
+	h := &host{}
+
+	evt := event.New(TypeDial, "reason.x", map[string]any{"remote_url": "http://b"})
+	evt.RequestId = "dial-1"
+	b.handleDial(baseworker.ParseToolCall(evt), h)
+
+	if len(h.patches) != 1 || len(h.patches[0]) != 1 {
+		t.Fatalf("patch = %+v, want only remote_url", h.patches)
+	}
+	if _, ok := h.patches[0]["remote_credential"]; ok {
+		t.Fatalf("patch = %+v, must not restate the credential", h.patches[0])
+	}
+	if tgt := b.currentTarget(); tgt.credRaw != "env:FAR_TOKEN" || tgt.cred != "resolved-env:FAR_TOKEN" {
+		t.Fatalf("target = %+v, want the reference kept and resolved for dialing", tgt)
+	}
+}
+
+// TestDialSaveFailureLeavesTargetAlone: when the repoint cannot be persisted the
+// call fails and the old target stays in force, so memory and config never
+// disagree.
+func TestDialSaveFailureLeavesTargetAlone(t *testing.T) {
+	b, _ := newBackend(t, Config{ID: "niq-a", RemoteURL: "http://a", RemoteWorkerID: "id-a"})
+	h := &host{patchErr: errors.New("manifest is read-only")}
+
+	evt := event.New(TypeDial, "reason.x", map[string]any{"remote_url": "http://b"})
+	evt.RequestId = "dial-1"
+	b.handleDial(baseworker.ParseToolCall(evt), h)
+
+	if len(h.fail) != 1 || !strings.Contains(h.fail[0], "read-only") {
+		t.Fatalf("failures = %+v, want one reporting the save error", h.fail)
+	}
+	if tgt := b.currentTarget(); tgt.url != "http://a" {
+		t.Fatalf("target = %+v, want the old target kept", tgt)
+	}
+}
+
+// TestDialWithoutConfigStoreDegrades: an embedded host has no declaration
+// writer. The repoint still applies for this process, and the reply says it was
+// not saved instead of pretending it was.
+func TestDialWithoutConfigStoreDegrades(t *testing.T) {
+	b, _ := newBackend(t, Config{ID: "niq-a", RemoteURL: "http://a", RemoteWorkerID: "id-a"})
+	h := &unwiredHost{}
+
+	evt := event.New(TypeDial, "reason.x", map[string]any{"remote_url": "http://b"})
+	evt.RequestId = "dial-1"
+	b.handleDial(baseworker.ParseToolCall(evt), h)
+
+	if tgt := b.currentTarget(); tgt.url != "http://b" {
+		t.Fatalf("target = %+v, want the in-memory repoint to apply", tgt)
+	}
+	if len(h.reps) != 1 {
+		t.Fatalf("replies = %+v", h.reps)
+	}
+	if msg, _ := h.reps[0]["result"].(string); !strings.Contains(msg, "not saved") {
+		t.Fatalf("dial reply = %v, want it to report that nothing was saved", h.reps[0]["result"])
+	}
+}
+
+// unwiredHost is a host with no declaration writer: baseworker reports
+// ErrConfigUnavailable, which the backend treats as "memory only".
+type unwiredHost struct{ host }
+
+func (h *unwiredHost) PatchConfig(map[string]any) error {
+	return fmt.Errorf("%w", baseworker.ErrConfigUnavailable)
 }
 
 // TestLinkRetriesAndStopsCleanly verifies Start/Stop on the backend without a

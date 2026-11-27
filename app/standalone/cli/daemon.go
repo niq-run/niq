@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/niq-run/niq/app/client/tui"
+	"github.com/niq-run/niq/app/client/tui/picker"
 	"github.com/niq-run/niq/app/standalone/contract"
 	"github.com/niq-run/niq/app/standalone/gateway"
 	"github.com/niq-run/niq/app/standalone/helper"
@@ -538,7 +538,7 @@ func printProjectStatus(controlURL string) {
 	fmt.Println()
 	// The list reports state; acting on it is the picker's job, so the heading
 	// says where that is.
-	tui.PrintTable(views, url, bold("niq i")+dim(" to start, stop or restart one"))
+	picker.PrintTable(views, url, bold("niq i")+dim(" to start, stop or restart one"))
 }
 
 // openInBrowser is best-effort: the address is always printed, so a failed
@@ -554,7 +554,7 @@ func openInBrowser(url string) {
 func printShellStarted(st *shellState) {
 	printControlRunning(st)
 	printProjectStatus(store.LocalhostURL(st.Bound))
-	fmt.Printf("\n%s\n", dim("`niq -f` runs it in this terminal instead"))
+	fmt.Printf("\n%s\n", dim("`niq i` opens the interactive UI · `niq -f` runs it in this terminal"))
 }
 
 // logTail returns the last n lines of the control-plane log, so a failed start

@@ -112,10 +112,9 @@ func TestSpawnLiftsPlacementAndLaunchFields(t *testing.T) {
 		"id":        "fs",
 		"placement": "managed-process",
 		"command":   []any{"npx", "-y", "server-filesystem"},
-		"TOKEN":     "env:TOKEN",
 		"cwd":       "/tmp",
 		"label":     "文件系统",
-		"servers":   []any{},
+		"params":    map[string]any{"TOKEN": "env:TOKEN", "servers": []any{}},
 	})
 	if !ok {
 		t.Fatalf("spawn failed: %+v", reply.Payload)
@@ -156,7 +155,7 @@ func TestSpawnRepliesWithResolvedID(t *testing.T) {
 	be := &fakeBackend{resolved: "ws-derived"}
 	w := New(Config{ID: "host", Bus: ch, Engine: be})
 
-	reply, ok := call(t, w, ch, TypeSpawn, map[string]any{"type": "workspace", "path": "/tmp/x"})
+	reply, ok := call(t, w, ch, TypeSpawn, map[string]any{"type": "workspace", "params": map[string]any{"path": "/tmp/x"}})
 	if !ok {
 		t.Fatalf("spawn failed: %+v", reply.Payload)
 	}
@@ -302,10 +301,10 @@ func TestArchiveForwardsIntent(t *testing.T) {
 	}
 }
 
-// TestSpawnAcceptsNestedParams verifies the tool takes construction params either
-// flat (an agent) or under a `params` object (a UI form) — the flattening is the
-// tool's own input boundary, so no caller has to know spawn's shape.
-func TestSpawnAcceptsNestedParams(t *testing.T) {
+// TestSpawnTakesParamsObject verifies the type-specific arguments are read from
+// one `params` object — the shape the declaration, the update tool and the
+// create form already use — and that the wrapper is not re-nested into them.
+func TestSpawnTakesParamsObject(t *testing.T) {
 	ch := &recordingChannel{}
 	be := &fakeBackend{}
 	w := New(Config{ID: "host", Bus: ch, Engine: be})
@@ -319,7 +318,7 @@ func TestSpawnAcceptsNestedParams(t *testing.T) {
 	}
 	spec := be.created[0]
 	if spec.Params["goal"] != "watch the queue" || spec.Params["model"] != "m" {
-		t.Fatalf("params = %+v, want the nested object flattened", spec.Params)
+		t.Fatalf("params = %+v, want the params object", spec.Params)
 	}
 	// Control fields must not survive inside params.
 	if _, ok := spec.Params["params"]; ok {
@@ -327,26 +326,46 @@ func TestSpawnAcceptsNestedParams(t *testing.T) {
 	}
 }
 
-// TestSpawnRejectsParamCollidingWithLaunchField verifies a param cannot shadow a
-// control field: `id`/`placement`/`command` decide how the worker runs.
-func TestSpawnRejectsParamCollidingWithLaunchField(t *testing.T) {
+// TestSpawnRejectsFlatArguments verifies a caller that puts type-specific
+// arguments next to `type` is told where they belong, rather than spawning a
+// worker that silently ignored them. A control-field name inside `params` is
+// just a parameter there — it cannot shadow the real field.
+func TestSpawnRejectsFlatArguments(t *testing.T) {
 	ch := &recordingChannel{}
 	be := &fakeBackend{}
 	w := New(Config{ID: "host", Bus: ch, Engine: be})
 
-	for _, tc := range []map[string]any{
-		{"type": "reason", "id": "r1", "params": map[string]any{"id": "other"}},
-		{"type": "mcp", "id": "e1", "placement": "managed-process", "params": map[string]any{"placement": "in-process"}},
-		{"type": "reason", "params": map[string]any{"type": "workspace"}},
-	} {
-		if _, ok := call(t, w, ch, TypeSpawn, tc); ok {
-			t.Fatalf("collision accepted: %v", tc)
-		}
+	reply, ok := call(t, w, ch, TypeSpawn, map[string]any{
+		"type": "reason",
+		"id":   "r1",
+		"goal": "watch the queue",
+	})
+	if ok {
+		t.Fatalf("a flat argument was accepted: %+v", reply.Payload)
+	}
+	msg, _ := reply.Payload["error"].(string)
+	if !strings.Contains(msg, `"goal"`) || !strings.Contains(msg, `"params"`) {
+		t.Fatalf("error does not name the field and where it belongs: %q", msg)
 	}
 	if len(be.created) != 0 {
 		t.Fatalf("a rejected spawn reached the backend: %+v", be.created)
 	}
+
+	// A non-object params value is a mistake, not an empty bag.
 	if _, ok := call(t, w, ch, TypeSpawn, map[string]any{"type": "reason", "params": "nope"}); ok {
 		t.Fatal("a non-object params value was accepted")
+	}
+
+	// An `id` inside params is a parameter named id; it must not become the
+	// worker's identity.
+	if _, ok := call(t, w, ch, TypeSpawn, map[string]any{
+		"type":   "reason",
+		"id":     "r2",
+		"params": map[string]any{"id": "other"},
+	}); !ok {
+		t.Fatal("spawn failed")
+	}
+	if got := be.created[len(be.created)-1].ID; got != "r2" {
+		t.Fatalf("id = %q, want the top-level id", got)
 	}
 }

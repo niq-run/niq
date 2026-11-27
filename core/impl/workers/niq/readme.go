@@ -63,11 +63,17 @@ a remote worker — the far side neither knows nor needs to know this worker typ
 - niq.recipient.unset {} — clear this channel's recipient binding.
 - niq.recipient.get {} — the current local and remote recipient bindings.
 - niq.dial { remote_url?, remote_worker_id?, remote_credential? } — actively
-  (re)connect the link, optionally repointing the far-side target.
+  (re)connect the link, optionally repointing the far-side target. A repoint is
+  persistent: the changed keys are merged into this worker's config, so a
+  restart dials it again. Pass the credential as a reference ("env:NAME" /
+  "file:PATH") to keep the token out of the project files; it stays a reference
+  when saved.
 - niq.status {} — live link status: connected, far-side target, bindings.
 
 ## Notes
 
+- A repoint through niq.dial survives a restart. If it cannot be saved, the call
+  fails and the old target stays in force: memory and config never disagree.
 - A local worker.input is dropped while the far side has not set the remote
   recipient; set it there with niq.recipient.set, or seed it via config.
 - The far side's PublishAllow for this remote identity is the security boundary:

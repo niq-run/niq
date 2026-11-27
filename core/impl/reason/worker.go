@@ -381,6 +381,11 @@ type reasonState struct {
 	// re-mint an id still present in the restored history, and a result would
 	// then patch that old message instead of the new call's placeholder.
 	ToolCallSeq uint64 `json:"tool_call_seq"`
+	// ContextUsage is the last completed round's context accounting. It rides in
+	// the snapshot because the provider's numbers cannot be re-derived from the
+	// restored transcript — without it, context.status would report nothing
+	// until the worker's next round.
+	ContextUsage *contextUsage `json:"context_usage,omitempty"`
 }
 
 type providerSelection struct {
@@ -408,6 +413,7 @@ func (w *BaseReasonWorker) Snapshot() ([]byte, error) {
 	}
 	state.Requests = requests
 	state.ToolCallSeq = w.toolCallSeq
+	state.ContextUsage = w.contextUsage
 	// Only persist a selection the worker actually made; a worker left on its
 	// configured default stays on it (and picks up config changes to it).
 	if w.providerName != "" && w.providerModel != "" {
@@ -449,6 +455,7 @@ func (w *BaseReasonWorker) Restore(state []byte) error {
 		return err
 	}
 	w.toolCallSeq = s.ToolCallSeq
+	w.contextUsage = s.ContextUsage
 	// The tracker is bookkeeping, not memory: a corrupt blob must not keep the
 	// daemon from starting (Restore's error fails project recovery), and losing
 	// it only means late results go unmatched. The transcript is the opposite:
@@ -584,6 +591,10 @@ type BaseReasonWorker struct {
 	// prepareReasoning from the exact request that was sent and carried on the
 	// round's reason.response (see contextbreakdown.go). Guarded by w.mu.
 	roundBreakdown []contextSection
+	// contextUsage is the last completed round's accounting, carried into the
+	// snapshot so the state survives a restart (see contextstatus.go). Guarded
+	// by w.mu.
+	contextUsage *contextUsage
 }
 
 // workerTypeOrDefault returns the worker's announced type, defaulting to the

@@ -93,6 +93,12 @@ func ProviderConfigPath() string {
 // gateway runs, its address has already been decided and passed as --addr.
 func ConfigPath() string { return filepath.Join(Root(), "common", "config.json") }
 
+// VaultDir returns the shared credential store: <root>/common/vault.
+//
+// It sits next to providers/ on purpose: credentials are a user-level resource,
+// shared by every project, not a per-project file. One entry per name.
+func VaultDir() string { return filepath.Join(Root(), "common", "vault") }
+
 // SanitizeID keeps ids path-safe; an id is a directory name, not a path. The
 // rule itself lives in helper.SafeName, the one implementation every id that
 // becomes a directory name shares.

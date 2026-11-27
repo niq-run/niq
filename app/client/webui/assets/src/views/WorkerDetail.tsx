@@ -3,8 +3,9 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTheme, fontSizes } from '../theme'
 import { useI18n } from '../i18n'
-import { isReasonFamilyType, type WorkerInfo, type WorkerDetailTab, type ProviderOption, type ProviderSelection, type WatchEntry, type EventPayload } from '../types'
-import { getWorkerTypeColor } from '../components/talk-utils'
+import { isReasonFamilyType, type WorkerInfo, type WorkerDetailTab, type WorkerContextStatus, type ProviderOption, type ProviderSelection, type WatchEntry, type EventPayload } from '../types'
+import { getWorkerTypeColor, formatCompact } from '../components/talk-utils'
+import ContextUsageReport from '../components/ContextUsageReport'
 import SendEventForm from '../components/SendEventForm'
 import SelectDropdown from '../components/SelectDropdown'
 import DetailRow from '../components/DetailRow'
@@ -12,7 +13,7 @@ import CollapsibleCode from '../components/CollapsibleCode'
 import { makeMdComponents } from '../components/MarkdownComponents'
 import { PublishAllowRows, SubscribeAllowRows, type PublishRow, type SubscribeRow } from '../components/AllowEditors'
 import { formStyles } from '../components/Form'
-import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerMounts, mutateWorkerMount, sendWorkerEvent, fetchEventsByRequest, updateWorkerAllow, updateWorkerMeta, updateWorkerParams } from '../services/api'
+import { suspendWorker, resumeWorker, startWorker, stopWorker, restartWorker, deleteWorker, fetchWorkerProviders, switchWorkerProvider, fetchWorkerContext, fetchWorkerMounts, mutateWorkerMount, sendWorkerEvent, fetchEventsByRequest, updateWorkerAllow, updateWorkerMeta, updateWorkerParams } from '../services/api'
 
 interface WorkerDetailProps {
   worker: WorkerInfo
@@ -46,11 +47,27 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
     ? (declStopped ? t('worker.stopped') : suspended ? t('worker.suspended') : t('worker.running'))
     : '\u2014'
   const typeColor = worker.type ? getWorkerTypeColor(worker.type, colors) : colors.textDimmed
+  // Reason-family workers are the ones with context accounting and a
+  // switchable model, so they get the Context tab; other worker types keep the
+  // original four tabs.
+  const reasonFamily = isReasonFamilyType(worker.type)
+  const tabs: { key: WorkerDetailTab; label: string }[] = [
+    { key: 'info', label: t('wd.tab.info') },
+    { key: 'readme', label: t('wd.tab.readme') },
+    ...(reasonFamily ? [{ key: 'context' as WorkerDetailTab, label: t('wd.tab.context') }] : []),
+    { key: 'events', label: t('wd.sendEvent') },
+    { key: 'perms', label: t('wd.permissions') },
+  ]
   // Display metadata (label / tags / description) inline editing.
   const [editingMeta, setEditingMeta] = useState(false)
   const [metaNote, setMetaNote] = useState('')
-  // Tabs: Info / Readme / Send Event / Permissions.
-  const [tab, setTab] = useState<WorkerDetailTab>(initialTab ?? 'info')
+  // Tabs: Info / Readme / Context / Events / Permissions.
+  // A deep link that names a tab this worker does not have (a stale bookmark,
+  // or 'context' on a type that lost it) falls back to Info instead of landing
+  // on a panel with every card hidden.
+  const usableTab = (k: WorkerDetailTab | undefined): WorkerDetailTab =>
+    k === 'context' && !reasonFamily ? 'info' : (k ?? 'info')
+  const [tab, setTab] = useState<WorkerDetailTab>(usableTab(initialTab))
   const [draftLabel, setDraftLabel] = useState('')
   const [draftTags, setDraftTags] = useState('')
   const [draftDesc, setDraftDesc] = useState('')
@@ -245,10 +262,11 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
       {/* Scrollable content: a column of independent cards, each a bg block
           with a gap of bare page background between them (no separators). */}
       <div style={{ padding: 14 }}>
-        {/* Top tabs: Info / Actions / Events / Permissions. Each tab shows only
-            its own card(s); the rest are hidden via display. */}
+        {/* Top tabs: Info / Readme / Context / Events / Permissions (the Context
+            tab only for reason-family workers). Each tab shows only its own
+            card(s); the rest are hidden via display. */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-          {([['info', t('wd.tab.info')], ['readme', t('wd.tab.readme')], ['events', t('wd.sendEvent')], ['perms', t('wd.permissions')]] as const).map(([k, label]) => (
+          {tabs.map(({ key: k, label }) => (
             <span
               key={k}
               onClick={() => setTab(k)}
@@ -578,10 +596,14 @@ export default function WorkerDetail({ worker, allWorkers, watch, onClose, archi
 						<SendEventForm workerId={worker.id} watch={watch} />
 					</div>
 
-					{/* Model / Provider — only reason workers carry ProviderSources.
-							 Keyed by worker id so switching workers cannot leak one worker's
-								 provider state into another. */}
-					{isReasonFamilyType(worker.type) && tab === 'events' && <ProviderSection key={worker.id} workerId={worker.id} />}
+					{/* Model / Provider moved with the context report: this tab is the
+							 reason worker's "what am I running on, and how full is it" view. */}
+					{reasonFamily && tab === 'context' && (
+						<>
+							<ContextSection key={worker.id + '-context'} workerId={worker.id} />
+							<ProviderSection key={worker.id + '-provider'} workerId={worker.id} />
+						</>
+					)}
 
 					{/* Mounts — the workspace counterpart: the worker's mounted
 							 directories are its read/write boundary; list, mount and
@@ -681,6 +703,102 @@ function ReadmeSection({ workerId, supported }: { workerId: string; supported: b
         </div>
       ) : (
         <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.readme.empty')}</div>
+      )}
+    </div>
+  )
+}
+
+// ContextSection is the reason worker's context view: it asks the worker over the
+// bus for its context state (the context.status event) and renders the last
+// round's accounting — occupancy, the prompt's composition, cache, transcript
+// size and the compression budgets. Mounted by its tab, so the query fires when
+// the human opens the tab rather than on every worker selection.
+function ContextSection({ workerId }: { workerId: string }) {
+  const { colors } = useTheme()
+  const { t } = useI18n()
+  const [status, setStatus] = useState<WorkerContextStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [nonce, setNonce] = useState(0) // refresh trigger
+
+  useEffect(() => {
+    const ac = new AbortController()
+    setLoading(true)
+    setError('')
+    fetchWorkerContext(workerId, ac.signal)
+      .then((s) => setStatus(s))
+      .catch((e) => {
+        if ((e as Error)?.name === 'AbortError') return
+        setError((e as Error)?.message || 'failed to load context')
+      })
+      .finally(() => setLoading(false))
+    return () => ac.abort()
+  }, [workerId, nonce])
+
+  // Usage fields only exist once a round has completed; before that the state
+  // still has the window, transcript size and budgets.
+  const hasRound = !!status && typeof status.input_tokens === 'number'
+  const cache = status ? {
+    read: status.cache_read_tokens ?? 0,
+    creation: status.cache_creation_tokens ?? 0,
+    hitPercent: status.cache_hit_percent ?? 0,
+    reported: typeof status.cache_read_tokens === 'number',
+  } : undefined
+  const pct = (r: number) => Math.round(r * 100) + '%'
+
+  return (
+    <div style={{ padding: '12px 14px', background: colors.detailBg, borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: colors.detailLabel, fontSize: fontSizes.base, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          {t('wd.context.title')}
+        </span>
+        <span
+          onClick={() => setNonce((n) => n + 1)}
+          className="btn-hover"
+          style={{ cursor: 'pointer', color: colors.textDim, fontSize: fontSizes.sm, marginLeft: 'auto', userSelect: 'none', padding: '2px 8px', borderRadius: 4 }}
+        >
+          {t('wd.context.refresh')}
+        </span>
+        {loading && (
+          <span className="niq-spinner" style={{ width: 13, height: 13, borderWidth: 2, borderColor: colors.accent, borderTopColor: 'transparent' }} />
+        )}
+      </div>
+
+      {!status && loading && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: colors.textDimmed, fontSize: fontSizes.sm }}>
+          {t('wd.context.asking')}
+        </div>
+      )}
+
+      {error && <div style={{ color: colors.toolFailed, fontSize: fontSizes.sm }}>{error}</div>}
+
+      {status && (
+        <>
+          {hasRound ? (
+            <ContextUsageReport
+              contextWindow={status.context_window}
+              used={status.used_tokens ?? 0}
+              breakdown={status.breakdown ?? []}
+              cache={cache}
+            />
+          ) : (
+            <div style={{ color: colors.textDimmed, fontSize: fontSizes.sm }}>{t('wd.context.noRound')}</div>
+          )}
+
+          <div>
+            <DetailRow label={t('wd.context.transcript')} value={formatCompact(status.transcript_tokens)} colors={colors} />
+            <DetailRow label={t('wd.context.messages')} value={String(status.messages)} colors={colors} />
+            <DetailRow label={t('wd.context.rounds')} value={String(status.rounds)} colors={colors} />
+            <DetailRow label={t('wd.context.budgets')} value={pct(status.budget_soft) + ' / ' + pct(status.budget_hard)} colors={colors} />
+            {status.last_round_at ? (
+              <DetailRow
+                label={t('wd.context.lastRound')}
+                value={new Date(status.last_round_at * 1000).toLocaleString()}
+                colors={colors}
+              />
+            ) : null}
+          </div>
+        </>
       )}
     </div>
   )

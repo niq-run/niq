@@ -76,7 +76,7 @@ function TrailMarker({ workerId, usage, ctx }: { workerId: string; usage?: Usage
     setAnchor({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })
   }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, maxWidth: bubbleMax, margin: '2px 0 16px' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, width: '100%', maxWidth: bubbleMax, margin: '2px 0 16px' }}>
       {usage && (hasLeft || hasRight) && (
         <span
           ref={labelRef}
@@ -88,23 +88,28 @@ function TrailMarker({ workerId, usage, ctx }: { workerId: string; usage?: Usage
           role={canOpen ? 'button' : undefined}
           onClick={canOpen ? (e) => { e.stopPropagation(); if (anchor) setAnchor(null); else openPanel() } : undefined}
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: 8,
+            // The row's bubbleMax is the only cap: the label takes whatever the
+            // trailing badge leaves, instead of a second (percentage) cap that
+            // cut text while space was still unused.
+            display: 'inline-flex', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center',
+            columnGap: 12, rowGap: 2, textAlign: 'right',
             fontSize: fontSizes.xs, color: colors.textDimmed, userSelect: 'none',
             cursor: canOpen ? 'pointer' : undefined, borderRadius: 3, padding: '1px 4px',
-            // On phone the trailing label is one short line: the occupancy
-            // (window · percent) is what a glance needs, and the input/output/
-            // cache tail moves into the panel one tap away. Without a known
-            // window the right side is all there is, so it falls back to that.
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            maxWidth: isMobile ? 'calc(100vw - 96px)' : '60%',
-            flexShrink: 1, minWidth: 0,
+            minWidth: 0, flexShrink: 1,
           }}
         >
-          {hasLeft && <span>{usage.left}</span>}
-          {hasLeft && hasRight && !isMobile && (
-            <span aria-hidden style={{ width: 1, height: '0.6em', background: colors.textDimmed, opacity: 0.45, alignSelf: 'center', flexShrink: 0 }} />
+          {/* The two halves break onto separate lines when they cannot share
+              one; each only ellipsizes if it alone is wider than the row. */}
+          {hasLeft && (
+            <span style={{ minWidth: 0, flexShrink: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {usage.left}
+            </span>
           )}
-          {hasRight && (!isMobile || !hasLeft) && <span>{usage.right}</span>}
+          {hasRight && (!isMobile || !hasLeft) && (
+            <span style={{ minWidth: 0, flexShrink: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {usage.right}
+            </span>
+          )}
         </span>
       )}
       <WorkerBadge
