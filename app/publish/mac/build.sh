@@ -15,8 +15,9 @@ cd "$root"
 
 src=app/client/mac
 app=dist/niq.app
-min_macos=13.0
+min_macos=26.0
 zip_name=niq_mac_darwin_universal.zip
+srcs=$(find "$src/Sources" -name '*.swift')
 
 assemble() {
 	rm -rf "$app"
@@ -33,10 +34,12 @@ install_launcher() {
 
 case "${1:-build}" in
 build)
-	echo "app: building $app (swiftc)…"
+	echo "app: building $app (swiftc, SwiftUI)…"
 	assemble
-	swiftc -O -swift-version 5 -framework AppKit "$src/main.swift" \
-		-o "$app/Contents/MacOS/niq-mac"
+	swiftc -O -swift-version 5 -parse-as-library -target "arm64-apple-macos$min_macos" \
+		-framework SwiftUI -framework AppKit \
+		$srcs -o "$app/Contents/MacOS/niq-mac"
+	codesign --force --sign - --timestamp=none "$app"
 	install_launcher
 	echo "app: built — run: ./bin/miq"
 	;;
@@ -48,10 +51,10 @@ universal)
 	tmp=dist/.build
 	rm -rf "$tmp"
 	mkdir -p "$tmp"
-	swiftc -O -swift-version 5 -target "arm64-apple-macos$min_macos" -framework AppKit \
-		"$src/main.swift" -o "$tmp/niq-mac-arm64"
-	swiftc -O -swift-version 5 -target "x86_64-apple-macos$min_macos" -framework AppKit \
-		"$src/main.swift" -o "$tmp/niq-mac-x86_64"
+	swiftc -O -swift-version 5 -parse-as-library -target "arm64-apple-macos$min_macos" \
+		-framework SwiftUI -framework AppKit $srcs -o "$tmp/niq-mac-arm64"
+	swiftc -O -swift-version 5 -parse-as-library -target "x86_64-apple-macos$min_macos" \
+		-framework SwiftUI -framework AppKit $srcs -o "$tmp/niq-mac-x86_64"
 	lipo -create -output "$app/Contents/MacOS/niq-mac" \
 		"$tmp/niq-mac-arm64" "$tmp/niq-mac-x86_64"
 	rm -rf "$tmp"
