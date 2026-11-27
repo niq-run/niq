@@ -29,9 +29,10 @@ runner configuration this repository is not entitled to, and the job is cancelle
 before its first step with "The configuration 'macos-14-arm64-us-default' is not
 supported". `macos-latest` is what the CI workflow already uses.
 
-All three platforms built on the v0.18.0 tag; Windows and Linux produced their
-bundles on the first try, macOS needed this runner fix and a local
-`make dist-desktop UNIVERSAL=1` to fill in the `--universal` artifacts.
+All three platforms ship for v0.18.0, but not all three built on the tag: Windows
+and Linux produced their bundles there, while macOS was rejected by the runner
+before its first step and was built locally with `make dist-desktop UNIVERSAL=1`
+and attached by hand. That gap is why the shell now also builds in CI.
 
 ## What a release is
 
@@ -59,8 +60,9 @@ make dist-desktop UNIVERSAL=1            # arm64 + x86_64
 `release.sh --help` lists the flags. The script:
 
 1. optionally stamps the version into `tauri.conf.json` + `Cargo.toml`;
-2. stages the sidecar (`binaries/niq-<triple>`, or a lipo'd
-   `niq-universal-apple-darwin` for `--universal`);
+2. stages the sidecars (`binaries/niq-<triple>`; for `--universal`, both
+   architectures plus the lipo'd `niq-universal-apple-darwin` that the bundling
+   step copies in);
 3. runs `tauri build`;
 4. signs, and notarises + staples when credentials are present;
 5. copies the `.dmg` and a zipped `.app` into `dist/` with stable names.
@@ -73,7 +75,7 @@ make dist-desktop UNIVERSAL=1            # arm64 + x86_64
 2. **desktop** — a matrix over macOS / Windows / Linux, each running
    `app/publish/desktop/release.sh --version ${tag}` and attaching its artifacts
    to that release with `gh release upload`. `fail-fast: false`, so one platform
-   failing does not stop the others; re-run the failed job from the Actions tab.
+   failing does not stop the others.
 3. **npm** — publishes the packages from the CLI archives.
 
 Secrets the desktop job uses (all optional, see below):
@@ -82,7 +84,28 @@ Goreleaser creates the release first, so `gh release upload` has somewhere to pu
 the files; the desktop job therefore depends on it.
 
 The build logic is a shell script rather than inline workflow steps precisely so
-`make dist-desktop` and CI produce the same artifacts.
+`make dist-desktop` and CI produce the same artifacts. `.github/workflows/ci.yml`
+also builds the shell (on the paths that can break it) so a broken script is a red
+pull request rather than a broken tag.
+
+## Repairing a release whose desktop job failed
+
+Re-running the failed job from the Actions tab replays the workflow **as it was
+at the tag** — a fix to `release.sh`, to a runner label or to the toolchain cannot
+take effect there. Instead, run the **Desktop rebuild** workflow
+(`.github/workflows/desktop-rebuild.yml`, `workflow_dispatch`) with the tag and
+the platform: it checks the tag out (or a branch, via `ref`), runs the current
+build script, and uploads the artifacts to that release with `--clobber`. It never
+creates a release and never publishes the CLI or the npm packages, so it is safe
+against a release that is already out.
+
+The same thing by hand, from a checkout that has the fix:
+
+```sh
+./app/publish/desktop/release.sh --universal --version 0.18.0
+git checkout -- app/client/desktop/src-tauri/{tauri.conf.json,Cargo.toml,Cargo.lock}
+gh release upload v0.18.0 dist/niq-desktop_0.18.0_macos_universal.*
+```
 
 ## Signing and notarisation
 
