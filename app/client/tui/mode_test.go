@@ -2,11 +2,16 @@ package tui
 
 import (
 	"bufio"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/niq-run/niq/app/client/tui/layout"
 	"github.com/niq-run/niq/app/client/tui/screen"
+	"github.com/niq-run/niq/app/standalone/contract"
 )
 
 // TestModalModes pins the vim split: esc goes normal, i comes back, and in normal
@@ -208,14 +213,51 @@ func TestNormalModeEnterDoesNotSend(t *testing.T) {
 }
 
 // TestInsertModeEnterSends pins the other half: enter sends only in insert mode.
+// The send runs in its own goroutine, so the test waits for the result instead of
+// only checking that the draft was taken — a chat with no client also takes the
+// draft, and then panics inside that goroutine, which is not something to leave
+// resting on the process exiting first.
 func TestInsertModeEnterSends(t *testing.T) {
-	c := &chat{in: newInput(), vp: layout.Viewport{Follow: true}, seen: map[string]bool{}}
+	var sent contract.Input
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/api/input") {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+			t.Errorf("decode input: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := &chat{
+		client: contract.New(srv.URL), projectID: "p1", target: "niq",
+		in: newInput(), vp: layout.Viewport{Follow: true}, seen: map[string]bool{},
+		sends: make(chan sendResult, 1),
+	}
 	c.in.ed.setText("hi")
-	// A nil client would panic inside the send goroutine; the draft is cleared
-	// before it starts, which is what this asserts.
+
 	c.handleKey(t.Context(), press{Kind: pressEnter}, nil)
 	if !c.in.empty() {
 		t.Fatalf("insert-mode enter did not take the draft: %q", c.in.text())
+	}
+	select {
+	case res := <-c.sends:
+		if res.err != nil {
+			t.Fatalf("send failed: %v", res.err)
+		}
+		if res.text != "hi" {
+			t.Fatalf("sent %q, want the draft", res.text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("insert-mode enter did not send")
+	}
+	if len(sent.Content) != 1 || sent.Content[0].Type != "text" || sent.Content[0].Text != "hi" {
+		t.Fatalf("wire content = %+v", sent.Content)
+	}
+	if len(sent.Targets) != 1 || sent.Targets[0] != "niq" {
+		t.Fatalf("targets = %+v", sent.Targets)
 	}
 }
 
