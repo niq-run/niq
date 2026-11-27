@@ -37,6 +37,10 @@ type Registry struct {
 	builders map[string]workerctl.Builder
 	checks   map[string]func(params map[string]any) error
 	accepted map[string][]string
+	// secret names the params that carry a credential. Declaring it is how the
+	// write path knows to seal a literal into the vault instead of writing it to
+	// workers.json — a fact about the type, not a guess about a param's name.
+	secret map[string][]string
 }
 
 // NewRegistry returns an empty table.
@@ -45,6 +49,7 @@ func NewRegistry() *Registry {
 		builders: map[string]workerctl.Builder{},
 		checks:   map[string]func(map[string]any) error{},
 		accepted: map[string][]string{},
+		secret:   map[string][]string{},
 	}
 }
 
@@ -64,6 +69,25 @@ func (r *Registry) RegisterType(typ string, accepted []string, ctx BuildContext,
 	r.mu.Lock()
 	r.accepted[typ] = keys
 	r.mu.Unlock()
+}
+
+// MarkSecret declares which of a type's params carry a credential. The control
+// plane seals a literal value for these keys into the vault and stores only a
+// `vault:` reference, so a token never lands in workers.json.
+//
+// It is a separate call from RegisterType because most types have none, and a
+// long RegisterType signature would hide the one that does.
+func (r *Registry) MarkSecret(typ string, names ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.secret[typ] = append([]string(nil), names...)
+}
+
+// SecretParams returns the credential-bearing params of a type (empty when none).
+func (r *Registry) SecretParams(typ string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]string(nil), r.secret[typ]...)
 }
 
 // RegisterBuilder is the seam for types this package does not ship: tests and

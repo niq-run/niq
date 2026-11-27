@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/niq-run/niq/app/standalone/secret"
+	"github.com/niq-run/niq/app/standalone/vault"
 	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/core/impl/iface"
 	"github.com/niq-run/niq/core/impl/workers/niq"
@@ -39,7 +39,7 @@ func buildNIQSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (corewo
 	remoteRecipient, _ := p["remote_recipient"].(string)
 	// The secret provider is injected so a dedicated `vault:` implementation can
 	// replace the default env/file one without touching this builder.
-	var secrets secret.Provider = secret.Default{}
+	var secrets vault.Provider = vault.Fallback{}
 	if ctx.Secrets != nil {
 		secrets = ctx.Secrets
 	}
@@ -116,4 +116,7 @@ var spawnParamsNiq = []string{"remote_url", "remote_worker_id", "remote_credenti
 
 func registerNiq(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("niq", spawnParamsNiq, ctx, buildNIQSpec)
+	// The far-side credential is a secret: a literal passed to Create/update is
+	// sealed into the vault, and the declaration keeps only `vault:<name>`.
+	reg.MarkSecret("niq", "remote_credential")
 }

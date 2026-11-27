@@ -139,6 +139,42 @@ export async function fetchProviders(): Promise<any> {
   return res.json()
 }
 
+// ── Vault ──
+//
+// The credential store is shared by every project (standalone level), so these
+// calls go to the control plane. The list endpoint NEVER returns a value: the
+// UI shows that an entry exists and lets the user replace it.
+
+export interface VaultEntry {
+  name: string
+  size: number
+  updated_at: string
+}
+
+export async function fetchVault(): Promise<{ entries: VaultEntry[] }> {
+  const res = await fetch(CONTROL + '/api/vault')
+  if (!res.ok) throw new Error('fetch vault failed: ' + res.status)
+  return res.json()
+}
+
+export async function putVault(name: string, value: string): Promise<void> {
+  const res = await fetch(CONTROL + '/api/vault/' + encodeURIComponent(name).replace(/%2F/gi, '/'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  })
+  if (!res.ok) throw new Error((await res.text()) || 'save credential failed: ' + res.status)
+}
+
+export async function deleteVault(name: string): Promise<void> {
+  const res = await fetch(CONTROL + '/api/vault/' + encodeURIComponent(name).replace(/%2F/gi, '/'), {
+    method: 'DELETE',
+  })
+  if (!res.ok && res.status !== 404) {
+    throw new Error((await res.text()) || 'delete credential failed: ' + res.status)
+  }
+}
+
 // providersUsable mirrors provider.Configured on the backend: at least one
 // provider carries a non-empty api_key. An unparsable provider.json fails the
 // GET above, which callers treat as "not usable" too.

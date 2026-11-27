@@ -16,11 +16,11 @@ import (
 	"github.com/niq-run/niq/app/standalone/helper"
 	"github.com/niq-run/niq/app/standalone/project/api"
 	providerpkg "github.com/niq-run/niq/app/standalone/provider"
-	secretpkg "github.com/niq-run/niq/app/standalone/secret"
 	"github.com/niq-run/niq/app/standalone/store"
 	eventstore "github.com/niq-run/niq/app/standalone/store/event"
 	"github.com/niq-run/niq/app/standalone/store/identity"
 	"github.com/niq-run/niq/app/standalone/store/migrate"
+	"github.com/niq-run/niq/app/standalone/vault"
 	projworker "github.com/niq-run/niq/app/standalone/worker"
 	projbuiltin "github.com/niq-run/niq/app/standalone/worker/builtin"
 	projprocess "github.com/niq-run/niq/app/standalone/worker/process"
@@ -312,7 +312,7 @@ func runAssembly(opts assemblyOptions) error {
 	// references when it turns params into a process environment, and builders
 	// resolve them when they construct a worker. Swapping in a `vault:` provider
 	// is a change here and nowhere else.
-	secrets := secretpkg.Default{}
+	secrets := vault.New(store.VaultDir())
 
 	cp := projworker.New(projworker.Config{
 		ProjectID:  opts.ContextInfo.Project,

@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/niq-run/niq/app/standalone/secret"
+	"github.com/niq-run/niq/app/standalone/vault"
 	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/app/standalone/worker/builtin/workers"
 	"github.com/niq-run/niq/app/standalone/worker/process"
@@ -41,7 +41,7 @@ type Config struct {
 	Logf    func(string, ...any)
 	// Secrets resolves credential references when a managed process's params
 	// become its environment. Optional: nil means the default env/file provider.
-	Secrets secret.Provider
+	Secrets vault.Provider
 }
 
 // ControlPlane owns the worker subsystem for one project.

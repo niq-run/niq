@@ -2,7 +2,7 @@ package builtin
 
 import (
 	providerpkg "github.com/niq-run/niq/app/standalone/provider"
-	"github.com/niq-run/niq/app/standalone/secret"
+	"github.com/niq-run/niq/app/standalone/vault"
 	"github.com/niq-run/niq/core/impl/eventbus/transport/inprocess"
 	"github.com/niq-run/niq/core/impl/workerctl"
 	corebus "github.com/niq-run/niq/core/itfs/bus"
@@ -42,5 +42,5 @@ type BuildContext struct {
 	// Secrets resolves `env:` / `file:` (and, later, `vault:`) credential
 	// references for a builder. Injected so a dedicated provider can replace the
 	// default without changing worker code; nil means the env/file default.
-	Secrets secret.Provider
+	Secrets vault.Provider
 }

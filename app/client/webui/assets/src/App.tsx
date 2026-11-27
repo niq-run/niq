@@ -8,6 +8,7 @@ import WorkerDetail from './views/WorkerDetail'
 import ProjectsView from './views/ProjectsView'
 import TemplatesView from './views/TemplatesView'
 import ProvidersView from './views/ProvidersView'
+import VaultView from './views/VaultView'
 import ProgramsView from './views/ProgramsView'
 import McpView from './views/McpView'
 import ViewHeader from './components/ViewHeader'
@@ -186,7 +187,7 @@ function composeInput(text: string, attachments: StagedAttachment[], targets: st
 // the control plane (?panel=projects|templates|providers), or one of the
 // project's own views (?view=events|approvals|workers|mcp|programs; talk is the
 // default and stays out of the URL). They are mutually exclusive.
-type Panel = 'projects' | 'templates' | 'providers'
+type Panel = 'projects' | 'templates' | 'providers' | 'vault'
 
 const VIEWS: ViewMode[] = ['talk', 'events', 'approvals', 'workers', 'mcp', 'programs']
 
@@ -243,7 +244,7 @@ export default function App() {
   const [workers, setWorkers] = useState<WorkerInfo[]>([])
   const [view, setView] = useState<ViewMode>(() => viewFromLocation() ?? 'talk')
   const [context, setContext] = useState<ContextInfo>({ mode: 'project' })
-  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | null>(() => {
+  const [panel, setPanel] = useState<'projects' | 'templates' | 'providers' | 'vault' | null>(() => {
     // ?panel=<tab> keeps the open management tab in the address bar, so a reload
     // (or a link) lands on the tab you were looking at instead of back in the
     // project's talk view.
@@ -1527,9 +1528,11 @@ export default function App() {
           </div>
         )}
         {mode !== 'project' ? (
-          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => selectPanel('providers')} />
+          panel === 'templates' ? <TemplatesView isMobile={isMobile} /> : panel === 'vault' ? <VaultView /> : panel === 'providers' ? <ProvidersView /> : <ProjectsView onGoToProviders={() => selectPanel('providers')} />
         ) : panel === 'templates' ? (
           <TemplatesView isMobile={isMobile} />
+        ) : panel === 'vault' ? (
+          <VaultView />
         ) : panel === 'providers' ? (
           <ProvidersView />
         ) : panel === 'projects' ? (

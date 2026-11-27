@@ -48,6 +48,9 @@ type providerSources struct {
 	name string
 	// model is the spawn-time model selection ("" = the provider's default).
 	model string
+	// resolve expands a whole-string credential reference (`vault:` / `env:` /
+	// `file:`) before ${VAR} expansion. Nil means only ${VAR} is understood.
+	resolve func(string) string
 }
 
 // NewProviderSources returns a reason.ProviderSources backed by the injected
@@ -55,6 +58,14 @@ type providerSources struct {
 // model picks the resolved provider's default model.
 func NewProviderSources(load Loader, name, model string) reason.ProviderSources {
 	return &providerSources{load: load, name: name, model: model}
+}
+
+// NewProviderSourcesWithRefs is NewProviderSources for a host that owns a
+// credential store: provider.json's api_key and header values may then be
+// `vault:NAME` / `env:NAME` / `file:PATH` references, resolved by the same
+// provider worker params use.
+func NewProviderSourcesWithRefs(load Loader, name, model string, resolve func(string) string) reason.ProviderSources {
+	return &providerSources{load: load, name: name, model: model, resolve: resolve}
 }
 
 // InitialProviderInfo resolves the initially active provider's name and model,
@@ -100,7 +111,7 @@ func (s *providerSources) Default() llm.LLMProvider {
 	}
 	log.Printf("[project] resolved default provider: name=%s type=%s model=%s base_url=%s",
 		p.Name, p.Type, p.ResolveDefaultModel(), p.BaseURL)
-	return Build(p)
+	return BuildWithRefs(p, s.resolve)
 }
 
 // initial returns the configured entry the worker starts on.
@@ -133,7 +144,7 @@ func (s *providerSources) Build(name, model string) (llm.LLMProvider, error) {
 	log.Printf("[project] building provider: name=%s type=%s model=%s base_url=%s",
 		name, p.Type, effModel, p.BaseURL)
 	p.Model = effModel
-	return Build(p), nil
+	return BuildWithRefs(p, s.resolve), nil
 }
 
 // List enumerates every configured provider and its models. A provider with a
@@ -199,7 +210,7 @@ func (s *providerSources) modelsFor(p Entry) []llm.ModelInfo {
 	// here would stall the whole worker indefinitely.
 	ctx, cancel := context.WithTimeout(context.Background(), listModelsTimeout)
 	defer cancel()
-	apiModels, err := Build(p).ListModels(ctx)
+	apiModels, err := BuildWithRefs(p, s.resolve).ListModels(ctx)
 	if err != nil {
 		log.Printf("[project] provider %q: model list from API unavailable (%v)", p.Name, err)
 		return nil

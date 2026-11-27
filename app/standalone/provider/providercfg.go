@@ -251,16 +251,39 @@ func Find(cfg *Config, name string) (Entry, bool) {
 // Build constructs an llm.LLMProvider from a provider Entry. The model used is
 // the entry's default model (see ResolveDefaultModel); a caller that wants
 // another model from Models sets Entry.Model before calling.
-func Build(p Entry) llm.LLMProvider {
+func Build(p Entry) llm.LLMProvider { return BuildWithRefs(p, nil) }
+
+// resolveValue expands one configured credential value.
+//
+// A whole-string reference (`vault:` / `env:` / `file:`) is resolved by the
+// host's provider; a value it leaves unchanged falls back to ${VAR} expansion,
+// which is what provider.json has always supported. A resolved token is never
+// re-expanded, so a key containing `$` stays intact.
+func resolveValue(v string, resolve func(string) string) string {
+	if resolve != nil {
+		if resolved := resolve(v); resolved != v {
+			return resolved
+		}
+	}
+	return expandEnv(v)
+}
+
+// BuildWithRefs is Build for a host that owns a credential store: a value that is
+// a whole-string reference (`vault:NAME`, `env:NAME`, `file:PATH`) is resolved by
+// the provider first, and only a value it leaves unchanged falls back to the
+// ${VAR}/$VAR expansion provider.json has always supported.
+//
+// resolve may be nil, in which case only ${VAR} expansion happens.
+func BuildWithRefs(p Entry, resolve func(string) string) llm.LLMProvider {
 	if resolved := p.ResolveDefaultModel(); resolved != "" {
 		p.Model = resolved
 	}
-	// Expand ${VAR}/$VAR in the API key and in every custom header value so
-	// secrets can live in the environment rather than provider.json.
-	p.APIKey = expandEnv(p.APIKey)
+	// Secrets can live outside provider.json: a vault entry, an environment
+	// variable, or a file. ${VAR} stays supported for compatibility.
+	p.APIKey = resolveValue(p.APIKey, resolve)
 	headers := make(map[string]string, len(p.Headers))
 	for k, v := range p.Headers {
-		headers[k] = expandEnv(v)
+		headers[k] = resolveValue(v, resolve)
 	}
 	switch p.Type {
 	case "claude", "anthropic":

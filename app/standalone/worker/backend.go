@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/niq-run/niq/app/standalone/secret"
+	"github.com/niq-run/niq/app/standalone/vault"
 	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/eventbus"
@@ -53,7 +53,7 @@ type backendConfig struct {
 	// Secrets resolves `env:` / `file:` (and, later, `vault:`) references when a
 	// managed process's params become its environment. Optional: nil means the
 	// default env/file provider.
-	Secrets secret.Provider
+	Secrets vault.Provider
 }
 
 // workerHostBackend implements core worker.Backend over the instance manager,
@@ -69,7 +69,7 @@ type workerHostBackend struct {
 	signer     *eventbus.TokenSigner
 	engine     *eventbus.Engine
 	logf       func(string, ...any)
-	secrets    secret.Provider
+	secrets    vault.Provider
 
 	mu        sync.Mutex
 	protected map[string]bool
@@ -86,7 +86,7 @@ func newBackend(cfg backendConfig) *workerHostBackend {
 	}
 	secrets := cfg.Secrets
 	if secrets == nil {
-		secrets = secret.Default{}
+		secrets = vault.Fallback{}
 	}
 	return &workerHostBackend{
 		projectID:  cfg.ProjectID,
@@ -154,6 +154,14 @@ func (b *workerHostBackend) Create(ctx context.Context, spec coreworker.WorkerSp
 	if err := b.validateCreate(spec, placement); err != nil {
 		return coreworker.WorkerInfo{}, err
 	}
+	// A credential-bearing param is sealed before anything is written or built:
+	// the vault gets the value, the declaration gets a `vault:` reference, and a
+	// ref the caller already used is left alone.
+	sealed, err := b.sealParams(spec.Type, spec.ID, spec.Params)
+	if err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	spec.Params = sealed
 	if spec.ID != "" {
 		l := b.idLock(spec.ID)
 		l.Lock()
@@ -357,6 +365,11 @@ func (b *workerHostBackend) Update(_ context.Context, id string, patch coreworke
 	if err := b.validateParams(next); err != nil {
 		return coreworker.WorkerInfo{}, err
 	}
+	sealed, err := b.sealParams(next.Type, next.ID, next.Params)
+	if err != nil {
+		return coreworker.WorkerInfo{}, err
+	}
+	next.Params = sealed
 	if err := b.manifests.Update(&next); err != nil {
 		return coreworker.WorkerInfo{}, err
 	}
@@ -390,6 +403,75 @@ func (b *workerHostBackend) validateParams(m Manifest) error {
 		}
 		return b.types.Validate(SpawnConfig(m))
 	}
+}
+
+// sealParams replaces literal credentials with vault references.
+//
+// Which params are credentials is the TYPE's declaration (registry.MarkSecret),
+// not a guess about a name: the write path cannot know what a param means.
+//
+//   - an empty value or an existing reference (`vault:`/`env:`/`file:`) is left
+//     alone, so re-saving never re-seals and never overwrites a deliberate ref;
+//   - a non-string value is an error, not a silent stringification;
+//   - a type with secret params needs an explicit id, because the entry name is
+//     derived from it.
+//
+// A host whose provider cannot write (the env/file fallback, used by tests and
+// embedded hosts) leaves values untouched: sealing needs somewhere to put them.
+func (b *workerHostBackend) sealParams(typ, id string, params map[string]any) (map[string]any, error) {
+	if params == nil || b.types == nil {
+		return params, nil
+	}
+	names := b.types.SecretParams(typ)
+	if len(names) == 0 {
+		return params, nil
+	}
+	storer, ok := b.secrets.(interface {
+		Put(name, value string) error
+	})
+	if !ok {
+		return params, nil
+	}
+
+	out := make(map[string]any, len(params))
+	for k, v := range params {
+		out[k] = v
+	}
+	for _, key := range names {
+		raw, present := out[key]
+		if !present {
+			continue
+		}
+		s, isString := raw.(string)
+		if !isString {
+			return nil, fmt.Errorf("worker %s: param %q carries a credential and must be a string", id, key)
+		}
+		if s == "" || vault.IsRef(s) {
+			continue
+		}
+		if id == "" {
+			return nil, fmt.Errorf("worker of type %s: param %q carries a credential, so an explicit id is required", typ, key)
+		}
+		name := b.secretName(id, key)
+		if err := storer.Put(name, s); err != nil {
+			return nil, fmt.Errorf("worker %s: seal %q into the vault: %w", id, key, err)
+		}
+		out[key] = "vault:" + name
+	}
+	return out, nil
+}
+
+// secretName is the vault entry for one worker's credential: project, worker and
+// param. Storing the same name again overwrites, so sealing is idempotent.
+//
+// Deleting a worker must NOT delete its entries: a credential may be shared, and
+// a worker does not own a value it merely references.
+func (b *workerHostBackend) secretName(id, param string) string {
+	scope := b.projectID
+	if scope == "" {
+		scope = "project"
+	}
+	return scope + "/" + SanitizeID(id) + "/" + param
 }
 
 // Archive moves a worker in or out of the archived set. Archiving suspends a

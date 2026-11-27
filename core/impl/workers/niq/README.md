@@ -73,5 +73,5 @@ unrelated param edited elsewhere is never clobbered.
   (`env:NAME`, `file:PATH`) to `niq.dial` and it stays a reference; the resolved
   token is never written — not to the manifest, and not to the worker's snapshot
   (which holds only the two recipient bindings, and is plain JSON on disk).
-  Resolution goes through the injected secret provider (`app/standalone/secret`), so a
+  Resolution goes through the injected credential provider (`app/standalone/vault`), so a
   dedicated `vault:` provider can replace the default env/file one later.

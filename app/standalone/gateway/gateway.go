@@ -30,6 +30,7 @@ import (
 
 	"github.com/niq-run/niq/app/standalone/store"
 	"github.com/niq-run/niq/app/standalone/template"
+	"github.com/niq-run/niq/app/standalone/vault"
 )
 
 // Options configures the control-plane service.
@@ -95,6 +96,11 @@ type Gateway struct {
 
 	authUser string // basic-auth user for non-loopback access ("" = disabled)
 	authPass string
+
+	// vault is the shared credential store this plane manages. It lives at the
+	// standalone layer because credentials are a user resource, not a project
+	// one: every project references the same entries.
+	vault *vault.Vault
 }
 
 // New creates a control-plane service bound to addr ("127.0.0.1:9527"
@@ -104,7 +110,7 @@ func New(addr string) *Gateway {
 	if addr == "" {
 		addr = "127.0.0.1:9527"
 	}
-	c := &Gateway{addr: addr}
+	c := &Gateway{addr: addr, vault: vault.New(store.VaultDir())}
 	c.proxy = c.newProjectProxy()
 	return c
 }
@@ -180,6 +186,9 @@ func (c *Gateway) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /api/projects/link", c.handleLinkProject)
 	mux.HandleFunc("GET /api/providers", c.handleGetProviders)
 	mux.HandleFunc("PUT /api/providers", c.handleUpdateProviders)
+	mux.HandleFunc("GET /api/vault", c.handleListVault)
+	mux.HandleFunc("PUT /api/vault/{name...}", c.handlePutVault)
+	mux.HandleFunc("DELETE /api/vault/{name...}", c.handleDeleteVault)
 	mux.HandleFunc("GET /api/projects/{id}/template-preview", c.handleTemplatePreview)
 	mux.HandleFunc("POST /api/projects", c.handleCreateProject)
 	mux.HandleFunc("POST /api/projects/{id}/start", c.handleStartProject)

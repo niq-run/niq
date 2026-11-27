@@ -37,8 +37,8 @@ interface SidebarProps {
   onProjectStop?: () => void
   onProjectRestart?: () => void
   archived: Set<string>
-  panel: 'projects' | 'templates' | 'providers' | null
-  onSelectPanel: (p: 'projects' | 'templates' | 'providers') => void
+  panel: 'projects' | 'templates' | 'providers' | 'vault' | null
+  onSelectPanel: (p: 'projects' | 'templates' | 'providers' | 'vault') => void
   // Mobile drawer mode: the sidebar slides in from the left and overlays the
   // main area; open toggles it, onNavigate is called after any navigation so
   // the caller can close the drawer.
@@ -1099,6 +1099,14 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         style={{ ...hoverStyle('providers'), marginBottom: -6, cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
       >
         {t('sidebar.providers')}{panel === 'providers' ? ' \u25C9' : ''}
+      </div>
+      <div
+        onClick={() => { onSelectPanel('vault'); onNavigate() }}
+        onMouseEnter={() => setHoverId('vault')}
+        onMouseLeave={() => setHoverId(null)}
+        style={{ ...hoverStyle('vault'), marginBottom: -6, cursor: 'pointer', color: panel === 'vault' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
+      >
+        {t('sidebar.vault')}{panel === 'vault' ? ' \u25C9' : ''}
       </div>
       </>)}
 
