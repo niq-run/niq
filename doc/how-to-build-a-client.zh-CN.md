@@ -238,7 +238,8 @@ POST /p/<id>/api/workers/<id>/provider     # 切换 provider/model
 |---|---|---|
 | **WebUI**（`app/client/webui`） | 内嵌 SPA | bundle 由网关提供；它的 JS 直接调用 `/p/{id}/api/*` |
 | **TUI**（`app/client/tui`） | `niq i` 选择器 + `niq c` 对话视图 | 一个普通的 `contract.Client`，走 HTTP+SSE；是独立进程、同一个数据口 |
-| **macOS**（`app/client/mac`） | 菜单栏应用 | 读 `niq status --json`，用 `/api/projects/{id}/{action}` 操作 |
+| **macOS**（`niq-run/clients` 的 `macos/`） | 原生 SwiftUI 应用 | 读 `niq status --json`，用 `/api/projects/{id}/{action}` 操作 |
+| **桌面套壳**（`app/client/desktop`） | Tauri + `niq` sidecar | 启动 CLI，然后加载网关自带的 WebUI |
 
 TUI 是写一个新的仓外客户端最清晰的模板：它是独立程序，只 import
 `app/standalone/contract`，却能拿到整套对话能力（谁在线、实时流、历史分页、发送输入、附件、

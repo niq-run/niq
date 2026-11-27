@@ -72,14 +72,13 @@ niq/
 │   ├── client/                   # interfaces: every one of them is a gateway client
 │   │   ├── webui/                #   browser interface: assets/ + Assets() (no server)
 │   │   ├── tui/                  #   terminal interface: picker, status table, conversation view
-│   │   └── mac/                  #   macOS interface (today: menu bar): Swift + Info.plist + icon
+│   │   └── desktop/              #   installable shell: Tauri + the CLI as a sidecar, loads the WebUI
 │   │
 │   ├── cluster/                  # deployment form: distributed (placeholder, a peer of standalone)
 │   │   └── README.md
 │   │
 │   └── publish/                  # distribution: decides which UIs ship and whether the binary is bundled
 │       ├── cmd/                  #   the niq CLI: thin main + install.sh + .goreleaser.yaml
-│       ├── mac/                  #   macOS distribution: packaging script + the miq launcher (interface source: client/mac)
 │       ├── npm/                  #   npm package and publish scripts
 │       └── releases/             #   per-version archive + LATEST.md (the current draft)
 │
@@ -92,7 +91,7 @@ niq/
 There are exactly two build output directories; neither is committed and neither
 belongs to the layout:
 
-- `bin/`: local executables (`niq` from `make build`, `miq` from `make miq`);
+- `bin/`: local executables (`niq` from `make build`);
   `make install` links from here;
 - `dist/`: distributable artifacts (goreleaser archives, `niq.app`, zips, the npm
   tree). `goreleaser --clean` wipes it, so executables never live here.

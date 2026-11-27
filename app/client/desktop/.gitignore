@@ -1,0 +1,9 @@
+# Rust build output.
+/target/
+
+# The sidecar copied in by scripts/prepare-sidecar.sh (it is a build artifact,
+# named per target triple).
+/src-tauri/binaries/
+
+# Tauri's generated schemas and code.
+/src-tauri/gen/

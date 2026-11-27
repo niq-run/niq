@@ -35,7 +35,7 @@ WebUI bundle 是**提交进仓库**的（`app/client/webui/assets/dist`，由 `a
 ## 3. make 目标
 
 ```sh
-make build              # 本机能构建的全部：webui、niq、（macOS 上还有 miq）
+make build              # 本机能构建的全部：webui、niq
 make build webui        # 只构建 bundle
 make build niq          # 只构建 CLI，按现状嵌入 bundle
 make build niq webui    # 先 bundle 再 CLI —— 词序不影响结果
@@ -43,18 +43,17 @@ make install            # 把已构建的产物软链到 $(PREFIX)；从不构�
 ```
 
 `build` 后面的词是**目标，不是参数** —— make 会把它们都跑一遍 —— 所以 `make niq`、
-`make webui`、`make miq` 单独用也可以，而只有 `make build` 时仍然表示“全部”。当 `niq` 与
+`make webui` 单独用也可以，而只有 `make build` 时仍然表示“全部”。当 `niq` 与
 `webui` 一起写时，无论顺序如何都会先构建 bundle。
 
 | 目标 | 产物 | 说明 |
 |---|---|---|
-| `make build` | 下面各项 | Linux 上是 `webui niq`，macOS 上是 `webui niq miq` |
+| `make build` | 下面各项 | `webui niq` |
 | `make webui` | `app/client/webui/assets/dist` | 先 `npm ci`，再 `tsc -b && vite build`；产物提交进仓库 |
 | `make niq` | `./bin/niq` | 注入 `-X main.version`（来自 `git describe`）与 `main.buildTime` |
-| `make miq` | `dist/niq.app`、`./bin/miq` | 仅 macOS；打包逻辑在 `app/publish/mac/build.sh` |
-| `make miq-universal` | `dist/niq.app`（arm64 + x86_64） | 仅 macOS |
-| `make dist-miq` | `dist/niq_mac_darwin_universal.zip` | 发布时要发的那个包 |
-| `make install` | `$(PREFIX)` 下的软链（默认 `~/.local/bin`） | 链接 `./bin/niq`（构建过 `miq` 也一起链），随后安装补全 |
+| `make desktop` | `app/client/desktop/src-tauri/target/release/bundle/` 下的安装包 | 可安装的套壳：内置 `./bin/niq`，打开网关自带的 WebUI；需要 Go + Rust + Tauri CLI |
+| `make desktop-sidecar` | `app/client/desktop/src-tauri/binaries/niq-<triple>` | 只把 CLI 放到位，不构建安装包 |
+| `make install` | `$(PREFIX)` 下的软链（默认 `~/.local/bin`） | 链接 `./bin/niq`，随后安装补全 |
 | `make snapshot` | `dist/` | 完整的发布试跑，不上传（见 §7） |
 | `make npm-publish` | npm 包 | `DRY=--dry-run` 预览；需要已构建的 `dist/` |
 

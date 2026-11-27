@@ -275,7 +275,8 @@ POST /p/<id>/api/workers/<id>/provider     # switch provider/model
 |---|---|---|
 | **WebUI** (`app/client/webui`) | the embedded SPA | the bundle is served by the gateway; its JS calls `/p/{id}/api/*` directly |
 | **TUI** (`app/client/tui`) | `niq i` picker + `niq c` conversation | an ordinary `contract.Client` over HTTP+SSE; a second process, same data port |
-| **macOS** (`app/client/mac`) | menu bar app | reads `niq status --json`, acts via `/api/projects/{id}/{action}` |
+| **macOS** (`niq-run/clients`, `macos/`) | native SwiftUI app | reads `niq status --json`, acts via `/api/projects/{id}/{action}` |
+| **Desktop shell** (`app/client/desktop`) | Tauri + `niq` sidecar | starts the CLI, then loads the gateway's own WebUI |
 
 The TUI is the clearest template for a new out-of-tree client: it is a separate
 program, imports only `app/standalone/contract`, and gets the whole conversation

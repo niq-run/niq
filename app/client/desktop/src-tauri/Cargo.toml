@@ -1,0 +1,17 @@
+[package]
+name = "niq-desktop"
+version = "0.1.0"
+description = "A desktop shell around the niq gateway and its WebUI"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde_json = "1"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

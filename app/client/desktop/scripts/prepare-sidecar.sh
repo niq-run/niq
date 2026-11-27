@@ -1,0 +1,39 @@
+#!/bin/sh
+# Copy the CLI into src-tauri/binaries/ under the name Tauri expects.
+#
+# Tauri's `externalBin: ["binaries/niq"]` requires one file per target triple,
+# e.g. binaries/niq-aarch64-apple-darwin. This script builds the CLI from this
+# repository (or copies NIQ_BIN) and names it accordingly.
+#
+#   ./scripts/prepare-sidecar.sh            build ./bin/niq and bundle it
+#   NIQ_BIN=/path/to/niq ./scripts/prepare-sidecar.sh   bundle that binary
+#
+# Run it before `cargo tauri build` (the Makefile's `desktop` target does).
+set -eu
+
+here=$(cd "$(dirname "$0")/.." && pwd)              # app/client/desktop
+root=$(cd "$here/../../.." && pwd)                  # repository root
+
+triple=$(rustc --print host-tuple 2>/dev/null || rustc -Vv | sed -n 's/host: //p')
+if [ -z "$triple" ]; then
+	echo "prepare-sidecar: cannot determine the target triple (is rustc installed?)" >&2
+	exit 1
+fi
+
+ext=""
+case "$triple" in
+*windows*) ext=".exe" ;;
+esac
+
+mkdir -p "$here/src-tauri/binaries"
+dest="$here/src-tauri/binaries/niq-$triple$ext"
+
+if [ -n "${NIQ_BIN:-}" ]; then
+	cp "$NIQ_BIN" "$dest"
+else
+	echo "prepare-sidecar: building ./bin/niq ($triple)…"
+	(cd "$root" && go build -o "$dest" ./app/publish/cmd/)
+fi
+
+chmod +x "$dest"
+echo "prepare-sidecar: $dest"

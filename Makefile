@@ -7,27 +7,25 @@ WEBUI := app/client/webui/assets
 # Quiet npm down with: make build NPM_LOGLEVEL=notice
 NPM_LOGLEVEL ?= http
 
-.PHONY: install build niq miq webui miq-universal dist-miq app snapshot npm-publish e2e e2e-cli e2e-bus e2e-worker
+.PHONY: install build niq webui desktop desktop-sidecar app snapshot npm-publish e2e e2e-cli e2e-bus e2e-worker
 
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-BUILD_PARTS := webui niq miq
-else
+# The desktop shell is not part of `build`: it needs Rust and the Tauri CLI, so
+# it is its own goal (`make desktop`).
 BUILD_PARTS := webui niq
-endif
 
 # `make build` on its own is everything this machine can build. make has no
 # notion of a subcommand — a word after `build` is another goal, not an argument
 # — so `build` contributes prerequisites only when it stands alone, and each
 # part is a target of its own:
 #
-#	make build              webui, then the CLI, then the app
+#	make build              webui, then the CLI
 #	make build webui        just the bundle
 #	make build niq          just the CLI, embedding the bundle as it is
 #	make build niq webui    the bundle, then the CLI
-#	make build miq          the menu bar app
 #
-# `make niq` / `make miq` / `make webui` mean the same without the prefix.
+# `make niq` / `make webui` mean the same without the prefix. The installable
+# desktop shell is `make desktop`; the native macOS app lives in the clients
+# repository.
 ifneq (,$(strip $(filter-out build,$(MAKECMDGOALS))))
 BUILD_PREREQ :=
 WANT := $(filter-out build,$(MAKECMDGOALS))
@@ -72,16 +70,22 @@ niq:
 	@echo "go: building ./bin/niq…"
 	$(GO_BUILD)
 
-# The macOS distribution. Packaging lives with it (app/publish/mac/build.sh);
-# these targets are the familiar entry points.
-miq:
-	@app/publish/mac/build.sh
+# The installable desktop shell: bundles ./bin/niq as a Tauri sidecar and opens
+# the gateway's own WebUI. Packaging lives with it (app/client/desktop); these
+# targets are the familiar entry points. Needs Go + Rust + the Tauri CLI.
+desktop: niq
+	@cd app/client/desktop && ./scripts/prepare-sidecar.sh
+	@cd app/client/desktop && cargo tauri build
 
-miq-universal:
-	@app/publish/mac/build.sh universal
+# Stage the sidecar without building the bundle (fast check that the CLI is
+# picked up).
+desktop-sidecar: niq
+	@cd app/client/desktop && ./scripts/prepare-sidecar.sh
 
-dist-miq:
-	@app/publish/mac/build.sh zip
+# Note: the native macOS app is no longer part of this repository. It lives in
+# the clients repository (github.com/niq-run/clients), together with the other
+# third-party clients — this repo ships the CLI, the WebUI, the TUI and the
+# desktop shell above.
 
 # Full local test of the release pipeline (no upload, no publish).
 # End-to-end suites: black-box tests that build the CLI and drive it the way a
@@ -118,7 +122,6 @@ define install_steps
 	@echo "install: linking $(PREFIX)/niq → $(shell pwd)/bin/niq"
 	mkdir -p $(PREFIX)
 	ln -sf "$(shell pwd)/bin/niq" $(PREFIX)/niq
-	-@if [ -x "$(shell pwd)/bin/miq" ]; then ln -sf "$(shell pwd)/bin/miq" $(PREFIX)/miq; echo "install: $(PREFIX)/miq → $(shell pwd)/bin/miq"; fi
 	-@if [ "$$NIQ_NO_COMPLETION" != "1" ]; then "$(PREFIX)/niq" completion install; fi
 	@echo "niq installed → $(PREFIX)/niq"
 	@echo "Make sure $(PREFIX) is in your PATH"

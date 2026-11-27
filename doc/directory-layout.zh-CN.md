@@ -73,7 +73,7 @@ niq/
 │   │
 │   └── publish/                  # 分发：决定带哪些 UI、是否打包二进制
 │       ├── cmd/                  #   niq CLI：薄 main + install.sh + .goreleaser.yaml
-│       ├── mac/                  #   macOS 分发：打包脚本 + miq 启动器（界面源码在 client/mac）
+│       ├── npm/                  #   npm 包（CLI）
 │       ├── npm/                  #   npm 包与发布脚本
 │       └── releases/             #   每版本归档 + LATEST.md（当前草稿）
 │
@@ -85,7 +85,7 @@ niq/
 
 构建产物只有两个目录，都不入库，也不属于目录划分：
 
-- `bin/`：本地可执行（`make build` 的 `niq`、`make miq` 的 `miq`），`make install` 从这里链接；
+- `bin/`：本地可执行（`make build` 的 `niq`），`make install` 从这里链接；
 - `dist/`：可分发的产物（goreleaser 归档、`niq.app`、zip、npm 树）。`goreleaser --clean` 会清空它，所以可执行文件不放这里。
 
 中间文件不进源码树：通用构建的两个架构切片放在 `dist/.build`，lipo 后立刻删除。
