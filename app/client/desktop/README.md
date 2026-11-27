@@ -124,9 +124,8 @@ app/client/desktop/
   template image (`icons/tray.png`, drawn from `icons/tray.svg`): the mark alone
   without its tile, so macOS tints it with the menu bar's own colour, and
   `tray-icon` draws it at 18 pt. At 18 pt the 3D mark's dark faces disappear, so
-  the menu bar uses a flat one instead — three squares in the 品 arrangement
-  inside a frame, which stays legible at that size. The app icon keeps the
-  shaded cubes.
+  the menu bar uses a flat one instead — three squares in the 品 arrangement,
+  which stays legible at that size. The app icon keeps the shaded cubes.
 - A release build needs code signing + notarisation on macOS and signing on
   Windows; the config here is unsigned for local use.
 - **Size.** The release profile optimises the shell for size (`lto`, one codegen
