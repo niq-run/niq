@@ -88,6 +88,32 @@ Without them the build is **ad-hoc signed**: it runs on the machine that built i
 and Gatekeeper will refuse it elsewhere. A public release needs both, plus the
 notary credentials in CI secrets.
 
+## Why a shared copy says it is "damaged"
+
+A bundle built without a Developer ID is ad-hoc signed — `codesign -dv` reports
+`Signature=adhoc` and `TeamIdentifier=not set`. Apple silicon requires *some*
+signature to run a binary at all, so the bundle cannot simply be left unsigned;
+but ad-hoc is not something Gatekeeper can trust.
+
+Anything downloaded carries `com.apple.quarantine`. For an ad-hoc bundle the
+Gatekeeper message is the blunt one — *“niq” is damaged and can't be opened. You
+should move it to the Trash.* — rather than the usual "unidentified developer"
+prompt with an Open Anyway button. That is not a corrupt download: it is the
+signature failing the notarisation requirement, which an ad-hoc bundle can never
+satisfy.
+
+**Signing it yourself does not help.** A self-signed certificate is trusted only
+on machines where that certificate is installed and trusted; the recipient's
+Gatekeeper still refuses the bundle. Two things actually work:
+
+| Path | Effect |
+|---|---|
+| `xattr -dr com.apple.quarantine /Applications/niq.app` on the recipient's machine | works today, no Apple account needed |
+| Developer ID + notarisation (the `APPLE_*` secrets above) | no prompt at all, for everyone |
+
+Until there is a Developer ID, the `xattr` line is the honest thing to put next
+to the download link: copy the app to `/Applications` first, then run it.
+
 ## Not done yet (deliberate)
 
 - **A PR-time build check.** The desktop app is currently built only at release

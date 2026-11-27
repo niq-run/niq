@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "webui",
+  "description": "The gateway's WebUI is served over loopback HTTP, so from Tauri's point of view it is a remote origin and needs its own capability. It may post system notifications (the approval bell) and nothing else: no shell, no sidecar.",
+  "windows": ["main"],
+  "local": false,
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": ["notification:default"]
+}
