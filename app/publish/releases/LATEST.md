@@ -90,10 +90,13 @@ the release down — re-run that job). macOS builds one universal bundle. The
 version stamp is pure `sed`, because the Windows runner's Git Bash does not
 guarantee a `python3`.
 
-Worth saying plainly: **macOS has been built and run locally; Windows and Linux
-are wired to Tauri's documented bundle layout and this is their first real
-test.** Treat a first-run problem there as a build-plumbing issue, not a
-regression in the app.
+Worth saying plainly: **Windows and Linux built on the first tag run; macOS did
+not.** The workflow asked for `macos-14`, which resolves to a runner
+configuration this repository is not entitled to — the job was cancelled before
+its first step with "The configuration 'macos-14-arm64-us-default' is not
+supported". The workflow now asks for `macos-latest`, and the macOS artifacts for
+this release were built locally with `make dist-desktop UNIVERSAL=1` and attached
+to the release by hand. The next tag builds all three in CI.
 
 **The native macOS client left the repository.** The SwiftUI client that
 mirrored the WebUI now lives in `github.com/niq-run/clients`, along with the

@@ -16,7 +16,7 @@ in the same spirit as `publish/cmd` (the CLI's goreleaser config) and
 
 | Platform | Runner | Artifacts | Notes |
 |---|---|---|---|
-| macOS | `macos-14` | `.dmg`, `.app.zip` | `--universal` (arm64 + x86_64 in one bundle); DMG needs a macOS runner |
+| macOS | `macos-latest` | `.dmg`, `.app.zip` | `--universal` (arm64 + x86_64 in one bundle); DMG needs a macOS runner |
 | Windows | `windows-latest` | `.msi`, `-setup.exe` (NSIS) | x64; needs `icons/icon.ico` |
 | Linux | `ubuntu-22.04` | `.AppImage`, `.deb`, `.rpm` | needs `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf` |
 
@@ -24,8 +24,14 @@ Each runner builds its own sidecar (`niq-<triple>`), so the app never depends on
 a CLI being installed on the user's machine. macOS ships one universal bundle
 instead of two per-arch ones to keep the download list short.
 
-Windows and Linux are wired to Tauri's documented bundle layout but have only
-been exercised on macOS locally; the first tag run is their real test.
+The macOS runner is `macos-latest`, not a pinned image: `macos-14` resolves to a
+runner configuration this repository is not entitled to, and the job is cancelled
+before its first step with "The configuration 'macos-14-arm64-us-default' is not
+supported". `macos-latest` is what the CI workflow already uses.
+
+All three platforms built on the v0.18.0 tag; Windows and Linux produced their
+bundles on the first try, macOS needed this runner fix and a local
+`make dist-desktop UNIVERSAL=1` to fill in the `--universal` artifacts.
 
 ## What a release is
 

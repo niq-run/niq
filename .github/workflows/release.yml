@@ -76,7 +76,7 @@ jobs:
           # Universal covers both Apple silicon and Intel in one bundle, which
           # keeps the download list short.
           - platform: macos
-            os: macos-14
+            os: macos-latest
             args: --universal
           - platform: windows
             os: windows-latest
