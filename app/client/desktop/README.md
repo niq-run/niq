@@ -123,9 +123,14 @@ app/client/desktop/
   NSStatusItem; there is no hand-written AppKit module. The menu bar icon is a
   template image (`icons/tray.png`, drawn from `icons/tray.svg`): the mark alone
   without its tile, so macOS tints it with the menu bar's own colour, and
-  `tray-icon` draws it at 18 pt. All three faces are one colour with no internal
-  lines: at 18 pt the cube edges turn into noise, and the mark reads better as
-  three solid blocks with the gaps between them.
+  `tray-icon` draws it at 18 pt. At 18 pt the 3D mark's dark faces disappear, so
+  the menu bar uses a flat one instead — three squares in the 品 arrangement,
+  which stays legible at that size. The app icon keeps the shaded cubes.
+- **Closing the window does not quit.** The close is intercepted
+  (`WindowEvent::CloseRequested` → `prevent_close` + `hide`), so the shell keeps
+  running with the window put away, and the WebUI keeps its state. Quitting is
+  explicit: ⌘Q or 退出 in the menu bar item. The window comes back from 显示窗口
+  or by clicking the Dock icon (`RunEvent::Reopen`, macOS only).
 - A release build needs code signing + notarisation on macOS and signing on
   Windows; the config here is unsigned for local use.
 - **Size.** The release profile optimises the shell for size (`lto`, one codegen

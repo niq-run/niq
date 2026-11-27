@@ -8,17 +8,53 @@ import type {
 } from "./types/index.js";
 import { EventType } from "./types/index.js";
 import { createEvent } from "./createEvent.js";
+import { FileDurableStore, type DurableStore } from "./durable.js";
+import { readStateDir } from "./env.js";
 import { eventHelp, helpIndex, visibleEventNames } from "./help.js";
 import type { HelpFunc } from "./help.js";
 import { readmeText } from "./readme.js";
 import { s, toJsonSchema } from "./schema.js";
 
 /**
+ * A partial edit to a worker's own declaration (its construction params).
+ *
+ * MERGE semantics, mirroring the host's `update` tool: only the given keys
+ * change, and a `null` value removes that key. A worker repointing one field
+ * therefore never has to restate — and risk clobbering — the rest.
+ */
+export type ConfigPatch = Record<string, unknown>;
+
+/**
+ * Thrown by {@link BaseWorker.patchConfig} when the composing layer injected no
+ * declaration writer. Callers that can degrade (keep the change in memory for
+ * this process) test for it with `instanceof`.
+ */
+export class ConfigUnavailableError extends Error {
+  constructor(id: string) {
+    super(`config updates are not available for this worker: ${id}`);
+    this.name = "ConfigUnavailableError";
+  }
+}
+
+/**
+ * Thrown by {@link BaseWorker.saveState} when no durable store was configured.
+ * A worker that wants persistence to be optional checks
+ * {@link BaseWorker.hasDurableStore} first.
+ */
+export class StateUnavailableError extends Error {
+  constructor(id: string) {
+    super(`no durable store is configured for this worker: ${id}`);
+    this.name = "StateUnavailableError";
+  }
+}
+
+/**
  * BaseWorker — the shared base implementation every worker builds on,
  * mirroring Go `pkg/baseworker.BaseWorker`. It holds identity, subscription
  * declarations and the worker-side bus channel; the extension registry (the
  * uniform way to declare what the worker responds to and how); tool-request
- * reply plumbing; and the `worker.ready` presence announcement.
+ * reply plumbing; the `worker.ready` presence announcement; and the two
+ * optional capabilities below — self-config updates and durable state.
  *
  * Registering an extension is safe at any time — before connecting or at
  * runtime from within a handler. Registering the same (event, keyField, key)
@@ -40,14 +76,129 @@ export class BaseWorker {
     publishes?: Record<string, unknown>[];
   } | null = null;
 
+  /** Writes this worker's declaration. Injected by the composing layer. */
+  private configPatcher: ((patch: ConfigPatch) => Promise<void>) | null = null;
+
+  /** Where this worker's own state lives. `null` means "not persisted". */
+  private durableStore: DurableStore | null = null;
+
   constructor(opts: {
     id: string;
     subscriptions?: EventPattern[];
     channel: WorkerSideChannel;
+    /**
+     * An explicit durable store. Wins over `durableDir` when both are given.
+     */
+    durable?: DurableStore;
+    /**
+     * Directory for the DEFAULT durable store (one `state.json` inside it).
+     * Wins over the injected `NIQ_STATE_DIR` directory. Omitting both means the
+     * worker persists nothing: the SDK does not invent a location on disk.
+     */
+    durableDir?: string;
   }) {
     this.id = opts.id;
     this.subscriptions = opts.subscriptions ?? [];
     this.channel = opts.channel;
+    const dir = opts.durableDir?.trim() || readStateDir();
+    this.durableStore =
+      opts.durable ?? (dir ? new FileDurableStore(dir) : null);
+  }
+
+  // ── Config: the worker asks, the owner writes ──
+  //
+  // A worker never writes its own declaration. PatchConfig only forwards to a
+  // provider installed by whoever COMPOSES the worker, which owns validation,
+  // locking, persistence and the "applies on the next start" contract.
+  //
+  // There is deliberately no default provider. This SDK does not talk to the
+  // host worker (or any other worker) on a worker's behalf: a host worker is an
+  // ordinary worker that may be absent, and its tool surface is not a stable
+  // contract. A worker that needs to change its config reaches whatever owns
+  // the declaration itself — and a remote worker's provider is supplied by
+  // whoever embeds it, or not at all.
+
+  /**
+   * Install the operation that writes this worker's declaration. Called by the
+   * composing layer; a worker never invents its own.
+   */
+  setConfigPatcher(fn: (patch: ConfigPatch) => Promise<void> | void): void {
+    this.configPatcher = async (patch) => {
+      await fn(patch);
+    };
+  }
+
+  /**
+   * Apply a partial edit to this worker's own declaration.
+   *
+   * This is an internal capability, not a tool on the bus: a worker that needs
+   * to change its own construction params (say, repointing a link) calls it
+   * directly. The patch MERGES — only the given keys change, a `null` value
+   * clears a key — and it takes effect on the worker's NEXT start, because
+   * construction params are build input. Nothing live is touched.
+   *
+   * Throws {@link ConfigUnavailableError} when no provider was installed; any
+   * other error is the provider's.
+   */
+  async patchConfig(patch: ConfigPatch): Promise<void> {
+    if (!this.configPatcher) throw new ConfigUnavailableError(this.id);
+    await this.configPatcher(patch);
+  }
+
+  // ── State: the worker owns the bytes, the caller owns the location ──
+  //
+  // The location comes from outside — a `durableDir` option, or the
+  // `NIQ_STATE_DIR` directory a host injects. With neither, nothing is
+  // persisted: memory-only is the default, not a file under some guessed path.
+
+  /**
+   * Replace the durable store (or clear it with `null`). Lets a worker swap the
+   * default file store for its own backend — a database row, a remote KV, an
+   * in-memory store in tests.
+   */
+  setDurableStore(store: DurableStore | null): void {
+    this.durableStore = store;
+  }
+
+  /** Whether state can be persisted at all (a store is configured). */
+  hasDurableStore(): boolean {
+    return this.durableStore !== null;
+  }
+
+  /**
+   * Read the last state saved for this worker, parsed as JSON. Returns
+   * `undefined` when nothing was ever saved.
+   *
+   * Throws when a saved value exists but does not parse: a corrupt state file is
+   * reported, not silently treated as "no state" — the caller decides whether to
+   * reset it.
+   */
+  async loadState<T = unknown>(): Promise<T | undefined> {
+    const raw = await this.durableStore?.load();
+    if (raw === undefined || raw === "") return undefined;
+    try {
+      return JSON.parse(raw) as T;
+    } catch (err) {
+      throw new Error(`worker ${this.id}: saved state is not valid JSON: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Persist this worker's state. A full replace, not a merge: callers pass the
+   * whole snapshot, so a removed field disappears instead of lingering.
+   *
+   * Throws {@link StateUnavailableError} when no store is configured, so a worker
+   * cannot believe it persisted something it did not.
+   */
+  async saveState(value: unknown): Promise<void> {
+    if (!this.durableStore) throw new StateUnavailableError(this.id);
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      // undefined / a function / a symbol: nothing to persist, and writing the
+      // literal "undefined" would produce a file loadState cannot parse.
+      throw new Error(`worker ${this.id}: state must be JSON-serializable`);
+    }
+    await this.durableStore.save(serialized);
   }
 
   /**

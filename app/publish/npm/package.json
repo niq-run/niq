@@ -8,12 +8,10 @@
     "url": "git+https://github.com/niq-run/niq.git"
   },
   "bin": {
-    "niq": "./bin/niq.js",
-    "miq": "./bin/miq"
+    "niq": "./bin/niq.js"
   },
   "files": [
-    "bin/",
-    "niq.app/"
+    "bin/"
   ],
   "scripts": {
     "postinstall": "node bin/postinstall.js"

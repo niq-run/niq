@@ -12,6 +12,26 @@ export const BUS_ENV_VARS = {
   credential: "NIQ_WORKER_CREDENTIAL",
 } as const;
 
+/**
+ * Env var a host may inject to give this worker a place to keep its own state.
+ *
+ * Absent means "no state directory was offered": the SDK then persists nothing,
+ * rather than inventing a location on disk. Setting it is the host saying "this
+ * worker may write state here".
+ */
+export const STATE_ENV_VAR = "NIQ_STATE_DIR";
+
+/**
+ * Read the injected state directory, or `""` when none was provided.
+ *
+ * `env` is injectable for tests; defaults to `process.env`.
+ */
+export function readStateDir(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return env[STATE_ENV_VAR]?.trim() ?? "";
+}
+
 /** Connection parameters read from the supervisor-injected environment. */
 export interface BusEnv {
   baseURL: string;

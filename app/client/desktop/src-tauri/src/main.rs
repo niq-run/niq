@@ -169,12 +169,7 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
 /// with a `tray-` prefix telling the two apart.
 fn handle_menu(app: &AppHandle, id: &str) {
     match id {
-        "show" | "tray-show" => {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }
+        "show" | "tray-show" => show_main(app),
         "reload" | "tray-reload" => {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.eval("window.location.reload()");
@@ -192,6 +187,15 @@ fn handle_menu(app: &AppHandle, id: &str) {
             }
         }
         _ => {}
+    }
+}
+
+/// Bring the window back. After a close it is hidden rather than destroyed, so
+/// this reuses the same webview — and the WebUI keeps its state.
+fn show_main(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 
@@ -213,7 +217,7 @@ fn open_external(url: &str) {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // Replaces `window.Notification` with a system-backed shim at document
         // start (see the plugin's init script), which is how the WebUI's
         // browser-notification code path works unchanged inside the shell.
@@ -241,6 +245,31 @@ fn main() {
             Ok(())
         })
         .on_menu_event(|app, event| handle_menu(app, event.id().0.as_str()))
-        .run(tauri::generate_context!())
+        // Closing the window hides it instead of destroying it. This is a gateway
+        // client that lives in the menu bar: putting the window away should leave
+        // the shell — and the WebUI's state — intact. Quitting stays explicit:
+        // ⌘Q, or 退出 in the menu bar item.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
         .expect("error while running niq");
+
+    app.run(|_app, _event| {
+        // Clicking the Dock icon (or otherwise re-opening the app) with nothing
+        // on screen brings the hidden window back. macOS only.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } = _event
+        {
+            if !has_visible_windows {
+                show_main(_app);
+            }
+        }
+    });
 }

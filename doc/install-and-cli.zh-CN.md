@@ -24,13 +24,12 @@ npm install -g @niq.run/niq
 
 包内带有 macOS、Linux 与 Windows 的预编译二进制（x64 与 arm64），并在命令之外多做两件事：
 
-- **macOS**：把 `niq.app` 复制到 `~/Applications`（Spotlight 与 Finder 都能看到），
-  `miq` 用于打开菜单栏应用（与双击 app 是同一个菜单）；同时把 `~/.niq/bin/niq`
-  指向本次安装的二进制，因为 GUI 启动不继承 PATH，也跑不了 node shim。
+- **macOS**：把 `~/.niq/bin/niq` 指向本次安装的二进制，因为 GUI 启动不继承 PATH，
+  也跑不了 node shim。包里已经不再携带 app —— 可安装的桌面应用有自己的渠道，见下文。
 - **除 Windows 外的所有平台**：把补全脚本写进 shell 本来就会扫描的目录
   （见 [§3.6](#36-shell-补全)），所以下一个 shell 里 Tab 补全就能用，无需改 dotfile。
 
-两者都是尽力而为：任何一项写不进去都不会让安装失败。`NIQ_NO_APP=1` 跳过 app，
+两者都是尽力而为：任何一项写不进去都不会让安装失败。`NIQ_NO_APP=1` 跳过 CLI 软链，
 `NIQ_NO_COMPLETION=1` 跳过补全。
 
 这种方式靠 `niq update` 保持最新 —— 见 [§2](#2-升级)。
@@ -71,21 +70,29 @@ make install
 如果你更希望把二进制留在 `./bin/niq` 并从检出目录直接调用，改用 `make build`。
 
 bundle 是提交进仓库的（`go:embed` 嵌入），`make build niq` 完全按现状取用它：重建
-SPA 是单独的一步（`make build webui`）。单纯 `make build` 会按顺序全做 —— bundle、
-CLI、app —— 目标名一起写时顺序不影响结果（`make build niq webui` 仍然先构建 bundle）。
+SPA 是单独的一步（`make build webui`）。单纯 `make build` 会按顺序做本机能做的一切 ——
+bundle、CLI，以及装了 Rust 与 Tauri CLI 时的桌面应用 —— 目标名一起写时顺序不影响结果
+（`make build niq webui` 仍然先构建 bundle）。
 
-### 菜单栏（macOS）
+### 桌面应用（macOS、Linux、Windows）
 
-菜单栏应用属于 macOS 安装的一部分，不是单独的分发渠道：npm 包会把 `niq.app` 复制到
-`~/Applications`，并把 `miq` 放进 PATH（检出目录用 `make build miq` 构建这两样）。
-`miq` 负责打开它；再次运行则聚焦菜单。
+可安装的应用是 `app/client/desktop` 里的套壳：它把 CLI 作为 sidecar 带在包里，拉起网关，
+再打开网关自带的 WebUI，所以装一个东西就得到一个能用的 niq。它是单独的分发渠道 ——
+npm 包与 CLI 归档里都不包含它。
 
 ```sh
-miq              # 把 niq 放进菜单栏；再次运行则聚焦它
+make desktop           # 为本机构建
+make install           # 把 niq.app 复制进 /Applications（用 APP_DIR=… 改位置）
+make dist-desktop      # 发布产物：.dmg + 打包的 .app（UNIVERSAL=1 出双架构）
 ```
 
-发布构建（`niq_mac_darwin_universal.zip`）是 ad-hoc 签名、未公证，所以新下载的
-`niq.app` 首次需要右键 → 打开，或执行 `xattr -d com.apple.quarantine niq.app`。
+发布时由 `app/publish/desktop` 按平台挂上去（流水线见
+`app/publish/desktop/README.md`）。没有 Developer ID 的 macOS 构建是 ad-hoc 签名，
+所以下载来的副本会被 Gatekeeper 拦住，直到清掉隔离属性；DMG 里附带的 `INSTALL.txt`
+写了那一行命令。
+
+macOS 原生客户端与其它的三方客户端在 clients 仓库
+（`github.com/niq-run/clients`），不在本仓库。
 
 ### 验证
 
@@ -470,7 +477,7 @@ niq w --foreground
 | `NIQ_PROVIDER_CONFIG` | launcher、project、worker | 整体覆盖 `common/providers/provider.json` |
 | `NIQ_NO_UPDATE_CHECK=1` | `niq` | 关闭每日 registry 检查 |
 | `NIQ_NO_COMPLETION=1` | 安装器、`niq completion install` | 跳过补全 |
-| `NIQ_NO_APP=1` | npm `postinstall` | 不把 `niq.app` 复制到 `~/Applications` |
+| `NIQ_NO_APP=1` | npm `postinstall` | 不为 GUI 客户端创建 `~/.niq/bin/niq` 软链 |
 | `NIQ_INSTALL_DIR`、`NIQ_VERSION`、`NIQ_NO_MODIFY_PATH` | 安装脚本 | 见 [§1](#安装脚本不依赖-npm) |
 | `PREFIX` | `make install` | 软链目标目录（默认 `~/.local/bin`） |
 | `NO_COLOR`、`TERM=dumb` | 每条命令 | 纯文本输出 |

@@ -1,6 +1,6 @@
 # Build and test
 
-> Status: as-built (2026-11-21). English · [简体中文](build-and-test.zh-CN.md).
+> Status: as-built (2026-11-27). English · [简体中文](build-and-test.zh-CN.md).
 >
 > How to build the binaries on this machine, how to run the Go and TypeScript
 > suites, how to work on the WebUI with hot reload, and how to dry-run the
@@ -13,10 +13,14 @@
 |---|---|---|
 | Go | 1.26+ (`go.mod` says `1.26.0`) | everything; the embedded QuickJS engine requires it |
 | Node | 20+ | building the WebUI bundle, the TypeScript SDK |
-| Xcode command line tools | any recent | the macOS menu bar app only (Swift + `lipo`) |
+| Rust | stable, 1.77+ (the crate's `rust-version`) | the desktop shell in `app/client/desktop` |
+| Tauri CLI | v2 (`npm i -g @tauri-apps/cli`, or `cargo tauri`) | `make desktop`, `make dist-desktop` |
+| Xcode command line tools | any recent | macOS only: `codesign`, `iconutil` and `lipo` for that bundle |
 
 Go alone is enough to build, vet and test the backend: **no Node is needed to
-compile the CLI**, because the SPA is embedded as committed files.
+compile the CLI**, because the SPA is embedded as committed files. Rust and the
+Tauri CLI are only for the desktop shell — `make build` skips it when they are
+missing, so a CLI-only machine still builds.
 
 ## 2. The one rule that surprises people
 
@@ -28,7 +32,8 @@ The WebUI bundle is **committed** to the repo (`app/client/webui/assets/dist`,
 - rebuilding the bundle is its own step: `make build webui` (or `npm run build`
   in `app/client/webui/assets`);
 - `make build` on its own does everything this machine can build, in order:
-  bundle → CLI → app (the app part only on macOS).
+  bundle → CLI → desktop shell (the last one only when Rust and the Tauri CLI are
+  installed, on any platform).
 
 Because the bundle is compiled in, a frontend change is only visible after it is
 rebuilt **and** the binary is rebuilt — and the commit still matters for
@@ -55,9 +60,9 @@ together the bundle is built first regardless of the order typed.
 |---|---|---|
 | `make build` | everything below | `webui niq`, plus `desktop` when Rust + the Tauri CLI are installed |
 | `make webui` | `app/client/webui/assets/dist` | `npm ci` then `tsc -b && vite build`; the result is committed |
-| `make niq` | `./bin/niq` | injects `-X main.version` (from `git describe`) and `main.buildTime` |
-| `make desktop` | a Tauri bundle under `app/client/desktop/src-tauri/target/release/bundle/` | the installable shell: bundles `./bin/niq` and opens the gateway's WebUI; needs Go + Rust + the Tauri CLI |
-| `make dist-desktop` | `dist/niq-desktop_<version>_<arch>.{dmg,app.zip}` | release artifacts; `UNIVERSAL=1` for both architectures (`app/publish/desktop/release.sh`) |
+| `make niq` | `./bin/niq` | injects `-X main.version` (from `git describe`) and `main.buildTime`, and strips with `-trimpath -s -w` — the local CLI matches what a release ships |
+| `make desktop` | a Tauri bundle under `app/client/desktop/src-tauri/target/release/bundle/` | the installable shell: bundles `./bin/niq` and opens the gateway's WebUI; needs Go + Rust + the Tauri CLI; signs the bundle ad-hoc on macOS when `APPLE_SIGNING_IDENTITY` is unset |
+| `make dist-desktop` | `dist/niq-desktop_<version>_<arch>.{dmg,app.zip}` | release artifacts; `UNIVERSAL=1` for both architectures (`app/publish/desktop/release.sh`). An ad-hoc build also ships `.INSTALL.txt`, the one command that clears macOS quarantine |
 | `make desktop-sidecar` | `app/client/desktop/src-tauri/binaries/niq-<triple>` | stages the CLI without building the bundle |
 | `make install` | `$(PREFIX)/niq` symlink + `niq.app` in `$(APP_DIR)` (default `/Applications`) | links the CLI, installs completion, and copies the built app if there is one (`APP_DIR=$HOME/Applications` for a no-sudo install) |
 | `make snapshot` | `dist/` | full release dry run, no upload (see §7) |
@@ -117,6 +122,8 @@ They are behind the `e2e` build tag, so `go test ./...` stays fast:
 make e2e                       # every suite
 make e2e-cli                   # assembly: start/stop/restart, ports, output, completion
 make e2e-bus                   # data plane: dial-in peers, delivery, ACL, request/reply
+make e2e-worker                # the bundled worker types
+make e2e-cli e2e-bus           # any subset, in one run
 go test -tags e2e ./e2e/suites/cli -run TestE2EStop -v
 ```
 
@@ -184,30 +191,32 @@ make snapshot        # goreleaser release --snapshot --clean, then npm publish -
 
 It builds the CLI archives for linux/darwin/windows (amd64 and arm64) into
 `dist/` and assembles the npm tree so you can inspect exactly what a release
-would ship. The actual publishing (tag push, GitHub Release, mac job) is in
+would ship. The actual publishing (tag push, GitHub Release, the desktop jobs for
+macOS, Windows and Linux, the npm packages) is in
 `.github/workflows/release.yml`; `make npm-publish` publishes the npm packages
 from an existing `dist/` (`DRY=--dry-run` to preview).
 
 ## 8. What is covered today
 
-- **Go unit/integration tests: 109 `_test.go` files, 727 tests**, green in ~6 s
-  (~18 s under `-race`). They cover the gateways' HTTP contracts, the launcher's
+- **Go unit/integration tests: 147 `_test.go` files, 867 tests**, green in ~6 s
+  (longer under `-race`). They cover the gateways' HTTP contracts, the launcher's
   process protocol, the bus engine and transports, worker lifecycle and placement,
   storage/migration, the provider adapters, and the worker type library.
 - **Black-box suites: 22 `_test.go` files, 58 cases** in
   `e2e/suites/{cli,bus,worker}`, green in ~8 s. They are the only coverage of the
   process boundary — binary → `niq` → gateway → `/p/{id}/` → project process
   (§4).
-- **TypeScript SDK: 8 Vitest files, 64 tests** (`sdk/ts`).
+- **TypeScript SDK: 11 Vitest files, 91 tests** (`sdk/ts`).
 
 Coverage grows with the code: a new command adds a case to `e2e/suites/cli`, a new
 worker type adds one to `e2e/suites/worker`.
 
 ## 9. CI
 
-`.github/workflows/ci.yml` runs on every push to `dev`/`main` and on every pull
-request. It publishes nothing — that is `release.yml`'s job — and its jobs run in
-parallel:
+`.github/workflows/ci.yml` runs on every pull request, and on a push to `main`
+(the branch a release is cut from) — merging a PR into `dev` has already run that
+commit, so it is not repeated. It publishes nothing — that is `release.yml`'s job
+— and its jobs run in parallel:
 
 | job | runner | what it proves |
 |---|---|---|
@@ -216,7 +225,7 @@ parallel:
 | `cross` | ubuntu | `GOOS=windows` (amd64, arm64), `linux/arm64` and `darwin/amd64` still compile |
 | `sdk` | ubuntu | `npm ci`, `npm test`, `typecheck`, `build` in `sdk/ts` |
 | `webui` | ubuntu | the committed bundle is what `vite build` produces (§2) |
-| `desktop` | macOS | `app/publish/desktop/release.sh --universal` builds, signs and verifies the shell; both binaries are x86_64 + arm64 |
+| `desktop` | macOS, Windows, Linux | `app/publish/desktop/release.sh` builds the shell on all three; macOS also verifies the bundle and that both binaries are x86_64 + arm64 |
 
 Why those choices:
 
@@ -236,9 +245,12 @@ Why those choices:
 - **`desktop` is the one artifact no Go test can stand in for.** The shell is a
   Rust crate bundled around a Go sidecar and staged by a shell script; none of
   that ran anywhere until a tag, which is how v0.18.0 shipped with no macOS
-  bundle. It is path-gated (`app/client/desktop`, `app/publish/desktop`, the
-  `Makefile`) because a universal Tauri build is minutes, and it runs the release
-  script rather than `tauri build` so the distribution path is what is tested.
+  bundle. It runs on all three platforms because the Windows and Linux bundles
+  (msi/NSIS, AppImage/deb/rpm, each around a natively-built sidecar) have no
+  other place to break before a tag. It is path-gated (`app/client/desktop`,
+  `app/publish/desktop`, the `Makefile`) because those builds are minutes each,
+  and it runs the release script rather than `tauri build` so the distribution
+  path is what is tested.
 
 Every job is reproducible locally by running the command in its row: none needs a
 secret, a service container or a prepared environment.

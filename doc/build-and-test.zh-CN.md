@@ -1,6 +1,6 @@
 # 构建与测试
 
-> 状态：as-built（2026-11-21）。简体中文 · [English](build-and-test.md)。
+> 状态：as-built（2026-11-27）。简体中文 · [English](build-and-test.md)。
 >
 > 怎么在本机构建二进制、怎么跑 Go 与 TypeScript 测试、怎么带热更新开发 WebUI、
 > 以及怎么在本地试跑发布流水线。安装见 [install-and-cli.zh-CN.md](install-and-cli.zh-CN.md)；
@@ -12,10 +12,13 @@
 |---|---|---|
 | Go | 1.26+（`go.mod` 写的是 `1.26.0`） | 全部；内嵌 QuickJS 引擎要求如此 |
 | Node | 20+ | 构建 WebUI bundle、TypeScript SDK |
-| Xcode command line tools | 近期版本即可 | 仅 macOS 菜单栏应用（Swift + `lipo`） |
+| Rust | stable，1.77+（crate 的 `rust-version`） | `app/client/desktop` 里的桌面套壳 |
+| Tauri CLI | v2（`npm i -g @tauri-apps/cli` 或 `cargo tauri`） | `make desktop`、`make dist-desktop` |
+| Xcode command line tools | 近期版本即可 | 仅 macOS：那个 bundle 需要 `codesign`、`iconutil` 与 `lipo` |
 
 只装 Go 就足够构建、vet 与测试后端：**编译 CLI 不需要 Node**，因为 SPA 是作为已提交文件
-嵌入的。
+嵌入的。Rust 与 Tauri CLI 只服务于桌面套壳 —— 没有它们时 `make build` 会跳过桌面这一步，
+所以只做 CLI 的机器照样能构建。
 
 ## 2. 一条最容易踩的规则
 
@@ -26,7 +29,8 @@ WebUI bundle 是**提交进仓库**的（`app/client/webui/assets/dist`，由 `a
   上的 bundle 原样取用；
 - 重建 bundle 是单独的一步：`make build webui`（或在 `app/client/webui/assets` 里
   `npm run build`）；
-- 单纯的 `make build` 会按顺序做本机能做的一切：bundle → CLI → app（app 部分仅 macOS）。
+- 单纯的 `make build` 会按顺序做本机能做的一切：bundle → CLI → desktop 套壳（最后一步只在
+  装了 Rust 与 Tauri CLI 时出现，不限平台）。
 
 因为 bundle 是编译进去的，前端改动只有在**重建 bundle 并重建二进制**之后才可见；而这次
 提交对 `go build ./...`、`go test ./...` 与发布流程仍然重要（goreleaser 与 CI 不跑 Node），
@@ -50,9 +54,9 @@ make install            # 把已构建的产物软链到 $(PREFIX)；从不构�
 |---|---|---|
 | `make build` | 下面各项 | `webui niq`；装了 Rust + Tauri CLI 时还会构建 `desktop` |
 | `make webui` | `app/client/webui/assets/dist` | 先 `npm ci`，再 `tsc -b && vite build`；产物提交进仓库 |
-| `make niq` | `./bin/niq` | 注入 `-X main.version`（来自 `git describe`）与 `main.buildTime` |
-| `make desktop` | `app/client/desktop/src-tauri/target/release/bundle/` 下的安装包 | 可安装的套壳：内置 `./bin/niq`，打开网关自带的 WebUI；需要 Go + Rust + Tauri CLI |
-| `make dist-desktop` | `dist/niq-desktop_<version>_<arch>.{dmg,app.zip}` | 发布产物；`UNIVERSAL=1` 构建双架构（`app/publish/desktop/release.sh`） |
+| `make niq` | `./bin/niq` | 注入 `-X main.version`（来自 `git describe`）与 `main.buildTime`，并用 `-trimpath -s -w` 剥符号 —— 本地产物与发布产物一致 |
+| `make desktop` | `app/client/desktop/src-tauri/target/release/bundle/` 下的安装包 | 可安装的套壳：内置 `./bin/niq`，打开网关自带的 WebUI；需要 Go + Rust + Tauri CLI；macOS 上未设 `APPLE_SIGNING_IDENTITY` 时会自己补 ad-hoc 签名 |
+| `make dist-desktop` | `dist/niq-desktop_<version>_<arch>.{dmg,app.zip}` | 发布产物；`UNIVERSAL=1` 构建双架构（`app/publish/desktop/release.sh`）。ad-hoc 构建还会附带 `.INSTALL.txt`，里面是清除 macOS 隔离属性的那一条命令 |
 | `make desktop-sidecar` | `app/client/desktop/src-tauri/binaries/niq-<triple>` | 只把 CLI 放到位，不构建安装包 |
 | `make install` | `$(PREFIX)/niq` 软链 + `$(APP_DIR)` 里的 `niq.app`（默认 `/Applications`） | 链接 CLI、安装补全，并把已构建的 App 复制过去（免 sudo 用 `APP_DIR=$HOME/Applications`） |
 | `make snapshot` | `dist/` | 完整的发布试跑，不上传（见 §7） |
@@ -106,6 +110,8 @@ go test -race ./app/standalone/...                    # 并发敏感的包
 make e2e                       # 全部套件
 make e2e-cli                   # 装配层：启停/重启、端口、输出、补全
 make e2e-bus                   # 数据面：dial-in 参与者、投递、ACL、请求-回复
+make e2e-worker                # 内置的 worker 类型
+make e2e-cli e2e-bus           # 任意子集，一次跑完
 go test -tags e2e ./e2e/suites/cli -run TestE2EStop -v
 ```
 
@@ -166,25 +172,26 @@ make snapshot        # goreleaser release --snapshot --clean，然后 npm publis
 ```
 
 它会把 linux/darwin/windows（amd64 与 arm64）的 CLI 归档构建到 `dist/`，并组装 npm 目录树，
-所以你可以直接检视一次发布究竟会发什么。真正的发布（打 tag、GitHub Release、mac job）
-在 `.github/workflows/release.yml`；`make npm-publish` 从已有的 `dist/` 发布 npm 包
-（`DRY=--dry-run` 预览）。
+所以你可以直接检视一次发布究竟会发什么。真正的发布（打 tag、GitHub Release、macOS/Windows/
+Linux 三个桌面 job、npm 包）在 `.github/workflows/release.yml`；`make npm-publish` 从已有的
+`dist/` 发布 npm 包（`DRY=--dry-run` 预览）。
 
 ## 8. 现在覆盖了什么
 
-- **Go 单元/集成测试：109 个 `_test.go`、727 个测试**，约 6 秒全绿（加 `-race` 约 18 秒）。
+- **Go 单元/集成测试：147 个 `_test.go`、867 个测试**，约 6 秒全绿（加 `-race` 更久）。
   覆盖网关的 HTTP 契约、launcher 的进程协议、总线引擎与传输、worker 生命周期与
   placement、存储与迁移、provider 适配器，以及 worker 类型库。
 - **黑盒套件：22 个 `_test.go`、58 个用例**，位于 `e2e/suites/{cli,bus,worker}`，约 8 秒全绿。
   进程边界（二进制 → `niq` → 网关 → `/p/{id}/` → 项目进程）只有它们覆盖（§4）。
-- **TypeScript SDK：8 个 Vitest 文件、64 个测试**（`sdk/ts`）。
+- **TypeScript SDK：11 个 Vitest 文件、91 个测试**（`sdk/ts`）。
 
 覆盖跟着代码走：加一个命令就给 `e2e/suites/cli` 加一个用例，加一种 worker 类型就给
 `e2e/suites/worker` 加一个。
 
 ## 9. CI
 
-`.github/workflows/ci.yml` 在每次推送到 `dev`/`main` 和每个 pull request 上运行。它不发布
+`.github/workflows/ci.yml` 在每个 pull request 上运行，以及在推送到 `main`（发版分支）时
+运行 —— PR 合进 `dev` 时那个提交已经跑过了，所以不重复。它不发布
 任何东西——那是 `release.yml` 的事——各 job 并行：
 
 | job | runner | 证明什么 |
@@ -194,7 +201,7 @@ make snapshot        # goreleaser release --snapshot --clean，然后 npm publis
 | `cross` | ubuntu | `GOOS=windows`（amd64、arm64）、`linux/arm64`、`darwin/amd64` 仍能编译 |
 | `sdk` | ubuntu | `sdk/ts` 的 `npm ci`、`npm test`、`typecheck`、`build` |
 | `webui` | ubuntu | 提交进仓库的 bundle 就是 `vite build` 的产物（§2） |
-| `desktop` | macOS | `app/publish/desktop/release.sh --universal` 能构建、签名并通过校验；两个可执行文件都是 x86_64 + arm64 |
+| `desktop` | macOS、Windows、Linux | `app/publish/desktop/release.sh` 在三个平台上都能构建；macOS 还会额外校验包和两个可执行文件都是 x86_64 + arm64 |
 
 为什么这么选：
 
@@ -210,8 +217,10 @@ make snapshot        # goreleaser release --snapshot --clean，然后 npm publis
   "把重建的 `dist` 一起提交"这条规则需要一个在忘记时失败的东西。
 - **`desktop` 是任何 Go 测试都代替不了的那一个产物。** 桌面壳是一个 Rust crate，外面包着
   Go sidecar，由 shell 脚本组装；这些在打 tag 之前哪儿都没跑过，所以 v0.18.0 发出来时
-  根本没有 macOS 包。它按路径门控（`app/client/desktop`、`app/publish/desktop`、
-  `Makefile`），因为 universal 的 Tauri 构建要几分钟；它跑的是发布脚本而不是直接
+  根本没有 macOS 包。它在三个平台上都跑，因为 Windows 与 Linux 的包（msi/NSIS、
+  AppImage/deb/rpm，各自套着本平台构建的 sidecar）在打 tag 之前没有别的地方能暴露问题。
+  它按路径门控（`app/client/desktop`、`app/publish/desktop`、
+  `Makefile`），因为那些构建每一个都要几分钟；它跑的是发布脚本而不是直接
   `tauri build`，被测的就是分发路径本身。
 
 每个 job 都能在本地复现：直接跑表格里那一行的命令即可，都不需要 secret、service container

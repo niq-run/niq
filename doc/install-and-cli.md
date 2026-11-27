@@ -26,16 +26,15 @@ npm install -g @niq.run/niq
 The package ships prebuilt binaries for macOS, Linux and Windows (x64 and
 arm64) and adds two conveniences on top of the command:
 
-- **macOS**: `niq.app` is copied to `~/Applications`, so Spotlight and Finder
-  see it, and `miq` opens the menu bar app (the same menu as opening the app
-  directly). `~/.niq/bin/niq` is also linked to this install's binary, because a
-  GUI launch inherits no PATH and cannot run a node shim.
+- **macOS**: `~/.niq/bin/niq` is linked to this install's binary, because a GUI
+  launch inherits no PATH and cannot run a node shim. The package does not carry
+  an app any more — the installable desktop app has its own channel, below.
 - **Everywhere but Windows**: the shell completion script is written where your
   shell already looks (see [§3.6](#36-shell-completion)), so tab completion
   works in the next shell without editing a dotfile.
 
 Both are best-effort: an install never fails because a convenience could not be
-written. `NIQ_NO_APP=1` skips the app, `NIQ_NO_COMPLETION=1` skips completion.
+written. `NIQ_NO_APP=1` skips the CLI link, `NIQ_NO_COMPLETION=1` skips completion.
 
 `niq update` is how this install stays current — see [§2](#2-upgrade).
 
@@ -81,23 +80,31 @@ call it from the checkout.
 
 The bundle is committed (`go:embed`-ed), and `make build niq` takes it as it is:
 rebuilding the SPA is a separate step (`make build webui`). A plain `make build`
-does everything in order — bundle, CLI, app — and naming targets together works
-in any order (`make build niq webui` still builds the bundle first).
+does everything this machine can, in order — bundle, CLI, and the desktop app
+when Rust and the Tauri CLI are installed — and naming targets together works in
+any order (`make build niq webui` still builds the bundle first).
 
-### Menu bar (macOS)
+### Desktop app (macOS, Linux, Windows)
 
-The menu bar app is part of the macOS install, not a separate channel: the npm
-package copies `niq.app` to `~/Applications` and puts `miq` on your PATH (`make
-build miq` builds both for a checkout). `miq` opens it; running it again focuses
-the menu.
+The installable app is the shell in `app/client/desktop`: it carries the CLI as a
+sidecar, starts the gateway, and opens the gateway's own WebUI, so installing one
+thing gets you a working niq. It is a separate download — the npm package and the
+CLI archives do not contain it.
 
 ```sh
-miq              # puts niq in the menu bar; running it again focuses it
+make desktop           # build it for this machine
+make install           # copy niq.app into /Applications (APP_DIR=… to change)
+make dist-desktop      # release artifacts: .dmg + zipped .app (UNIVERSAL=1 for both arches)
 ```
 
-Release builds (`niq_mac_darwin_universal.zip`) are ad-hoc signed, not
-notarized, so a freshly downloaded `niq.app` needs right-click → Open the first
-time — or `xattr -d com.apple.quarantine niq.app`.
+Releases attach it per platform from `app/publish/desktop`
+(`app/publish/desktop/README.md` covers the pipeline). A macOS build without a
+Developer ID is ad-hoc signed, so a downloaded copy is refused by Gatekeeper
+until the quarantine attribute is cleared; the DMG ships `INSTALL.txt` with the
+one command that does it.
+
+The native macOS client and the other third-party clients are in the clients
+repository (`github.com/niq-run/clients`), not here.
 
 ### Verify
 
@@ -567,7 +574,7 @@ niq w --foreground
 | `NIQ_PROVIDER_CONFIG` | launcher, project, workers | override `common/providers/provider.json` wholesale |
 | `NIQ_NO_UPDATE_CHECK=1` | `niq` | disable the daily registry check |
 | `NIQ_NO_COMPLETION=1` | installers, `niq completion install` | skip completion |
-| `NIQ_NO_APP=1` | npm `postinstall` | do not copy `niq.app` to `~/Applications` |
+| `NIQ_NO_APP=1` | npm `postinstall` | do not link `~/.niq/bin/niq` for GUI clients |
 | `NIQ_INSTALL_DIR`, `NIQ_VERSION`, `NIQ_NO_MODIFY_PATH` | install script | see [§1](#install-script-no-npm) |
 | `PREFIX` | `make install` | symlink target directory (default `~/.local/bin`) |
 | `NO_COLOR`, `TERM=dumb` | every command | plain output |

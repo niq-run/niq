@@ -152,8 +152,9 @@ is not an error.
 
 A **third-party client is the reverse**: it is its own application, not launched
 by the CLI, so it has to **locate and drive the `niq` binary itself** — bring the
-gateway up, then talk to it over HTTP. The macOS menu bar app is the in-repo
-reference for this direction:
+gateway up, then talk to it over HTTP. The desktop shell in
+`app/client/desktop` is the in-repo reference for this direction — the native
+macOS client that used to live here is in `github.com/niq-run/clients`:
 
 1. **Locate `niq`** — `NIQ_BIN`, then the usual install locations, then a login
    shell's `PATH` (a GUI app inherits a minimal `PATH`).
@@ -317,6 +318,10 @@ flowchart TB
 
 `BaseWorker` is the raw contract underneath both (identity, an extension
 registry, replies, presence) — use it for a worker that has a domain of its own.
+It also carries two optional capabilities: a config-patch hook the composing
+code may inject (the worker asks, the owner writes; applies on next start) and
+durable state (a file under an injected `NIQ_STATE_DIR`, or a store you supply).
+Both stay off when nothing is injected.
 
 **Registering it in the project.** A worker is declared by a manifest
 (`workers.json`): `id`, `type`, `params`, and a `placement`. For a worker a

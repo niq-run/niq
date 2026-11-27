@@ -85,27 +85,29 @@ the files; the desktop job therefore depends on it.
 
 The build logic is a shell script rather than inline workflow steps precisely so
 `make dist-desktop` and CI produce the same artifacts. `.github/workflows/ci.yml`
-also builds the shell (on the paths that can break it) so a broken script is a red
-pull request rather than a broken tag.
+also builds the shell — on all three platforms, on the paths that can break it —
+so a broken script is a red pull request rather than a broken tag.
 
-## Repairing a release whose desktop job failed
+## When a desktop job fails on a tag
 
-Re-running the failed job from the Actions tab replays the workflow **as it was
-at the tag** — a fix to `release.sh`, to a runner label or to the toolchain cannot
-take effect there. Instead, run the **Desktop rebuild** workflow
-(`.github/workflows/desktop-rebuild.yml`, `workflow_dispatch`) with the tag and
-the platform: it checks the tag out (or a branch, via `ref`), runs the current
-build script, and uploads the artifacts to that release with `--clobber`. It never
-creates a release and never publishes the CLI or the npm packages, so it is safe
-against a release that is already out.
-
-The same thing by hand, from a checkout that has the fix:
+Cut the next patch release. A version is immutable once published: npm will not
+accept a re-publish of the same version, and re-running the failed job from the
+Actions tab replays the workflow **as it was at the tag**, so a fix to
+`release.sh`, to a runner label or to the toolchain cannot take effect there.
 
 ```sh
-./app/publish/desktop/release.sh --universal --version 0.18.0
-git checkout -- app/client/desktop/src-tauri/{tauri.conf.json,Cargo.toml,Cargo.lock}
-gh release upload v0.18.0 dist/niq-desktop_0.18.0_macos_universal.*
+# fix on dev, land it, then:
+git tag v0.18.1 && git push origin v0.18.1
 ```
+
+The tag rebuilds everything — CLI archives, the three desktop bundles, the npm
+packages — from the fixed script, which is the point: a release is one thing,
+not a set of artifacts to be patched individually.
+
+If the broken release should not stay visible at all, delete it before tagging:
+`gh release delete v0.18.0` (the tag itself can be removed with `git push
+--delete origin v0.18.0`). The npm packages matter more: those versions are
+consumed already, so prefer a new patch version over trying to withdraw them.
 
 ## Signing and notarisation
 

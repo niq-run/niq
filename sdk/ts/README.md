@@ -14,7 +14,7 @@ over HTTP (SSE + POST).
 | Connect to a bus over HTTP (`GET /events` SSE stream) | Identity registration (control-plane / `registryapi`) |
 | `send` (directed) and `broadcast` (subscription-matched) | Worker runtime / swarm assembly |
 | Receive routed events (`request.completed`, etc.) | Program compilation |
-| Base worker (`BaseWorker`: extension registry, tool replies, presence announcement) | — |
+| Base worker (`BaseWorker`: extension registry, tool replies, presence announcement, optional config patch + durable state) | — |
 | Protocol event type constants | — |
 | Event construction helpers (`createEvent`, correctly timestamped + UUIDv7 ids) | — |
 
@@ -230,6 +230,71 @@ Callers send `{ event_name: "echo" }` and may add `{ params: { … } }` to pick 
 more specific guide; omitting `event_name` lists every served event. Mirrors
 Go's `BaseWorker.RegisterReadme` / `RegisterHelp`.
 
+#### Config updates: the worker asks, the owner writes
+
+A worker never writes its own declaration. `patchConfig` only forwards to a
+provider installed by whoever **composes** the worker — that layer owns
+validation, locking, persistence and the "applies on next start" contract.
+
+```ts
+worker.setConfigPatcher(async (patch) => {
+  // Persist the MERGE patch: only the given keys change, `null` clears a key.
+});
+
+await worker.patchConfig({ remote_url: "http://other-bus", stale_key: null });
+```
+
+- **No provider by default.** Without one, `patchConfig` throws
+  `ConfigUnavailableError`, and the worker decides whether that is fatal (keep
+  the change for this process only, or fail the call).
+- **Not a tool.** It is an internal method; whether to expose anything on the
+  bus is the worker's own design decision.
+- **Merge semantics** — `null` removes a key, everything else is replaced, so
+  patching one field never clobbers the rest.
+- **Applies on the next start.** Construction params are build input; nothing
+  live is touched. Restart the worker to apply the change now.
+- **The SDK does not call a host worker for you.** A host worker is an ordinary
+  worker: it may be absent, and its tool surface is not a contract this SDK
+  promises. A managed-process worker that needs a config change reaches
+  whatever owns its declaration itself; a remote or embedded worker gets a
+  patcher from whoever composes it — or none.
+
+#### Durable state: the worker owns the bytes, the caller owns the location
+
+```ts
+// The location comes from outside. Either the host injects NIQ_STATE_DIR, or the
+// composing code passes durableDir. With neither, the worker keeps state in
+// memory only — the SDK never invents a directory.
+const worker = new BaseWorker({
+  id: "echo@me",
+  channel,
+  durableDir: "/var/lib/niq/echo", // optional: wins over NIQ_STATE_DIR
+});
+
+const st = (await worker.loadState<{ count: number }>()) ?? { count: 0 };
+st.count++;
+await worker.saveState(st); // atomic replace of state.json
+```
+
+- **Off unless the caller offers a directory.** No `durableDir` and no
+  `NIQ_STATE_DIR` in the environment means nothing is persisted; that is the
+  default, not an error. Precedence: `durable` store > `durableDir` option >
+  `NIQ_STATE_DIR` > memory only.
+- **Default store**: one `state.json` under that directory, written to a
+  temporary sibling and renamed into place, so a crash mid-write keeps the
+  previous value.
+- **Overridable**: pass `durable: myStore` to the constructor, or call
+  `worker.setDurableStore(myStore)` later. A store is just
+  `{ load(): Promise<string | undefined>; save(data: string): Promise<void> }`,
+  so a database row or remote KV fits as well as a file.
+  `MemoryDurableStore` covers tests and runs with no writable disk;
+  `setDurableStore(null)` turns persistence off.
+- **`loadState`** returns `undefined` when nothing was ever saved, and throws
+  when a saved value is not valid JSON (corruption is reported, not hidden).
+- **`saveState`** is a full replace, not a merge, and throws
+  `StateUnavailableError` when no store is configured — guard optional
+  persistence with `hasDurableStore()`.
+
 ### CLI helpers (writing a worker `start` entrypoint)
 
 Out-of-process workers ship a `src/start.ts` (compiled to the package `bin`) to
@@ -253,6 +318,10 @@ await runWorkerApp(async () => {
   `--bus-url` / `--worker-id` / `--credential` flags override the
   supervisor-injected env (`NIQ_BUS_URL` / `NIQ_WORKER_ID` / `NIQ_WORKER_CREDENTIAL`).
 - `runWorkerApp(main)` — run the app body, log + set `process.exitCode = 1` on failure.
+
+A host may also inject `NIQ_STATE_DIR` (read with `readStateDir()`) to give the
+worker a place to keep its own state; see “Durable state” above. It is optional —
+without it the worker persists nothing.
 
 ## Protocol notes
 

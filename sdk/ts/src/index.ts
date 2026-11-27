@@ -1,7 +1,18 @@
 export { HTTPWorkerClient } from "./client.js";
 export type { HTTPWorkerClientOptions } from "./client.js";
 
-export { BaseWorker, parseToolCall, argString, argInt } from "./baseworker.js";
+export {
+  BaseWorker,
+  ConfigUnavailableError,
+  StateUnavailableError,
+  parseToolCall,
+  argString,
+  argInt,
+} from "./baseworker.js";
+export type { ConfigPatch } from "./baseworker.js";
+
+export { FileDurableStore, MemoryDurableStore } from "./durable.js";
+export type { DurableStore } from "./durable.js";
 
 export {
   InterfaceWorker,
@@ -39,7 +50,7 @@ export { parseCliArgs, busConnFromArgs, runWorkerApp, BUS_CLI_FLAGS } from "./cl
 export type { ParsedCliArgs } from "./cli.js";
 
 export { createEvent } from "./createEvent.js";
-export { BUS_ENV_VARS, readBusEnv, type BusEnv } from "./env.js";
+export { BUS_ENV_VARS, STATE_ENV_VAR, readBusEnv, readStateDir, type BusEnv } from "./env.js";
 export { newId } from "./id.js";
 export { parseEventStream } from "./sse.js";
 
