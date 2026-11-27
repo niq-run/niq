@@ -1,8 +1,6 @@
 package process
 
 import (
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -11,26 +9,6 @@ import (
 	corebus "github.com/niq-run/niq/core/itfs/bus"
 	"github.com/niq-run/niq/core/itfs/event"
 )
-
-// TestResolveSecret verifies env:/file:/plaintext credential resolution.
-func TestResolveSecret(t *testing.T) {
-	t.Setenv("NIW_TEST_CRED", "from-env")
-	if got := ResolveSecret("env:NIW_TEST_CRED"); got != "from-env" {
-		t.Fatalf("env resolution = %q, want %q", got, "from-env")
-	}
-
-	f := filepath.Join(t.TempDir(), "cred")
-	if err := os.WriteFile(f, []byte("from-file\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if got := ResolveSecret("file:" + f); got != "from-file" {
-		t.Fatalf("file resolution = %q, want %q", got, "from-file")
-	}
-
-	if got := ResolveSecret("plaintext"); got != "plaintext" {
-		t.Fatalf("plaintext pass-through = %q, want %q", got, "plaintext")
-	}
-}
 
 // TestBuildRemoteIdentityDefaults verifies the default ACLs: a dialect-in
 // worker gets the broad wildcard, while a niq link's far-side identity gets only what the

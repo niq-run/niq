@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/niq-run/niq/app/standalone/secret"
 	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/app/standalone/worker/builtin/workers"
 	"github.com/niq-run/niq/app/standalone/worker/process"
@@ -38,6 +39,9 @@ type Config struct {
 	// destroyed (the host, the WebUI's interface worker).
 	Protect []string
 	Logf    func(string, ...any)
+	// Secrets resolves credential references when a managed process's params
+	// become its environment. Optional: nil means the default env/file provider.
+	Secrets secret.Provider
 }
 
 // ControlPlane owns the worker subsystem for one project.
@@ -82,6 +86,7 @@ func New(cfg Config) *ControlPlane {
 		Bus:        cfg.Bus,
 		Engine:     cfg.Engine,
 		Logf:       logf,
+		Secrets:    cfg.Secrets,
 	})
 	manager.SetSpawnHook(func(conf coreworker.WorkerConfig) error {
 		m := cp.backend.manifestFromSpec(coreworker.WorkerSpec{WorkerConfig: conf})

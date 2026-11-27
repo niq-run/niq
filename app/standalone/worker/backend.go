@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/niq-run/niq/app/standalone/secret"
 	"github.com/niq-run/niq/app/standalone/worker/builtin"
 	"github.com/niq-run/niq/app/standalone/worker/process"
 	"github.com/niq-run/niq/core/impl/eventbus"
@@ -49,6 +50,10 @@ type backendConfig struct {
 	Engine *eventbus.Engine
 	// Logf defaults to log.Printf.
 	Logf func(string, ...any)
+	// Secrets resolves `env:` / `file:` (and, later, `vault:`) references when a
+	// managed process's params become its environment. Optional: nil means the
+	// default env/file provider.
+	Secrets secret.Provider
 }
 
 // workerHostBackend implements core worker.Backend over the instance manager,
@@ -64,6 +69,7 @@ type workerHostBackend struct {
 	signer     *eventbus.TokenSigner
 	engine     *eventbus.Engine
 	logf       func(string, ...any)
+	secrets    secret.Provider
 
 	mu        sync.Mutex
 	protected map[string]bool
@@ -78,6 +84,10 @@ func newBackend(cfg backendConfig) *workerHostBackend {
 	if logf == nil {
 		logf = log.Printf
 	}
+	secrets := cfg.Secrets
+	if secrets == nil {
+		secrets = secret.Default{}
+	}
 	return &workerHostBackend{
 		projectID:  cfg.ProjectID,
 		manager:    cfg.Manager,
@@ -89,6 +99,7 @@ func newBackend(cfg backendConfig) *workerHostBackend {
 		signer:     cfg.Signer,
 		engine:     cfg.Engine,
 		logf:       logf,
+		secrets:    secrets,
 		protected:  map[string]bool{},
 		locks:      map[string]*sync.Mutex{},
 	}
@@ -271,7 +282,7 @@ func (b *workerHostBackend) createManagedProcess(spec coreworker.WorkerSpec) (co
 		// Resume retries the launch.
 		return coreworker.WorkerInfo{}, err
 	}
-	if err := b.supervisor.Start(launchSpec(m, credential)); err != nil {
+	if err := b.supervisor.Start(b.launchSpec(m, credential)); err != nil {
 		return coreworker.WorkerInfo{}, err
 	}
 	return b.infoFor(&m), nil
@@ -296,6 +307,11 @@ func (b *workerHostBackend) createUnmanagedProcess(spec coreworker.WorkerSpec) (
 // Update applies a partial edit to a worker's manifest. Nothing is (re)started:
 // params are construction input, so a running instance follows the edit on its
 // next start, and display metadata is cosmetic.
+//
+// `params` MERGES: only the given keys change, and a nil value removes that key
+// (JSON null clears). A call that repoints one field therefore cannot clobber
+// the rest by omission, which is what makes a self-service edit (a niq worker
+// repointing its link) safe against a concurrent edit made elsewhere.
 func (b *workerHostBackend) Update(_ context.Context, id string, patch coreworker.WorkerPatch) (coreworker.WorkerInfo, error) {
 	l := b.idLock(id)
 	l.Lock()
@@ -316,10 +332,21 @@ func (b *workerHostBackend) Update(_ context.Context, id string, patch coreworke
 		next.Description = *patch.Description
 	}
 	if patch.Params != nil {
-		if len(patch.Params) == 0 {
+		merged := make(map[string]any, len(m.Params)+len(patch.Params))
+		for k, v := range m.Params {
+			merged[k] = v
+		}
+		for k, v := range patch.Params {
+			if v == nil {
+				delete(merged, k)
+				continue
+			}
+			merged[k] = v
+		}
+		if len(merged) == 0 {
 			next.Params = nil
 		} else {
-			next.Params = patch.Params
+			next.Params = merged
 		}
 	}
 	// Validate the RESULT, not the patch: metadata limits apply to the whole
@@ -459,7 +486,7 @@ func (b *workerHostBackend) resume(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
-		return b.supervisor.Start(launchSpec(*m, credential))
+		return b.supervisor.Start(b.launchSpec(*m, credential))
 	case coreworker.PlacementUnmanagedProcess:
 		_, err := process.ProvisionUnmanagedProcess(b.bus, b.signer, identityFromManifest(*m))
 		return err
@@ -561,7 +588,7 @@ func (b *workerHostBackend) Restart(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
-		return b.supervisor.Start(launchSpec(*m, credential))
+		return b.supervisor.Start(b.launchSpec(*m, credential))
 	case coreworker.PlacementUnmanagedProcess:
 		return fmt.Errorf("worker %s runs outside this host and cannot be restarted", id)
 	default:
@@ -758,11 +785,15 @@ func identityFromManifest(m Manifest) process.IdentitySpec {
 
 // launchSpec lowers a manifest into the supervisor's launch input. The
 // credential is the freshly minted one (managed-process never persists it).
-func launchSpec(m Manifest, credential string) process.Spec {
+//
+// Param values go through the assembly layer's secret provider: a `file:` /
+// `env:` reference is expanded here, at the boundary where a declaration turns
+// into a live process environment.
+func (b *workerHostBackend) launchSpec(m Manifest, credential string) process.Spec {
 	env := make(map[string]string, len(m.Params))
 	for k, v := range m.Params {
 		if s, ok := v.(string); ok {
-			env[k] = process.ResolveSecret(s)
+			env[k] = b.secrets.Resolve(s)
 		}
 	}
 	return process.Spec{

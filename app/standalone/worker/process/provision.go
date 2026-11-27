@@ -14,7 +14,6 @@ package process
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -214,22 +213,4 @@ func RegisterIdentity(registry corebus.IdentityRegistry, id corebus.Identity) er
 		return registry.Register(id)
 	}
 	return registry.Update(id.WorkerID, id.PublishAllow, id.SubscribeAllow)
-}
-
-// ResolveSecret resolves a credential that may be a literal value or an
-// "env:VAR" / "file:PATH" reference. References keep remote credentials out of
-// the manifest; a bare value passes through unchanged.
-func ResolveSecret(s string) string {
-	if s == "" {
-		return s
-	}
-	if v, ok := strings.CutPrefix(s, "env:"); ok {
-		return os.Getenv(v)
-	}
-	if v, ok := strings.CutPrefix(s, "file:"); ok {
-		if b, err := os.ReadFile(v); err == nil {
-			return strings.TrimSpace(string(b))
-		}
-	}
-	return s
 }

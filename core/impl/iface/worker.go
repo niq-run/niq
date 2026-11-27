@@ -42,6 +42,13 @@ type Config struct {
 	Approvals bool
 	// RequestTimeout overrides DefaultRequestTimeout.
 	RequestTimeout time.Duration
+	// PatchConfig applies a partial edit to this worker's own DECLARATION (its
+	// params), so a worker can persist a change it made to itself (a niq worker
+	// repointing its far-side link). Injected by the assembly: the host's control
+	// plane owns the write and validates it. Nil leaves the worker unable to
+	// persist a config change (PatchConfig then reports
+	// baseworker.ErrConfigUnavailable).
+	PatchConfig func(patch map[string]any) error
 }
 
 // Worker is the interface worker: a bus participant that bridges events to its
@@ -87,6 +94,9 @@ func New(cfg Config) *Worker {
 		pubs:       cfg.Publishes,
 		state:      state,
 		timeout:    timeout,
+	}
+	if cfg.PatchConfig != nil {
+		w.BaseWorker.SetConfigPatcher(cfg.PatchConfig)
 	}
 	w.h = newHandler(cfg.ID, cfg.Bus, timeout)
 	w.handle = w.h

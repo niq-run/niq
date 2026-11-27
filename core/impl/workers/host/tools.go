@@ -172,7 +172,7 @@ func (w *HostWorker) registerExtensions() {
 	w.Register(baseworker.Extension{
 		Event:       TypeUpdate,
 		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"updated"}}}),
-		Description: "Edit a worker's declaration without touching its runtime state. `label`/`tags`/`description` are display metadata (cosmetic, visible immediately). `params` replaces the construction params wholesale, and takes effect on the worker's NEXT start (params are build input; use restart to apply them now). Bus ACL is not editable here: publish/subscribe grants belong to the bus identity layer, not to a worker's lifecycle.",
+		Description: "Edit a worker's declaration without touching its runtime state. `label`/`tags`/`description` are display metadata (cosmetic, visible immediately). `params` MERGES into the worker's construction params: only the given keys change, and a null value clears that key, so naming one field never clobbers the rest. Params take effect on the worker's NEXT start (they are build input; use restart to apply them now). Bus ACL is not editable here: publish/subscribe grants belong to the bus identity layer, not to a worker's lifecycle.",
 		Parameters: obj(map[string]any{
 			"worker_id": map[string]any{
 				"type":        "string",
@@ -193,7 +193,7 @@ func (w *HostWorker) registerExtensions() {
 			},
 			"params": map[string]any{
 				"type":        "object",
-				"description": "Replacement construction params for the worker's type. Replaces the whole object; an empty object clears it. Omit to leave it unchanged. Applied on the next start.",
+				"description": "Merge into the construction params of the worker's type. Only the given keys change; a null value clears that key. Applied on the next start.",
 			},
 		}),
 	}, func(evt event.Event) {

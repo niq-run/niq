@@ -49,8 +49,12 @@ type WorkerSpec struct {
 
 // WorkerPatch is a partial edit of the DECLARED half of a worker: what it is
 // called, how it is built. Every field is optional; a nil pointer, nil slice or
-// nil map means "leave unchanged", while an empty slice or empty map means
-// "clear".
+// nil map means "leave unchanged".
+//
+// Params MERGES: only the given keys are written, and a nil value clears that
+// key (JSON null). An empty map is therefore a no-op, not "clear everything" —
+// send each key as nil to remove it. Merge is the safe default for a patch that
+// names one field: omission must not delete the rest.
 //
 // ACL is deliberately absent. Publish/subscribe grants are bus identity data,
 // owned by the bus control plane — editing them belongs to the bus, not to a

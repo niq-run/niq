@@ -43,3 +43,35 @@ instead of the `*` a generic third-party worker gets.
 `niq.recipient.set` / `unset` / `get`, `niq.dial`, `niq.status` — plus
 `worker.readme`, which renders the live link state and bindings (never the
 credential).
+
+## `niq.dial` persists by default
+
+A dial may repoint the link with `remote_url` / `remote_worker_id` /
+`remote_credential`. That change is **persisted before it is applied**, so the
+next process start dials the same target — an agent that provisions a link does
+not have to re-provision it after a restart.
+
+It goes through the worker's own declaration writer, not around it:
+
+```
+niq.dial → baseworker.PatchConfig → injected writer → control plane Update
+                                                       (merge, validate, lock, log)
+```
+
+The writer is injected by the assembly at construction (`iface.Config.PatchConfig`
+→ `baseworker.SetConfigPatcher`), wired to `WorkerBackend.Update`, so the
+control plane keeps ownership, validation and the "applies on the next start"
+contract. The patch is a **merge** of only the keys the call changed, so an
+unrelated param edited elsewhere is never clobbered.
+
+- No writer injected (embedded use, tests): `PatchConfig` returns
+  `baseworker.ErrConfigUnavailable`, the repoint applies to this process only,
+  and the reply says "not saved".
+- A failed write fails the call and leaves the old target in force: memory and
+  config never disagree.
+- The credential is persisted **as configured**. Pass a reference
+  (`env:NAME`, `file:PATH`) to `niq.dial` and it stays a reference; the resolved
+  token is never written — not to the manifest, and not to the worker's snapshot
+  (which holds only the two recipient bindings, and is plain JSON on disk).
+  Resolution goes through the injected secret provider (`app/standalone/secret`), so a
+  dedicated `vault:` provider can replace the default env/file one later.
