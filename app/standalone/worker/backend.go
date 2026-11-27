@@ -407,8 +407,9 @@ func (b *workerHostBackend) validateParams(m Manifest) error {
 
 // sealParams replaces literal credentials with vault references.
 //
-// Which params are credentials is the TYPE's declaration (registry.MarkSecret),
-// not a guess about a name: the write path cannot know what a param means.
+// Which params are credentials is the TYPE's declaration (the Secret flag on its
+// ParamSpecs, surfaced as registry.SecretParams), not a guess about a name: the
+// write path cannot know what a param means.
 //
 //   - an empty value or an existing reference (`vault:`/`env:`/`file:`) is left
 //     alone, so re-saving never re-seals and never overwrites a deliberate ref;

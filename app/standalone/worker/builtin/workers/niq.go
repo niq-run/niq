@@ -112,11 +112,16 @@ func buildNIQSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (corewo
 }
 
 // ── spawn contract ──
-var spawnParamsNiq = []string{"remote_url", "remote_worker_id", "remote_credential", "recipient", "remote_recipient"}
+var spawnParamsNiq = []builtin.ParamSpec{
+	{Name: "remote_url"},
+	{Name: "remote_worker_id"},
+	// The far-side credential is a secret: a literal passed to Create/update is
+	// sealed into the vault, and the declaration keeps only `vault:<name>`.
+	{Name: "remote_credential", Secret: true},
+	{Name: "recipient"},
+	{Name: "remote_recipient"},
+}
 
 func registerNiq(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("niq", spawnParamsNiq, ctx, buildNIQSpec)
-	// The far-side credential is a secret: a literal passed to Create/update is
-	// sealed into the vault, and the declaration keeps only `vault:<name>`.
-	reg.MarkSecret("niq", "remote_credential")
 }

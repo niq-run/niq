@@ -37,6 +37,10 @@ type Registry struct {
 	builders map[string]workerctl.Builder
 	checks   map[string]func(params map[string]any) error
 	accepted map[string][]string
+	// specs is the full contract a type registered, carrying each param's
+	// secrecy. accepted/secret are derived views of it, kept so the control
+	// plane and tests can read the same registration.
+	specs map[string][]ParamSpec
 	// secret names the params that carry a credential. Declaring it is how the
 	// write path knows to seal a literal into the vault instead of writing it to
 	// workers.json — a fact about the type, not a guess about a param's name.
@@ -49,6 +53,7 @@ func NewRegistry() *Registry {
 		builders: map[string]workerctl.Builder{},
 		checks:   map[string]func(map[string]any) error{},
 		accepted: map[string][]string{},
+		specs:    map[string][]ParamSpec{},
 		secret:   map[string][]string{},
 	}
 }
@@ -59,24 +64,31 @@ func NewRegistry() *Registry {
 // The contract is registered with the builder, in one call, because the valid
 // parameter set is the type's own knowledge: drift between "what the builder
 // reads" and "what the check allows" is then a visible edit rather than a silent
-// gap.
-func (r *Registry) RegisterType(typ string, accepted []string, ctx BuildContext, build SpecFunc) {
-	keys := append([]string(nil), accepted...)
+// gap. The same contract carries each param's secrecy, so a credential param is
+// declared in one place rather than a second, forgettable MarkSecret call.
+func (r *Registry) RegisterType(typ string, specs []ParamSpec, ctx BuildContext, build SpecFunc) {
+	keys := Names(specs)
 	r.RegisterBuilder(typ, func(cfg coreworker.WorkerConfig) (coreworker.SpawnSpec, error) {
 		return build(ctx, cfg)
-	}, CheckSpawnParams(typ, keys))
+	}, CheckSpawnParams(typ, specs))
 
+	specsCopy := append([]ParamSpec(nil), specs...)
 	r.mu.Lock()
 	r.accepted[typ] = keys
+	r.specs[typ] = specsCopy
 	r.mu.Unlock()
+	if secrets := SecretNames(specs); len(secrets) > 0 {
+		r.MarkSecret(typ, secrets...)
+	}
 }
 
 // MarkSecret declares which of a type's params carry a credential. The control
 // plane seals a literal value for these keys into the vault and stores only a
 // `vault:` reference, so a token never lands in workers.json.
 //
-// It is a separate call from RegisterType because most types have none, and a
-// long RegisterType signature would hide the one that does.
+// RegisterType derives this from the type's ParamSpecs; the call remains public
+// as the seam for RegisterBuilder types (out-of-tree, tests) that have no spec
+// list to carry secrecy.
 func (r *Registry) MarkSecret(typ string, names ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -88,6 +100,21 @@ func (r *Registry) SecretParams(typ string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]string(nil), r.secret[typ]...)
+}
+
+// Specs returns the contract a type registered with, sorted by name. A type
+// registered through RegisterBuilder (out-of-tree, tests) reports nil, false:
+// it has no spec list, only whatever check it supplied.
+func (r *Registry) Specs(typ string) ([]ParamSpec, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	specs, ok := r.specs[typ]
+	if !ok {
+		return nil, false
+	}
+	out := append([]ParamSpec(nil), specs...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, true
 }
 
 // RegisterBuilder is the seam for types this package does not ship: tests and

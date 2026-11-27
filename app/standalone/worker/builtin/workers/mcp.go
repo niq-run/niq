@@ -60,7 +60,10 @@ func buildMCPSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (corewo
 }
 
 // ── spawn contract ──
-var spawnParamsMCP = []string{"expose", "fixed", "servers", "allowed_tools", "mcp", "readme", "readme_append"}
+var spawnParamsMCP = []builtin.ParamSpec{
+	{Name: "expose"}, {Name: "fixed"}, {Name: "servers"}, {Name: "allowed_tools"},
+	{Name: "mcp"}, {Name: "readme"}, {Name: "readme_append"},
+}
 
 func registerMCP(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("mcp", spawnParamsMCP, ctx, buildMCPSpec)

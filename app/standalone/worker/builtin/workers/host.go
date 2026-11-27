@@ -43,7 +43,7 @@ func buildHostSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (corew
 }
 
 // ── spawn contract ──
-var spawnParamsHost = []string{"readme", "readme_append"}
+var spawnParamsHost = []builtin.ParamSpec{{Name: "readme"}, {Name: "readme_append"}}
 
 func registerHost(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("host", spawnParamsHost, ctx, buildHostSpec)

@@ -77,7 +77,7 @@ func buildProgramSpec(ctx builtin.BuildContext, cfg coreworker.WorkerConfig) (co
 }
 
 // ── spawn contract ──
-var spawnParamsProgram = []string{"mounts", "path"}
+var spawnParamsProgram = []builtin.ParamSpec{{Name: "mounts"}, {Name: "path"}}
 
 func registerProgram(ctx builtin.BuildContext, reg *builtin.Registry) {
 	reg.RegisterType("program", spawnParamsProgram, ctx, buildProgramSpec)

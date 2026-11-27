@@ -102,6 +102,37 @@ func TestCheckSpawnParamsRejectsIdentityKeys(t *testing.T) {
 	}
 }
 
+// TestCredentialParamsAreDerivedFromContract is the point of making the contract
+// data: a param's secrecy is declared next to its name, so the write path learns
+// what to seal from the same registration that validates the call. No separate
+// MarkSecret call can drift from it.
+func TestCredentialParamsAreDerivedFromContract(t *testing.T) {
+	reg := builtin.NewRegistry()
+	Register(builtin.BuildContext{}, reg)
+
+	specs, ok := reg.Specs("niq")
+	if !ok {
+		t.Fatal("niq registered no spec list")
+	}
+	var marked []string
+	for _, s := range specs {
+		if s.Secret {
+			marked = append(marked, s.Name)
+		}
+	}
+	if len(marked) != 1 || marked[0] != "remote_credential" {
+		t.Fatalf("niq secret params = %v, want [remote_credential]", marked)
+	}
+	if got := reg.SecretParams("niq"); len(got) != 1 || got[0] != "remote_credential" {
+		t.Fatalf("SecretParams(niq) = %v, want the contract's secret names", got)
+	}
+
+	// Types with no credential declare none — the derived view stays empty.
+	if got := reg.SecretParams("reason"); len(got) != 0 {
+		t.Fatalf("SecretParams(reason) = %v, want none", got)
+	}
+}
+
 // TestValidateProcessParams verifies managed-process params are env-shaped.
 func TestValidateProcessParams(t *testing.T) {
 	if err := builtin.ValidateProcessParams(map[string]any{"TOKEN": "env:TOKEN", "ROOT": "/data"}); err != nil {

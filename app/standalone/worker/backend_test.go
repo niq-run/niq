@@ -212,7 +212,7 @@ func newTestRig(t *testing.T, protect ...string) *testRig {
 			return &fakeWorker{BaseWorker: baseworker.NewBaseWorker(id, ch)}
 		}
 		return coreworker.SpawnSpec{Config: cfg, Connect: connect, Build: build}, nil
-	}, builtin.CheckSpawnParams("fake", []string{"name", "note"}))
+	}, builtin.CheckSpawnParams("fake", []builtin.ParamSpec{{Name: "name"}, {Name: "note"}}))
 
 	return &testRig{cp: cp, backend: cp.backend, manager: cp.Manager(), supervisor: sup, manifests: manifests, registry: registry, bus: bus}
 }
