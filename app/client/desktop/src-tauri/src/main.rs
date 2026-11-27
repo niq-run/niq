@@ -15,6 +15,15 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
+/// Runs after the notification plugin's own shim, which is why the window is
+/// built in code rather than in `tauri.conf.json`: a webview's own
+/// initialization scripts are appended after the plugins', and only that order
+/// lets this one wrap `window.Notification` instead of being overwritten.
+const NOTIFICATION_CLICKS: &str = include_str!("notify.js");
+
+/// Keeps the menu bar item alive: dropping a `TrayIcon` removes it.
+struct Tray(#[allow(dead_code)] tauri::tray::TrayIcon);
+
 /// Handshake state between the splash page and the gateway boot.
 ///
 /// The window is created before the gateway answers, so it shows a local splash
@@ -132,6 +141,60 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// The menu bar item: the mark alone, without its tile — a template image, so
+/// macOS tints it with the menu bar's own colour.
+fn install_tray(app: &tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "tray-show", "显示窗口", true, None::<&str>)?;
+    let reload = MenuItem::with_id(app, "tray-reload", "重新加载", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "tray-open", "在浏览器中打开", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "tray-stop", "停止网关", true, None::<&str>)?;
+    let quit = PredefinedMenuItem::quit(app, Some("退出 niq"))?;
+    let menu = Menu::with_items(app, &[&show, &reload, &open, &stop, &quit])?;
+
+    let tray = tauri::tray::TrayIconBuilder::with_id("main")
+        .icon(tauri::image::Image::from_bytes(include_bytes!(
+            "../icons/tray.png"
+        ))?)
+        .icon_as_template(true)
+        .tooltip("niq")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| handle_menu(app, event.id().0.as_str()))
+        .build(app)?;
+    app.manage(Tray(tray));
+    Ok(())
+}
+
+/// Menu actions live here once: the app menu and the menu bar item share them,
+/// with a `tray-` prefix telling the two apart.
+fn handle_menu(app: &AppHandle, id: &str) {
+    match id {
+        "show" | "tray-show" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        "reload" | "tray-reload" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval("window.location.reload()");
+            }
+        }
+        "open" | "tray-open" => {
+            let url = app.state::<Shell>().url.lock().unwrap().clone();
+            if let Some(url) = url {
+                open_external(&url);
+            }
+        }
+        "stop" | "tray-stop" => {
+            if let Err(error) = gateway::stop_installed() {
+                gateway::log(&error);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn open_external(url: &str) {
     let _ = std::process::Command::new("open").arg(url).spawn();
@@ -160,28 +223,24 @@ fn main() {
         .invoke_handler(tauri::generate_handler![ui_ready, retry_gateway])
         .setup(|app| {
             install_menu(app)?;
+            // The window is built here, not in tauri.conf.json, so it can carry
+            // the notification-click script (see NOTIFICATION_CLICKS).
+            tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("")
+            .inner_size(1280.0, 820.0)
+            .min_inner_size(900.0, 600.0)
+            .center()
+            .initialization_script(NOTIFICATION_CLICKS)
+            .build()?;
+            install_tray(app)?;
             boot(app.handle().clone());
             Ok(())
         })
-        .on_menu_event(|app, event| match event.id().0.as_str() {
-            "reload" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.eval("window.location.reload()");
-                }
-            }
-            "open" => {
-                let url = app.state::<Shell>().url.lock().unwrap().clone();
-                if let Some(url) = url {
-                    open_external(&url);
-                }
-            }
-            "stop" => {
-                if let Err(error) = gateway::stop_installed() {
-                    gateway::log(&error);
-                }
-            }
-            _ => {}
-        })
+        .on_menu_event(|app, event| handle_menu(app, event.id().0.as_str()))
         .run(tauri::generate_context!())
         .expect("error while running niq");
 }

@@ -85,12 +85,13 @@ app/client/desktop/
 ├── ui/index.html            the splash (no build step, no framework)
 ├── scripts/prepare-sidecar.sh
 └── src-tauri/
-    ├── Cargo.toml           tauri + tauri-plugin-shell
-    ├── tauri.conf.json      window, externalBin, bundle metadata
-    ├── capabilities/        shell:allow-execute|spawn for the sidecar
-    ├── icons/               PNG/ICO/ICNS; see "Icons" in the notes
-    └── src/main.rs          menu, splash handshake, sidecar spawn
+    ├── Cargo.toml           tauri + shell + notification plugins
+    ├── tauri.conf.json      externalBin and bundle metadata; the window is built in code
+    ├── capabilities/        sidecar spawn and notification permissions
+    ├── icons/               PNG/ICO/ICNS + tray.png; see "Icons" in the notes
+    └── src/main.rs          window, menus, menu bar item, splash, sidecar spawn
         src/gateway.rs       find / start / probe the gateway
+        src/notify.js        notification clicks back to the page
 ```
 
 ## Notes
@@ -113,10 +114,15 @@ app/client/desktop/
 - **Notifications.** A macOS webview has no `window.Notification`, so the WebUI's
   browser notification path reported "unsupported" inside the shell even though it
   works in a browser. `tauri-plugin-notification` installs a system-backed
-  `window.Notification` at document start, so the WebUI's own code runs unchanged
-  and the first opt-in asks macOS for permission. One gap: the shim does not
-  report clicks, so tapping a notification does not bring the approval list
-  forward.
+  `window.Notification` at document start; `src/notify.js` runs after it (a
+  webview's own initialization scripts are appended after the plugins') and wraps
+  it so a click runs the page's own `onclick`. That is the whole adaptation — the
+  WebUI is written against the standard API and is not modified.
+- **Menus.** Both the menu at the top of the screen and the menu bar item are
+  Tauri's own APIs (`tauri::menu`, `tauri::tray`), thin wrappers over NSMenu and
+  NSStatusItem; there is no hand-written AppKit module. The menu bar icon is a
+  template image (`icons/tray.png`): the mark alone without its tile, so macOS
+  tints it with the menu bar's own colour, and `tray-icon` draws it at 18 pt.
 - A release build needs code signing + notarisation on macOS and signing on
   Windows; the config here is unsigned for local use.
 - **Size.** The release profile optimises the shell for size (`lto`, one codegen
