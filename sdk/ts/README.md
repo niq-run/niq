@@ -262,10 +262,13 @@ await worker.patchConfig({ remote_url: "http://other-bus", stale_key: null });
 #### Durable state: the worker owns the bytes, the caller owns the location
 
 ```ts
+// The location comes from outside. Either the host injects NIQ_STATE_DIR, or the
+// composing code passes durableDir. With neither, the worker keeps state in
+// memory only — the SDK never invents a directory.
 const worker = new BaseWorker({
   id: "echo@me",
   channel,
-  durableDir: "/var/lib/niq/echo", // the caller picks the location
+  durableDir: "/var/lib/niq/echo", // optional: wins over NIQ_STATE_DIR
 });
 
 const st = (await worker.loadState<{ count: number }>()) ?? { count: 0 };
@@ -273,8 +276,13 @@ st.count++;
 await worker.saveState(st); // atomic replace of state.json
 ```
 
-- **Default store**: one `state.json` under `durableDir`, written to a temporary
-  sibling and renamed into place, so a crash mid-write keeps the previous value.
+- **Off unless the caller offers a directory.** No `durableDir` and no
+  `NIQ_STATE_DIR` in the environment means nothing is persisted; that is the
+  default, not an error. Precedence: `durable` store > `durableDir` option >
+  `NIQ_STATE_DIR` > memory only.
+- **Default store**: one `state.json` under that directory, written to a
+  temporary sibling and renamed into place, so a crash mid-write keeps the
+  previous value.
 - **Overridable**: pass `durable: myStore` to the constructor, or call
   `worker.setDurableStore(myStore)` later. A store is just
   `{ load(): Promise<string | undefined>; save(data: string): Promise<void> }`,
@@ -310,6 +318,10 @@ await runWorkerApp(async () => {
   `--bus-url` / `--worker-id` / `--credential` flags override the
   supervisor-injected env (`NIQ_BUS_URL` / `NIQ_WORKER_ID` / `NIQ_WORKER_CREDENTIAL`).
 - `runWorkerApp(main)` — run the app body, log + set `process.exitCode = 1` on failure.
+
+A host may also inject `NIQ_STATE_DIR` (read with `readStateDir()`) to give the
+worker a place to keep its own state; see “Durable state” above. It is optional —
+without it the worker persists nothing.
 
 ## Protocol notes
 

@@ -127,7 +127,8 @@ bundle，要么是 CLI 自己的一个模式：
 `niq status [--json]` 只做汇报 —— 它不启动任何东西；网关没起来也不算错误。
 
 **三方客户端则相反**：它是独立应用，不被 CLI 拉起，所以它得**自己去找到并驱动 `niq` 二进制** ——
-把网关起来，然后走 HTTP 与之对话。macOS 菜单栏应用就是仓库里这个方向的参考：
+把网关起来，然后走 HTTP 与之对话。仓库里这个方向的参考是 `app/client/desktop` 的桌面套壳 ——
+原先在这里的 macOS 原生客户端已经搬到 `github.com/niq-run/clients`：
 
 1. **找到 `niq`** —— `NIQ_BIN`，然后常见安装位置，最后是登录 shell 的 `PATH`（GUI 应用继承的
    `PATH` 很精简）。
@@ -272,7 +273,9 @@ flowchart TB
   常驻守护、UI backend。
 
 `BaseWorker` 是这两者之下的原始契约（身份、扩展注册表、回复、presence）—— 给你那个有自己领域的
-worker 用。
+worker 用。它另带两个可选能力：可被装配方注入的 config patch 钩子（worker 提出、owner 落盘，
+下次启动生效），以及 durable state（写到注入的 `NIQ_STATE_DIR` 目录，或由你提供 store）。
+两者在不注入时都保持关闭。
 
 **在项目里登记它。** worker 由 manifest（`workers.json`）声明：`id`、`type`、`params`，加一个
 `placement`。客户端自带的 worker，**多数情况是远程 worker —— `unmanaged-process`**：

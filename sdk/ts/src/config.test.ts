@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import {
   type ConfigPatch,
 } from "./baseworker.js";
 import { MemoryDurableStore, type DurableStore } from "./durable.js";
+import { STATE_ENV_VAR } from "./env.js";
 import type { Event, WorkerSideChannel } from "./types/index.js";
 
 class FakeChannel implements WorkerSideChannel {
@@ -144,5 +145,57 @@ describe("durable state", () => {
   it("refuses to persist a value JSON cannot represent", async () => {
     const w = worker({ durable: new MemoryDurableStore() });
     await expect(w.saveState(undefined)).rejects.toThrow(/JSON-serializable/);
+  });
+
+  describe("state directory injected through the environment", () => {
+    // The SDK reads the directory once, at construction, so each case controls
+    // the ambient value explicitly and restores it afterwards.
+    const saved = process.env[STATE_ENV_VAR];
+    afterEach(() => {
+      if (saved === undefined) delete process.env[STATE_ENV_VAR];
+      else process.env[STATE_ENV_VAR] = saved;
+    });
+
+    it("persists under NIQ_STATE_DIR when it is set", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "niq-env-state-"));
+      process.env[STATE_ENV_VAR] = dir;
+
+      const w = worker();
+      expect(w.hasDurableStore()).toBe(true);
+      await w.saveState({ from: "env" });
+      expect(await worker().loadState()).toEqual({ from: "env" });
+    });
+
+    it("persists nothing when the variable is absent", async () => {
+      delete process.env[STATE_ENV_VAR];
+      expect(worker().hasDurableStore()).toBe(false);
+    });
+
+    it("persists nothing when the variable is blank", async () => {
+      process.env[STATE_ENV_VAR] = "   ";
+      expect(worker().hasDurableStore()).toBe(false);
+    });
+
+    it("lets durableDir override the environment", async () => {
+      const envDir = await mkdtemp(join(tmpdir(), "niq-env-state-"));
+      const optDir = await mkdtemp(join(tmpdir(), "niq-opt-state-"));
+      process.env[STATE_ENV_VAR] = envDir;
+
+      const w = worker({ durableDir: optDir });
+      await w.saveState({ where: "opt" });
+
+      expect(await worker({ durableDir: optDir }).loadState()).toEqual({ where: "opt" });
+      // The env directory was untouched.
+      expect(await worker({ durableDir: envDir }).loadState()).toBeUndefined();
+    });
+
+    it("lets an explicit store override the environment", async () => {
+      process.env[STATE_ENV_VAR] = "/nonexistent/env-dir";
+      const memory = new MemoryDurableStore();
+      const w = worker({ durable: memory });
+
+      await w.saveState({ via: "explicit" });
+      expect(await memory.load()).toBe('{"via":"explicit"}');
+    });
   });
 });

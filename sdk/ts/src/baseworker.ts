@@ -9,6 +9,7 @@ import type {
 import { EventType } from "./types/index.js";
 import { createEvent } from "./createEvent.js";
 import { FileDurableStore, type DurableStore } from "./durable.js";
+import { readStateDir } from "./env.js";
 import { eventHelp, helpIndex, visibleEventNames } from "./help.js";
 import type { HelpFunc } from "./help.js";
 import { readmeText } from "./readme.js";
@@ -91,16 +92,17 @@ export class BaseWorker {
     durable?: DurableStore;
     /**
      * Directory for the DEFAULT durable store (one `state.json` inside it).
-     * The caller supplies the location because only it knows where a worker's
-     * state belongs. Omit it — or pass `durable` — to opt out of file storage.
+     * Wins over the injected `NIQ_STATE_DIR` directory. Omitting both means the
+     * worker persists nothing: the SDK does not invent a location on disk.
      */
     durableDir?: string;
   }) {
     this.id = opts.id;
     this.subscriptions = opts.subscriptions ?? [];
     this.channel = opts.channel;
+    const dir = opts.durableDir?.trim() || readStateDir();
     this.durableStore =
-      opts.durable ?? (opts.durableDir ? new FileDurableStore(opts.durableDir) : null);
+      opts.durable ?? (dir ? new FileDurableStore(dir) : null);
   }
 
   // ── Config: the worker asks, the owner writes ──
@@ -144,6 +146,10 @@ export class BaseWorker {
   }
 
   // ── State: the worker owns the bytes, the caller owns the location ──
+  //
+  // The location comes from outside — a `durableDir` option, or the
+  // `NIQ_STATE_DIR` directory a host injects. With neither, nothing is
+  // persisted: memory-only is the default, not a file under some guessed path.
 
   /**
    * Replace the durable store (or clear it with `null`). Lets a worker swap the
