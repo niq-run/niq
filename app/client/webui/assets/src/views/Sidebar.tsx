@@ -1096,7 +1096,7 @@ export default function Sidebar({ view, setView, filterWorkers, onToggleFilterWo
         onClick={() => { onSelectPanel('providers'); onNavigate() }}
         onMouseEnter={() => setHoverId('providers')}
         onMouseLeave={() => setHoverId(null)}
-        style={{ ...hoverStyle('providers'), marginBottom: -6, cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
+        style={{ ...hoverStyle('providers'), cursor: 'pointer', color: panel === 'providers' ? colors.accent : colors.textMuted, fontSize: optSize, lineHeight: optLine }}
       >
         {t('sidebar.providers')}{panel === 'providers' ? ' \u25C9' : ''}
       </div>
