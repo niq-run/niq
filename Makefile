@@ -101,8 +101,13 @@ desktop: niq
 	@# bundle signature: `codesign -v` rejects it. Sign the bundle ad-hoc so the
 	@# copy in /Applications verifies (and is not "damaged" if handed to someone
 	@# else). Tauri already signed it properly when an identity is configured.
+	@# Nested code is signed first: the CLI sidecar carries no signature of its
+	@# own, and codesign refuses the bundle while a subcomponent is unsigned.
 	@if [ "$$(uname -s)" = "Darwin" ] && [ -z "$${APPLE_SIGNING_IDENTITY:-}" ] && command -v codesign >/dev/null 2>&1; then \
 		echo "desktop: signing the bundle ad-hoc"; \
+		for bin in "$(DESKTOP_APP)/Contents/MacOS"/* "$(DESKTOP_APP)/Contents/Frameworks"/*; do \
+			[ -f "$$bin" ] && codesign --force --sign - "$$bin" >/dev/null 2>&1 || true; \
+		done; \
 		codesign --force --sign - "$(DESKTOP_APP)"; \
 	fi
 
