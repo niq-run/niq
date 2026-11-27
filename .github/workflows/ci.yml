@@ -1,9 +1,9 @@
 name: CI
 
 # Every push and pull request: build, vet, unit tests with the race detector, the
-# black-box suites, and the two Node trees. The release workflow stays separate —
-# it is about publishing, and it should not be the first place a broken test is
-# noticed.
+# black-box suites, the two Node trees, and the desktop shell when its own files
+# changed. The release workflow stays separate — it is about publishing, and it
+# should not be the first place a broken test is noticed.
 
 on:
   pull_request:
@@ -143,3 +143,72 @@ jobs:
 
       - name: the committed bundle matches its source
         run: git diff --exit-code --stat -- dist
+
+  # The desktop job below only makes sense when the shell or its distribution
+  # script changed, and asking GitHub for a path filter on a whole workflow would
+  # gate the five jobs above too. So one cheap job answers the question the others
+  # need.
+  changes:
+    name: which paths changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            desktop:
+              - 'app/client/desktop/**'
+              - 'app/publish/desktop/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+
+  # The desktop shell is the one artifact no Go test can stand in for: a Rust
+  # crate bundled around a Go sidecar, staged and signed by a shell script. None
+  # of that ran in CI, so a broken `release.sh` stayed invisible until a tag —
+  # which is how v0.18.0 shipped with no macOS bundle at all (the universal build
+  # asked for the wrong sidecar names, and the ad-hoc signature it produced did
+  # not verify). It runs the release script rather than `tauri build` so the
+  # distribution path is the thing under test, and it asks for the universal
+  # bundle because that is the branch with the extra moving parts.
+  desktop:
+    name: desktop build (macos)
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/client/desktop/src-tauri
+
+      - run: npm install -g @tauri-apps/cli
+
+      - name: Build the universal bundle
+        run: ./app/publish/desktop/release.sh --universal --out "$RUNNER_TEMP/dist"
+
+      # The bundle is the product, so the assertions are about the bundle: it
+      # verifies, both binaries are universal, and the sidecar is inside it.
+      - name: The bundle verifies and carries its sidecar
+        run: |
+          app=$(ls -d app/client/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app)
+          codesign -v "$app"
+          for bin in niq niq-desktop; do
+            info=$(lipo -info "$app/Contents/MacOS/$bin")
+            echo "$bin: $info"
+            echo "$info" | grep -q x86_64
+            echo "$info" | grep -q arm64
+          done
+          ls -l "$RUNNER_TEMP"/dist
