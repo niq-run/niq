@@ -110,6 +110,13 @@ app/client/desktop/
   `externalBin` string, **not** the file name with the triple.
 - The splash ships the WebUI's own logo font subset (`ui/assets`), so the boot
   screen matches the app it becomes.
+- **Notifications.** A macOS webview has no `window.Notification`, so the WebUI's
+  browser notification path reported "unsupported" inside the shell even though it
+  works in a browser. `tauri-plugin-notification` installs a system-backed
+  `window.Notification` at document start, so the WebUI's own code runs unchanged
+  and the first opt-in asks macOS for permission. One gap: the shim does not
+  report clicks, so tapping a notification does not bring the approval list
+  forward.
 - A release build needs code signing + notarisation on macOS and signing on
   Windows; the config here is unsigned for local use.
 - **Size.** The release profile optimises the shell for size (`lto`, one codegen

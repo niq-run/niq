@@ -33,7 +33,9 @@ fn flush(app: &AppHandle) {
     if !*state.ui_ready.lock().unwrap() {
         return;
     }
-    let Some(window) = app.get_webview_window("main") else { return };
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
     // Take copies out of the guards first: keeping the guard alive inside the
     // `if let` would outlive `state` at the end of the function.
     let error = state.error.lock().unwrap().clone();
@@ -149,6 +151,10 @@ fn open_external(url: &str) {
 
 fn main() {
     tauri::Builder::default()
+        // Replaces `window.Notification` with a system-backed shim at document
+        // start (see the plugin's init script), which is how the WebUI's
+        // browser-notification code path works unchanged inside the shell.
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .manage(Shell::default())
         .invoke_handler(tauri::generate_handler![ui_ready, retry_gateway])
