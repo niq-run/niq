@@ -190,7 +190,8 @@ Linux 三个桌面 job、npm 包）在 `.github/workflows/release.yml`；`make n
 
 ## 9. CI
 
-`.github/workflows/ci.yml` 在每次推送到 `dev`/`main` 和每个 pull request 上运行。它不发布
+`.github/workflows/ci.yml` 在每个 pull request 上运行，以及在推送到 `main`（发版分支）时
+运行 —— PR 合进 `dev` 时那个提交已经跑过了，所以不重复。它不发布
 任何东西——那是 `release.yml` 的事——各 job 并行：
 
 | job | runner | 证明什么 |
@@ -200,7 +201,7 @@ Linux 三个桌面 job、npm 包）在 `.github/workflows/release.yml`；`make n
 | `cross` | ubuntu | `GOOS=windows`（amd64、arm64）、`linux/arm64`、`darwin/amd64` 仍能编译 |
 | `sdk` | ubuntu | `sdk/ts` 的 `npm ci`、`npm test`、`typecheck`、`build` |
 | `webui` | ubuntu | 提交进仓库的 bundle 就是 `vite build` 的产物（§2） |
-| `desktop` | macOS | `app/publish/desktop/release.sh --universal` 能构建、签名并通过校验；两个可执行文件都是 x86_64 + arm64 |
+| `desktop` | macOS、Windows、Linux | `app/publish/desktop/release.sh` 在三个平台上都能构建；macOS 还会额外校验包和两个可执行文件都是 x86_64 + arm64 |
 
 为什么这么选：
 
@@ -216,8 +217,10 @@ Linux 三个桌面 job、npm 包）在 `.github/workflows/release.yml`；`make n
   "把重建的 `dist` 一起提交"这条规则需要一个在忘记时失败的东西。
 - **`desktop` 是任何 Go 测试都代替不了的那一个产物。** 桌面壳是一个 Rust crate，外面包着
   Go sidecar，由 shell 脚本组装；这些在打 tag 之前哪儿都没跑过，所以 v0.18.0 发出来时
-  根本没有 macOS 包。它按路径门控（`app/client/desktop`、`app/publish/desktop`、
-  `Makefile`），因为 universal 的 Tauri 构建要几分钟；它跑的是发布脚本而不是直接
+  根本没有 macOS 包。它在三个平台上都跑，因为 Windows 与 Linux 的包（msi/NSIS、
+  AppImage/deb/rpm，各自套着本平台构建的 sidecar）在打 tag 之前没有别的地方能暴露问题。
+  它按路径门控（`app/client/desktop`、`app/publish/desktop`、
+  `Makefile`），因为那些构建每一个都要几分钟；它跑的是发布脚本而不是直接
   `tauri build`，被测的就是分发路径本身。
 
 每个 job 都能在本地复现：直接跑表格里那一行的命令即可，都不需要 secret、service container

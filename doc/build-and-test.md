@@ -213,9 +213,10 @@ worker type adds one to `e2e/suites/worker`.
 
 ## 9. CI
 
-`.github/workflows/ci.yml` runs on every push to `dev`/`main` and on every pull
-request. It publishes nothing — that is `release.yml`'s job — and its jobs run in
-parallel:
+`.github/workflows/ci.yml` runs on every pull request, and on a push to `main`
+(the branch a release is cut from) — merging a PR into `dev` has already run that
+commit, so it is not repeated. It publishes nothing — that is `release.yml`'s job
+— and its jobs run in parallel:
 
 | job | runner | what it proves |
 |---|---|---|
@@ -224,7 +225,7 @@ parallel:
 | `cross` | ubuntu | `GOOS=windows` (amd64, arm64), `linux/arm64` and `darwin/amd64` still compile |
 | `sdk` | ubuntu | `npm ci`, `npm test`, `typecheck`, `build` in `sdk/ts` |
 | `webui` | ubuntu | the committed bundle is what `vite build` produces (§2) |
-| `desktop` | macOS | `app/publish/desktop/release.sh --universal` builds, signs and verifies the shell; both binaries are x86_64 + arm64 |
+| `desktop` | macOS, Windows, Linux | `app/publish/desktop/release.sh` builds the shell on all three; macOS also verifies the bundle and that both binaries are x86_64 + arm64 |
 
 Why those choices:
 
@@ -244,9 +245,12 @@ Why those choices:
 - **`desktop` is the one artifact no Go test can stand in for.** The shell is a
   Rust crate bundled around a Go sidecar and staged by a shell script; none of
   that ran anywhere until a tag, which is how v0.18.0 shipped with no macOS
-  bundle. It is path-gated (`app/client/desktop`, `app/publish/desktop`, the
-  `Makefile`) because a universal Tauri build is minutes, and it runs the release
-  script rather than `tauri build` so the distribution path is what is tested.
+  bundle. It runs on all three platforms because the Windows and Linux bundles
+  (msi/NSIS, AppImage/deb/rpm, each around a natively-built sidecar) have no
+  other place to break before a tag. It is path-gated (`app/client/desktop`,
+  `app/publish/desktop`, the `Makefile`) because those builds are minutes each,
+  and it runs the release script rather than `tauri build` so the distribution
+  path is what is tested.
 
 Every job is reproducible locally by running the command in its row: none needs a
 secret, a service container or a prepared environment.

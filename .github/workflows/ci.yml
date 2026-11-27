@@ -1,14 +1,21 @@
 name: CI
 
-# Every push and pull request: build, vet, unit tests with the race detector, the
-# black-box suites, the two Node trees, and the desktop shell when its own files
-# changed. The release workflow stays separate — it is about publishing, and it
-# should not be the first place a broken test is noticed.
+# Pull requests are the gate: every PR builds, vets, runs the unit tests with the
+# race detector, the black-box suites, the two Node trees, and — when its own files
+# changed — the desktop shell on all three platforms. A push to `main` repeats it,
+# because that is the branch a release is cut from.
+#
+# A push to `dev` does not: merging a PR there has already run the same commit, so
+# repeating it only spends minutes. (A commit pushed straight to `dev`, bypassing a
+# PR, therefore runs nothing — open a PR, or add `dev` back to the branches below.)
+#
+# The release workflow stays separate — it is about publishing, and it should not
+# be the first place a broken test is noticed.
 
 on:
   pull_request:
   push:
-    branches: [main, dev]
+    branches: [main]
 
 # A push to a PR branch cancels the run it superseded. Nothing here publishes, so
 # a cancelled run costs only time.
@@ -173,14 +180,32 @@ jobs:
   # which is how v0.18.0 shipped with no macOS bundle at all (the universal build
   # asked for the wrong sidecar names, and the ad-hoc signature it produced did
   # not verify). It runs the release script rather than `tauri build` so the
-  # distribution path is the thing under test, and it asks for the universal
+  # distribution path is the thing under test, and macOS asks for the universal
   # bundle because that is the branch with the extra moving parts.
+  #
+  # All three platforms, because the bundles are otherwise only built at tag
+  # time: the Windows and Linux ones (msi/NSIS, AppImage/deb/rpm around a native
+  # sidecar) have no other place to break. It stays path-gated, so a PR that does
+  # not touch the shell pays nothing for it.
   desktop:
-    name: desktop build (macos)
+    name: desktop build (${{ matrix.platform }})
     needs: changes
     if: needs.changes.outputs.desktop == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 40
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            os: macos-latest
+            args: --universal
+          - platform: windows
+            os: windows-latest
+            args: ''
+          - platform: linux
+            os: ubuntu-22.04
+            args: ''
     steps:
       - uses: actions/checkout@v4
 
@@ -188,20 +213,39 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app/client/desktop/src-tauri
 
+      - name: Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
       - run: npm install -g @tauri-apps/cli
 
-      - name: Build the universal bundle
-        run: ./app/publish/desktop/release.sh --universal --out "$RUNNER_TEMP/dist"
+      # `shell: bash` on every platform: the script is POSIX sh, and Git Bash is
+      # what the Windows runner provides.
+      - name: Build the bundle
+        shell: bash
+        env:
+          # linuxdeploy is an AppImage itself; let it run without FUSE in CI.
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: ./app/publish/desktop/release.sh ${{ matrix.args }} --out "$RUNNER_TEMP/dist"
 
       # The bundle is the product, so the assertions are about the bundle: it
       # verifies, both binaries are universal, and the sidecar is inside it.
       - name: The bundle verifies and carries its sidecar
+        if: matrix.platform == 'macos'
+        shell: bash
         run: |
           app=$(ls -d app/client/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app)
           codesign -v "$app"
@@ -211,4 +255,11 @@ jobs:
             echo "$info" | grep -q x86_64
             echo "$info" | grep -q arm64
           done
+
+      # release.sh already fails when it cannot stage anything; this states what
+      # it staged, so a green run shows the installer it produced.
+      - name: The installer was staged
+        shell: bash
+        run: |
           ls -l "$RUNNER_TEMP"/dist
+          test -n "$(ls -1 "$RUNNER_TEMP"/dist/niq-desktop_* 2>/dev/null)"
