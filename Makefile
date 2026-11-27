@@ -97,6 +97,14 @@ desktop: niq
 	else \
 		echo "desktop: the Tauri CLI is required — npm i -g @tauri-apps/cli"; exit 1; \
 	fi
+	@# Tauri leaves only the linker's signature on the Mach-O, which is not a
+	@# bundle signature: `codesign -v` rejects it. Sign the bundle ad-hoc so the
+	@# copy in /Applications verifies (and is not "damaged" if handed to someone
+	@# else). Tauri already signed it properly when an identity is configured.
+	@if [ "$$(uname -s)" = "Darwin" ] && [ -z "$${APPLE_SIGNING_IDENTITY:-}" ] && command -v codesign >/dev/null 2>&1; then \
+		echo "desktop: signing the bundle ad-hoc"; \
+		codesign --force --sign - "$(DESKTOP_APP)"; \
+	fi
 
 # Stage the sidecar without building the bundle (fast check that the CLI is
 # picked up).

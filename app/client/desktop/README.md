@@ -88,7 +88,7 @@ app/client/desktop/
     ├── Cargo.toml           tauri + shell + notification plugins
     ├── tauri.conf.json      externalBin and bundle metadata; the window is built in code
     ├── capabilities/        sidecar spawn and notification permissions
-    ├── icons/               PNG/ICO/ICNS + tray.png; see "Icons" in the notes
+    ├── icons/               PNG/ICO/ICNS + tray.png/tray.svg; see the notes
     └── src/main.rs          window, menus, menu bar item, splash, sidecar spawn
         src/gateway.rs       find / start / probe the gateway
         src/notify.js        notification clicks back to the page
@@ -121,8 +121,11 @@ app/client/desktop/
 - **Menus.** Both the menu at the top of the screen and the menu bar item are
   Tauri's own APIs (`tauri::menu`, `tauri::tray`), thin wrappers over NSMenu and
   NSStatusItem; there is no hand-written AppKit module. The menu bar icon is a
-  template image (`icons/tray.png`): the mark alone without its tile, so macOS
-  tints it with the menu bar's own colour, and `tray-icon` draws it at 18 pt.
+  template image (`icons/tray.png`, drawn from `icons/tray.svg`): the mark alone
+  without its tile, so macOS tints it with the menu bar's own colour, and
+  `tray-icon` draws it at 18 pt. The three cubes are one colour, with the Y
+  between the faces cut out — the cut stops short of the outline, so the faces
+  read as a cube without the mark turning into a wireframe.
 - A release build needs code signing + notarisation on macOS and signing on
   Windows; the config here is unsigned for local use.
 - **Size.** The release profile optimises the shell for size (`lto`, one codegen
