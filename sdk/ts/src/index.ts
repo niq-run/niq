@@ -1,7 +1,18 @@
 export { HTTPWorkerClient } from "./client.js";
 export type { HTTPWorkerClientOptions } from "./client.js";
 
-export { BaseWorker, parseToolCall, argString, argInt } from "./baseworker.js";
+export {
+  BaseWorker,
+  ConfigUnavailableError,
+  StateUnavailableError,
+  parseToolCall,
+  argString,
+  argInt,
+} from "./baseworker.js";
+export type { ConfigPatch } from "./baseworker.js";
+
+export { FileDurableStore, MemoryDurableStore } from "./durable.js";
+export type { DurableStore } from "./durable.js";
 
 export {
   InterfaceWorker,

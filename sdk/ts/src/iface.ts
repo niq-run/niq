@@ -1,5 +1,6 @@
 import { BaseWorker } from "./baseworker.js";
 import { createEvent } from "./createEvent.js";
+import type { DurableStore } from "./durable.js";
 import { newId } from "./id.js";
 import { ReplyError } from "./reply.js";
 import type { HelpFunc } from "./help.js";
@@ -129,6 +130,10 @@ export interface InterfaceWorkerOptions {
   publishes?: Record<string, unknown>[];
   /** Default request timeout in ms (default 30s, mirroring Go). */
   requestTimeoutMs?: number;
+  /** Explicit durable store for this worker's own state (wins over `durableDir`). */
+  durable?: DurableStore;
+  /** Directory for the default file-backed durable store. */
+  durableDir?: string;
 }
 
 /** The default request timeout, matching Go's `iface.DefaultRequestTimeout`. */
@@ -162,7 +167,12 @@ export class InterfaceWorker extends BaseWorker {
   private stopping = false;
 
   constructor(opts: InterfaceWorkerOptions) {
-    super({ id: opts.id, channel: opts.channel });
+    super({
+      id: opts.id,
+      channel: opts.channel,
+      durable: opts.durable,
+      durableDir: opts.durableDir,
+    });
     this.backends = opts.backends ?? [];
     this.typ = opts.type ?? "interface";
     this.publishes = opts.publishes;
