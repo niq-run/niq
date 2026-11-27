@@ -135,8 +135,8 @@ Placement:
 - ` + "`command`" + ` — argv array. Required for ` + "`managed-process`" + `: the host launches it
   as an OS process and supervises it. Rejected elsewhere. No shell: the array is
   executed as-is.
-- every other argument — for ` + "`managed-process`" + `, all remaining keys become the
-  child's environment variables (flat string values). Prefer ` + "`env:VAR`" + `
+- every key inside ` + "`params`" + ` — for ` + "`managed-process`" + `, every one becomes a
+  child environment variable (flat string values). Prefer ` + "`env:VAR`" + `
   references for secrets.
 - ` + "`cwd`" + ` — child working directory (` + "`managed-process`" + ` only; must exist).
 
@@ -147,8 +147,10 @@ Common:
 - ` + "`description`" + ` — one-line purpose note for the WebUI.
 - ` + "`label`" + ` — display name (备注名) the WebUI shows in place of the id.
 
-Type-specific arguments are passed as top-level properties next to ` + "`type`" + `.
-For example workspace takes ` + "`path`" + ` (or ` + "`mounts`" + `) and ` + "`approver`" + `.
+Type-specific arguments go in ` + "`params`" + `, next to the fixed fields — the same
+bag the declaration stores, so a parameter can never be mistaken for a control
+field. For example workspace takes ` + "`path`" + ` (or ` + "`mounts`" + `) and ` + "`approver`" + ` inside
+it.
 
 ## Process example
 
@@ -158,7 +160,7 @@ For example workspace takes ` + "`path`" + ` (or ` + "`mounts`" + `) and ` + "`a
   "id": "mcp-filesystem",
   "placement": "managed-process",
   "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"],
-  "GITHUB_TOKEN": "env:GITHUB_TOKEN"
+  "params": {"GITHUB_TOKEN": "env:GITHUB_TOKEN"}
 }
 ` + "```" + `
 
@@ -291,6 +293,6 @@ spawn argument is ` + "`type: \"reason\"`" + `, not ` + "`worker`" + `.
 // specialized guide yet.
 const noTypeHelp = `
 > No type-specific guide exists for that ` + "`params.worker`" + ` value yet; this is the
-> general spawn reference. The type-specific arguments still apply as top-level
-> properties next to ` + "`type`" + `.
+> general spawn reference. The type-specific arguments still apply inside
+> ` + "`params`" + `.
 `

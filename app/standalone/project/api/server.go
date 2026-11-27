@@ -99,15 +99,6 @@ type WorkerCreated struct {
 	Credential string `json:"credential,omitempty"`
 }
 
-// WorkerSpawnArgs translates the create form body into the host worker's
-// `spawn` arguments (type-specific params flattened to the top level). It
-// performs no I/O: creating a worker is a bus call, and the host validates,
-// declares and starts in one step. Implemented by the assembly layer; nil
-// disables POST /api/workers/create.
-type WorkerSpawnArgs interface {
-	SpawnArgs(body json.RawMessage) (map[string]any, error)
-}
-
 // Server is the WebUI HTTP server.
 type Server struct {
 	// bus is the interface worker's handler, injected through iface.Backend's

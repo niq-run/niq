@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/niq-run/niq/core/impl/baseworker"
@@ -37,7 +38,7 @@ func (w *HostWorker) registerExtensions() {
 	w.Register(baseworker.Extension{
 		Event:       TypeSpawn,
 		Response:    baseworker.ObjectSchema(map[string]any{"worker_id": map[string]any{"type": "string"}, "status": map[string]any{"type": "string", "enum": []string{"created"}}, "type": map[string]any{"type": "string"}, "placement": map[string]any{"type": "string"}}),
-		Description: "Create a worker and start it immediately. `type` selects the kind (reason, workspace, mcp, ...); `placement` selects where it runs: in-process (default, host builds it), managed-process (host launches the command and supervises the OS process), or unmanaged-process (a third party dials in on its own; nothing is launched here). Type-specific arguments are passed as top-level properties. For managed-process, every argument other than the fixed fields (type/id/placement/command/cwd/label/tags/description) becomes a child environment variable. Parameters are validated per type: one the type does not read fails the call and the error lists what that type accepts.",
+		Description: "Create a worker and start it immediately. `type` selects the kind (reason, workspace, mcp, ...); `placement` selects where it runs: in-process (default, host builds it), managed-process (host launches the command and supervises the OS process), or unmanaged-process (a third party dials in on its own; nothing is launched here). Type-specific construction arguments go in `params` — the same bag the declaration stores — and nothing else is accepted at the top level besides the fixed fields (type/id/placement/command/cwd/label/tags/description). For managed-process, every `params` key becomes a child environment variable. Parameters are validated per type: one the type does not read fails the call and the error lists what that type accepts.",
 		Parameters: obj(map[string]any{
 			"type": map[string]any{
 				"type":        "string",
@@ -61,24 +62,9 @@ func (w *HostWorker) registerExtensions() {
 				"type":        "string",
 				"description": "Working directory for a managed-process child (must exist).",
 			},
-			"token_ttl_seconds": map[string]any{
-				"type":        "integer",
-				"description": "Lifetime of a provisioned remote (unmanaged-process) credential, in seconds. Applies only to that placement: a managed-process credential's lifetime is its child process, and an in-process worker never authenticates over the wire.",
-			},
-			"path": map[string]any{
-				"type":        "string",
-				"description": "Workspace mount directory (required when type=workspace). Becomes the primary mount; add more at runtime via the workspace's mount.add.",
-			},
-			"mounts": map[string]any{
-				"type":        "array",
-				"description": "Workspace mount directories (when type=workspace); the first is the primary mount. Overrides path.",
-				"items": map[string]any{
-					"type": "string",
-				},
-			},
-			"approver": map[string]any{
-				"type":        "string",
-				"description": "Worker that approves boundary-expansion requests (when type=workspace). Defaults to webui; empty disables the approval flow. The workspace can hand this role to another worker at runtime via its approver.set event (e.g. a reason worker that decides out-of-mount requests itself).",
+			"params": map[string]any{
+				"type":        "object",
+				"description": "Type-specific construction arguments, as this type's spawn contract defines them: the keys a reason worker reads (`instruction`, `goal`, `model`, …), a workspace's `mounts`/`path`/`approver`, an mcp's `servers`, and so on. An unknown key fails the call and the error lists what the type accepts. For managed-process every key becomes a child environment variable; unmanaged-process takes none.",
 			},
 			"tags": map[string]any{
 				"type":        "array",
@@ -92,11 +78,6 @@ func (w *HostWorker) registerExtensions() {
 			"label": map[string]any{
 				"type":        "string",
 				"description": "Optional display name (备注名) shown in the WebUI in place of the worker id. Display metadata only; the id stays the identity on the bus.",
-			},
-			"collaborators": map[string]any{
-				"type":        "array",
-				"description": "When type=reason/coding: the reason workers this one may collaborate with. Omitted means every reason worker is visible; when given it is an allowlist (empty = none). An out-of-scope reason peer is invisible to this worker and cannot be messaged or called; capability workers are unaffected.",
-				"items":       map[string]any{"type": "string"},
 			},
 		}),
 	}, func(evt event.Event) {
@@ -282,29 +263,30 @@ func liftPlacement(args map[string]any) (placement worker.Placement, command []s
 }
 
 func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
-	// Construction params may arrive flat (an agent passes them next to `type`)
-	// or nested under `params` (a UI form groups the type-specific part). Both
-	// mean the same thing, so the flattening lives here, at the tool's own input
-	// boundary, and no caller has to know the shape spawn expects. Flattening
-	// comes FIRST so a nested param cannot shadow a control field.
-	if err := flattenParams(tc.Args); err != nil {
-		return "", err
-	}
-
 	typ := baseworker.ArgString(tc.Args, "type")
 	if typ == "" {
 		return "", fmt.Errorf("type is required")
 	}
 	id := baseworker.ArgString(tc.Args, "id")
-	// type/id are identity fields, not construction params. The manifest
-	// carries them; a builder must not see them inside params (and a
-	// managed-process child must not receive them as env).
+	// type/id are identity fields, not construction params. The manifest carries
+	// them; a builder must not see them inside params (and a managed-process
+	// child must not receive them as env).
 	delete(tc.Args, "type")
 	delete(tc.Args, "id")
 
 	label, tags, desc := liftDisplayMeta(tc.Args)
 	placement, command, cwd := liftPlacement(tc.Args)
 	publish, subscribe := liftACL(tc.Args)
+	params, err := takeParams(tc.Args)
+	if err != nil {
+		return "", err
+	}
+	// Anything left is neither a control field nor inside `params`. Reject it:
+	// accepting it would look like a successful spawn that initialised nothing.
+	if len(tc.Args) > 0 {
+		return "", fmt.Errorf("unknown spawn field(s) %s: type-specific arguments go in \"params\"", quotedKeys(tc.Args))
+	}
+
 	spec := worker.WorkerSpec{
 		Placement: placement,
 		Command:   command,
@@ -312,7 +294,7 @@ func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 	}
 	spec.ID = id
 	spec.Type = typ
-	spec.Params = tc.Args
+	spec.Params = params
 	spec.Label = label
 	spec.Tags = tags
 	spec.Description = desc
@@ -330,27 +312,36 @@ func (w *HostWorker) handleSpawn(tc baseworker.ToolCall) (any, error) {
 	}, nil
 }
 
-// flattenParams merges a nested `params` object into the argument map. A key that
-// already exists at the top level is a collision, not a silent override: the
-// top level also carries the control fields (type/id/placement/command/cwd/...),
-// and letting a param shadow one of those would change how the worker runs.
-func flattenParams(args map[string]any) error {
+// takeParams pulls the type-specific construction arguments out of a spawn
+// request. They live in one `params` object — the same bag the declaration, the
+// update tool and the create form use — so a parameter can never shadow a
+// control field like `placement` or `cwd`, and a flat caller is caught rather
+// than silently spawning a worker that ignored its arguments.
+func takeParams(args map[string]any) (map[string]any, error) {
 	raw, ok := args["params"]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	delete(args, "params")
 	params, ok := raw.(map[string]any)
 	if !ok {
-		return fmt.Errorf("params must be an object, got %T", raw)
+		return nil, fmt.Errorf("params must be an object, got %T", raw)
 	}
-	for k, v := range params {
-		if _, taken := args[k]; taken {
-			return fmt.Errorf("param %q collides with the \"%s\" field", k, k)
-		}
-		args[k] = v
+	return params, nil
+}
+
+// quotedKeys renders a request's leftover fields for an error message.
+func quotedKeys(m map[string]any) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
-	return nil
+	sort.Strings(keys)
+	quoted := make([]string, len(keys))
+	for i, k := range keys {
+		quoted[i] = fmt.Sprintf("%q", k)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // workerIDArg pulls the target id out of a lifecycle call.
