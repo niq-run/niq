@@ -63,7 +63,10 @@ for archive in "${DIST}"/niq_*_*.tar.gz "${DIST}"/niq_*_*.zip; do
   if [[ "$base" == *.zip ]]; then
     unzip -j -o "$archive" 'niq.exe' -d "${pkgdir}/bin/" >/dev/null
   else
-    tar -xzf "$archive" -C "${pkgdir}/bin/"
+    # The archive also carries LICENSE and README (goreleaser `archives.files`);
+    # the package only wants the binary, and the main package below ships the
+    # license once.
+    tar -xzf "$archive" -C "${pkgdir}/bin/" niq
   fi
 
   cat > "${pkgdir}/package.json" <<EOF
@@ -84,6 +87,9 @@ mkdir -p "${OUT}/niq"
 mkdir -p "${OUT}/niq/bin"
 cp "${NPM_DIR}/bin/"* "${OUT}/niq/bin/"
 cp "${NPM_DIR}/README.md" "${OUT}/niq/README.md"
+# npm includes a LICENSE sitting in the package directory; the repository keeps
+# the single copy at its root, so copy it in rather than maintaining a second.
+cp "${ROOT}/LICENSE" "${OUT}/niq/LICENSE"
 
 # The npm package is the CLI and its completion script. The macOS app is built
 # and distributed by the clients repository (github.com/niq-run/clients) and by

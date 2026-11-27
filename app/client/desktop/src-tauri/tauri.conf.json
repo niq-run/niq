@@ -25,6 +25,9 @@
     ],
     "externalBin": ["binaries/niq"],
     "category": "DeveloperTool",
+    "resources": {
+      "../../../../LICENSE": "LICENSE"
+    },
     "shortDescription": "niq desktop",
     "longDescription": "A shell that launches the niq CLI and opens the gateway's own WebUI."
   }

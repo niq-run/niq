@@ -237,6 +237,14 @@ jobs:
       - name: Build the bundle
         shell: bash
         env:
+          # Pinned empty on purpose. The release job passes every Apple secret as
+          # an environment variable, so with no identity configured the script
+          # sees an empty string — which is what broke the v0.19.0 macOS bundle:
+          # Tauri takes a variable that exists at face value and ran
+          # `codesign --sign ""`. Never a real identity here either: this runner
+          # has no certificate installed, and a signing secret set here would
+          # turn every PR red.
+          APPLE_SIGNING_IDENTITY: ''
           # linuxdeploy is an AppImage itself; let it run without FUSE in CI.
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: ./app/publish/desktop/release.sh ${{ matrix.args }} --out "$RUNNER_TEMP/dist"

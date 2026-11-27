@@ -173,6 +173,16 @@ else
 fi
 
 # ── Bundle ─────────────────────────────────────────────────────────────────
+
+# An empty APPLE_SIGNING_IDENTITY is not "no identity". CI passes every secret as
+# an environment variable, so an unset secret arrives as "" — and Tauri takes a
+# variable that exists at face value, runs `codesign --sign ""`, and the bundle
+# step dies with "no identity found". Unsetting it is what makes Tauri leave the
+# signing to the ad-hoc block below.
+if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+	unset APPLE_SIGNING_IDENTITY
+fi
+
 if [ "$universal" = "1" ]; then
 	echo "release: building the universal app…"
 	run_tauri --target universal-apple-darwin

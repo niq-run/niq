@@ -29,6 +29,11 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    # The MIT notice has to travel with the binary, and a v2 archive contains only
+    # the binary unless told otherwise.
+    files:
+      - LICENSE
+      - README.md
     name_template: >-
       {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}
 
