@@ -12,6 +12,21 @@ in the same spirit as `publish/cmd` (the CLI's goreleaser config) and
 | **`publish/desktop`** | `app/client/desktop` | `niq.app` + `.dmg`, with the CLI bundled as a sidecar |
 | `publish/releases` | — | per-version notes, `LATEST.md` |
 
+## Platforms
+
+| Platform | Runner | Artifacts | Notes |
+|---|---|---|---|
+| macOS | `macos-14` | `.dmg`, `.app.zip` | `--universal` (arm64 + x86_64 in one bundle); DMG needs a macOS runner |
+| Windows | `windows-latest` | `.msi`, `-setup.exe` (NSIS) | x64; needs `icons/icon.ico` |
+| Linux | `ubuntu-22.04` | `.AppImage`, `.deb`, `.rpm` | needs `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf` |
+
+Each runner builds its own sidecar (`niq-<triple>`), so the app never depends on
+a CLI being installed on the user's machine. macOS ships one universal bundle
+instead of two per-arch ones to keep the download list short.
+
+Windows and Linux are wired to Tauri's documented bundle layout but have only
+been exercised on macOS locally; the first tag run is their real test.
+
 ## What a release is
 
 ```
@@ -43,6 +58,25 @@ make dist-desktop UNIVERSAL=1            # arm64 + x86_64
 4. signs, and notarises + staples when credentials are present;
 5. copies the `.dmg` and a zipped `.app` into `dist/` with stable names.
 
+## CI
+
+`.github/workflows/release.yml` runs three jobs on a tag:
+
+1. **release** — goreleaser builds the CLI and creates the GitHub Release;
+2. **desktop** — a matrix over macOS / Windows / Linux, each running
+   `app/publish/desktop/release.sh --version ${tag}` and attaching its artifacts
+   to that release with `gh release upload`. `fail-fast: false`, so one platform
+   failing does not stop the others; re-run the failed job from the Actions tab.
+3. **npm** — publishes the packages from the CLI archives.
+
+Secrets the desktop job uses (all optional, see below):
+`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
+Goreleaser creates the release first, so `gh release upload` has somewhere to put
+the files; the desktop job therefore depends on it.
+
+The build logic is a shell script rather than inline workflow steps precisely so
+`make dist-desktop` and CI produce the same artifacts.
+
 ## Signing and notarisation
 
 | Env | Effect |
@@ -56,8 +90,9 @@ notary credentials in CI secrets.
 
 ## Not done yet (deliberate)
 
-- **CI job.** The steps are a shell script precisely so a workflow can call it
-  unchanged; wiring it into the release workflow is the next step.
+- **A PR-time build check.** The desktop app is currently built only at release
+  time, so a break shows up on a tag rather than on the pull request. A
+  path-filtered job (build on changes under `app/client/desktop`) would fix that.
 - **Universal by default.** `--universal` works but is not the default; it needs
   both rust targets and doubles the build time.
 - **Auto-update.** Tauri's updater plugin would give signed in-app updates; it
