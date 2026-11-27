@@ -15,3 +15,12 @@ serde_json = "1"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+# The shell is glue around the system webview; optimise it for size, not speed.
+# LTO and one codegen unit are what buy most of it, and `strip` drops the
+# symbol table (12 MB -> ~8 MB on its own).
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+strip = true

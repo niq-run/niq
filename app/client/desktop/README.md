@@ -112,6 +112,11 @@ app/client/desktop/
   screen matches the app it becomes.
 - A release build needs code signing + notarisation on macOS and signing on
   Windows; the config here is unsigned for local use.
+- **Size.** The release profile optimises the shell for size (`lto`, one codegen
+  unit, `opt-level = "z"`, `strip`), which puts it at ~4 MB, and the CLI sidecar
+  is built with `-s -w` like the released binary (~21 MB). A macOS bundle is
+  therefore ~25 MB and the DMG ~10 MB — nearly all of it the CLI, which is the
+  product.
 - **Icons.** `icons/icon.icns` is a full-bleed squircle: the tile touches all
   four edges and only the corners are transparent (radius ≈ 22% of the canvas).
   A flat *opaque* square makes macOS 26+ composite the art onto its own light

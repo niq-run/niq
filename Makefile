@@ -72,7 +72,7 @@ webui: $(WEBUI)/node_modules/.package-lock.json
 	@echo "webui: building the bundle (tsc -b && vite build)…"
 	cd $(WEBUI) && npm run build
 
-GO_BUILD = go build -ldflags "-X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
+GO_BUILD = go build -trimpath -ldflags "-s -w -X main.version=$(shell git describe --tags --always 2>/dev/null || echo dev) -X main.buildTime=$(BUILDTIME)" -o ./bin/niq ./app/publish/cmd/
 
 # The CLI. It embeds whatever bundle is in app/client/webui/assets/dist, so this does
 # not rebuild the SPA — `make build webui` (or plain `make build`) is that step.

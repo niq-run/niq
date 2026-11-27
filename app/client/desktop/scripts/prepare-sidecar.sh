@@ -42,8 +42,10 @@ dest="$here/src-tauri/binaries/niq-$triple$ext"
 if [ -n "${NIQ_BIN:-}" ]; then
 	cp "$NIQ_BIN" "$dest"
 else
+	# -s -w strips the symbol table and DWARF: 30 MB -> 21 MB, matching what
+	# the goreleaser build ships.
 	echo "prepare-sidecar: building ./bin/niq ($triple)…"
-	(cd "$root" && go build -o "$dest" ./app/publish/cmd/)
+	(cd "$root" && go build -trimpath -ldflags='-s -w' -o "$dest" ./app/publish/cmd/)
 fi
 
 chmod +x "$dest"

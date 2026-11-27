@@ -156,8 +156,8 @@ if [ "$universal" = "1" ]; then
 	rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
-	(cd "$root" && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o "$tmp/niq-arm64" ./app/publish/cmd/)
-	(cd "$root" && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o "$tmp/niq-amd64" ./app/publish/cmd/)
+	(cd "$root" && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o "$tmp/niq-arm64" ./app/publish/cmd/)
+	(cd "$root" && CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o "$tmp/niq-amd64" ./app/publish/cmd/)
 	lipo -create -output "$client/src-tauri/binaries/niq-universal-apple-darwin" \
 		"$tmp/niq-arm64" "$tmp/niq-amd64"
 	echo "release: sidecar → binaries/niq-universal-apple-darwin"
