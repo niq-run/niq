@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Two conveniences after `npm install -g @niq.run/niq`:
 //
-//   macOS   niq.app in ~/Applications, and ~/.niq/bin/niq pointing at this
-//           install's binary — a GUI launch inherits no PATH, so the app could
-//           not find the npm shim on its own
+//   macOS   ~/.niq/bin/niq pointing at this install's binary — a GUI client
+//           inherits no PATH and cannot run a node shim, so the macOS app (in the
+//           clients repository) looks there
 //   all     the completion script in a directory the shell already scans, so a
 //           fresh install leaves tab completion working without editing ~/.zshrc
 //
@@ -37,7 +37,7 @@ try {
 const binExe = path.join(path.dirname(subpkg), 'bin', 'niq')
 
 if (process.platform === 'darwin' && process.env.NIQ_NO_APP !== '1') {
-  installApp(path.resolve(__dirname, '..'), binExe)
+  linkCLI(binExe)
 }
 
 if (process.env.NIQ_NO_COMPLETION !== '1' && process.platform !== 'win32') {
@@ -48,27 +48,11 @@ if (process.env.NIQ_NO_COMPLETION !== '1' && process.platform !== 'win32') {
 }
 process.exit(0)
 
-// installApp puts the bundle where Finder and Spotlight look, and links the CLI
-// somewhere the app looks: ~/.niq/bin is on its list before it falls back to a
-// login shell, which a GUI launch cannot use to run a node shim anyway.
-function installApp(pkgRoot, binExe) {
-  const src = path.join(pkgRoot, 'niq.app')
-  const dest = path.join(os.homedir(), 'Applications', 'niq.app')
-  if (fs.existsSync(path.join(src, 'Contents', 'Info.plist'))) {
-    try {
-      fs.rmSync(dest, { recursive: true, force: true })
-      fs.mkdirSync(path.dirname(dest), { recursive: true })
-      const copied = spawnSync('/bin/cp', ['-R', src, dest], { encoding: 'utf8' })
-      if (copied.status === 0) {
-        console.log(`niq: installed ${dest}`)
-      } else {
-        console.error(`niq: could not copy the app: ${copied.stderr.trim()}`)
-      }
-    } catch (e) {
-      console.error(`niq: could not install the app to ${dest}: ${e.message}`)
-    }
-  }
-
+// linkCLI puts the binary somewhere a GUI client can find it. ~/.niq/bin is on
+// the macOS app's list before it falls back to a login shell, which a GUI launch
+// cannot use to run a node shim anyway. A real file there belongs to a non-npm
+// install (install.sh), and is left alone.
+function linkCLI(binExe) {
   try {
     const dir = path.join(os.homedir(), '.niq', 'bin')
     fs.mkdirSync(dir, { recursive: true })

@@ -5,8 +5,7 @@
 #
 # Layout produced:
 #   <dist>/npm/@niq.run/niq-<os>-<arch>/   platform subpackages (binary only)
-#   <dist>/npm/niq/                     main package (copied from npm/, plus the
-#                                       miq launcher and niq.app when built)
+#   <dist>/npm/niq/                     main package (copied from npm/)
 #
 # goreleaser archives are named niq_<os>_<arch>.tar.gz where
 # os/arch are Go names; they are mapped to npm os/arch names.
@@ -86,26 +85,10 @@ mkdir -p "${OUT}/niq/bin"
 cp "${NPM_DIR}/bin/"* "${OUT}/niq/bin/"
 cp "${NPM_DIR}/README.md" "${OUT}/niq/README.md"
 
-# The macOS launcher and app are built by the clients repository now
-# (github.com/niq-run/clients). When a release run drops them into dist/, they
-# ride inside the package; otherwise the npm package is CLI-only.
-if [ -f "${DIST}/miq" ]; then
-  cp "${DIST}/miq" "${OUT}/niq/bin/miq"
-  chmod +x "${OUT}/niq/bin/miq"
-fi
+# The npm package is the CLI and its completion script. The macOS app is built
+# and distributed by the clients repository (github.com/niq-run/clients) and by
+# app/publish/desktop here; neither rides inside this package.
 
-# 3. niq.app, when the macOS job produced it. It rides inside the package (so
-# `miq` finds it next to itself) and postinstall copies it to ~/Applications.
-MAC_ZIP="${DIST}/niq_mac_darwin_universal.zip"
-if [ -f "${MAC_ZIP}" ]; then
-  tmp="$(mktemp -d)"
-  unzip -q "${MAC_ZIP}" "niq-mac/niq.app/*" -d "${tmp}"
-  cp -R "${tmp}/niq-mac/niq.app" "${OUT}/niq/niq.app"
-  rm -rf "${tmp}"
-  echo "packaged niq.app"
-else
-  echo "note: ${MAC_ZIP} not found; the npm package will ship without niq.app"
-fi
 node - "${VERSION}" "${OUT}" "${ROOT}" <<'EOF'
 const [version, out, root] = process.argv.slice(2);
 const fs = require('fs');
