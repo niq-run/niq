@@ -193,7 +193,7 @@ const VIEWS: ViewMode[] = ['talk', 'events', 'approvals', 'workers', 'mcp', 'pro
 
 function panelFromLocation(): Panel | null {
   const q = new URLSearchParams(window.location.search).get('panel')
-  return q === 'projects' || q === 'templates' || q === 'providers' ? q : null
+  return q === 'projects' || q === 'templates' || q === 'providers' || q === 'vault' ? q : null
 }
 
 function viewFromLocation(): ViewMode | null {
