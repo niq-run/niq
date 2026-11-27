@@ -1,0 +1,39 @@
+niq — 安装说明 / How to install
+================================
+
+这个包没有经过 Apple 公证，所以首次打开时 macOS 可能会说：
+
+  “niq”已损坏，无法打开。你应该将它移到垃圾桶。
+
+这不是文件损坏。它是「没有开发者签名」时 Gatekeeper 给的说法，
+点那个提示是没用的，也不要去点「移到垃圾桶」。
+
+安装 / Install
+--------------
+
+1. 把左边的 niq 拖进「应用程序」（/Applications）。
+
+2. 打开「终端」（Terminal），粘贴执行下面这一行，回车：
+
+     xattr -dr com.apple.quarantine /Applications/niq.app
+
+3. 正常双击打开 niq。之后每次都可以直接打开，不用再执行上面的命令。
+
+如果你把 niq 装在了别的位置，把上面命令里的路径换成实际的 .app 路径。
+
+
+English
+-------
+
+This bundle is not notarised by Apple, so macOS may report that the app
+"is damaged and can't be opened". It is not damaged: Gatekeeper simply cannot
+verify an unsigned bundle, and there is no "Open Anyway" button for that case.
+
+1. Drag niq into /Applications.
+2. Open Terminal and run:
+
+     xattr -dr com.apple.quarantine /Applications/niq.app
+
+3. Open niq normally. You only need to run that command once.
+
+If you put niq somewhere else, point the command at that .app path instead.

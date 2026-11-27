@@ -220,7 +220,50 @@ macos)
 	else
 		echo "release: skipping notarisation (APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID not all set)"
 	fi
+
+	# An ad-hoc bundle can never satisfy Gatekeeper, so nothing can make the app
+	# open freely — the least the DMG can do is sign the bundle properly and say
+	# so. A notarised build needs neither.
+	if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+		# Tauri leaves the app with only the linker's signature on the Mach-O,
+		# which is not a bundle signature: `codesign -v` rejects it with "code
+		# has no resources but signature indicates they must be present", and
+		# that is what macOS reports as a damaged app. Signing the bundle
+		# ad-hoc seals Resources and makes the signature consistent.
+		echo "release: ad-hoc build — signing the bundle and shipping INSTALL.txt"
+		if ! codesign --force --sign - "$app" >/dev/null 2>&1; then
+			echo "release: could not sign the bundle ad-hoc" >&2
+		fi
+		cp "$here/INSTALL.txt" "$out/$name.INSTALL.txt"
+		echo "release: $out/$name.INSTALL.txt"
+		staged=$((staged + 1))
+
+		if [ -n "$dmg" ]; then
+			# hdiutil cannot add a file to a compressed image: convert it to
+			# read/write, put the signed app and the note in, convert back.
+			work=$(mktemp -d)
+			base=$(basename "$app")
+			if hdiutil convert "$dmg" -format UDRW -o "$work/rw" >/dev/null 2>&1 \
+				&& mkdir -p "$work/mnt" \
+				&& hdiutil attach "$work/rw.dmg" -nobrowse -readwrite -mountpoint "$work/mnt" >/dev/null 2>&1
+			then
+				rm -rf "$work/mnt/$base"
+				ditto "$app" "$work/mnt/$base" 2>/dev/null || true
+				cp "$here/INSTALL.txt" "$work/mnt/INSTALL.txt" 2>/dev/null || true
+				hdiutil detach "$work/mnt" >/dev/null 2>&1 || true
+				if hdiutil convert "$work/rw.dmg" -format UDZO -o "$work/final" >/dev/null 2>&1; then
+					dmg="$work/final.dmg"
+				else
+					echo "release: could not repack the dmg; shipping the original" >&2
+				fi
+			else
+				echo "release: could not mount the dmg; shipping the original" >&2
+			fi
+		fi
+	fi
+
 	stage "$dmg" dmg
+	if [ -n "${work:-}" ]; then rm -rf "$work"; fi
 	rm -f "$out/$name.app.zip"
 	ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent "$app" "$out/$name.app.zip"
 	echo "release: $out/$name.app.zip"

@@ -36,6 +36,7 @@ app/client/desktop (Tauri crate + ui/)          ← the app
         ↓
 dist/niq-desktop_<version>_<arch>.dmg
 dist/niq-desktop_<version>_<arch>.app.zip
+dist/niq-desktop_<version>_<arch>.INSTALL.txt   ← ad-hoc builds only
 ```
 
 The app carries the CLI, so a user installs **one** thing and gets a working niq:
@@ -90,17 +91,21 @@ notary credentials in CI secrets.
 
 ## Why a shared copy says it is "damaged"
 
-A bundle built without a Developer ID is ad-hoc signed — `codesign -dv` reports
-`Signature=adhoc` and `TeamIdentifier=not set`. Apple silicon requires *some*
-signature to run a binary at all, so the bundle cannot simply be left unsigned;
-but ad-hoc is not something Gatekeeper can trust.
+Two different things produce that message, and only one of them is quarantine.
 
-Anything downloaded carries `com.apple.quarantine`. For an ad-hoc bundle the
-Gatekeeper message is the blunt one — *“niq” is damaged and can't be opened. You
-should move it to the Trash.* — rather than the usual "unidentified developer"
-prompt with an Open Anyway button. That is not a corrupt download: it is the
-signature failing the notarisation requirement, which an ad-hoc bundle can never
-satisfy.
+**A broken bundle signature.** Tauri leaves the app with just the linker's
+signature on the Mach-O — `codesign -dv` shows `flags=0x20002(adhoc,linker-signed)`
+and `codesign -v` fails with *"code has no resources but signature indicates they
+must be present"*. A bundle whose signature does not verify is exactly what macOS
+calls damaged. `release.sh` therefore signs the bundle itself when there is no
+`APPLE_SIGNING_IDENTITY`, which seals `Resources` and makes `codesign -v` pass
+(`flags=0x2(adhoc)`, `Sealed Resources version=2`). Both the `.dmg` and the
+`.app.zip` are built from that signed bundle.
+
+**Quarantine with no notarisation ticket.** Anything downloaded carries
+`com.apple.quarantine`, and an ad-hoc signature can never satisfy the
+notarisation requirement. Once the signature verifies, this is the ordinary
+"unidentified developer" block rather than a damaged app.
 
 **Signing it yourself does not help.** A self-signed certificate is trusted only
 on machines where that certificate is installed and trusted; the recipient's
@@ -111,8 +116,9 @@ Gatekeeper still refuses the bundle. Two things actually work:
 | `xattr -dr com.apple.quarantine /Applications/niq.app` on the recipient's machine | works today, no Apple account needed |
 | Developer ID + notarisation (the `APPLE_*` secrets above) | no prompt at all, for everyone |
 
-Until there is a Developer ID, the `xattr` line is the honest thing to put next
-to the download link: copy the app to `/Applications` first, then run it.
+So an ad-hoc build ships `INSTALL.txt` — inside the DMG and next to it in
+`dist/` — spelling out that one command. A notarised build ships neither, because
+the recipient has nothing to do.
 
 ## Not done yet (deliberate)
 
