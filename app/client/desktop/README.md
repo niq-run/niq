@@ -123,9 +123,10 @@ app/client/desktop/
   NSStatusItem; there is no hand-written AppKit module. The menu bar icon is a
   template image (`icons/tray.png`, drawn from `icons/tray.svg`): the mark alone
   without its tile, so macOS tints it with the menu bar's own colour, and
-  `tray-icon` draws it at 18 pt. All three faces are one colour with no internal
-  lines: at 18 pt the cube edges turn into noise, and the mark reads better as
-  three solid blocks with the gaps between them.
+  `tray-icon` draws it at 18 pt. At 18 pt the 3D mark's dark faces disappear, so
+  the menu bar uses a flat one instead — three squares in the 品 arrangement
+  inside a frame, which stays legible at that size. The app icon keeps the
+  shaded cubes.
 - A release build needs code signing + notarisation on macOS and signing on
   Windows; the config here is unsigned for local use.
 - **Size.** The release profile optimises the shell for size (`lto`, one codegen
