@@ -88,7 +88,7 @@ app/client/desktop/
     ├── Cargo.toml           tauri + tauri-plugin-shell
     ├── tauri.conf.json      window, externalBin, bundle metadata
     ├── capabilities/        shell:allow-execute|spawn for the sidecar
-    ├── icons/               generated from the shared brand icon
+    ├── icons/               PNG/ICO/ICNS; see "Icons" in the notes
     └── src/main.rs          menu, splash handshake, sidecar spawn
         src/gateway.rs       find / start / probe the gateway
 ```
@@ -112,3 +112,8 @@ app/client/desktop/
   screen matches the app it becomes.
 - A release build needs code signing + notarisation on macOS and signing on
   Windows; the config here is unsigned for local use.
+- **Icons.** `icons/icon.icns` is a full-bleed squircle: the tile touches all
+  four edges and only the corners are transparent (radius ≈ 22% of the canvas).
+  A flat *opaque* square makes macOS 26+ composite the art onto its own light
+  plate and shrink it, which reads as an icon that does not fill its tile. The
+  PNGs and the `.ico` stay square and opaque for Windows and Linux.
