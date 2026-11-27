@@ -72,3 +72,7 @@ Everything niq writes lives under `~/.niq` (`NIQ_HOME` relocates the root;
 `NIQ_AUTH_CONFIG` / `NIQ_PROVIDER_CONFIG` override those two files wholesale).
 The tree, which component owns each file, and what each process reads are in
 [doc/install-and-cli.md §6](doc/install-and-cli.md#6-where-it-writes).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
